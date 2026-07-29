@@ -35,7 +35,7 @@ jobs:
           python tools/repository_audit.py \
             --root . \
             --output-dir audit-artifacts \
-            --fail-on none
+            --fail-on high
 
       - name: Freeze reviewed source snapshot
         run: |
