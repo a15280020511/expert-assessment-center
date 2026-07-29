@@ -20,12 +20,12 @@ _ORIGINAL_ACTIVATE_RUNTIME = dynamic_runtime.activate_runtime
 
 
 def _conservative_dynamic_input(profile: TaskProfile, run: RunConfig) -> dict[str, Any]:
-    """Escalate to 4+1 only when at least two institutional-risk signals agree."""
+    """Escalate to 4+1 only when all three institutional-risk signals agree."""
     data = _ORIGINAL_INFER_TASK_INPUT(profile, run)
     overrides = team_optimizer._json_overrides(run.task)
     if "expert_count" not in overrides and profile.complexity == "complex":
         signals = sum((bool(profile.high_stakes), bool(profile.long_context), len(profile.domains) >= 3))
-        if signals < 2:
+        if signals < 3:
             data["expert_count"] = 3
     return data
 
@@ -36,7 +36,7 @@ def _broad_global_pool(
     limit: int,
     tier: str,
 ) -> list[ModelInfo]:
-    """Search the full stable pool; use professional/risk fit in scoring, not as a brittle hard prefilter."""
+    """Search the full stable pool; use professional/risk fit without brittle prefilters."""
     rows = list(pool)
     if seat.key == "red":
         risk_rows = [model for model in rows if scoring._term_fit(model, scoring.RISK_TERMS) > 0]
@@ -91,6 +91,8 @@ def _audit_reason(
         + f"；优化器有效候选池={effective_pool}"
         + f"；智能排名={model.ranks.get('intelligence-high-to-low')}"
     )
+    if expert.seat_key == "red":
+        reason += f"；风险反证匹配={scoring._term_fit(model, scoring.RISK_TERMS):.3f}"
     return replace(expert, selection_reason=reason)
 
 
