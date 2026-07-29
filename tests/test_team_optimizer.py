@@ -30,7 +30,7 @@ class TeamOptimizerTests(unittest.TestCase):
         )
 
     @staticmethod
-    def run(task, output_dir):
+    def run_config(task, output_dir):
         return SimpleNamespace(
             task=task,
             quality_tier="value",
@@ -71,7 +71,7 @@ class TeamOptimizerTests(unittest.TestCase):
 
     def test_topology_is_inferred_from_task_risk_and_complexity(self):
         with tempfile.TemporaryDirectory() as temp:
-            run = self.run("普通商业问题", Path(temp))
+            run = self.run_config("普通商业问题", Path(temp))
             self.assertEqual(team_optimizer.infer_task_input(self.profile(), run)["expert_count"], 1)
             self.assertEqual(
                 team_optimizer.infer_task_input(self.profile("medium", domains=["business", "legal"]), run)["expert_count"],
@@ -87,7 +87,7 @@ class TeamOptimizerTests(unittest.TestCase):
     def test_embedded_task_parameters_override_objective_and_count(self):
         task = '<expert-team-config>{"objective":"quality","expert_count":2,"budget_usd":1.5}</expert-team-config>\n分析项目'
         with tempfile.TemporaryDirectory() as temp:
-            inputs = team_optimizer.infer_task_input(self.profile("medium"), self.run(task, Path(temp)))
+            inputs = team_optimizer.infer_task_input(self.profile("medium"), self.run_config(task, Path(temp)))
         self.assertEqual(inputs["objective"], "quality")
         self.assertEqual(inputs["expert_count"], 2)
         self.assertEqual(inputs["budget_usd"], 1.5)
@@ -96,7 +96,7 @@ class TeamOptimizerTests(unittest.TestCase):
         models = [self.model(index) for index in range(7)]
         profile = self.profile("medium", domains=["business", "research"])
         with tempfile.TemporaryDirectory() as temp:
-            run = self.run("比较商业方案并核验证据", Path(temp))
+            run = self.run_config("比较商业方案并核验证据", Path(temp))
             with mock.patch.object(team_optimizer.base, "_stable_pool", return_value=models), mock.patch.object(
                 team_optimizer.base, "_enrich_benchmarks", return_value={}
             ), mock.patch.object(team_optimizer, "activate_runtime"):
