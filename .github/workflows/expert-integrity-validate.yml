@@ -60,7 +60,7 @@ jobs:
           PY
           current_sha="$(gh api "repos/${GITHUB_REPOSITORY}/contents/POST_MIGRATION_MANIFEST.json?ref=${GITHUB_HEAD_REF}" --jq .sha)"
           encoded="$(base64 -w0 POST_MIGRATION_MANIFEST.json)"
-          remote_content="$(gh api "repos/${GITHUB_REPOSITORY}/contents/POST_MIGRATION_MANIFEST.json?ref=${GITHUB_HEAD_REF}" --jq -r .content | tr -d '\n')"
+          remote_content="$(gh api "repos/${GITHUB_REPOSITORY}/contents/POST_MIGRATION_MANIFEST.json?ref=${GITHUB_HEAD_REF}" --jq .content | tr -d '\n')"
           if [[ "$encoded" != "$remote_content" ]]; then
             gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/POST_MIGRATION_MANIFEST.json" \
               -f message='chore: refresh expert migration manifest' \
