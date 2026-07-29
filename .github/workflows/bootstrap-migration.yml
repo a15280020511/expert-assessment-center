@@ -1,0 +1,37 @@
+name: Bootstrap Enhanced Migration
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      TARGET_DIR: expert-assessment-center
+      ARTIFACT_URL: "https://sdmntprcentralus.oaiusercontent.com/files/00000000-c0c8-81f5-96c9-a28765f2e704/raw?se=2026-07-29T15:28:42Z&sp=r&sv=2026-02-06&sr=b&scid=9001d057-d893-5672-a542-5ea7fdf6ced9&skoid=fadb8e47-d3c7-4c79-a9c3-970d9af3b213&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-07-28T23:51:11Z&ske=2026-07-30T23:51:11Z&sks=b&skv=2026-02-06&sig=kGnPrGtJ75/B9OO8HhPho5cNnTsIIwB/fokmj8x6vJ8%3D"
+      ARTIFACT_SHA256: 1084fc28aa06974b5e636addc95bfdc80a88e63f2e6172e0164828e25b7fe77e
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Download verify and import
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --output /tmp/migration.zip "$ARTIFACT_URL"
+          echo "$ARTIFACT_SHA256  /tmp/migration.zip" | sha256sum --check --strict
+          rm -rf /tmp/migration && mkdir -p /tmp/migration
+          unzip -q /tmp/migration.zip -d /tmp/migration
+          test -f "/tmp/migration/$TARGET_DIR/POST_MIGRATION_MANIFEST.json"
+          ! find "/tmp/migration/$TARGET_DIR" -type f \( -iname '*.pem' -o -iname '*.key' \) | grep -q .
+          git switch -c migration/from-test-v3
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -a "/tmp/migration/$TARGET_DIR/." .
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "feat: migrate enhanced expert assessment center"
+          git push origin HEAD:refs/heads/migration/from-test-v3
