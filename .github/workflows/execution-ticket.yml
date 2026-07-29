@@ -1,0 +1,296 @@
+name: Execution Ticket Expert Team
+
+on:
+  issues:
+    types: [opened, reopened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+jobs:
+  execute-ticket:
+    if: >-
+      github.actor == github.repository_owner &&
+      ((github.event_name == 'issues' && startsWith(github.event.issue.title, '[execution]')) ||
+       (github.event_name == 'issue_comment' && startsWith(github.event.issue.title, '[execution]') &&
+        startsWith(github.event.comment.body, '/retry-expert-team ')))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      MODEL_HISTORY_PATH: runtime-state/model-performance.json
+    steps:
+      - name: Checkout pinned source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up pinned Python action
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-runtime.txt
+
+      - name: Install pinned runtime dependencies
+        run: python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
+
+      - name: Compile production modules
+        run: python -m py_compile open-model-market/*.py
+
+      - name: Parse, authorize, and de-duplicate ticket
+        id: prepare
+        run: |
+          python open-model-market/issue_ticket_hardened.py prepare \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --output-dir ticket-artifacts
+
+      - name: Comment ticket accepted
+        if: steps.prepare.outputs.accepted == 'true'
+        run: |
+          python open-model-market/issue_ticket_hardened.py render \
+            --phase accepted --output-dir ticket-artifacts --run-url "$RUN_URL" > issue-comment.md
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          status = json.loads(Path("ticket-artifacts/ticket-status.json").read_text(encoding="utf-8"))
+          path = Path("issue-comment.md")
+          text = path.read_text(encoding="utf-8")
+          old = f"- 模型故障替换上限：`{status.get('maximum_replacements')}`\n"
+          new = f"- 额外调用额度（专家或裁判故障替换共享）：`{status.get('maximum_replacements')}`\n"
+          if old not in text:
+              raise SystemExit("expected replacement-limit line was not found")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@issue-comment.md
+
+      - name: Comment ticket rejected
+        if: steps.prepare.outputs.accepted != 'true'
+        run: |
+          python open-model-market/issue_ticket_hardened.py render \
+            --phase rejected --output-dir ticket-artifacts --run-url "$RUN_URL" > issue-comment.md
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@issue-comment.md
+
+      - name: Check OpenRouter secret
+        if: steps.prepare.outputs.accepted == 'true'
+        id: secret
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          if [[ -n "$OPENROUTER_API_KEY" ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Comment missing secret
+        if: steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present != 'true'
+        run: |
+          cat > issue-comment.md <<EOF
+          ## EXECUTION_REJECTED
+
+          票据通过，但仓库缺少 Actions Secret：\`OPENROUTER_API_KEY\`。
+
+          - Run: \`${RUN_URL}\`
+          - 专家模型调用：\`0\`
+          EOF
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@issue-comment.md
+
+      - name: Restore latest model performance history
+        if: steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present == 'true'
+        shell: bash
+        run: |
+          set -u
+          mkdir -p runtime-state ticket-artifacts
+          artifact_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=model-performance-state&per_page=100" \
+            --jq '.artifacts | map(select(.expired == false)) | sort_by(.created_at) | reverse | .[0].id // empty' \
+            2>/dev/null || true)"
+          restore_status="no-prior-artifact"
+          if [[ -n "$artifact_id" ]]; then
+            restore_status="download-failed"
+            if gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" \
+              > /tmp/model-history.zip 2>/dev/null; then
+              restore_status="invalid-artifact"
+              if unzip -p /tmp/model-history.zip model-performance.json \
+                > /tmp/model-performance.json 2>/dev/null && \
+                python -m json.tool /tmp/model-performance.json >/dev/null 2>&1; then
+                mv /tmp/model-performance.json "$MODEL_HISTORY_PATH"
+                restore_status="restored"
+              fi
+            fi
+          fi
+          if [[ ! -s "$MODEL_HISTORY_PATH" ]] || \
+             ! python -m json.tool "$MODEL_HISTORY_PATH" >/dev/null 2>&1; then
+            printf '{"version":1,"models":{}}\n' > "$MODEL_HISTORY_PATH"
+            [[ "$restore_status" == "restored" ]] && restore_status="invalid-artifact"
+          fi
+          python - "$restore_status" "$artifact_id" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          Path("ticket-artifacts/history-restore.json").write_text(
+              json.dumps(
+                  {
+                      "version": 1,
+                      "status": sys.argv[1],
+                      "artifact_id": sys.argv[2] or None,
+                      "fallback_used": sys.argv[1] != "restored",
+                  },
+                  ensure_ascii=False,
+                  indent=2,
+              ),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Execute fixed 3+1 expert team
+        id: execute
+        if: steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present == 'true'
+        continue-on-error: true
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          QUALITY_TIER: ${{ steps.prepare.outputs.quality_tier }}
+          TOTAL_MODEL_CALLS: ${{ steps.prepare.outputs.calls }}
+        run: |
+          set -o pipefail
+          EXPERT_TASK="$(cat ticket-artifacts/task.txt)"
+          export EXPERT_TASK
+          python open-model-market/expert_team_hardened.py \
+            --quality-tier "$QUALITY_TIER" \
+            --require-live-catalog \
+            --output-dir ticket-artifacts \
+            2>&1 | tee ticket-artifacts/execution-console.log
+
+      - name: Publish and verify full report
+        id: publish
+        if: steps.execute.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          rm -rf ticket-artifacts/report-comments
+          python open-model-market/publish_report.py \
+            --report ticket-artifacts/expert-team-report.md \
+            --output-dir ticket-artifacts/report-comments \
+            --run-url "$RUN_URL"
+
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments?per_page=100" \
+            --jq '.[] | select(.user.login == "github-actions[bot]") | .body' > /tmp/trusted-issue-comments.txt
+          for report_comment in ticket-artifacts/report-comments/report-comment-*.md; do
+            marker="$(head -n 1 "$report_comment")"
+            if grep -Fqx "$marker" /tmp/trusted-issue-comments.txt; then
+              echo "Skipping trusted already published report part: $marker"
+              continue
+            fi
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@"$report_comment"
+          done
+
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments?per_page=100" \
+            --jq '.[] | select(.user.login == "github-actions[bot]") | .body' > /tmp/trusted-issue-comments-after.txt
+          while IFS= read -r report_comment; do
+            marker="$(head -n 1 "ticket-artifacts/report-comments/$report_comment")"
+            grep -Fqx "$marker" /tmp/trusted-issue-comments-after.txt
+          done < <(jq -r '.files[]' ticket-artifacts/report-comments/report-comments-manifest.json)
+          report_sha="$(jq -r '.report_sha256' ticket-artifacts/report-comments/report-comments-manifest.json)"
+          grep -Fq "Report SHA256: \`${report_sha}\`" /tmp/trusted-issue-comments-after.txt
+
+      - name: Stage model performance state
+        id: stage_state
+        if: always() && steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present == 'true'
+        continue-on-error: true
+        run: |
+          mkdir -p performance-state
+          cp "$MODEL_HISTORY_PATH" performance-state/model-performance.json
+          cp "$MODEL_HISTORY_PATH" ticket-artifacts/model-performance.json
+
+      - name: Generate structured diagnostic bundle
+        id: diagnostics
+        if: always() && steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present == 'true'
+        continue-on-error: true
+        run: |
+          python open-model-market/diagnostic_bundle.py \
+            --output-dir ticket-artifacts \
+            --execute-outcome "${{ steps.execute.outcome }}" \
+            --publish-outcome "${{ steps.publish.outcome }}" \
+            --state-outcome "${{ steps.stage_state.outcome }}"
+
+      - name: Run deterministic execution audit
+        id: audit
+        if: always() && steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present == 'true'
+        continue-on-error: true
+        run: |
+          python open-model-market/execution_auditor.py \
+            --output-dir ticket-artifacts \
+            --execute-outcome "${{ steps.execute.outcome }}" \
+            --publish-outcome "${{ steps.publish.outcome }}"
+
+      - name: Refresh final artifact manifest
+        id: manifest
+        if: always()
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, "open-model-market")
+          from artifact_manifest import write_manifest
+
+          write_manifest(Path("ticket-artifacts"))
+          PY
+
+      - name: Upload ticket artifacts
+        id: upload_ticket
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: execution-ticket-${{ github.event.issue.number }}-${{ github.run_id }}
+          path: ticket-artifacts/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload model performance state
+        id: upload_state
+        if: always() && steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present == 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: model-performance-state
+          path: performance-state/model-performance.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish authoritative final status
+        id: final
+        if: always() && steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present == 'true'
+        continue-on-error: true
+        run: |
+          python open-model-market/final_status.py \
+            --output-dir ticket-artifacts \
+            --run-url "$RUN_URL" \
+            --audit-outcome "${{ steps.audit.outcome }}" \
+            --manifest-outcome "${{ steps.manifest.outcome }}" \
+            --ticket-upload-outcome "${{ steps.upload_ticket.outcome }}" \
+            --state-upload-outcome "${{ steps.upload_state.outcome }}" \
+            --artifact-id "${{ steps.upload_ticket.outputs['artifact-id'] }}" \
+            --artifact-url "${{ steps.upload_ticket.outputs['artifact-url'] }}" \
+            --artifact-digest "${{ steps.upload_ticket.outputs['artifact-digest'] }}" \
+            > final-status.md
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@final-status.md
+
+      - name: Mark failed execution
+        if: >-
+          always() &&
+          ((steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present != 'true') ||
+           steps.final.outcome == 'failure' ||
+           steps.final.outputs.status == 'FAIL')
+        run: exit 1
