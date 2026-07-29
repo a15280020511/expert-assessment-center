@@ -3,13 +3,10 @@ name: Bootstrap Expert Assessment Center Migration
 on:
   pull_request:
     types: [opened]
-  issues:
-    types: [opened]
   workflow_dispatch:
 
 permissions:
   contents: write
-  issues: read
   pull-requests: read
 
 concurrency:
@@ -18,7 +15,7 @@ concurrency:
 
 jobs:
   migrate:
-    if: github.repository_owner == 'a15280020511' && (github.event_name == 'workflow_dispatch' || github.event.issue.title == '[migration] bootstrap center' || github.event.pull_request.title == '[migration] bootstrap center')
+    if: github.repository_owner == 'a15280020511' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.title == '[migration] bootstrap center v2')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -53,10 +50,12 @@ jobs:
             --target-repository "$GITHUB_REPOSITORY"
           python -m compileall -q .
 
-      - name: Commit migration
+      - name: Commit non-workflow migration
         shell: bash
         run: |
           set -euo pipefail
+          rm -rf .github/workflows
+          git checkout origin/main -- .github/workflows
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
