@@ -6,7 +6,7 @@
   "governance_version": "3.1.0",
   "optimization_status": "phase-1-controls-implemented; advanced modes controlled-preview",
   "file_count": 76,
-  "total_bytes": 504142,
+  "total_bytes": 506172,
   "files": [
     {
       "path": ".github/dependabot.yml",
@@ -20,8 +20,8 @@
     },
     {
       "path": ".github/workflows/expert-integrity-validate.yml",
-      "size_bytes": 762,
-      "sha256": "e7cfa74d90df36eefeb5bf5bcc044b025e4457274165522d6c47497603a1ab1f"
+      "size_bytes": 3004,
+      "sha256": "d2e258121797874f0bc51a9ccb423754e4c49aae5f9d4dee9dd87ff8e768d625"
     },
     {
       "path": ".github/workflows/expert-team-canary.yml",
@@ -35,8 +35,8 @@
     },
     {
       "path": ".github/workflows/validate.yml",
-      "size_bytes": 6114,
-      "sha256": "aeea2ce261671d770e7fcc754daeafdf3ffa57290cfe05aea1f54d686352e068"
+      "size_bytes": 5902,
+      "sha256": "269f4ae5d7bf27c8bded009effb2878b5a5d60102f3339e1bcbd25cad4b78d7f"
     },
     {
       "path": ".gitignore",
