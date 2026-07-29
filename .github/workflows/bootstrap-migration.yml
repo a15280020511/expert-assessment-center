@@ -15,11 +15,11 @@ jobs:
     timeout-minutes: 15
     env:
       TARGET_DIR: expert-assessment-center
-      ARTIFACT_URL: "https://sdmntprwestus3.oaiusercontent.com/files/00000000-ac04-81fd-9ba9-81076a442c2e/raw?se=2026-07-29T15:34:26Z&sp=r&sv=2026-02-06&sr=b&scid=af3781a9-ceb8-5a25-9b0f-6d1101c1f52d&skoid=fadb8e47-d3c7-4c79-a9c3-970d9af3b213&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-07-29T12:57:40Z&ske=2026-07-31T12:57:40Z&sks=b&skv=2026-02-06&sig=CdeBRxkaRmnJ4srExqGRWdXTyUUIOAKoHqk1rB2N4sk%3D"
+      ARTIFACT_URL: "https://sdmntprcentralus.oaiusercontent.com/files/00000000-28a8-81f5-8ce3-d4eb43a24a3f/raw?se=2026-07-29T15:43:58Z&sp=r&sv=2026-02-06&sr=b&scid=9e4cd500-8d2e-5300-90fc-6230b498abe5&skoid=fadb8e47-d3c7-4c79-a9c3-970d9af3b213&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-07-28T23:41:52Z&ske=2026-07-30T23:41:52Z&sks=b&skv=2026-02-06&sig=nyclZZgQu3Pq5BruQMs%2BJCluv6zsiR/JSag/Z4yhm2Q%3D"
       ARTIFACT_SHA256: 1084fc28aa06974b5e636addc95bfdc80a88e63f2e6172e0164828e25b7fe77e
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - name: Download verify and import
+      - name: Download verify and import non-workflow files
         shell: bash
         run: |
           set -euo pipefail
@@ -30,8 +30,9 @@ jobs:
           test -f "/tmp/migration/$TARGET_DIR/POST_MIGRATION_MANIFEST.json"
           ! find "/tmp/migration/$TARGET_DIR" -type f \( -iname '*.pem' -o -iname '*.key' \) | grep -q .
           git switch -c migration/from-test-v3
-          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
-          cp -a "/tmp/migration/$TARGET_DIR/." .
+          find . -mindepth 1 -maxdepth 1 ! -name .git ! -name .github -exec rm -rf {} +
+          find .github -mindepth 1 -maxdepth 1 ! -name workflows -exec rm -rf {} +
+          rsync -a --exclude='.github/workflows/' "/tmp/migration/$TARGET_DIR/." .
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
