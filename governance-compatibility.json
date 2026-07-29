@@ -4,5 +4,13 @@
   "governance_source_commit": "abac3d776340c8c162b8fc0c670167fde94f3baa",
   "runtime_cross_repository_read": false,
   "shared_business_workflows": false,
-  "shared_business_secrets": false
+  "shared_business_secrets": false,
+  "governance_version": "3.1.0",
+  "governance_contract_sha256": "abf47f5d065de03b9004c778739233c7d9d3f6b955f05654d3138780ecb1b398",
+  "center_version": "3.0.0",
+  "compatible_governance_versions": ">=3.1.0,<4.0.0",
+  "sole_cross_center_relay": "custom-gpts",
+  "direct_center_to_center_calls_allowed": false,
+  "governance_repository": "a15280020511/decision-system-governance",
+  "runtime_governance_repository_read": false
 }

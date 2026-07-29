@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "model_id",
+    "window_start",
+    "window_end",
+    "complete_answer_rate",
+    "empty_answer_rate",
+    "truncation_rate",
+    "format_failure_rate",
+    "provider_failure_rate",
+    "average_cost_usd"
+  ],
+  "properties": {
+    "model_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "window_start": {
+      "type": "string"
+    },
+    "window_end": {
+      "type": "string"
+    },
+    "complete_answer_rate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "empty_answer_rate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "truncation_rate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "format_failure_rate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "provider_failure_rate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "judge_adoption_rate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "average_cost_usd": {
+      "type": "number",
+      "minimum": 0
+    },
+    "domain_performance": {
+      "type": "object"
+    },
+    "degradation_flag": {
+      "type": "boolean"
+    }
+  }
+}
