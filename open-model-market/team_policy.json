@@ -1,0 +1,52 @@
+{
+  "pattern": "three-experts-plus-one-judge",
+  "seats": [
+    {"key": "core", "function": "核心主研席", "mission": "建立问题框架，识别关键变量，完成主分析、必要计算和初步结论。"},
+    {"key": "cross", "function": "交叉验证席", "mission": "从相邻专业或不同方法独立验证主问题，补足遗漏变量、数据要求和替代方案。"},
+    {"key": "red", "function": "独立反证席", "mission": "主动寻找反例、失败条件、证据缺口、隐藏假设和最坏情景，不以多数意见为准。"}
+  ],
+  "keywords": {
+    "international_relations": ["外交", "国际关系", "地缘政治", "国务卿", "外长", "制裁", "乌克兰", "俄罗斯", "北约", "geopolit", "foreign policy", "foreign minister", "secretary of state", "sanction"],
+    "legal": ["法律", "法规", "诉讼", "合同", "判例", "合规", "监管", "legal", "law", "regulation", "contract", "compliance"],
+    "medical": ["医疗", "健康", "疾病", "诊断", "治疗", "药物", "临床", "medical", "health", "clinical", "diagnosis", "treatment"],
+    "security": ["安全", "网络安全", "威胁", "攻击", "漏洞", "红队", "security", "cyber", "threat", "attack", "vulnerability", "red team"],
+    "supply_chain": ["供应链", "物流", "库存", "采购", "交付", "产能", "supply chain", "logistics", "inventory", "procurement"],
+    "public_policy": ["公共政策", "政策评估", "政府", "财政政策", "社会治理", "public policy", "government", "policy evaluation"],
+    "coding": ["code", "coding", "software", "api", "bug", "debug", "python", "javascript", "sql", "代码", "编程", "接口", "仓库", "故障", "调试", "软件"],
+    "math": ["math", "proof", "equation", "optimization", "statistics", "probability", "monte carlo", "simulation", "modeling", "数学", "证明", "优化", "统计", "概率", "蒙特卡罗", "仿真", "建模"],
+    "research": ["research", "evidence", "source", "latest", "current", "compare", "market", "policy", "benchmark", "news", "研究", "证据", "来源", "最新", "比较", "市场", "政策", "基准", "新闻", "调查"],
+    "business": ["business", "investment", "revenue", "profit", "strategy", "finance", "economics", "pricing", "商业", "投资", "营收", "利润", "战略", "金融", "财务", "经济", "定价", "经营", "回报", "企业", "餐饮", "项目"],
+    "creative": ["creative", "story", "poem", "script", "copywriting", "design", "创意", "故事", "诗", "剧本", "文案", "设计"]
+  },
+  "description_terms": {
+    "international_relations": ["geopolitics", "foreign policy", "policy", "diplomacy", "international relations", "analysis", "reasoning"],
+    "legal": ["legal", "law", "compliance", "regulation", "contract", "policy", "reasoning"],
+    "medical": ["medical", "clinical", "health", "science", "evidence", "research", "reasoning"],
+    "security": ["security", "cyber", "risk", "audit", "adversarial", "reasoning", "analysis"],
+    "supply_chain": ["supply chain", "logistics", "operations", "optimization", "business", "analysis"],
+    "public_policy": ["policy", "government", "research", "evidence", "economics", "analysis"],
+    "coding": ["code", "coding", "software", "programming", "developer", "debug", "security"],
+    "math": ["math", "mathematical", "reasoning", "science", "proof", "statistics", "simulation"],
+    "research": ["research", "knowledge", "evidence", "long context", "document", "analysis"],
+    "business": ["analysis", "business", "finance", "economic", "enterprise", "strategy", "investment"],
+    "creative": ["creative", "writing", "story", "style", "design"],
+    "general": ["general", "reasoning", "analysis"]
+  },
+  "professions": {
+    "international_relations": {"core": "国际关系与外交战略专家", "cross": "地区安全与政策核验专家", "red": "地缘政治反证与升级风险审计专家", "judge": "国际战略与证据质量裁决官"},
+    "legal": {"core": "法律分析与规则适用专家", "cross": "证据、程序与合规核验专家", "red": "法律风险与反方论证审计专家", "judge": "法律方案与风险裁决官"},
+    "medical": {"core": "临床证据与医疗决策专家", "cross": "研究方法与诊疗证据核验专家", "red": "医疗安全、不良结果与偏差审计专家", "judge": "医疗证据与风险裁决官"},
+    "security": {"core": "安全架构与威胁分析专家", "cross": "检测、验证与响应工程专家", "red": "对抗测试与失效模式审计专家", "judge": "安全方案与残余风险裁决官"},
+    "supply_chain": {"core": "供应链与运营优化专家", "cross": "库存、物流与履约验证专家", "red": "供应中断与极端情景审计专家", "judge": "供应链决策与韧性评审官"},
+    "public_policy": {"core": "公共政策设计与影响评估专家", "cross": "财政、社会与执行效果核验专家", "red": "政策副作用与利益冲突审计专家", "judge": "公共政策证据与实施裁决官"},
+    "coding": {"core": "软件架构与系统工程专家", "cross": "软件可靠性、测试与运维工程专家", "red": "软件安全与失效模式审计专家", "judge": "技术方案与系统决策评审官"},
+    "math": {"core": "运筹、统计与仿真建模专家", "cross": "敏感性分析与模型验证专家", "red": "定量假设与极端情景审计专家", "judge": "定量决策与模型评审官"},
+    "research": {"core": "研究设计与证据综合专家", "cross": "资料核验与方法学专家", "red": "证据偏差与反证审计专家", "judge": "证据决策与研究质量评审官"},
+    "business": {"core": "商业战略与经营分析专家", "cross": "财务建模与市场验证专家", "red": "投资风险与竞争战略红队专家", "judge": "商业投资与经营决策评审官"},
+    "creative": {"core": "创意策略与内容设计专家", "cross": "受众体验与传播效果专家", "red": "品牌风险与可执行性审查专家", "judge": "创意方案与传播决策评审官"},
+    "general": {"core": "问题领域主分析专家", "cross": "交叉验证与方法补充专家", "red": "反证、风险与边界条件审计专家", "judge": "综合决策与质量评审官"}
+  },
+  "high_stakes": ["medical", "health", "legal", "law", "security", "military", "war", "compliance", "safety", "risk", "医疗", "健康", "法律", "安全", "军事", "战争", "合规", "风险", "监管", "外交", "制裁"],
+  "long_context": ["document", "report", "contract", "repository", "codebase", "full text", "文档", "报告", "合同", "全文", "代码库", "整个仓库"],
+  "chinese_authors": []
+}

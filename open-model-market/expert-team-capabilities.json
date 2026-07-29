@@ -1,0 +1,77 @@
+{
+  "schema_version": "expert-team-capabilities-v1",
+  "catalog_status": "production",
+  "selection_owner": "gpts-usage-center",
+  "execution_owner": "github-expert-team-control-plane",
+  "maintenance_owner": "ordinary-web-gpt-with-github-plugin",
+  "gpts_exposure": {
+    "capabilities_exposed": true,
+    "discovery_action": "getExpertTeamCatalog",
+    "ticket_schema_action": "getExpertTicketSchema",
+    "delegation_contract_action": "getExpertDelegationContract",
+    "model_ids_selectable_by_gpts": false,
+    "providers_selectable_by_gpts": false,
+    "internal_prompts_exposed": false,
+    "secret_values_exposed": false
+  },
+  "use_when": [
+    "the task requires multidisciplinary judgment rather than only deterministic calculation",
+    "evidence, assumptions, trade-offs, strategy, policy, business, risk, or red-team analysis must be synthesized",
+    "the user explicitly requests the GitHub expert team",
+    "API or compute results require independent interpretation and adjudication"
+  ],
+  "do_not_use_when": [
+    "a fixed API connector can directly return the requested public data",
+    "a deterministic compute operation can fully answer the question",
+    "the user requests an immediate factual lookup without expert synthesis",
+    "the ticket would contain secrets, private personal data, or unverified artifact identifiers without the underlying body"
+  ],
+  "fixed_execution_chain": {
+    "experts": 3,
+    "judges": 1,
+    "minimum_calls": 4,
+    "maximum_calls": 6,
+    "roles": ["primary_research", "cross_validation", "independent_red_team", "final_judge"],
+    "semantic_router_default": "disabled",
+    "shared_replacement_pool": "calls 5 and 6 only for bounded technical replacement"
+  },
+  "quality_tiers": {
+    "budget": "prefer lower cost among models that pass hard capability and reliability gates",
+    "value": "default; price-performance first, then task fit and historical complete delivery",
+    "quality": "prefer stronger absolute capability after hard gates while still recording actual cost"
+  },
+  "ticket_inputs": [
+    "task_id",
+    "objective",
+    "pipeline",
+    "task.question",
+    "task.requirements",
+    "task.language",
+    "execution_acceptance",
+    "evidence",
+    "approved_budget.calls",
+    "quality_tier",
+    "private_output=false"
+  ],
+  "outputs": [
+    "three independent expert attempts",
+    "one judge report or a structured failure",
+    "call ledger with actual models, providers, tokens, cost and errors",
+    "execution diagnosis",
+    "report SHA-256 and public comment manifest",
+    "artifact manifest and authoritative PASS, DEGRADED or FAIL status"
+  ],
+  "completion_rule": "Only EXECUTION_COMPLETED with the complete judge report and verified delivery evidence is a normal PASS. queued, in_progress, accepted, workflow success, or artifact metadata alone are not completion.",
+  "restrictions": [
+    "GPTs must not choose a concrete model ID or provider",
+    "experts and judge cannot browse, call tools, plugins, APIs or download artifacts",
+    "no unlimited retries, replacements or agent loops",
+    "no secret or private data in public issues",
+    "no self-answer by Web GPT before the GitHub report when delegation is explicit"
+  ],
+  "upstream_guidance": {
+    "api_first": "Use the API center first when current structured public data is required.",
+    "compute_first": "Use the compute center first when quantitative simulation or deterministic analysis is required.",
+    "evidence_transfer": "GPTs must retrieve and verify complete upstream bodies and SHA values before creating the expert ticket."
+  }
+}

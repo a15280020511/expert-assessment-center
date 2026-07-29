@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/a15280020511/test/open-model-market/execution-ticket.schema.json",
+  "title": "GitHub Expert Team Execution Ticket",
+  "description": "Execution contract for the GitHub-owned fixed 3+1 expert team. GPTs submits and retrieves; GitHub owns routing, model selection, analysis, judgment, and deterministic execution acceptance.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_id", "route", "task", "approved_budget"],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$"
+    },
+    "objective": {
+      "description": "Execution and delivery metadata for the GPTs/GitHub control plane. It is stored for audit but is not sent to experts or used for task classification. Put substantive goals in task.question and task.requirements.",
+      "type": "string",
+      "maxLength": 5000
+    },
+    "pipeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pipeline_id", "stage_id"],
+      "properties": {
+        "pipeline_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$"
+        },
+        "stage_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$"
+        },
+        "sequence_reason": {"type": "string", "maxLength": 2000},
+        "upstream_refs": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["center", "task_id", "file", "sha256"],
+            "properties": {
+              "center": {"enum": ["api", "compute", "expert", "user", "public_source"]},
+              "task_id": {"type": "string", "maxLength": 128},
+              "issue_number": {"type": "integer", "minimum": 1},
+              "run_id": {"type": "integer", "minimum": 1},
+              "artifact_id": {"type": "integer", "minimum": 1},
+              "file": {"type": "string", "maxLength": 500},
+              "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+              "observed_at": {"type": "string", "maxLength": 100}
+            }
+          }
+        }
+      }
+    },
+    "route": {"const": "expert-team"},
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["question"],
+      "properties": {
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20000
+        },
+        "requirements": {
+          "description": "Substantive requirements sent to the experts and judge. GitHub run/Job/Artifact acceptance checks do not belong here.",
+          "type": "array",
+          "maxItems": 20,
+          "items": {"type": "string", "maxLength": 2000}
+        },
+        "language": {"type": "string", "maxLength": 64}
+      }
+    },
+    "execution_acceptance": {
+      "description": "Deterministic GitHub-side acceptance checks. These labels are stored with the ticket but are not sent to experts as substantive analysis instructions.",
+      "type": "array",
+      "maxItems": 40,
+      "items": {"type": "string", "minLength": 1, "maxLength": 500}
+    },
+    "evidence": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "note": {"type": "string", "maxLength": 5000}
+          }
+        },
+        {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "source_level": {"type": "string", "maxLength": 5000},
+              "source": {"type": "string", "maxLength": 5000},
+              "url": {"type": "string", "maxLength": 5000},
+              "note": {"type": "string", "maxLength": 5000},
+              "center": {"type": "string", "enum": ["api", "compute", "expert", "gpts", "external"]},
+              "run_id": {"type": "string", "pattern": "^[0-9]{1,32}$"},
+              "artifact_id": {"type": "string", "pattern": "^[0-9]{1,32}$"},
+              "file": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "^[^\\\\]+$"
+              },
+              "sha256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+              "observed_at": {"type": "string", "format": "date-time", "maxLength": 64}
+            }
+          }
+        }
+      ]
+    },
+    "approved_budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["calls"],
+      "properties": {
+        "calls": {
+          "description": "Total paid model-call ceiling. Four calls are reserved for 3 experts plus 1 judge. Calls 5 and 6 form a shared pool for bounded expert or judge replacement calls. Semantic routing is disabled by default.",
+          "type": "integer",
+          "minimum": 4,
+          "maximum": 6
+        },
+        "max_cost_usd": {
+          "description": "Deprecated compatibility field. It is accepted for old tickets but ignored; production execution has no hard monetary ceiling and records actual provider cost instead.",
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 100
+        }
+      }
+    },
+    "quality_tier": {
+      "description": "User cost/quality preference. Value remains the default and keeps price-performance first without imposing a hard monetary ceiling.",
+      "type": "string",
+      "enum": ["budget", "value", "quality"],
+      "default": "value"
+    },
+    "private_output": {
+      "description": "Private delivery is not implemented for this public repository. Omit this field or set it to false.",
+      "const": false,
+      "default": false
+    }
+  }
+}

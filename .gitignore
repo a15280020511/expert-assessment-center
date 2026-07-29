@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+artifacts/
+validation-artifacts/
+ticket-artifacts/
+runtime-state/
+performance-state/
+tmp-test-artifacts/

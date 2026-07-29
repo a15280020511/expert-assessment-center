@@ -1,0 +1,8 @@
+{
+  "schema_version": "governance-compatibility-v1",
+  "temporary_governance_repository": "a15280020511/test",
+  "governance_source_commit": "abac3d776340c8c162b8fc0c670167fde94f3baa",
+  "runtime_cross_repository_read": false,
+  "shared_business_workflows": false,
+  "shared_business_secrets": false
+}
