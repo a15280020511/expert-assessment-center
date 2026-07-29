@@ -8,10 +8,8 @@ on:
       - ".github/workflows/execution-ticket.yml"
       - ".github/workflows/expert-team.yml"
       - ".github/workflows/expert-team-canary.yml"
+      - ".github/workflows/expert-integrity-validate.yml"
       - ".github/workflows/validate.yml"
-      - ".github/workflows/repository-maintenance.yml"
-      - ".github/workflows/dependabot-auto-merge.yml"
-      - ".github/workflows/repository-static.yml"
       - ".github/dependabot.yml"
       - "requirements*.txt"
       - "README.md"
@@ -23,10 +21,8 @@ on:
       - ".github/workflows/execution-ticket.yml"
       - ".github/workflows/expert-team.yml"
       - ".github/workflows/expert-team-canary.yml"
+      - ".github/workflows/expert-integrity-validate.yml"
       - ".github/workflows/validate.yml"
-      - ".github/workflows/repository-maintenance.yml"
-      - ".github/workflows/dependabot-auto-merge.yml"
-      - ".github/workflows/repository-static.yml"
       - ".github/dependabot.yml"
       - "requirements*.txt"
       - "README.md"
@@ -61,14 +57,14 @@ jobs:
           python -m ruff check --select E9,F63,F7,F82 open-model-market tests 2>&1 | tee ruff.log
       - name: Compile Python
         run: python -m py_compile open-model-market/*.py
-      - name: Verify maintenance and Dependabot controls exist
+      - name: Verify center-local maintenance and delivery controls exist
         run: |
           test -s .github/dependabot.yml
-          test -s .github/workflows/dependabot-auto-merge.yml
-          test -s .github/workflows/repository-maintenance.yml
-          test -s .github/workflows/repository-static.yml
-          test -s .github/workflows/full-repository-audit.yml
+          test -s .github/workflows/validate.yml
+          test -s .github/workflows/expert-integrity-validate.yml
           test -s .github/workflows/expert-team-canary.yml
+          test -s .github/workflows/expert-team.yml
+          test -s .github/workflows/execution-ticket.yml
       - name: Run unit tests
         shell: bash
         run: |

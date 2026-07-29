@@ -21,3 +21,7 @@
 ## 迁移证据
 
 查看 `MIGRATION_MANIFEST.json`、`MIGRATION.md` 和 `governance-compatibility.json`。
+
+## V3 integrity controls
+
+A model reliability ledger schema and fail-closed report integrity gate now require 3/3 usable experts, a non-empty judge report, at least four call-ledger records, and verified Artifact SHA values.
