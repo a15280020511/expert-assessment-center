@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "solver": "google-or-tools-cp-sat",
+  "topology": {
+    "simple": 1,
+    "medium": 2,
+    "complex": 3,
+    "high_stakes_min": 3,
+    "complex_escalated": 4
+  },
+  "complex_escalation_conditions": [
+    "high_stakes",
+    "long_context",
+    "three_or_more_domains"
+  ],
+  "candidate_pool_per_seat": 12,
+  "solver_timeout_seconds": 8.0,
+  "strict_provider_diversity": true,
+  "hard_constraints": [
+    "stable direct model only",
+    "official intelligence rank within top 50",
+    "context and output capacity sufficient",
+    "one model per seat",
+    "no model reuse",
+    "no provider reuse when strict diversity is enabled",
+    "high-stakes task requires red-team seat",
+    "budget must not be exceeded when supplied",
+    "external tools, routers and online model variants are forbidden"
+  ],
+  "task_input": {
+    "automatic_fields": [
+      "primary_domain",
+      "secondary_domains",
+      "complexity",
+      "high_stakes",
+      "long_context",
+      "requested_context",
+      "quality_tier"
+    ],
+    "optional_override_fields": [
+      "objective",
+      "expert_count",
+      "budget_usd",
+      "strict_provider_diversity",
+      "candidate_pool_per_seat",
+      "solver_timeout_seconds",
+      "forbidden_models",
+      "preferred_models"
+    ],
+    "embedded_json_wrapper": "<expert-team-config>{...}</expert-team-config>",
+    "environment_variable": "EXPERT_TEAM_INPUT_JSON"
+  }
+}
