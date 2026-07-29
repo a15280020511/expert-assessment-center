@@ -4,7 +4,7 @@
     "quality_tier": "value",
     "ranking_limit": 50,
     "minimum_context_length": 16384,
-    "candidate_pool_per_seat": 12,
+    "candidate_pool_per_seat": 3,
     "budget_safety_factor": 1.25,
     "history_weight": 0.0,
     "catalog_sorts": [
