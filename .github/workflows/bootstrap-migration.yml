@@ -1,19 +1,21 @@
 name: Bootstrap Enhanced Migration
 
 on:
-  push:
+  pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 jobs:
   import:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       TARGET_DIR: expert-assessment-center
-      ARTIFACT_URL: "https://sdmntprcentralus.oaiusercontent.com/files/00000000-c0c8-81f5-96c9-a28765f2e704/raw?se=2026-07-29T15:28:42Z&sp=r&sv=2026-02-06&sr=b&scid=9001d057-d893-5672-a542-5ea7fdf6ced9&skoid=fadb8e47-d3c7-4c79-a9c3-970d9af3b213&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-07-28T23:51:11Z&ske=2026-07-30T23:51:11Z&sks=b&skv=2026-02-06&sig=kGnPrGtJ75/B9OO8HhPho5cNnTsIIwB/fokmj8x6vJ8%3D"
+      ARTIFACT_URL: "https://sdmntprwestus3.oaiusercontent.com/files/00000000-ac04-81fd-9ba9-81076a442c2e/raw?se=2026-07-29T15:34:26Z&sp=r&sv=2026-02-06&sr=b&scid=af3781a9-ceb8-5a25-9b0f-6d1101c1f52d&skoid=fadb8e47-d3c7-4c79-a9c3-970d9af3b213&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-07-29T12:57:40Z&ske=2026-07-31T12:57:40Z&sks=b&skv=2026-02-06&sig=CdeBRxkaRmnJ4srExqGRWdXTyUUIOAKoHqk1rB2N4sk%3D"
       ARTIFACT_SHA256: 1084fc28aa06974b5e636addc95bfdc80a88e63f2e6172e0164828e25b7fe77e
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
