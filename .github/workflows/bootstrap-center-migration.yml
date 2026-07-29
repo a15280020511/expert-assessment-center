@@ -1,6 +1,8 @@
 name: Bootstrap Expert Assessment Center Migration
 
 on:
+  pull_request:
+    types: [opened]
   issues:
     types: [opened]
   workflow_dispatch:
@@ -8,6 +10,7 @@ on:
 permissions:
   contents: write
   issues: read
+  pull-requests: read
 
 concurrency:
   group: bootstrap-center-migration
@@ -15,7 +18,7 @@ concurrency:
 
 jobs:
   migrate:
-    if: github.repository_owner == 'a15280020511' && (github.event_name == 'workflow_dispatch' || github.event.issue.title == '[migration] bootstrap center')
+    if: github.repository_owner == 'a15280020511' && (github.event_name == 'workflow_dispatch' || github.event.issue.title == '[migration] bootstrap center' || github.event.pull_request.title == '[migration] bootstrap center')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
