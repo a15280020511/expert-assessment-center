@@ -16,6 +16,36 @@ from response_audit import diagnostics
 
 _ORIGINAL_BUILD_RUN_CONFIG = model_market.build_run_config
 _ACTIVE_QUALITY_TIER = "value"
+SYNC_INCOMPATIBLE_MODEL_MARKERS = (":batch", ":online")
+
+
+def _is_synchronous_direct_model(model: Any) -> bool:
+    """Return whether a catalog model can be called by the synchronous 3+1 runtime.
+
+    OpenRouter router aliases, online variants, and Batch-API-only variants are
+    not direct synchronous chat endpoints. They must be excluded before seat
+    scoring rather than discovered through a paid failed call.
+    """
+    model_id = str(getattr(model, "id", "") or "").strip().casefold()
+    if not model_id:
+        return False
+    if model_id.startswith("openrouter/"):
+        return False
+    return not any(marker in model_id for marker in SYNC_INCOMPATIBLE_MODEL_MARKERS)
+
+
+_ORIGINAL_STABLE_POOL = seat_scoring._stable_pool
+
+
+def _synchronous_stable_pool(models, profile):
+    """Apply the synchronous endpoint hard gate before normal stability gates."""
+    direct_models = [model for model in models if _is_synchronous_direct_model(model)]
+    return _ORIGINAL_STABLE_POOL(direct_models, profile)
+
+
+# Selection, candidate evidence, and judge recovery all resolve this function
+# dynamically from seat_scoring, so one defensive patch protects every seat.
+seat_scoring._stable_pool = _synchronous_stable_pool
 
 
 def _no_limit_build_run_config(args: Any) -> Any:
@@ -49,7 +79,7 @@ def _policy_aware_replacement_candidates(
     run=None,
     tier=None,
 ):
-    """Reuse initial stability/capability gates and the active quality policy."""
+    """Reuse initial synchronous, stability, capability, and quality gates."""
     effective_tier = str(tier or getattr(run, "quality_tier", "") or _ACTIVE_QUALITY_TIER)
     if effective_tier not in seat_scoring.RULE_ORDER:
         effective_tier = _ACTIVE_QUALITY_TIER
@@ -57,6 +87,7 @@ def _policy_aware_replacement_candidates(
         model
         for model in ranked
         if model.id not in used_ids
+        and _is_synchronous_direct_model(model)
         and not seat_scoring._is_unstable(model)
         and seat_scoring._history_bucket(model) > 0
         and seat_scoring._within_capability_floor(model)
