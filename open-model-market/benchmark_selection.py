@@ -13,8 +13,8 @@ import unicodedata
 from collections import defaultdict
 from typing import Any, Dict, Mapping, Sequence, Tuple
 
+import optimizer_compat
 import seat_scoring as base
-import team_optimizer
 from model_market import ModelInfo, RunConfig, SelectedExpert, SelectedJudge, TaskProfile
 
 DATE_SUFFIX_RE = re.compile(r"-(?:20\d{2}(?:-\d{2}-\d{2})?|20\d{6})$")
@@ -102,7 +102,7 @@ def select_team(
     profile: TaskProfile,
     run: RunConfig,
 ) -> Tuple[list[SelectedExpert], SelectedJudge, float]:
-    """Run benchmark alias resolution and delegate to the CP-SAT optimizer."""
+    """Run benchmark alias resolution and delegate to the guarded CP-SAT optimizer."""
     original_request = base.request_json
     stable_models = base._stable_pool(ranked, profile)
 
@@ -114,6 +114,6 @@ def select_team(
 
     base.request_json = request_with_aliases
     try:
-        return team_optimizer.select_team(ranked, profile, run)
+        return optimizer_compat.select_team(ranked, profile, run)
     finally:
         base.request_json = original_request
