@@ -1,14 +1,13 @@
 name: Bootstrap Expert Assessment Center Migration
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/bootstrap-center-migration.yml"
+  issues:
+    types: [opened]
   workflow_dispatch:
 
 permissions:
   contents: write
+  issues: read
 
 concurrency:
   group: bootstrap-center-migration
@@ -16,7 +15,7 @@ concurrency:
 
 jobs:
   migrate:
-    if: github.repository_owner == 'a15280020511'
+    if: github.repository_owner == 'a15280020511' && (github.event_name == 'workflow_dispatch' || github.event.issue.title == '[migration] bootstrap center')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -26,6 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: main
           fetch-depth: 0
 
       - name: Fetch immutable source
