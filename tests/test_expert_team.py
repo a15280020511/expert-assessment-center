@@ -53,28 +53,30 @@ class ExpertTeamTests(unittest.TestCase):
         experts, judge, estimate = expert_team.select_team(ranked, profile, run)
         return run, profile, models, source, ranked, experts, judge, estimate
 
-    def test_task_matrix_provider_diverse_selection_and_capability_floor(self):
+    def test_resource_plan_selection_and_capability_floor(self):
         run, profile, _, _, ranked, experts, judge, estimate = self.prepare("复杂商业、代码和风险建模比较")
         by_id = {model.id: model for model in ranked}
         self.assertGreaterEqual(len(experts), 1)
-        self.assertLessEqual(len(experts), 4)
-        self.assertEqual(experts[0].seat_key, "primary")
+        self.assertLessEqual(len(experts) + 1, 16)
         self.assertIn("red", {item.seat_key for item in experts})
-        authors = {by_id[item.model_id].author for item in experts} | {by_id[judge.model_id].author}
-        self.assertEqual(len(authors), len(experts) + 1)
+        self.assertEqual(len({item.model_id for item in experts} | {judge.model_id}), len(experts) + 1)
         self.assertGreater(estimate, 0)
         chosen = [by_id[item.model_id] for item in experts] + [by_id[judge.model_id]]
         self.assertTrue(all(model.ranks["intelligence-high-to-low"] <= seat_scoring.MAX_INTELLIGENCE_RANK for model in chosen))
         self.assertTrue(all(not seat_scoring._is_explicitly_small(model) for model in chosen))
         self.assertTrue(all(model.max_completion_tokens > 0 for model in chosen))
-        self.assertTrue(all("任务矩阵+CP-SAT" in item.selection_reason for item in experts))
+        self.assertTrue(all("资源需求先行+CP-SAT" in item.selection_reason for item in experts))
         optimization = json.loads((run.output_dir / "team-optimization.json").read_text(encoding="utf-8"))
-        matrix = optimization["task_matrix"]
-        self.assertFalse(matrix["history_input_used"])
-        self.assertFalse(matrix["fixed_team_mode_used"])
-        self.assertFalse(matrix["fixed_parameter_template_used"])
+        requirements = optimization["resource_requirements"]
+        self.assertFalse(requirements["history_input_used"])
+        self.assertFalse(requirements["fixed_team_mode_used"])
+        self.assertFalse(requirements["fixed_seat_template_used"])
+        self.assertFalse(requirements["fixed_prompt_template_used"])
+        self.assertFalse(requirements["fixed_parameter_template_used"])
         self.assertEqual(optimization["expert_count"], len(experts))
-        self.assertEqual(optimization["team_pattern"], f"{len(experts)}-experts-plus-one-judge")
+        self.assertEqual(optimization["team_pattern"], f"{len(experts)}-dynamic-work-packages-plus-synthesis")
+        self.assertTrue(all(row["prompt_modules"] for row in optimization["selected"].values()))
+        self.assertTrue(all(row["resource_profile_id"].startswith("params-") for row in optimization["selected"].values()))
 
     def test_models_and_professions_change_with_task(self):
         *_, coding_experts, coding_judge, _ = self.prepare("审计Python软件仓库的架构、可靠性和安全问题")
@@ -190,6 +192,8 @@ class ExpertTeamTests(unittest.TestCase):
         self.assertEqual(len(dry["expert_requests"]), len(experts))
         self.assertEqual(optimization["expert_count"], len(experts))
         self.assertEqual(optimization["optimizer"], "google-or-tools-cp-sat")
+        self.assertEqual(optimization["version"], 3)
+        self.assertTrue((run.output_dir / "task-resource-requirements.json").exists())
         self.assertTrue((run.output_dir / "artifact-manifest.json").exists())
 
     def test_substantial_length_answer_is_recovered_as_partial(self):
