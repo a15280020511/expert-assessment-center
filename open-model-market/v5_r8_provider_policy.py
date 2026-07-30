@@ -6,6 +6,7 @@ from typing import Any, Mapping
 
 import v5_r8_executor as runtime
 from execution_graph import ExecutionGraph, GraphLimits
+from execution_graph_validator import validate_execution_graph
 from v5_budget_runtime_parity import planning_raw_budget_usd
 
 _INSTALLED = False
@@ -15,11 +16,13 @@ def diversity_aware_preflight(
     graph: ExecutionGraph,
     limits: GraphLimits,
 ) -> tuple[ExecutionGraph, dict[str, Any]]:
-    """Apply all runtime substitutions without invalidating the hard cost budget.
+    """Apply runtime substitutions without invalidating any hard graph invariant.
 
     Reliability is a hard delivery constraint for required nodes. Provider diversity
-    is a soft target unless the graph explicitly marks it required. Neither policy is
-    allowed to replace a budget-feasible node with a graph that cannot run.
+    is a soft target unless the graph explicitly marks it required. A substitution
+    is eligible only when it preserves the raw cost budget *and* the independence
+    contract of the selected graph. The rebuilt graph is fully validated again
+    before the first model call.
     """
     recovery = graph.metadata.get("recovery_pool", {}) if isinstance(graph.metadata, Mapping) else {}
     nodes = {node.node_id: node for node in graph.nodes}
@@ -38,8 +41,21 @@ def diversity_aware_preflight(
         projected = raw_cost() - nodes[node_id].estimated_cost + alternative.estimated_cost
         return projected <= raw_budget + 1e-12
 
+    def independence_safe(node_id: str, alternative: Any) -> bool:
+        """Do not collapse independent replicas onto the same model."""
+        selected = nodes[node_id]
+        group = selected.independence_group
+        if not group:
+            return True
+        return all(
+            peer.node_id == node_id
+            or peer.independence_group != group
+            or peer.model != alternative.model
+            for peer in nodes.values()
+        )
+
     # First satisfy the hard per-node reliability policy. Only an alternative that
-    # also preserves the runtime budget may be installed.
+    # also preserves the runtime budget and independent-model contract may be used.
     for selected in graph.nodes:
         active = nodes[selected.node_id]
         if active.failure_probability <= limits.max_node_failure_probability:
@@ -56,7 +72,11 @@ def diversity_aware_preflight(
             item.estimated_cost,
             -item.estimated_quality,
         ))
-        safe = next((item for item in alternatives if budget_safe(selected.node_id, item)), None)
+        safe = next((
+            item for item in alternatives
+            if budget_safe(selected.node_id, item)
+            and independence_safe(selected.node_id, item)
+        ), None)
         if safe is not None:
             previous = nodes[selected.node_id]
             nodes[selected.node_id] = safe
@@ -68,9 +88,15 @@ def diversity_aware_preflight(
             })
             continue
         for alternative in alternatives:
+            if not independence_safe(selected.node_id, alternative):
+                reason = "reliability-replacement-would-break-independent-model-diversity"
+            elif not budget_safe(selected.node_id, alternative):
+                reason = "reliability-replacement-would-exceed-raw-budget"
+            else:
+                reason = "reliability-replacement-rejected"
             rejected_substitutions.append({
                 "node_id": selected.node_id,
-                "reason": "reliability-replacement-would-exceed-raw-budget",
+                "reason": reason,
                 "candidate": alternative.provider_endpoint,
             })
         if selected.node_id in graph.final_nodes or "synthesis" not in selected.functions:
@@ -86,7 +112,7 @@ def diversity_aware_preflight(
         return result
 
     # Rebalance only when a different-provider candidate remains inside the raw
-    # planning budget implied by the runtime risk multiplier.
+    # budget and does not collapse an independence group onto one model.
     if len(nodes) >= 3 and limits.max_provider_share < 1.0:
         for _ in range(len(nodes)):
             current = counts()
@@ -94,7 +120,7 @@ def diversity_aware_preflight(
             if count / len(nodes) <= limits.max_provider_share + 1e-12:
                 break
             candidates: list[tuple[float, str, Any]] = []
-            unsafe: list[tuple[str, Any]] = []
+            unsafe: list[tuple[str, Any, str]] = []
             for node_id, node in nodes.items():
                 if runtime._provider(node) != overloaded:
                     continue
@@ -106,8 +132,19 @@ def diversity_aware_preflight(
                         or alternative.failure_probability > limits.max_node_failure_probability
                     ):
                         continue
+                    if not independence_safe(node_id, alternative):
+                        unsafe.append((
+                            node_id,
+                            alternative,
+                            "provider-rebalance-would-break-independent-model-diversity",
+                        ))
+                        continue
                     if not budget_safe(node_id, alternative):
-                        unsafe.append((node_id, alternative))
+                        unsafe.append((
+                            node_id,
+                            alternative,
+                            "provider-rebalance-would-exceed-raw-budget",
+                        ))
                         continue
                     penalty = (
                         max(0.0, alternative.estimated_cost - node.estimated_cost)
@@ -117,9 +154,9 @@ def diversity_aware_preflight(
             if not candidates:
                 rejected_substitutions.extend({
                     "node_id": node_id,
-                    "reason": "provider-rebalance-would-exceed-raw-budget",
+                    "reason": reason,
                     "candidate": alternative.provider_endpoint,
-                } for node_id, alternative in unsafe)
+                } for node_id, alternative, reason in unsafe)
                 break
             candidates.sort(key=lambda value: (
                 value[0],
@@ -158,6 +195,17 @@ def diversity_aware_preflight(
     if limits.max_budget_usd is not None and risk_cost > limits.max_budget_usd + 1e-12:
         blockers.append("preflight-risk-adjusted-cost-above-hard-budget")
 
+    # Runtime substitution is a graph mutation. Re-run the complete deterministic
+    # validator rather than assuming that cost/provider checks imply structural safety.
+    structural_issues = [
+        issue for issue in validate_execution_graph(rebuilt, limits)
+        if issue.code != "budget_limit"
+    ]
+    blockers.extend(
+        f"post-substitution-structural:{issue.code}"
+        for issue in structural_issues
+    )
+
     blockers = sorted(set(blockers))
     report = {
         "status": "rejected" if blockers else "pass",
@@ -171,9 +219,16 @@ def diversity_aware_preflight(
         "provider_diversity_required": strict,
         "substitutions": substitutions,
         "rejected_substitutions": rejected_substitutions,
+        "post_substitution_validation": {
+            "status": "PASS" if not structural_issues else "FAIL",
+            "issues": [
+                {"code": issue.code, "message": issue.message, "path": issue.path}
+                for issue in structural_issues
+            ],
+        },
         "warnings": sorted(set(warnings)),
         "blockers": blockers,
-        "policy": "R8 exact budget-safe reliability and provider preflight before first call",
+        "policy": "R8 budget-safe reliability/provider preflight with post-substitution structural validation",
     }
     return rebuilt, report
 
