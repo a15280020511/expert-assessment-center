@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import v5_cost_reliability_hardening as cost_reliability
 import v5_r8_executor as resilient
+import v5_r8_gate_wiring as gate_wiring
 import v5_r8_policy as runtime_policy
 import v5_r8_provider_policy as provider_policy
+import v5_r8_retry_policy as retry_policy
 
 MIN_PROVIDER_RELIABILITY = cost_reliability.MIN_PROVIDER_RELIABILITY
 COST_UNCERTAINTY_MULTIPLIER = cost_reliability.COST_UNCERTAINTY_MULTIPLIER
@@ -22,4 +24,6 @@ def install() -> None:
     runtime_policy.install()
     cost_reliability.install()
     provider_policy.install()
+    gate_wiring.install()
+    retry_policy.install()
     resilient.install()
