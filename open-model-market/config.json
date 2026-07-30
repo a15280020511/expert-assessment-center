@@ -1,6 +1,6 @@
 {
   "selection": {
-    "team_pattern": "dynamic-one-to-four-experts-plus-one-judge",
+    "team_pattern": "resource-demand-first-dynamic-work-packages-plus-synthesis",
     "quality_tier": "value",
     "ranking_limit": 50,
     "minimum_context_length": 16384,
@@ -21,8 +21,9 @@
     },
     "optimizer": {
       "engine": "google-or-tools-cp-sat",
-      "policy_file": "optimization_policy.json",
-      "parameter_templates_file": "parameter_templates.json",
+      "requirement_compiler": "resource_requirements.py",
+      "joint_resource_optimizer": "resource_plan_optimizer.py",
+      "runtime_prompt_binding": "resource_runtime_compat.py",
       "fallback_to_legacy_greedy_selector": false
     },
     "soft_price_caps_per_million": {
