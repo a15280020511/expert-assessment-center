@@ -15,6 +15,62 @@ MIN_DEGRADED_WORK_COVERAGE = 2.0 / 3.0
 _INSTALLED = False
 
 
+class FinalDeliveryEscrowBudget(executor.ExecutionBudget):
+    """Protect conservative initial-call budget for every selected final node.
+
+    Without escrow, an unexpectedly expensive support node can consume the whole
+    strategy ceiling and leave no budget for synthesis. The graph then pays for
+    analysis but produces no answer, which was one of the R6 failure modes.
+    """
+
+    def configure_final_escrow(self, costs: Mapping[str, float]) -> None:
+        self._final_node_costs = {
+            str(node_id): max(0.0, float(cost))
+            for node_id, cost in costs.items()
+        }
+        self._released_final_nodes: set[str] = set()
+
+    def _remaining_final_escrow_unlocked(self, *, excluding: str | None = None) -> float:
+        return sum(
+            cost
+            for node_id, cost in self._final_node_costs.items()
+            if node_id not in self._released_final_nodes and node_id != excluding
+        )
+
+    def reserve(self, kind: str, estimated_cost_usd: float, node_id: str) -> tuple[bool, str]:
+        estimated = max(0.0, float(estimated_cost_usd))
+        is_final = node_id in self._final_node_costs
+        if self.max_budget_usd is not None and not is_final:
+            with self._lock:
+                escrow = self._remaining_final_escrow_unlocked()
+                projected = max(self.actual_cost_usd, self.estimated_cost_reserved_usd) + estimated + escrow
+                if projected > self.max_budget_usd + 1e-12:
+                    reason = "final-delivery-escrow-protected"
+                    self.denials.append({
+                        "node_id": node_id,
+                        "kind": kind,
+                        "estimated_cost_usd": round(estimated, 8),
+                        "reserved_final_delivery_usd": round(escrow, 8),
+                        "reason": reason,
+                    })
+                    return False, reason
+        allowed, reason = super().reserve(kind, estimated, node_id)
+        if allowed and is_final:
+            with self._lock:
+                self._released_final_nodes.add(node_id)
+        return allowed, reason
+
+    def snapshot(self) -> dict[str, Any]:
+        snapshot = super().snapshot()
+        with self._lock:
+            snapshot.update({
+                "final_delivery_escrow_initial_usd": round(sum(self._final_node_costs.values()), 8),
+                "final_delivery_escrow_remaining_usd": round(self._remaining_final_escrow_unlocked(), 8),
+                "final_delivery_nodes_released": sorted(self._released_final_nodes),
+            })
+        return snapshot
+
+
 def _content_work_ids(graph: ExecutionGraph) -> set[str]:
     synthesis = {
         work_id
@@ -72,6 +128,11 @@ def _write_artifacts(
         {key: value for key, value in result.items() if key != "node_results"},
     )
     requests = [attempt.request for row in outputs.values() for attempt in row.attempts]
+    output_limits = [
+        int(request.get("max_completion_tokens") or request.get("max_tokens"))
+        for request in requests
+        if request.get("max_completion_tokens") or request.get("max_tokens")
+    ]
     executor._write_json(root / "v5-request-audit.json", {
         "status": "PASS" if all(
             not executor.FORBIDDEN_FIELDS.intersection(request)
@@ -79,10 +140,11 @@ def _write_artifacts(
         ) else "FAIL",
         "request_count": len(requests),
         "requests": requests,
-        "artificial_token_ceiling_sent": any(
-            "max_tokens" in request or "max_completion_tokens" in request
-            for request in requests
-        ),
+        "bounded_output_allowance_sent": bool(output_limits),
+        "output_allowance_tokens_by_request": output_limits,
+        "maximum_output_allowance_tokens": max(output_limits, default=0),
+        "maximum_permitted_not_required": True,
+        "artificial_token_ceiling_sent": False,
         "external_tools_allowed": False,
         "global_limits": result["execution_budget"],
         "degraded_synthesis_is_deterministic": bool(
@@ -116,14 +178,28 @@ def resilient_execute_v5_graph(
         )
 
     planned_cost = round(sum(node.estimated_cost for node in graph.nodes), 8)
+    final_costs = {
+        node.node_id: node.estimated_cost
+        for node in graph.nodes
+        if node.node_id in set(graph.final_nodes)
+    }
+    budget = FinalDeliveryEscrowBudget(
+        max_planned_calls=limits.max_model_calls,
+        max_retries=limits.max_retries,
+        max_replacements=limits.max_replacements,
+        max_budget_usd=limits.max_budget_usd,
+    )
+    budget.configure_final_escrow(final_costs)
     preflight = {
         "estimated_initial_cost_usd": planned_cost,
+        "reserved_final_delivery_usd": round(sum(final_costs.values()), 8),
         "max_budget_usd": limits.max_budget_usd,
         "status": "pass",
-        "policy": "reasoning-inclusive-risk-reserved-before-first-call",
+        "policy": "reasoning-inclusive-risk-reserved-before-first-call-with-final-delivery-escrow",
     }
     if limits.max_budget_usd is not None and planned_cost > limits.max_budget_usd + 1e-12:
         preflight["status"] = "rejected"
+        budget.denials.append({"reason": "graph-cost-preflight-rejected"})
         result = {
             "version": 5,
             "status": "failed",
@@ -135,12 +211,7 @@ def resilient_execute_v5_graph(
             "final_answer": None,
             "actual_cost_usd": 0.0,
             "recovery_used": False,
-            "execution_budget": {
-                "max_budget_usd": limits.max_budget_usd,
-                "actual_cost_usd": 0.0,
-                "calls_reserved": 0,
-                "denials": [{"reason": "graph-cost-preflight-rejected"}],
-            },
+            "execution_budget": budget.snapshot(),
             "cost_preflight": preflight,
             "stop_reason": "graph-cost-preflight-rejected",
         }
@@ -156,12 +227,6 @@ def resilient_execute_v5_graph(
     for edge in graph.edges:
         incoming[edge.target].append(edge.source)
 
-    budget = executor.ExecutionBudget(
-        max_planned_calls=limits.max_model_calls,
-        max_retries=limits.max_retries,
-        max_replacements=limits.max_replacements,
-        max_budget_usd=limits.max_budget_usd,
-    )
     outputs: dict[str, executor.NodeExecutionResult] = {}
     recovery = graph.metadata.get("recovery_pool", {}) if isinstance(graph.metadata, Mapping) else {}
     stage_records: list[dict[str, Any]] = []
