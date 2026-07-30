@@ -8,8 +8,10 @@ and a 46-call global envelope. It does not raise the 1.5 USD cost ceiling.
 """
 from __future__ import annotations
 
+import json
 import math
 import sys
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import v5_live_benchmark_economy as economy
@@ -25,6 +27,7 @@ VERIFIED_MAX_COMPLETION_PPM = 15.0
 VERIFIED_MINIMUM_RELIABILITY = 0.80
 _INSTALLED = False
 _ORIGINAL_MARKET_COMPILER = v5_value_optimizer.compile_model_endpoint_market
+_ECONOMY_CREDIT_PREFLIGHT = economy.credit_preflight
 
 
 def _within_verified_price_cap(row: Mapping[str, Any]) -> bool:
@@ -117,6 +120,55 @@ def verified_graph_limits(**kwargs: Any) -> OriginalGraphLimits:
     return OriginalGraphLimits(**kwargs)
 
 
+def verified_credit_preflight(
+    config_path: str | Path,
+    output_dir: str | Path,
+) -> int:
+    """Require account-level reserve evidence before any paid comparison call.
+
+    A per-key limit only constrains how much a key may spend; it does not prove
+    that the OpenRouter account has enough purchased credits. The verified
+    cutover benchmark therefore fails closed unless the management-key credits
+    endpoint confirms the full configured reserve.
+    """
+    base_code = _ECONOMY_CREDIT_PREFLIGHT(config_path, output_dir)
+    root = Path(output_dir)
+    report_path = root / "credit-preflight.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    required = float(report.get("required_reserve_usd", 0.0))
+    account_remaining = report.get("account_remaining_usd")
+    blockers = [str(value) for value in report.get("blockers", [])]
+
+    if account_remaining is None:
+        blockers.append("verified-account-credit-reserve-required")
+    else:
+        try:
+            if float(account_remaining) + 1e-12 < required:
+                blockers.append("account-credits-below-economy-reserve")
+        except (TypeError, ValueError):
+            blockers.append("verified-account-credit-reserve-required")
+
+    blockers = sorted(set(blockers))
+    report.update(
+        {
+            "version": max(2, int(report.get("version", 1))),
+            "blockers": blockers,
+            "status": "insufficient" if blockers else "verified",
+            "verified_account_credit_required": True,
+            "verified_account_credit_source": "OPENROUTER_MANAGEMENT_KEY:/api/v1/credits",
+            "model_inference_calls": 0,
+            "production_entrypoint_changed": False,
+            "v3_deleted": False,
+        }
+    )
+    report_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 3 if blockers else base_code
+
+
 def install_verified_alignment() -> None:
     """Install exactly the market and resource bounds proven by zero-call evidence."""
     global _INSTALLED
@@ -139,6 +191,7 @@ def install_verified_alignment() -> None:
         compile_verified_endpoint_market
     )
     economy.base.GraphLimits = verified_graph_limits
+    economy.hardened.credit_preflight = verified_credit_preflight
 
     economy_judges = economy.base._judge_endpoints
 
