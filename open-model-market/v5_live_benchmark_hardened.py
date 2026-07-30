@@ -42,6 +42,14 @@ def _number(value: Any) -> float | None:
         return None
 
 
+def _allowance_field(supported_parameters: Sequence[Any]) -> str:
+    supported = {str(value).casefold() for value in supported_parameters}
+    if "max_completion_tokens" in supported:
+        return "max_completion_tokens"
+    # OpenRouter direct Endpoint inventories currently commonly advertise max_tokens.
+    return "max_tokens"
+
+
 def credit_preflight(config_path: str | Path, output_dir: str | Path) -> int:
     config = base._load_json(config_path)
     required = float(config.get("max_cost_usd", 20.0))
@@ -51,7 +59,7 @@ def credit_preflight(config_path: str | Path, output_dir: str | Path) -> int:
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
     report: dict[str, Any] = {
-        "version": 1,
+        "version": 2,
         "required_reserve_usd": required,
         "output_allowance_tokens": ALLOWANCE,
         "status": "unverified",
@@ -92,14 +100,19 @@ def credit_preflight(config_path: str | Path, output_dir: str | Path) -> int:
                 "error": str(exc),
             }
     blockers: list[str] = []
-    if limit_remaining is not None and limit_remaining + 1e-12 < required:
+    if limit is None or limit_remaining is None:
+        blockers.append("finite-api-key-spending-limit-required")
+    elif limit_remaining + 1e-12 < required:
         blockers.append("api-key-limit-remaining-below-benchmark-reserve")
     if account_remaining is not None and account_remaining + 1e-12 < required:
         blockers.append("account-credits-below-benchmark-reserve")
-    if limit_remaining is None and account_remaining is None:
-        report["warning"] = "Neither a finite API-key remaining limit nor account credits could be verified."
+    if account_remaining is None:
+        report["account_credit_warning"] = (
+            "Account-level credits are not verified. Configure OPENROUTER_MANAGEMENT_KEY for read-only preflight evidence, "
+            "or ensure the account is funded before reopening the benchmark."
+        )
     report["blockers"] = blockers
-    report["status"] = "insufficient" if blockers else ("verified" if account_remaining is not None else "partially_verified")
+    report["status"] = "insufficient" if blockers else ("verified" if account_remaining is not None else "key_limit_verified")
     _write_json(root / "credit-preflight.json", report)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 3 if blockers else 0
@@ -139,11 +152,19 @@ def _annotate_v5_audit(output_dir: str | Path | None) -> None:
     except (OSError, json.JSONDecodeError):
         return
     requests = audit.get("requests") if isinstance(audit.get("requests"), list) else []
-    valid = bool(requests) and all(
-        isinstance(row, Mapping) and int(row.get("max_completion_tokens", -1)) == ALLOWANCE
-        for row in requests
-    )
+    fields: list[str] = []
+    valid = bool(requests)
+    for row in requests:
+        if not isinstance(row, Mapping):
+            valid = False
+            continue
+        field = "max_completion_tokens" if row.get("max_completion_tokens") == ALLOWANCE else "max_tokens" if row.get("max_tokens") == ALLOWANCE else ""
+        if not field:
+            valid = False
+        else:
+            fields.append(field)
     audit["benchmark_output_allowance_tokens"] = ALLOWANCE
+    audit["benchmark_output_allowance_parameters"] = sorted(set(fields))
     audit["benchmark_output_allowance_policy"] = "maximum-permitted-not-required"
     audit["benchmark_output_allowance_consistent"] = valid
     audit["artificial_token_ceiling_sent"] = False if valid else audit.get("artificial_token_ceiling_sent", False)
@@ -156,7 +177,10 @@ def _install_output_allowance() -> None:
 
     def allowed_safe(endpoint: Mapping[str, Any], system: str, user: str) -> dict[str, Any]:
         payload = original_safe(endpoint, system, user)
-        payload["max_completion_tokens"] = ALLOWANCE
+        field = _allowance_field(endpoint.get("supported_parameters", []))
+        payload.pop("max_tokens", None)
+        payload.pop("max_completion_tokens", None)
+        payload[field] = ALLOWANCE
         return payload
 
     base._safe_payload = allowed_safe
@@ -164,7 +188,11 @@ def _install_output_allowance() -> None:
 
     def allowed_node_payload(node: Any, original_task: str, upstream: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         payload = original_node_payload(node, original_task, upstream)
-        payload["max_completion_tokens"] = ALLOWANCE
+        supported = node.parameter_profile.get("supported_parameters", []) if isinstance(node.parameter_profile, Mapping) else []
+        field = _allowance_field(supported)
+        payload.pop("max_tokens", None)
+        payload.pop("max_completion_tokens", None)
+        payload[field] = ALLOWANCE
         return payload
 
     executor.build_node_payload = allowed_node_payload
