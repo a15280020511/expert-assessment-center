@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "open-model-market"))
 
 import v5_live_benchmark as base  # noqa: E402
 import v5_live_benchmark_economy as economy  # noqa: E402
+import v5_live_benchmark_economy_verified as verified  # noqa: E402
 import v5_live_benchmark_final as final  # noqa: E402
 import v5_value_optimizer  # noqa: E402
 
@@ -59,7 +60,11 @@ class TestFinalBenchmarkAlignment(unittest.TestCase):
 
 
 class TestEconomyProgressiveBenchmark(unittest.TestCase):
-    def test_prepare_defaults_to_three_tasks_and_low_hard_limits(self):
+    @classmethod
+    def setUpClass(cls):
+        verified.install_verified_alignment()
+
+    def test_prepare_defaults_to_three_tasks_and_verified_hard_limits(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             event = root / "event.json"
@@ -72,10 +77,48 @@ class TestEconomyProgressiveBenchmark(unittest.TestCase):
             self.assertEqual(config["strategies"], ["v5_joint_graph", "v3"])
             self.assertEqual(config["max_cost_usd"], 1.5)
             self.assertLessEqual(config["max_cost_usd"], economy.HARD_MAX_COST_USD)
-            self.assertEqual(config["max_calls"], 45)
+            self.assertEqual(config["max_calls"], 46)
             self.assertEqual(config["output_allowance_tokens"], 1800)
             self.assertFalse(config["production_entrypoint_changed"])
             self.assertFalse(config["v3_deleted"])
+
+    def test_verified_graph_limits_match_zero_call_evidence(self):
+        limits = economy.base.GraphLimits(
+            max_nodes=16,
+            max_edges=64,
+            max_stages=8,
+            max_model_calls=16,
+            max_retries=2,
+            max_replacements=2,
+            max_budget_usd=0.25,
+        )
+        self.assertEqual(limits.max_nodes, 10)
+        self.assertEqual(limits.max_model_calls, 10)
+        self.assertEqual(limits.max_retries, 0)
+        self.assertEqual(limits.max_replacements, 0)
+        self.assertEqual(limits.max_budget_usd, 0.25)
+
+    def test_verified_price_caps_match_zero_call_feasible_tier(self):
+        self.assertEqual(economy.MAX_PROMPT_PPM, 5.0)
+        self.assertEqual(economy.MAX_COMPLETION_PPM, 15.0)
+        self.assertTrue(
+            verified._within_verified_price_cap(
+                {
+                    "prompt_price_per_million": 5.0,
+                    "completion_price_per_million": 15.0,
+                    "reliability": 0.80,
+                }
+            )
+        )
+        self.assertFalse(
+            verified._within_verified_price_cap(
+                {
+                    "prompt_price_per_million": 5.01,
+                    "completion_price_per_million": 15.0,
+                    "reliability": 0.99,
+                }
+            )
+        )
 
     def test_prepare_rejects_more_than_three_tasks(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -109,7 +152,7 @@ class TestEconomyProgressiveBenchmark(unittest.TestCase):
             root = Path(temp)
             config = root / "benchmark-config.json"
             config.write_text(
-                json.dumps({"max_cost_usd": 1.5, "max_calls": 45, "output_allowance_tokens": 1800}),
+                json.dumps({"max_cost_usd": 1.5, "max_calls": 46, "output_allowance_tokens": 1800}),
                 encoding="utf-8",
             )
             key_payload = {
@@ -137,7 +180,7 @@ class TestEconomyProgressiveBenchmark(unittest.TestCase):
             root = Path(temp)
             config = root / "benchmark-config.json"
             config.write_text(
-                json.dumps({"max_cost_usd": 1.5, "max_calls": 45, "output_allowance_tokens": 1800}),
+                json.dumps({"max_cost_usd": 1.5, "max_calls": 46, "output_allowance_tokens": 1800}),
                 encoding="utf-8",
             )
             key_payload = {
@@ -214,7 +257,8 @@ class TestEconomyProgressiveBenchmark(unittest.TestCase):
     def test_default_cutover_workflow_is_economical_and_benchmark_only(self):
         workflow = (ROOT / ".github" / "workflows" / "v5-live-benchmark-final.yml").read_text(encoding="utf-8")
         self.assertIn("[v5-benchmark-economy]", workflow)
-        self.assertIn("v5_live_benchmark_economy.py run", workflow)
+        self.assertIn("v5_live_benchmark_economy_verified.py run", workflow)
+        self.assertIn("zero-call run 30536650572", workflow)
         self.assertIn('V5_BENCHMARK_OUTPUT_ALLOWANCE_TOKENS: "1800"', workflow)
         self.assertNotIn("v5_live_benchmark_final.py run", workflow)
         self.assertNotIn("update_ref", workflow)
