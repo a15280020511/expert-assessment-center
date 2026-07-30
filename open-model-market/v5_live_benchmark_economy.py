@@ -200,11 +200,16 @@ def _affordable_endpoints(market_bundle: Mapping[str, Any]) -> list[Mapping[str,
 def _judge_evidence_valid(row: Mapping[str, Any]) -> bool:
     models = {str(value) for value in row.get("blind_judge_models", []) if str(value)}
     providers = {str(value) for value in row.get("blind_judge_providers", []) if str(value)}
+    raw_disagreement = row.get("blind_judge_disagreement_points", 100.0)
+    try:
+        disagreement = float(100.0 if raw_disagreement is None else raw_disagreement)
+    except (TypeError, ValueError):
+        disagreement = 100.0
     return bool(
         int(row.get("blind_judge_count", 0) or 0) >= 2
         and len(models) >= 2
         and len(providers) >= 2
-        and float(row.get("blind_judge_disagreement_points", 100.0) or 100.0) <= 35.0
+        and disagreement <= 35.0
     )
 
 
