@@ -1,15 +1,16 @@
-"""Deliver the dynamically computed professional role in the actual node prompt."""
+"""Deliver the computed professional role without weakening output contracts."""
 from __future__ import annotations
 
 import v5_executor as executor
+import v5_output_contract_delivery as contracts
 from execution_graph import SelectedNode
 
 _INSTALLED = False
-_ORIGINAL_SYSTEM_PROMPT = executor._system_prompt
 
 
 def dynamic_system_prompt(node: SelectedNode) -> str:
-    base = _ORIGINAL_SYSTEM_PROMPT(node)
+    """Prepend the dynamic role to the canonical contract-aware system prompt."""
+    base = contracts.contract_aware_system_prompt(node)
     role = str(node.prompt_profile.get("professional_role") or "").strip()
     domains = [str(value) for value in node.prompt_profile.get("dominant_domains", [])]
     operations = [str(value) for value in node.prompt_profile.get("cognitive_operations", [])]
@@ -25,8 +26,8 @@ def dynamic_system_prompt(node: SelectedNode) -> str:
 
 
 def install() -> None:
+    """Install after the contract layer and remain deterministic across call order."""
     global _INSTALLED
-    if _INSTALLED:
-        return
+    contracts.install()
     executor._system_prompt = dynamic_system_prompt
     _INSTALLED = True
