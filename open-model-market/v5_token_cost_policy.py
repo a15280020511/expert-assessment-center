@@ -108,24 +108,21 @@ def usage_audited_candidate_for(*args: Any, **kwargs: Any) -> Any:
     endpoint = args[4] if len(args) > 4 and isinstance(args[4], Mapping) else {}
     works = args[2] if len(args) > 2 and isinstance(args[2], Sequence) else ()
     endpoint_max = _int(endpoint.get("max_completion_tokens"), 0)
-    usage = sum(
-        estimated_completion_usage(work, endpoint_max)
-        for work in works
-        if isinstance(work, Mapping)
-    )
-    allowance = sum(
-        cost.completion_envelope(work, endpoint_max)
-        for work in works
-        if isinstance(work, Mapping)
+    discount = max(0.1, float(kwargs.get("bundle_discount", 1.0)))
+    usage = int(
+        math.ceil(
+            sum(
+                estimated_completion_usage(work, endpoint_max)
+                for work in works
+                if isinstance(work, Mapping)
+            )
+            * discount
+        )
     )
     profile = dict(candidate.parameter_profile)
     profile.update(
         {
             "estimated_completion_usage_tokens": max(1, usage),
-            "recommended_output_allowance_tokens": min(
-                cost.MAX_OUTPUT_ALLOWANCE_TOKENS,
-                max(1_024, allowance),
-            ),
             "cost_estimation_policy": (
                 "reasoning-inclusive-p95-usage-not-max-allowance-r8"
             ),
@@ -134,6 +131,7 @@ def usage_audited_candidate_for(*args: Any, **kwargs: Any) -> Any:
             "structured_p95_token_usage_multiplier": (
                 STRUCTURED_P95_TOKEN_USAGE_MULTIPLIER
             ),
+            "bundle_discount_applied_to_usage_estimate": round(discount, 6),
         }
     )
     return replace(candidate, parameter_profile=profile)
