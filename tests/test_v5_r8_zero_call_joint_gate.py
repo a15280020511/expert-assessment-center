@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
@@ -74,17 +75,60 @@ def write_fixture(root: Path, **kwargs):
         )
 
 
+def runtime_pass(*args, **kwargs):
+    return {
+        "status": "pass",
+        "passed": True,
+        "selected_candidate_ids": [],
+        "selected_node_count": 9,
+        "selected_models": ["vendor/model-a", "vendor/model-b"],
+        "selected_provider_endpoints": ["vendor/model-a@provider"],
+        "estimated_total_cost_usd": 0.18,
+        "runtime_preflight": {"status": "pass", "blockers": []},
+        "model_inference_calls": 0,
+        "actual_cost_usd": 0.0,
+    }
+
+
 class TestV5R8ZeroCallJointGate(unittest.TestCase):
+    def setUp(self):
+        self.runtime_patch = patch.object(gate, "_exact_runtime_preflight", side_effect=runtime_pass)
+        self.runtime_patch.start()
+        self.addCleanup(self.runtime_patch.stop)
+
     def test_three_exact_nine_node_plans_unlock_paid_inference(self):
         with tempfile.TemporaryDirectory() as temp:
             write_fixture(Path(temp))
             report = gate.evaluate(temp, max_nodes=9, max_cost_usd=0.25)
         self.assertEqual(report["status"], "passed")
         self.assertTrue(report["paid_inference_allowed"])
+        self.assertTrue(report["runtime_preflight_parity_verified"])
         self.assertEqual(len(report["tasks"]), 3)
         self.assertTrue(all(row["allowance_usage_verified"] for row in report["tasks"]))
         self.assertFalse(report["production_entrypoint_changed"])
         self.assertFalse(report["v3_deleted"])
+
+    def test_runtime_preflight_blocker_stops_paid_inference(self):
+        self.runtime_patch.stop()
+        self.runtime_patch = patch.object(
+            gate,
+            "_exact_runtime_preflight",
+            return_value={
+                **runtime_pass(),
+                "status": "rejected",
+                "passed": False,
+                "runtime_preflight": {
+                    "status": "rejected",
+                    "blockers": ["preflight-risk-adjusted-cost-above-hard-budget"],
+                },
+            },
+        )
+        self.runtime_patch.start()
+        with tempfile.TemporaryDirectory() as temp:
+            write_fixture(Path(temp))
+            report = gate.evaluate(temp)
+        self.assertFalse(report["paid_inference_allowed"])
+        self.assertTrue(any("runtime-preflight" in item for item in report["blockers"]))
 
     def test_over_budget_plan_blocks_paid_inference(self):
         with tempfile.TemporaryDirectory() as temp:
