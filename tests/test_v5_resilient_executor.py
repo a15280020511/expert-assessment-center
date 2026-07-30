@@ -122,7 +122,7 @@ class TestV5ResilientExecutor(unittest.TestCase):
                     limits=GraphLimits(
                         max_retries=0,
                         max_replacements=0,
-                        max_budget_usd=0.002,
+                        max_budget_usd=0.0035,
                         cost_risk_multiplier=4.0,
                     ),
                 )
