@@ -329,9 +329,10 @@ class TestEconomyProgressiveBenchmark(unittest.TestCase):
     def test_default_cutover_workflow_is_economical_and_benchmark_only(self):
         workflow = (ROOT / ".github" / "workflows" / "v5-live-benchmark-final.yml").read_text(encoding="utf-8")
         self.assertIn("[v5-benchmark-economy]", workflow)
-        self.assertIn("v5_live_benchmark_economy_verified.py run", workflow)
+        self.assertIn("v5_live_benchmark_economy_r6.py run", workflow)
         self.assertIn("zero-call run 30536650572", workflow)
-        self.assertIn('V5_BENCHMARK_OUTPUT_ALLOWANCE_TOKENS: "1800"', workflow)
+        self.assertIn('V5_BENCHMARK_OUTPUT_ALLOWANCE_TOKENS: "10000"', workflow)
+        self.assertNotIn("secrets.OPENROUTER_MANAGEMENT_KEY", workflow)
         self.assertNotIn("v5_live_benchmark_final.py run", workflow)
         self.assertNotIn("update_ref", workflow)
         self.assertNotIn("merge_pull_request", workflow)
