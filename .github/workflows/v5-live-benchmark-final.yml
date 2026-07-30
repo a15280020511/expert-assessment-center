@@ -1,4 +1,4 @@
-name: V5 Economy Blind Benchmark
+name: V5 Resilient Economy Blind Benchmark
 
 on:
   issues:
@@ -52,25 +52,25 @@ jobs:
       - name: Parse economical benchmark request
         id: prepare
         run: |
-          python open-model-market/v5_live_benchmark_economy_r6.py prepare \
+          python open-model-market/v5_live_benchmark_resilient.py prepare \
             --event-path "$GITHUB_EVENT_PATH" \
             --output-dir v5-live-benchmark-artifacts
 
       - name: Publish benchmark acceptance
         run: |
           cat > benchmark-accepted.md <<EOF
-          ## V5_ECONOMY_BENCHMARK_ACCEPTED
+          ## V5_RESILIENT_ECONOMY_BENCHMARK_ACCEPTED
 
           - Tasks: ${{ steps.prepare.outputs.task_count }} diverse real tasks
-          - Strategies: active V5 cost-performance graph versus preserved V3 only
+          - Strategies: resilient V5 cost-performance graph versus preserved V3 only
           - Blind judges: two distinct models/providers per task; third only when disagreement exceeds 15 points
           - Global actual-cost ceiling: ${{ steps.prepare.outputs.max_cost_usd }} USD
           - Global paid-call ceiling: ${{ steps.prepare.outputs.max_calls }}
           - Output allowance: up to ${{ steps.prepare.outputs.output_allowance_tokens }} completion tokens; not required output
-          - Feasibility evidence: zero-call run 30536650572, 3/3 tasks ready
-          - V5 graph ceiling: 10 selected nodes per task; retries and replacements disabled
+          - V5 execution: required/optional/final node policy with coverage-qualified degraded delivery
+          - Recovery: same-endpoint retry disabled; at most one bounded cross-provider replacement
+          - Cost safety: risk-adjusted pre-call envelope and zero-call rejection when unsafe
           - Endpoint ceiling: prompt 5 USD/M, completion 15 USD/M, reliability at least 0.80
-          - Expensive strongest/cheapest/fixed/random reference baselines: not executed
           - V3 production entry: preserved and unchanged during benchmark
           - Run: ${RUN_URL}
           EOF
@@ -91,7 +91,7 @@ jobs:
         if: steps.secret.outputs.present != 'true'
         run: |
           cat > benchmark-rejected.md <<EOF
-          ## V5_ECONOMY_BENCHMARK_REJECTED
+          ## V5_RESILIENT_ECONOMY_BENCHMARK_REJECTED
 
           The repository is missing the Actions Secret OPENROUTER_API_KEY.
 
@@ -109,7 +109,7 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          python open-model-market/v5_live_benchmark_economy_r6.py credit-check \
+          python open-model-market/v5_live_benchmark_resilient.py credit-check \
             --config v5-live-benchmark-artifacts/benchmark-config.json \
             --output-dir v5-live-benchmark-artifacts
 
@@ -121,7 +121,7 @@ jobs:
           from pathlib import Path
           path = Path("v5-live-benchmark-artifacts/credit-preflight.json")
           data = json.loads(path.read_text()) if path.exists() else {}
-          print("## V5_ECONOMY_BENCHMARK_REJECTED")
+          print("## V5_RESILIENT_ECONOMY_BENCHMARK_REJECTED")
           print()
           print("已在任何模型推理前停止：可验证额度低于本次低成本硬上限。")
           print()
@@ -147,7 +147,7 @@ jobs:
           set -o pipefail
           mkdir -p "$(dirname "$MODEL_HISTORY_PATH")"
           printf '{"version":1,"models":{}}\n' > "$MODEL_HISTORY_PATH"
-          python open-model-market/v5_live_benchmark_economy_r6.py run \
+          python open-model-market/v5_live_benchmark_resilient.py run \
             --config v5-live-benchmark-artifacts/benchmark-config.json \
             --suite open-model-market/v5_live_benchmark_suite.json \
             --output-dir v5-live-benchmark-artifacts \
@@ -188,7 +188,7 @@ jobs:
               --run-url "$RUN_URL" > benchmark-result.md
           else
             cat > benchmark-result.md <<EOF
-          ## V5_ECONOMY_BENCHMARK_FAILED
+          ## V5_RESILIENT_ECONOMY_BENCHMARK_FAILED
 
           No complete benchmark result was generated.
 
