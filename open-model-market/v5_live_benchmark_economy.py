@@ -1,18 +1,10 @@
 #!/usr/bin/env python3
-"""Economical progressive live benchmark for V5 versus the preserved V3 entry.
-
-The benchmark spends only on evidence that can affect the production decision:
-three diverse tasks, the active V5 graph, the active V3 baseline, and adaptive
-blind judging. Expensive reference baselines remain available in the legacy full
-benchmark code but are not executed by the default final gate.
-"""
+"""Low-cost three-task live cutover benchmark for active V5 versus preserved V3."""
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
-import random
 import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -38,8 +30,6 @@ DEFAULT_OUTPUT_ALLOWANCE = 1800
 MAX_TASKS = 3
 MAX_PROMPT_PPM = 2.50
 MAX_COMPLETION_PPM = 8.00
-DECISIVE_SINGLE_JUDGE_MARGIN_POINTS = 8.0
-SECOND_JUDGE_DISAGREEMENT_TRIGGER_POINTS = 15.0
 
 
 def _write_json(path: str | Path, value: Any) -> None:
@@ -65,12 +55,8 @@ def prepare(event_path: str | Path, output_dir: str | Path) -> int:
             raise base.LiveBenchmarkError("Issue body must be one JSON object")
         raw = parsed
     allowed = {
-        "benchmark_id",
-        "max_cost_usd",
-        "max_calls",
-        "max_strategy_cost_usd",
-        "task_ids",
-        "output_allowance_tokens",
+        "benchmark_id", "max_cost_usd", "max_calls", "max_strategy_cost_usd",
+        "task_ids", "output_allowance_tokens",
     }
     unknown = sorted(set(raw) - allowed)
     if unknown:
@@ -90,14 +76,11 @@ def prepare(event_path: str | Path, output_dir: str | Path) -> int:
 
     max_cost = max(0.50, min(HARD_MAX_COST_USD, float(raw.get("max_cost_usd", DEFAULT_MAX_COST_USD))))
     max_calls = max(12, min(HARD_MAX_CALLS, int(raw.get("max_calls", DEFAULT_MAX_CALLS))))
-    strategy_cap = max(
-        0.10,
-        min(0.40, float(raw.get("max_strategy_cost_usd", DEFAULT_STRATEGY_CAP_USD))),
-    )
+    strategy_cap = max(0.10, min(0.40, float(raw.get("max_strategy_cost_usd", DEFAULT_STRATEGY_CAP_USD))))
     allowance = max(1024, min(3000, int(raw.get("output_allowance_tokens", DEFAULT_OUTPUT_ALLOWANCE))))
     config = {
         "version": 2,
-        "mode": "economy-progressive-cutover",
+        "mode": "economy-cutover",
         "benchmark_id": str(raw.get("benchmark_id") or "v5-economy-cutover-20260730"),
         "max_cost_usd": round(max_cost, 4),
         "max_calls": max_calls,
@@ -105,11 +88,7 @@ def prepare(event_path: str | Path, output_dir: str | Path) -> int:
         "output_allowance_tokens": allowance,
         "task_ids": task_ids,
         "strategies": ["v5_joint_graph", "v3"],
-        "judge_policy": {
-            "primary_judges": 1,
-            "second_judge_when_margin_below_points": DECISIVE_SINGLE_JUDGE_MARGIN_POINTS,
-            "third_judge_when_disagreement_above_points": SECOND_JUDGE_DISAGREEMENT_TRIGGER_POINTS,
-        },
+        "judge_policy": "two independent judges; third only when disagreement exceeds 15 points",
         "issue_number": int(issue.get("number") or 0),
         "production_entrypoint_changed": False,
         "v3_deleted": False,
@@ -124,13 +103,6 @@ def prepare(event_path: str | Path, output_dir: str | Path) -> int:
 
 
 def credit_preflight(config_path: str | Path, output_dir: str | Path) -> int:
-    """Use the low reserve as the only required funding proof.
-
-    A finite key limit or management-key account balance is checked when available.
-    An unbounded key without management evidence is accepted because the runtime has
-    a hard <=2 USD ledger and fail-fast HTTP 402 handling; this avoids requiring a
-    second credential merely to run a small benchmark.
-    """
     config = base._load_json(config_path)
     required = float(config.get("max_cost_usd", DEFAULT_MAX_COST_USD))
     if required > HARD_MAX_COST_USD + 1e-12:
@@ -160,12 +132,12 @@ def credit_preflight(config_path: str | Path, output_dir: str | Path) -> int:
                 account_remaining = max(0.0, total - usage)
                 if account_remaining + 1e-12 < required:
                     blockers.append("account-credits-below-economy-reserve")
-        except Exception as exc:  # noqa: BLE001 - preserve evidence, runtime remains bounded
+        except Exception as exc:  # noqa: BLE001
             account_error = str(exc)
 
     report = {
         "version": 1,
-        "mode": "economy-progressive-cutover",
+        "mode": "economy-cutover",
         "required_reserve_usd": required,
         "hard_reserve_ceiling_usd": HARD_MAX_COST_USD,
         "runtime_global_call_ceiling": int(config.get("max_calls", DEFAULT_MAX_CALLS)),
@@ -188,7 +160,7 @@ def credit_preflight(config_path: str | Path, output_dir: str | Path) -> int:
             "only V5 and V3 are executed",
             "maximum three tasks",
             "affordable endpoint caps",
-            "adaptive one-to-three blind judges",
+            "two independent judges per task; third only on disagreement",
             "first HTTP 402 stops the benchmark",
         ],
         "model_inference_calls": 0,
@@ -210,186 +182,26 @@ def _affordable_model(model: Any) -> bool:
 
 def _affordable_endpoints(market_bundle: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     rows = [
-        row
-        for row in market_bundle.get("endpoints", [])
+        row for row in market_bundle.get("endpoints", [])
         if isinstance(row, Mapping)
         and float(row.get("prompt_price_per_million", math.inf)) <= MAX_PROMPT_PPM
         and float(row.get("completion_price_per_million", math.inf)) <= MAX_COMPLETION_PPM
         and float(row.get("reliability", 0.0)) >= 0.80
     ]
-    rows.sort(
-        key=lambda row: (
-            -float(row.get("benchmark_score", 0.0)),
-            -float(row.get("reliability", 0.0)),
-            base._endpoint_cost(row),
-            str(row.get("endpoint_id")),
-        )
-    )
+    rows.sort(key=lambda row: (
+        -float(row.get("benchmark_score", 0.0)),
+        -float(row.get("reliability", 0.0)),
+        base._endpoint_cost(row),
+        str(row.get("endpoint_id")),
+    ))
     return rows
 
 
-def _parse_judge_response(
-    endpoint: Mapping[str, Any],
-    response: Mapping[str, Any],
-    latency: float,
-    labels: Sequence[str],
-) -> dict[str, Any]:
-    parsed = base._extract_json_object(base._answer(response))
-    score_rows = parsed.get("scores") if isinstance(parsed.get("scores"), Mapping) else {}
-    if not all(label in score_rows for label in labels):
-        raise base.LiveBenchmarkError("judge JSON omitted one or more anonymous candidates")
-    normalized: dict[str, Any] = {}
-    for label in labels:
-        row = score_rows[label] if isinstance(score_rows[label], Mapping) else {}
-        normalized[label] = {
-            "total_score": max(0.0, min(100.0, float(row.get("total_score", 0.0)))),
-            "fatal_errors": [str(value) for value in row.get("fatal_errors", [])]
-            if isinstance(row.get("fatal_errors"), list)
-            else [],
-            "brief_reason": str(row.get("brief_reason") or ""),
-            "criterion_scores": dict(row.get("criterion_scores") or {})
-            if isinstance(row.get("criterion_scores"), Mapping)
-            else {},
-        }
-    return {
-        "model": endpoint.get("model_id"),
-        "provider": endpoint.get("provider_slug"),
-        "latency_seconds": round(latency, 6),
-        "cost_usd": base._actual_cost(response),
-        "scores": normalized,
-        "ranking": list(parsed.get("ranking") or []),
-        "global_notes": str(parsed.get("global_notes") or ""),
-    }
-
-
-def evaluate_task(
-    run: Any,
-    task: Mapping[str, Any],
-    outcomes: Sequence[base.StrategyOutcome],
-    market_bundle: Mapping[str, Any],
-    ledger: base.GlobalLedger,
-    root: Path,
-) -> tuple[dict[str, float], dict[str, Any]]:
-    task_id = str(task["task_id"])
-    if {row.strategy for row in outcomes} != {"v5_joint_graph", "v3"}:
-        raise base.LiveBenchmarkError("economy benchmark only accepts V5 and V3 outcomes")
-
-    rng = random.Random(int(hashlib.sha256(task_id.encode()).hexdigest()[:12], 16))
-    labels = ["C1", "C2"]
-    rng.shuffle(labels)
-    strategy_to_label = {outcome.strategy: label for outcome, label in zip(outcomes, labels)}
-    label_to_strategy = {label: strategy for strategy, label in strategy_to_label.items()}
-    anonymous_outputs = {
-        strategy_to_label[outcome.strategy]: outcome.answer or "[EXECUTION_FAILED: 未生成可用答案]"
-        for outcome in outcomes
-    }
-    used_models = {model for outcome in outcomes for model in outcome.models}
-    judges = base._judge_endpoints(market_bundle, used_models)
-    if not judges:
-        raise base.LiveBenchmarkError("no blind judge endpoint is available")
-
-    system, user = base._judge_prompt(task, anonymous_outputs)
-    successful: list[dict[str, Any]] = []
-    attempts: list[dict[str, Any]] = []
-    for endpoint in judges[:3]:
-        payload = base._safe_payload(endpoint, system, user)
-        try:
-            response, latency = base._direct_call(
-                run,
-                endpoint,
-                payload,
-                ledger,
-                task_id=task_id,
-                strategy="blind_judge",
-            )
-            item = _parse_judge_response(endpoint, response, latency, labels)
-            successful.append(item)
-            attempts.append({"status": "success", **item})
-        except Exception as exc:  # noqa: BLE001
-            attempts.append(
-                {
-                    "status": "failed",
-                    "model": endpoint.get("model_id"),
-                    "provider": endpoint.get("provider_slug"),
-                    "error": str(exc),
-                }
-            )
-            continue
-
-        if len(successful) == 1:
-            first = successful[0]
-            values = [float(first["scores"][label]["total_score"]) for label in labels]
-            fatal = any(bool(first["scores"][label]["fatal_errors"]) for label in labels)
-            if abs(values[0] - values[1]) >= DECISIVE_SINGLE_JUDGE_MARGIN_POINTS and not fatal:
-                break
-            continue
-
-        differences = [
-            abs(float(successful[0]["scores"][label]["total_score"]) - float(successful[1]["scores"][label]["total_score"]))
-            for label in labels
-        ]
-        if max(differences, default=0.0) <= SECOND_JUDGE_DISAGREEMENT_TRIGGER_POINTS:
-            break
-
-    if not successful:
-        raise base.LiveBenchmarkError("no blind judge returned valid complete score JSON")
-    if len(successful) == 1:
-        values = [float(successful[0]["scores"][label]["total_score"]) for label in labels]
-        fatal = any(bool(successful[0]["scores"][label]["fatal_errors"]) for label in labels)
-        if abs(values[0] - values[1]) < DECISIVE_SINGLE_JUDGE_MARGIN_POINTS or fatal:
-            raise base.LiveBenchmarkError("single blind judge was not decisive; a second valid judge was required")
-
-    scores: dict[str, float] = {}
-    fatal_by_strategy: dict[str, bool] = {}
-    disagreement_by_strategy: dict[str, float] = {}
-    for label, strategy in label_to_strategy.items():
-        values = [float(row["scores"][label]["total_score"]) for row in successful]
-        fatal_votes = sum(bool(row["scores"][label]["fatal_errors"]) for row in successful)
-        average = sum(values) / len(values)
-        if fatal_votes > len(successful) / 2:
-            average = min(average, 40.0)
-        scores[strategy] = round(average / 100.0, 6)
-        fatal_by_strategy[strategy] = fatal_votes > len(successful) / 2
-        disagreement_by_strategy[strategy] = round(max(values) - min(values), 6)
-
-    first_scores = successful[0]["scores"]
-    primary_margin = abs(
-        float(first_scores[strategy_to_label["v5_joint_graph"]]["total_score"])
-        - float(first_scores[strategy_to_label["v3"]]["total_score"])
-    )
-    audit = {
-        "version": 2,
-        "mode": "adaptive-economy-blind-judging",
-        "task_id": task_id,
-        "strategy_to_anonymous_label": strategy_to_label,
-        "judge_count": len(successful),
-        "judge_models": [str(row["model"]) for row in successful],
-        "judge_providers": [str(row["provider"]) for row in successful],
-        "distinct_judge_models": len({str(row["model"]) for row in successful}),
-        "distinct_judge_providers": len({str(row["provider"]) for row in successful}),
-        "decisive_single_judge": len(successful) == 1,
-        "primary_margin_points": round(primary_margin, 6),
-        "single_judge_required_margin_points": DECISIVE_SINGLE_JUDGE_MARGIN_POINTS,
-        "fatal_by_strategy": fatal_by_strategy,
-        "disagreement_points_by_strategy": disagreement_by_strategy,
-        "attempts": attempts,
-    }
-    _write_json(root / "blind-evaluation.json", audit)
-    return scores, audit
-
-
 def _judge_evidence_valid(row: Mapping[str, Any]) -> bool:
-    count = int(row.get("blind_judge_count", 0) or 0)
-    if count == 1:
-        return bool(
-            row.get("blind_decisive_single_judge")
-            and float(row.get("blind_primary_margin_points", 0.0) or 0.0)
-            >= DECISIVE_SINGLE_JUDGE_MARGIN_POINTS
-        )
     models = {str(value) for value in row.get("blind_judge_models", []) if str(value)}
     providers = {str(value) for value in row.get("blind_judge_providers", []) if str(value)}
     return bool(
-        count >= 2
+        int(row.get("blind_judge_count", 0) or 0) >= 2
         and len(models) >= 2
         and len(providers) >= 2
         and float(row.get("blind_judge_disagreement_points", 100.0) or 100.0) <= 35.0
@@ -418,8 +230,7 @@ def economy_cutover_gate(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]
         unique_tasks = {str(row.get("task_id") or "") for row in rows if row.get("task_id")}
         missing_tasks = sorted(expected_tasks - unique_tasks)
         valid_rows = [
-            row
-            for row in rows
+            row for row in rows
             if row.get("status") == "success"
             and not row.get("safety_failure")
             and not row.get("blind_fatal_error")
@@ -429,33 +240,28 @@ def economy_cutover_gate(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]
             per_task_scores.setdefault(str(row.get("task_id") or ""), {})[strategy] = float(
                 row.get("blind_quality_score", 0.0)
             )
+        invalid_judging = sorted({
+            str(row.get("task_id") or "") for row in rows if not _judge_evidence_valid(row)
+        })
         summaries[strategy] = {
             "task_count": len(rows),
             "unique_task_count": len(unique_tasks),
             "missing_tasks": missing_tasks,
             "success_rate": round(len(valid_rows) / max(1, len(expected_tasks)), 6),
             "mean_blind_quality": round(
-                sum(float(row.get("blind_quality_score", 0.0)) for row in valid_rows) / max(1, len(valid_rows)),
-                6,
+                sum(float(row.get("blind_quality_score", 0.0)) for row in valid_rows) / max(1, len(valid_rows)), 6
             ),
             "mean_cost_usd": round(
-                sum(float(row.get("actual_cost_usd", 0.0)) for row in valid_rows) / max(1, len(valid_rows)),
-                8,
+                sum(float(row.get("actual_cost_usd", 0.0)) for row in valid_rows) / max(1, len(valid_rows)), 8
             ),
             "safety_failures": sum(bool(row.get("safety_failure")) for row in rows),
             "blind_fatal_errors": sum(bool(row.get("blind_fatal_error")) for row in rows),
-            "invalid_judge_evidence_tasks": sorted(
-                {
-                    str(row.get("task_id") or "")
-                    for row in rows
-                    if not _judge_evidence_valid(row)
-                }
-            ),
+            "invalid_judge_evidence_tasks": invalid_judging,
         }
         if missing_tasks:
             blockers.append(f"{strategy}:missing-tasks:" + ",".join(missing_tasks))
-        if summaries[strategy]["invalid_judge_evidence_tasks"]:
-            blockers.append(f"{strategy}:invalid-adaptive-blind-judging")
+        if invalid_judging:
+            blockers.append(f"{strategy}:invalid-independent-blind-judging")
 
     v5 = summaries.get("v5_joint_graph", {})
     v3 = summaries.get("v3", {})
@@ -474,8 +280,7 @@ def economy_cutover_gate(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]
         blockers.append("v5-cost-regression-above-policy")
 
     task_wins = sum(
-        1
-        for scores in per_task_scores.values()
+        1 for scores in per_task_scores.values()
         if scores.get("v5_joint_graph", 0.0) > scores.get("v3", 0.0)
     )
     if task_wins < 2:
@@ -484,7 +289,7 @@ def economy_cutover_gate(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]
     blockers = sorted(set(blockers))
     return {
         "version": 1,
-        "benchmark_type": "economy-progressive-live-blind-comparison",
+        "benchmark_type": "economy-live-blind-comparison",
         "task_ids": tasks,
         "summaries": summaries,
         "task_wins_v5": task_wins,
@@ -493,7 +298,8 @@ def economy_cutover_gate(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]
         "cutover_policy": {
             "minimum_tasks": 3,
             "required_strategies": ["v5_joint_graph", "v3"],
-            "adaptive_blind_judges": "one when margin >=8 points; otherwise two, third on >15-point disagreement",
+            "minimum_independent_judges_per_result": 2,
+            "third_judge_only_on_disagreement_above_points": 15,
             "minimum_v5_task_wins": 2,
             "minimum_v5_success_rate": 1.0,
             "minimum_quality_improvement_over_v3": 0.02,
@@ -539,30 +345,17 @@ def run_benchmark(config_path: str | Path, suite_path: str | Path, output_dir: s
         outcomes: list[base.StrategyOutcome] = []
         try:
             v5_outcome, market_bundle = base._v5_strategy(
-                task,
-                task_root / "v5_joint_graph",
-                ledger,
-                models,
-                endpoint_cache,
+                task, task_root / "v5_joint_graph", ledger, models, endpoint_cache,
                 min(strategy_cap, max(0.10, ledger.remaining_cost())),
             )
             outcomes.append(v5_outcome)
-            outcomes.append(
-                base._v3_strategy(
-                    task,
-                    task_root / "v3",
-                    ledger,
-                    min(strategy_cap, max(0.10, ledger.remaining_cost())),
-                )
-            )
+            outcomes.append(base._v3_strategy(
+                task, task_root / "v3", ledger,
+                min(strategy_cap, max(0.10, ledger.remaining_cost())),
+            ))
             direct_run = market.build_run_config(base._namespace(base._task_text(task), task_root / "judge", ranking_limit=50))
             scores, evaluation = base._evaluate_task(
-                direct_run,
-                task,
-                outcomes,
-                market_bundle,
-                ledger,
-                task_root,
+                direct_run, task, outcomes, market_bundle, ledger, task_root
             )
             for outcome in outcomes:
                 row = outcome.record()
@@ -574,8 +367,6 @@ def run_benchmark(config_path: str | Path, suite_path: str | Path, output_dir: s
                 row["blind_judge_disagreement_points"] = float(
                     evaluation["disagreement_points_by_strategy"].get(outcome.strategy, 100.0)
                 )
-                row["blind_decisive_single_judge"] = bool(evaluation.get("decisive_single_judge"))
-                row["blind_primary_margin_points"] = float(evaluation.get("primary_margin_points", 0.0))
                 records.append(row)
             task_bundle = {
                 "task_id": task_id,
@@ -594,20 +385,18 @@ def run_benchmark(config_path: str | Path, suite_path: str | Path, output_dir: s
         except Exception as exc:  # noqa: BLE001
             status = "technical_failure"
             error = f"task {task_id}: {exc}"
-            task_bundles.append(
-                {
-                    "task_id": task_id,
-                    "status": "technical_failure",
-                    "error": str(exc),
-                    "outcomes": [outcome.record() for outcome in outcomes],
-                }
-            )
+            task_bundles.append({
+                "task_id": task_id,
+                "status": "technical_failure",
+                "error": str(exc),
+                "outcomes": [outcome.record() for outcome in outcomes],
+            })
             break
 
     cutover = economy_cutover_gate(records)
     bundle = {
         "version": 2,
-        "mode": "economy-progressive-cutover",
+        "mode": "economy-cutover",
         "benchmark_id": config["benchmark_id"],
         "status": status,
         "error": error or None,
@@ -645,8 +434,6 @@ def _install_economy_controls() -> None:
 
     base._rank_v5_models = affordable_rank
 
-    original_graph_limits = OriginalGraphLimits
-
     def economy_graph_limits(**kwargs: Any) -> OriginalGraphLimits:
         kwargs["max_nodes"] = min(int(kwargs.get("max_nodes", 8)), 8)
         kwargs["max_edges"] = min(int(kwargs.get("max_edges", 32)), 32)
@@ -654,7 +441,7 @@ def _install_economy_controls() -> None:
         kwargs["max_model_calls"] = min(int(kwargs.get("max_model_calls", 8)), 8)
         kwargs["max_retries"] = 0
         kwargs["max_replacements"] = min(int(kwargs.get("max_replacements", 1)), 1)
-        return original_graph_limits(**kwargs)
+        return OriginalGraphLimits(**kwargs)
 
     base.GraphLimits = economy_graph_limits
 
@@ -663,7 +450,9 @@ def _install_economy_controls() -> None:
     def affordable_judges(market_bundle: Mapping[str, Any], used_models: set[str]) -> list[Mapping[str, Any]]:
         scoped = dict(market_bundle)
         affordable = _affordable_endpoints(market_bundle)
-        scoped["endpoints"] = affordable if affordable else list(market_bundle.get("endpoints", []))
+        scoped["endpoints"] = affordable if len({str(row.get("model_id")) for row in affordable}) >= 2 else list(
+            market_bundle.get("endpoints", [])
+        )
         return original_judges(scoped, used_models)
 
     base._judge_endpoints = affordable_judges
@@ -685,7 +474,6 @@ def _install_economy_controls() -> None:
     base.subprocess.run = bounded_v3_subprocess
     base.prepare = prepare
     base.run_benchmark = run_benchmark
-    base._evaluate_task = evaluate_task
     hardened.credit_preflight = credit_preflight
 
 
