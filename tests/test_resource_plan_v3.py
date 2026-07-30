@@ -32,7 +32,7 @@ class ResourcePlanV3Tests(unittest.TestCase):
         )
 
     @staticmethod
-    def run(task, output_dir):
+    def run_config(task, output_dir):
         return SimpleNamespace(
             task=task,
             max_estimated_cost_usd=None,
@@ -71,7 +71,7 @@ class ResourcePlanV3Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             data = requirements.compile_requirements(
                 self.profile(domains=["business", "legal"]),
-                self.run("比较投资方案，核验证据、计算收益并找出失败风险", Path(temp)),
+                self.run_config("比较投资方案，核验证据、计算收益并找出失败风险", Path(temp)),
             )
         self.assertEqual(data["architecture"], "task-to-resource-requirements-before-market-lookup")
         self.assertTrue(data["atomic_work_units"])
@@ -87,7 +87,7 @@ class ResourcePlanV3Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             data = requirements.compile_requirements(
                 self.profile(domains=["business", "legal"]),
-                self.run("比较商业和法律方案，核验证据并进行风险反证", Path(temp)),
+                self.run_config("比较商业和法律方案，核验证据并进行风险反证", Path(temp)),
             )
         packages = optimizer.generate_packages(data)
         self.assertTrue(packages)
@@ -120,7 +120,7 @@ class ResourcePlanV3Tests(unittest.TestCase):
     def test_full_selector_uses_quality_band_then_cost(self):
         models = [self.model(index) for index in range(8)]
         with tempfile.TemporaryDirectory() as temp:
-            run = self.run("比较两个商业投资方案并给出最优选择", Path(temp))
+            run = self.run_config("比较两个商业投资方案并给出最优选择", Path(temp))
             with mock.patch.object(optimizer.legacy, "_eligible_pool", return_value=models), mock.patch.object(
                 optimizer.scoring, "_enrich_benchmarks", return_value={}
             ), mock.patch.object(optimizer.dynamic_runtime, "activate_runtime"):
@@ -137,7 +137,7 @@ class ResourcePlanV3Tests(unittest.TestCase):
         self.assertTrue(all(row["resource_profile_id"].startswith("params-") for row in plan["selected"].values()))
 
     def test_call_budget_is_ceiling_not_team_mode(self):
-        run = self.run("test", Path("out"))
+        run = self.run_config("test", Path("out"))
         self.assertEqual(resource_call_budget.total_model_calls_from_env(run, {}), 16)
         self.assertEqual(resource_call_budget.total_model_calls_from_env(run, {"TOTAL_MODEL_CALLS": "9"}), 9)
 
