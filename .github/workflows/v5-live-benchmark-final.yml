@@ -108,7 +108,6 @@ jobs:
         continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MANAGEMENT_KEY: ${{ secrets.OPENROUTER_MANAGEMENT_KEY }}
         run: |
           python open-model-market/v5_live_benchmark_economy_verified.py credit-check \
             --config v5-live-benchmark-artifacts/benchmark-config.json \
