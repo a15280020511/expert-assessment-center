@@ -14,6 +14,7 @@ import v5_live_benchmark_economy as economy
 import v5_live_benchmark_economy_r6 as r6
 import v5_production_hardening as production
 import v5_r8_fail_fast_benchmark as fail_fast
+import v5_stage_d_ranking_parity as ranking_parity
 from execution_graph import GraphLimits as OriginalGraphLimits
 from v5_r8_single_key_preflight import check_single_api_key
 
@@ -222,6 +223,7 @@ def install_r8_stage_d() -> None:
     r6.install_r6_alignment()
     production.install()
     base.GraphLimits = _r8_limits
+    ranking_parity.install()
     economy.economy_cutover_gate = stage_d_gate
     economy.hardened.credit_preflight = credit_preflight
     base.run_benchmark = fail_fast.run_benchmark
