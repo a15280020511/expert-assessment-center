@@ -21,7 +21,6 @@ from typing import Any, Mapping
 import model_market as market
 import v5_candidate_diversity
 import v5_economy_zero_call_diagnostic as diagnostic
-import v5_executor
 import v5_live_benchmark as base
 import v5_planner
 import v5_r8_executor as runtime
@@ -176,6 +175,7 @@ def _frozen_plan(
         "model_inference_calls_before_approval": 0,
         "live_catalog_refetched": False,
         "live_endpoints_refetched": False,
+        "executor_entrypoint": "v5_r8_executor.resilient_execute_v5_graph",
         "cost_estimation_policy": EXPECTED_COST_POLICY,
         "passed": True,
     }
@@ -218,7 +218,7 @@ def production_parity_v5_strategy(
     result: Mapping[str, Any] = {}
     error = ""
     try:
-        result = v5_executor.execute_v5_graph(
+        result = runtime.resilient_execute_v5_graph(
             graph,
             run,
             run.task,
@@ -274,6 +274,7 @@ def production_parity_v5_strategy(
             "frozen_graph_evidence": dict(planner["evidence"]),
             "ranking_parity_verified": True,
             "zero_call_graph_reused": True,
+            "executor_entrypoint": "v5_r8_executor.resilient_execute_v5_graph",
         },
     )
     return outcome, frozen_market
