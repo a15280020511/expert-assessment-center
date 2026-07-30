@@ -1,7 +1,9 @@
 """Install the consolidated R8 production hardening policies for V5."""
 from __future__ import annotations
 
+import v5_budget_runtime_parity as budget_parity
 import v5_cost_reliability_hardening as cost_reliability
+import v5_dynamic_configuration as dynamic_configuration
 import v5_r8_executor as resilient
 import v5_r8_gate_wiring as gate_wiring
 import v5_r8_policy as runtime_policy
@@ -25,6 +27,8 @@ def install() -> None:
     runtime_policy.install()
     cost_reliability.install()
     token_cost.install()
+    budget_parity.install()
+    dynamic_configuration.install()
     provider_policy.install()
     gate_wiring.install()
     retry_policy.install()
