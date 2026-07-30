@@ -79,7 +79,7 @@ def _single_model(required: set[str], candidates: Sequence[Mapping[str, Any]], s
             if strongest else
             (lambda row, gain: (-gain, float(row.get("estimated_cost", 0.0)), -float(row.get("estimated_quality", 0.0)))),
         )
-        if plan and required <= set().union(*(_coverage(row) for row in plan):
+        if plan and required <= set().union(*(_coverage(row) for row in plan)):
             plans.append(plan)
     if not plans:
         return []
