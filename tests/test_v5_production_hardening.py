@@ -1,4 +1,5 @@
 import json
+import math
 import sys
 import tempfile
 import unittest
@@ -9,7 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
 from execution_graph import ExecutionGraph, GraphLimits, SelectedEdge, SelectedNode  # noqa: E402
+import v5_cost_reliability_hardening as legacy_cost  # noqa: E402
 import v5_production_hardening as hardening  # noqa: E402
+import v5_token_cost_policy as token_cost  # noqa: E402
 
 
 def _node(node_id, work_id, *, functions=("analysis",), model=None):
@@ -52,7 +55,7 @@ def _answer(label):
 
 
 class TestV5ProductionHardening(unittest.TestCase):
-    def test_cost_estimate_includes_reasoning_and_uncertainty_reserve(self):
+    def test_cost_estimate_includes_reasoning_and_p95_reserves_without_pricing_full_allowance(self):
         endpoint = {
             "prompt_price_per_million": 2.0,
             "completion_price_per_million": 10.0,
@@ -71,7 +74,27 @@ class TestV5ProductionHardening(unittest.TestCase):
         }]
         optimistic = hardening._ORIGINAL_ESTIMATED_COST(endpoint, works)
         conservative = hardening.conservative_estimated_cost(endpoint, works)
-        self.assertGreater(conservative, optimistic * 2.0)
+        usage = token_cost.estimated_completion_usage(works[0], 10000)
+        allowance = legacy_cost.completion_envelope(works[0], 10000)
+        reliability_reserve = 1.0 + (0.98 - 0.96) * 1.75
+        expected = round(
+            ((1000 * 2.0) + (usage * 10.0))
+            / 1_000_000
+            * reliability_reserve,
+            8,
+        )
+        full_allowance_cost = (
+            ((1000 * 2.0) + (allowance * 10.0))
+            / 1_000_000
+            * reliability_reserve
+        )
+
+        self.assertEqual(usage, math.ceil((2500 + 1600) * 1.22))
+        self.assertEqual(allowance, 6170)
+        self.assertLess(usage, allowance)
+        self.assertAlmostEqual(conservative, expected, places=8)
+        self.assertGreater(conservative, optimistic)
+        self.assertLess(conservative, full_allowance_cost)
         self.assertGreater(conservative, 0.05)
 
     def test_strict_json_schema_requires_every_declared_field(self):
