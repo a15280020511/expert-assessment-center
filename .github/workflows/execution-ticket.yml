@@ -45,36 +45,24 @@ jobs:
       - name: Compile production modules
         run: python -m py_compile open-model-market/*.py
 
-      - name: Parse, authorize, and de-duplicate ticket
+      - name: Parse, authorize, and de-duplicate V5 ticket
         id: prepare
         run: |
-          python open-model-market/issue_ticket_hardened.py prepare \
+          python open-model-market/v5_issue_ticket.py prepare \
             --event-path "$GITHUB_EVENT_PATH" \
             --output-dir ticket-artifacts
 
-      - name: Comment ticket accepted
+      - name: Comment V5 ticket accepted
         if: steps.prepare.outputs.accepted == 'true'
         run: |
-          python open-model-market/issue_ticket_hardened.py render \
+          python open-model-market/v5_issue_ticket.py render \
             --phase accepted --output-dir ticket-artifacts --run-url "$RUN_URL" > issue-comment.md
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("issue-comment.md")
-          text = path.read_text(encoding="utf-8")
-          text = text.replace("- 固定组合：`3名专家 + 1名裁判`", "- 组合方式：`V5动态专家DAG + 动态综合节点`")
-          text = text.replace("- 批准调用数：`6`", "- 动态调用安全上限：`16`（实际调用由任务规划决定）")
-          text = text.replace("- 批准调用数：`4`", "- 动态调用安全上限：`16`（实际调用由任务规划决定）")
-          text = text.replace("- 额外调用额度（专家或裁判故障替换共享）：`2`", "- 全局故障恢复：`最多2次有限替换；不自动回退V3`")
-          text = text.replace("- 额外调用额度（专家或裁判故障替换共享）：`0`", "- 全局故障恢复：`最多2次有限替换；不自动回退V3`")
-          path.write_text(text, encoding="utf-8")
-          PY
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@issue-comment.md
 
       - name: Comment ticket rejected
         if: steps.prepare.outputs.accepted != 'true'
         run: |
-          python open-model-market/issue_ticket_hardened.py render \
+          python open-model-market/v5_issue_ticket.py render \
             --phase rejected --output-dir ticket-artifacts --run-url "$RUN_URL" > issue-comment.md
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@issue-comment.md
 
