@@ -254,8 +254,16 @@ def robust_extract_answer(response: Mapping[str, Any]) -> str:
 
 def install() -> None:
     global _INSTALLED
+    global _ORIGINAL_CANDIDATE_FOR
+    global _ORIGINAL_BUILD_NODE_PAYLOAD
+    global _ORIGINAL_EXTRACT_ANSWER
     if _INSTALLED:
         return
+    # Bind after capability calibration and output-contract delivery have been
+    # installed, so hardening composes with those policies instead of bypassing them.
+    _ORIGINAL_CANDIDATE_FOR = planner._candidate_for
+    _ORIGINAL_BUILD_NODE_PAYLOAD = executor.build_node_payload
+    _ORIGINAL_EXTRACT_ANSWER = executor._extract_answer
     _INSTALLED = True
     planner._estimated_cost = conservative_estimated_cost
     planner._candidate_for = hardened_candidate_for
