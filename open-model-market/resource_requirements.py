@@ -35,7 +35,7 @@ OP_MODULES = {
 }
 OP_CAPS = {
     "analysis": {"reasoning"}, "decision": {"reasoning"}, "evidence": {"reasoning"},
-    "quantitative": {"reasoning", "structured_output"}, "forecast": {"reasoning"},
+    "quantitative": {"reasoning"}, "forecast": {"reasoning"},
     "adversarial": {"reasoning"}, "implementation": {"reasoning"}, "creative": set(),
 }
 OP_LABELS = {
@@ -120,10 +120,10 @@ def _unit(operation: str, domain: str, importance: float, profile: TaskProfile, 
     modules = set(OP_MODULES[operation]) | {"delivery"}
     if profile.high_stakes:
         modules.add("uncertainty")
-    structured = profile.high_stakes or operation in {"quantitative", "implementation"}
+    # High-stakes work needs structured reasoning and delivery, but not necessarily
+    # provider-native JSON/schema support. Native structured output is requested
+    # only by the task-level output contract below.
     caps = set(OP_CAPS[operation])
-    if structured:
-        caps.add("structured_output")
     tokens = 650 + int(importance * 900) + min(650, chars // 8)
     if operation in {"quantitative", "forecast", "adversarial", "implementation"}:
         tokens += 300
@@ -135,7 +135,7 @@ def _unit(operation: str, domain: str, importance: float, profile: TaskProfile, 
         "required_capabilities": sorted(caps),
         "required_prompt_modules": sorted(modules),
         "minimum_reasoning_level": _level(operation, importance, profile),
-        "structured_output_required": structured,
+        "structured_output_required": False,
         "minimum_context_tokens": profile.requested_context,
         "expected_output_tokens": max(700, min(4200, tokens)),
         "independence_group": "risk_challenge" if operation == "adversarial" else None,
@@ -167,6 +167,9 @@ def compile_requirements(profile: TaskProfile, run: RunConfig) -> dict[str, Any]
     active = [name for name, value in operations.items() if value >= thresholds[name]]
     if "analysis" not in active:
         active.insert(0, "analysis")
+    structured_requested = any(term in folded for term in (
+        "json", "json schema", "schema", "结构化输出", "机器可读", "严格字段", "response_format"
+    ))
     units = [_unit("analysis", primary, operations["analysis"], profile, len(text))]
     for domain in domains:
         if domain != primary and float(base["domain_scores"].get(domain, 0)) >= 0.45:
@@ -198,7 +201,10 @@ def compile_requirements(profile: TaskProfile, run: RunConfig) -> dict[str, Any]
     return {
         "version": 3,
         "architecture": "task-to-resource-requirements-before-market-lookup",
-        "task_signals": {**base["signals"], "primary_domain": primary, "active_domains": domains, "active_operations": active},
+        "task_signals": {
+            **base["signals"], "primary_domain": primary, "active_domains": domains,
+            "active_operations": active, "native_structured_output_requested": structured_requested,
+        },
         "domain_scores": base["domain_scores"],
         "operation_scores": {k: round(float(v), 6) for k, v in operations.items()},
         "atomic_work_units": units,
@@ -207,7 +213,7 @@ def compile_requirements(profile: TaskProfile, run: RunConfig) -> dict[str, Any]
             "minimum_context_tokens": profile.requested_context,
             "expected_output_tokens": max(1100, min(5000, 850 + len(units) * 420 + len(text) // 7)),
             "minimum_reasoning_level": 2 if profile.high_stakes or len(units) >= 4 else 1,
-            "structured_output_required": profile.high_stakes or len(units) >= 3,
+            "structured_output_required": structured_requested,
             "required_prompt_modules": sorted(synthesis_modules),
         },
         "requested_market_attributes": [
