@@ -28,7 +28,7 @@ class TaskMatrixOptimizerTests(unittest.TestCase):
         )
 
     @staticmethod
-    def run(task, output_dir):
+    def run_config(task, output_dir):
         return SimpleNamespace(
             task=task,
             output_dir=output_dir,
@@ -67,7 +67,7 @@ class TaskMatrixOptimizerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             matrix = optimizer.build_task_matrix(
                 self.profile(high_stakes=True),
-                self.run("评估商业投资，核验证据、计算风险并进行红队反证", Path(temp)),
+                self.run_config("评估商业投资，核验证据、计算风险并进行红队反证", Path(temp)),
             )
         self.assertFalse(matrix["history_input_used"])
         self.assertFalse(matrix["fixed_team_mode_used"])
@@ -82,7 +82,7 @@ class TaskMatrixOptimizerTests(unittest.TestCase):
             '"quality_tolerance_pct":1.5}</expert-team-input>\n分析项目'
         )
         with tempfile.TemporaryDirectory() as temp:
-            constraints = optimizer.build_task_matrix(self.profile(), self.run(task, Path(temp)))["constraints"]
+            constraints = optimizer.build_task_matrix(self.profile(), self.run_config(task, Path(temp)))["constraints"]
         self.assertEqual(constraints["budget_usd"], 1.2)
         self.assertEqual(constraints["min_experts"], 2)
         self.assertEqual(constraints["max_experts"], 4)
@@ -93,7 +93,7 @@ class TaskMatrixOptimizerTests(unittest.TestCase):
             profile = self.profile(high_stakes=True, domains=["coding", "business", "legal"])
             matrix = optimizer.build_task_matrix(
                 profile,
-                self.run("审计代码仓库、商业可行性、成本计算、合规风险和失败模式", Path(temp)),
+                self.run_config("审计代码仓库、商业可行性、成本计算、合规风险和失败模式", Path(temp)),
             )
             seats = optimizer.generate_seats(matrix, profile)
         covered = {demand for seat in seats for demand in seat["covers"]}
@@ -105,7 +105,7 @@ class TaskMatrixOptimizerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             matrix = optimizer.build_task_matrix(
                 self.profile(high_stakes=True),
-                self.run("进行高风险商业决策、定量分析与反证", Path(temp)),
+                self.run_config("进行高风险商业决策、定量分析与反证", Path(temp)),
             )
         variants = optimizer._variants(self.model(), "adversarial", matrix)
         self.assertTrue(variants)
@@ -120,7 +120,7 @@ class TaskMatrixOptimizerTests(unittest.TestCase):
             ranked = optimizer.rank_models_live_only(
                 models,
                 self.profile(domains=["business"], complexity="medium"),
-                self.run("商业分析", Path(temp)),
+                self.run_config("商业分析", Path(temp)),
             )
         self.assertEqual(len(ranked), 2)
         self.assertTrue(all("history" not in model.components for model in ranked))
