@@ -1,8 +1,8 @@
 """V5 execution-graph contracts.
 
-This module is intentionally independent from the V3 seat-based runtime. It
-provides stable data structures that later V5 compilers and optimizers can
-target without changing the current production entrypoint.
+The contracts are backward compatible with earlier V5 graph JSON.  New runtime
+limits describe production resilience policy; planners may omit them and the
+executor will apply conservative defaults.
 """
 from __future__ import annotations
 
@@ -135,7 +135,7 @@ class ExecutionGraph:
 
 @dataclass(frozen=True)
 class GraphLimits:
-    """Non-optimizable safety ceilings for a V5 execution graph."""
+    """Non-optimizable safety and resilience ceilings for a V5 graph."""
 
     max_nodes: int = 16
     max_edges: int = 64
@@ -144,6 +144,18 @@ class GraphLimits:
     max_retries: int = 2
     max_replacements: int = 2
     max_budget_usd: float | None = None
+
+    # Production-resilience policy.  These defaults intentionally favour a
+    # deliverable answer and budget safety over all-node success.
+    min_required_work_coverage: float = 0.66
+    min_successful_nodes: int = 1
+    max_node_failure_probability: float = 0.18
+    cost_risk_multiplier: float = 4.0
+    max_provider_share: float = 0.50
+    max_provider_failures: int = 1
+    allow_degraded_success: bool = True
+    max_upstream_chars_per_node: int = 6000
+    max_total_upstream_chars: int = 24000
 
 
 @dataclass(frozen=True)
