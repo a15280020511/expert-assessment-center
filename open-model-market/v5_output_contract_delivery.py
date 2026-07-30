@@ -3,19 +3,20 @@
 The previous executor serialized contract metadata into the prompt. Some models
 then repeated that metadata instead of filling the required fields, and bounded
 outputs were truncated before the JSON object closed. This module replaces the
-system prompt with an executable contract: required keys, actual content, no
-schema echo, no Markdown fence, and explicit JSON-closure priority.
+system prompt with an executable contract and strengthens the quality gate so
+schema echoes cannot masquerade as completed work.
 """
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Mapping
 
 import v5_executor
 from execution_graph import SelectedNode
 
 _INSTALLED = False
 _ORIGINAL_SYSTEM_PROMPT = v5_executor._system_prompt
+_ORIGINAL_QUALITY_GATE = v5_executor.quality_gate
 CONTRACT_METADATA_KEYS = (
     "machine_readable_required",
     "must_separate_fact_assumption_inference",
@@ -86,10 +87,50 @@ def contract_aware_system_prompt(node: SelectedNode) -> str:
     )
 
 
+def _append_reason(reasons: list[str], reason: str) -> None:
+    if reason not in reasons:
+        reasons.append(reason)
+
+
+def contract_aware_quality_gate(
+    node: SelectedNode,
+    response: Mapping[str, Any],
+    answer: str,
+) -> tuple[bool, float, list[str]]:
+    """Require actual top-level JSON fields, not contract metadata references."""
+    passed, score, reasons = _ORIGINAL_QUALITY_GATE(node, response, answer)
+    if not node.output_contract.get("machine_readable_required"):
+        return passed, score, reasons
+
+    try:
+        parsed = json.loads(answer)
+    except json.JSONDecodeError:
+        return passed, score, reasons
+    if not isinstance(parsed, Mapping):
+        return passed, score, reasons
+
+    required = _required_fields(node)
+    missing = [field for field in required if field not in parsed]
+    metadata = [key for key in CONTRACT_METADATA_KEYS if key in parsed]
+    if missing:
+        _append_reason(
+            reasons,
+            "missing-required-json-keys:" + ",".join(missing),
+        )
+    if metadata and len(missing) == len(required):
+        _append_reason(reasons, "contract-metadata-echo")
+
+    if missing or "contract-metadata-echo" in reasons:
+        passed = False
+        score = min(float(score), 0.35)
+    return passed, score, reasons
+
+
 def install() -> None:
-    """Install the contract-aware prompt once for all formal V5 execution paths."""
+    """Install contract-aware prompt and quality gate for formal V5 paths."""
     global _INSTALLED
     if _INSTALLED:
         return
     _INSTALLED = True
     v5_executor._system_prompt = contract_aware_system_prompt
+    v5_executor.quality_gate = contract_aware_quality_gate
