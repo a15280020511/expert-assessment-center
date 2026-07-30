@@ -71,11 +71,13 @@ class TestV5CandidateDiagnostics(unittest.TestCase):
         }
         report = diagnostics.analyze_candidate_structure(self.market(), bundle)
         row = report["interpretations"][0]
+        work = row["work_coverage"][0]
         self.assertTrue(row["local_structure_feasible"])
         self.assertTrue(report["local_structure_feasible_for_any_interpretation"])
         self.assertFalse(row["blockers"])
-        self.assertEqual(row["union_distinct_model_count"], 2)
-        self.assertEqual(row["union_distinct_endpoint_count"], 2)
+        self.assertEqual(work["union_distinct_model_count"], 2)
+        self.assertEqual(work["union_distinct_endpoint_count"], 2)
+        self.assertTrue(work["local_independence_feasible"])
 
     def test_reports_missing_copy_candidate(self):
         bundle = {
