@@ -95,6 +95,26 @@ def _solve_cost_performance(
     return solver, status, phase_status
 
 
+def _work_requires_distinct_model(
+    candidates: Sequence[CandidateNode],
+    candidate_indices: Sequence[int],
+    work_id: str,
+) -> bool:
+    """Return the explicit hard model-independence policy for one work unit.
+
+    Candidate generation places a work ID in ``independence_groups`` only when
+    the semantic compiler declared independent execution for that work. The
+    graph validator applies its hard no-model-reuse rule to the same group.
+    Ordinary redundant copies deliberately have no group: they remain separate
+    calls, while model/provider diversity is a preference handled by selection
+    and R8 provider rebalancing rather than an undeclared feasibility gate.
+    """
+    return any(
+        work_id in candidates[index].independence_groups
+        for index in candidate_indices
+    )
+
+
 def optimize_execution_graph(
     candidate_bundle: Mapping[str, Any],
     *,
@@ -150,12 +170,14 @@ def optimize_execution_graph(
     if limits.max_budget_usd is not None:
         model.Add(actual_cost <= int(round(limits.max_budget_usd * COST_SCALE)))
 
+    hard_independence_constraints: list[dict[str, Any]] = []
     for interpretation_id, meta in interpretations.items():
         for work_id, copies in meta["copies_by_work"].items():
-            if int(copies) < 2:
+            copies = int(copies)
+            if copies < 2:
                 continue
             copy_candidates: dict[int, list[int]] = {}
-            for copy_index in range(int(copies)):
+            for copy_index in range(copies):
                 key = f"{work_id}#{copy_index}"
                 copy_candidates[copy_index] = [
                     index
@@ -163,15 +185,31 @@ def optimize_execution_graph(
                     if candidate.interpretation_id == interpretation_id
                     and key in candidate.coverage_keys
                 ]
-            for left_copy in range(int(copies)):
-                for right_copy in range(left_copy + 1, int(copies)):
+            scoped_indices = sorted(
+                {index for indices in copy_candidates.values() for index in indices}
+            )
+            require_distinct_model = _work_requires_distinct_model(
+                candidates,
+                scoped_indices,
+                str(work_id),
+            )
+            hard_independence_constraints.append(
+                {
+                    "interpretation_id": str(interpretation_id),
+                    "work_id": str(work_id),
+                    "copies": copies,
+                    "different_model_required": require_distinct_model,
+                    "different_provider_required": False,
+                    "provider_diversity_mode": "preferred-runtime-rebalancing",
+                }
+            )
+            if not require_distinct_model:
+                continue
+            for left_copy in range(copies):
+                for right_copy in range(left_copy + 1, copies):
                     for left in copy_candidates[left_copy]:
                         for right in copy_candidates[right_copy]:
-                            if (
-                                candidates[left].model == candidates[right].model
-                                or candidates[left].provider_endpoint
-                                == candidates[right].provider_endpoint
-                            ):
+                            if candidates[left].model == candidates[right].model:
                                 model.Add(x[left] + x[right] <= 1)
 
     quality_terms = []
@@ -239,6 +277,16 @@ def optimize_execution_graph(
     graph_data["metadata"]["cost_performance_definition"] = (
         "risk_adjusted_task_utility_divided_by_estimated_model_cost_plus_call_overhead"
     )
+    graph_data["metadata"]["independence_policy"] = {
+        "hard_model_diversity_scope": "explicit-independence-groups-only",
+        "hard_provider_diversity_scope": "none",
+        "provider_diversity": "preferred-and-enforced-by-r8-runtime-rebalancing",
+        "constraints": [
+            row
+            for row in hard_independence_constraints
+            if row["interpretation_id"] == selected_interpretation
+        ],
+    }
 
     selected_quality = max(0, _value(solver, quality_expr))
     selected_effective_cost = max(1, _value(solver, effective_cost))
@@ -266,6 +314,7 @@ def optimize_execution_graph(
         "selected_candidate_ids": [
             candidates[index].candidate_id for index in selected_indices
         ],
+        "hard_independence_constraints": hard_independence_constraints,
         "execution_graph": graph_data,
         "fallback_used": False,
     }
