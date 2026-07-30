@@ -33,6 +33,25 @@ def _within_verified_price_cap(row: Mapping[str, Any]) -> bool:
     )
 
 
+def verified_graph_limits(**kwargs: Any) -> OriginalGraphLimits:
+    """Return the zero-call-proven graph limits without mutating runtime state."""
+    kwargs["max_nodes"] = min(
+        int(kwargs.get("max_nodes", VERIFIED_MAX_V5_NODES)),
+        VERIFIED_MAX_V5_NODES,
+    )
+    kwargs["max_edges"] = min(int(kwargs.get("max_edges", 40)), 40)
+    kwargs["max_stages"] = min(int(kwargs.get("max_stages", 8)), 8)
+    kwargs["max_model_calls"] = min(
+        int(kwargs.get("max_model_calls", VERIFIED_MAX_V5_NODES)),
+        VERIFIED_MAX_V5_NODES,
+    )
+    kwargs["max_retries"] = 0
+    # The benchmark measures the selected production candidates without buying
+    # replacement calls. Any node failure fails the task closed.
+    kwargs["max_replacements"] = 0
+    return OriginalGraphLimits(**kwargs)
+
+
 def install_verified_alignment() -> None:
     """Install only the zero-call-proven economical bounds."""
     global _INSTALLED
@@ -46,24 +65,6 @@ def install_verified_alignment() -> None:
     economy.MAX_PROMPT_PPM = VERIFIED_MAX_PROMPT_PPM
     economy.MAX_COMPLETION_PPM = VERIFIED_MAX_COMPLETION_PPM
     economy._install_economy_controls()
-
-    def verified_graph_limits(**kwargs: Any) -> OriginalGraphLimits:
-        kwargs["max_nodes"] = min(
-            int(kwargs.get("max_nodes", VERIFIED_MAX_V5_NODES)),
-            VERIFIED_MAX_V5_NODES,
-        )
-        kwargs["max_edges"] = min(int(kwargs.get("max_edges", 40)), 40)
-        kwargs["max_stages"] = min(int(kwargs.get("max_stages", 8)), 8)
-        kwargs["max_model_calls"] = min(
-            int(kwargs.get("max_model_calls", VERIFIED_MAX_V5_NODES)),
-            VERIFIED_MAX_V5_NODES,
-        )
-        kwargs["max_retries"] = 0
-        # The benchmark measures the selected production candidates without
-        # buying replacement calls. Any node failure fails the task closed.
-        kwargs["max_replacements"] = 0
-        return OriginalGraphLimits(**kwargs)
-
     economy.base.GraphLimits = verified_graph_limits
 
     economy_judges = economy.base._judge_endpoints
