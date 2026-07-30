@@ -27,6 +27,14 @@ class V5StageDRankingParityTests(unittest.TestCase):
         self.assertNotIn("ranked[:24]", combined)
         self.assertNotIn("maximum_models=24", combined)
 
+    def test_output_directory_exists_before_first_evidence_write(self):
+        source = inspect.getsource(parity.production_parity_v5_strategy)
+        mkdir = source.index("root.mkdir(parents=True, exist_ok=True)")
+        first_write = source.index("base._write_json(")
+        execution = source.index("execute_v5_graph(")
+        self.assertLess(mkdir, first_write)
+        self.assertLess(mkdir, execution)
+
     def test_stage_d_root_is_resolved_from_strategy_directory(self):
         root = Path("/tmp/run/tasks/task-id/v5_joint_graph")
         self.assertEqual(parity._stage_d_root(root), Path("/tmp/run"))
