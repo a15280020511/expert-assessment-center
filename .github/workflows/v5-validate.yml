@@ -46,7 +46,7 @@ jobs:
             open-model-market/atomic_work_graph.py \
             open-model-market/resource_matrix.py \
             open-model-market/cost_performance_solver.py \
-            open-model-market/cost_performance_optimizer.py \
+            open-model-market/value_resource_plan_optimizer.py \
             open-model-market/benchmark_selection.py \
             open-model-market/v5_planner.py \
             open-model-market/v5_value_planner.py \
