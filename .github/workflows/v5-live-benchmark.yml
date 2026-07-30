@@ -26,6 +26,7 @@ jobs:
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
       MODEL_HISTORY_PATH: v5-live-benchmark-artifacts/runtime-state/model-performance.json
+      V5_BENCHMARK_OUTPUT_ALLOWANCE_TOKENS: "10000"
     steps:
       - name: Checkout pinned source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -65,6 +66,7 @@ jobs:
           - Blind judges: \`at least 2 distinct models and providers per task\`
           - Global cost ceiling: \`${{ steps.prepare.outputs.max_cost_usd }} USD\`
           - Global paid-call ceiling: \`${{ steps.prepare.outputs.max_calls }}\`
+          - Output allowance: \`up to 10,000 completion tokens; models are not required to use the allowance\`
           - Production entrypoint: \`unchanged until the live cutover gate passes\`
           - Run: \`${RUN_URL}\`
           EOF
@@ -89,15 +91,52 @@ jobs:
 
           The repository is missing the Actions Secret \`OPENROUTER_API_KEY\`.
 
-          - Paid model calls: \`0\`
+          - API calls: \`0\`
           - Production entrypoint changed: \`false\`
           - Run: \`${RUN_URL}\`
           EOF
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@benchmark-rejected.md
 
+      - name: Verify OpenRouter credit reserve
+        id: credit
+        if: steps.secret.outputs.present == 'true'
+        continue-on-error: true
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MANAGEMENT_KEY: ${{ secrets.OPENROUTER_MANAGEMENT_KEY }}
+        run: |
+          python open-model-market/v5_live_benchmark_hardened.py credit-check \
+            --config v5-live-benchmark-artifacts/benchmark-config.json \
+            --output-dir v5-live-benchmark-artifacts
+
+      - name: Publish insufficient-credit rejection
+        if: steps.secret.outputs.present == 'true' && steps.credit.outcome != 'success'
+        run: |
+          python - <<'PY' > benchmark-credit-rejected.md
+          import json
+          from pathlib import Path
+          path = Path("v5-live-benchmark-artifacts/credit-preflight.json")
+          data = json.loads(path.read_text()) if path.exists() else {}
+          key = data.get("current_key") or {}
+          account = data.get("account_credits") or {}
+          print("## V5_BENCHMARK_REJECTED")
+          print()
+          print("OpenRouter可用额度未达到本次真实基准的预留要求，已在任何模型推理前停止。")
+          print()
+          print(f"- Required reserve: `{data.get('required_reserve_usd', 'unknown')} USD`")
+          print(f"- API-key limit remaining: `{key.get('limit_remaining_usd', 'unknown')} USD`")
+          print(f"- Account credits remaining: `{account.get('remaining_usd', 'unverified')} USD`")
+          print(f"- Blockers: `{','.join(data.get('blockers') or ['credit-preflight-unavailable'])}`")
+          print(f"- Output allowance after funding: `{data.get('output_allowance_tokens', 10000)} tokens maximum, not required output`")
+          print("- Model inference calls: `0`")
+          print("- Production entrypoint changed: `false`")
+          PY
+          printf '\n- Run: `%s`\n' "$RUN_URL" >> benchmark-credit-rejected.md
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@benchmark-credit-rejected.md
+
       - name: Run bounded live blind benchmark
         id: execute
-        if: steps.secret.outputs.present == 'true'
+        if: steps.secret.outputs.present == 'true' && steps.credit.outcome == 'success'
         continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -107,7 +146,7 @@ jobs:
           set -o pipefail
           mkdir -p "$(dirname "$MODEL_HISTORY_PATH")"
           printf '{"version":1,"models":{}}\n' > "$MODEL_HISTORY_PATH"
-          python open-model-market/v5_live_benchmark.py run \
+          python open-model-market/v5_live_benchmark_hardened.py run \
             --config v5-live-benchmark-artifacts/benchmark-config.json \
             --suite open-model-market/v5_live_benchmark_suite.json \
             --output-dir v5-live-benchmark-artifacts \
@@ -139,7 +178,7 @@ jobs:
           retention-days: 90
 
       - name: Publish benchmark result
-        if: always() && steps.secret.outputs.present == 'true'
+        if: always() && steps.secret.outputs.present == 'true' && steps.credit.outcome == 'success'
         continue-on-error: true
         run: |
           if [[ -s v5-live-benchmark-artifacts/v5-live-benchmark-results.json ]]; then
@@ -171,6 +210,7 @@ jobs:
         if: >-
           always() &&
           (steps.secret.outputs.present != 'true' ||
+           steps.credit.outcome == 'failure' ||
            steps.execute.outcome == 'failure' ||
            steps.upload.outcome == 'failure')
         run: exit 1
