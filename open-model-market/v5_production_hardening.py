@@ -11,6 +11,7 @@ import v5_r8_policy as runtime_policy
 import v5_r8_provider_policy as provider_policy
 import v5_r8_retry_policy as retry_policy
 import v5_rejection_audit_policy as rejection_audit
+import v5_stage_d_provider_compat as provider_compat
 import v5_token_cost_policy as token_cost
 
 MIN_PROVIDER_RELIABILITY = cost_reliability.MIN_PROVIDER_RELIABILITY
@@ -37,3 +38,4 @@ def install() -> None:
     retry_policy.install()
     rejection_audit.install()
     resilient.install()
+    provider_compat.install()
