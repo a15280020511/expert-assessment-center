@@ -13,6 +13,7 @@ from typing import Sequence
 import v5_capability_calibration
 import v5_output_contract_delivery
 import v5_planner
+import v5_planning_benchmark_policy
 import v5_production_hardening
 from v5_planner import CandidateNode
 
@@ -128,6 +129,9 @@ def install() -> None:
     if optimizer is not None:
         v5_planner.optimize_execution_graph = optimizer.optimize_execution_graph
 
+    # Planning-surrogate evidence must evaluate the exact same explicit
+    # independence policy as the optimizer and graph validator.
+    v5_planning_benchmark_policy.install()
     v5_output_contract_delivery.install()
     v5_production_hardening.install()
     _INSTALLED = True
