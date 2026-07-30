@@ -46,6 +46,30 @@ class TestV5LiveBenchmarkHardening(unittest.TestCase):
             self.assertEqual(report["status"], "insufficient")
             self.assertIn("api-key-limit-remaining-below-benchmark-reserve", report["blockers"])
 
+    def test_credit_preflight_rejects_unbounded_key_without_remaining_limit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = self.config(root)
+            payload = {
+                "data": {
+                    "label": "unbounded-key",
+                    "limit": None,
+                    "limit_remaining": None,
+                    "usage": 1.9,
+                    "is_free_tier": False,
+                    "is_management_key": False,
+                }
+            }
+            with patch.object(hardened, "request_json", return_value=payload), patch.dict(
+                os.environ,
+                {"OPENROUTER_API_KEY": "test-key", "OPENROUTER_MANAGEMENT_KEY": ""},
+                clear=False,
+            ):
+                code = hardened.credit_preflight(config, root)
+            self.assertEqual(code, 3)
+            report = json.loads((root / "credit-preflight.json").read_text(encoding="utf-8"))
+            self.assertIn("finite-api-key-spending-limit-required", report["blockers"])
+
     def test_credit_preflight_accepts_sufficient_key_limit(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -68,7 +92,7 @@ class TestV5LiveBenchmarkHardening(unittest.TestCase):
                 code = hardened.credit_preflight(config, root)
             self.assertEqual(code, 0)
             report = json.loads((root / "credit-preflight.json").read_text(encoding="utf-8"))
-            self.assertEqual(report["status"], "partially_verified")
+            self.assertEqual(report["status"], "key_limit_verified")
             self.assertFalse(report["blockers"])
 
     def test_credit_error_detection_covers_openrouter_402(self):
@@ -94,20 +118,41 @@ class TestV5LiveBenchmarkHardening(unittest.TestCase):
             v5_live_benchmark.execute_v5_graph = original_execute
             importlib.reload(hardened)
 
-    def test_benchmark_safe_payload_receives_ten_thousand_token_allowance(self):
+    def test_benchmark_uses_max_tokens_when_endpoint_advertises_it(self):
         original_safe = v5_live_benchmark._safe_payload
         original_node = v5_executor.build_node_payload
         original_execute = v5_live_benchmark.execute_v5_graph
         endpoint = {
             "model_id": "vendor/model",
             "provider_slug": "provider",
-            "supported_parameters": ["reasoning", "temperature"],
+            "supported_parameters": ["reasoning", "temperature", "max_tokens"],
+        }
+        try:
+            hardened._install_output_allowance()
+            payload = v5_live_benchmark._safe_payload(endpoint, "system", "user")
+            self.assertEqual(payload["max_tokens"], 10000)
+            self.assertNotIn("max_completion_tokens", payload)
+            self.assertNotIn("tools", payload)
+        finally:
+            v5_live_benchmark._safe_payload = original_safe
+            v5_executor.build_node_payload = original_node
+            v5_live_benchmark.execute_v5_graph = original_execute
+            importlib.reload(hardened)
+
+    def test_benchmark_uses_max_completion_tokens_only_when_advertised(self):
+        original_safe = v5_live_benchmark._safe_payload
+        original_node = v5_executor.build_node_payload
+        original_execute = v5_live_benchmark.execute_v5_graph
+        endpoint = {
+            "model_id": "vendor/model",
+            "provider_slug": "provider",
+            "supported_parameters": ["reasoning", "max_completion_tokens"],
         }
         try:
             hardened._install_output_allowance()
             payload = v5_live_benchmark._safe_payload(endpoint, "system", "user")
             self.assertEqual(payload["max_completion_tokens"], 10000)
-            self.assertNotIn("tools", payload)
+            self.assertNotIn("max_tokens", payload)
         finally:
             v5_live_benchmark._safe_payload = original_safe
             v5_executor.build_node_payload = original_node
