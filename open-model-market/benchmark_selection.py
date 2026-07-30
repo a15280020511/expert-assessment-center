@@ -1,4 +1,4 @@
-"""Benchmark alias normalization before full-dynamic resource optimization."""
+"""Benchmark alias normalization before cost-performance resource optimization."""
 from __future__ import annotations
 
 import copy
@@ -8,9 +8,9 @@ from collections import defaultdict
 from dataclasses import replace
 from typing import Any, Dict, Mapping, Sequence, Tuple
 
+import cost_performance_optimizer
 import history_free_runtime_compat
 import model_market as market
-import resource_plan_optimizer
 import resource_plan_compat  # noqa: F401 - installs feasibility guards
 import resource_runtime_compat
 import seat_scoring as base
@@ -101,7 +101,7 @@ def select_team(
     profile: TaskProfile,
     run: RunConfig,
 ) -> Tuple[list[SelectedExpert], SelectedJudge, float]:
-    """Normalize live benchmarks, then run the two-stage resource planner."""
+    """Normalize live benchmarks, then maximize direct cost-performance."""
     original_request = base.request_json
     stable_models = legacy._eligible_pool(ranked, profile)
 
@@ -113,7 +113,7 @@ def select_team(
 
     base.request_json = request_with_aliases
     try:
-        experts, judge, estimated = resource_plan_optimizer.select_team(ranked, profile, run)
+        experts, judge, estimated = cost_performance_optimizer.select_team(ranked, profile, run)
     finally:
         base.request_json = original_request
     history_free_runtime_compat.bind(run, profile, ranked, experts, judge)
