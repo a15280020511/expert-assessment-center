@@ -47,9 +47,14 @@ def _install_dynamic_budget() -> None:
         try:
             return original_compile(*args, **kwargs)
         except v5_planner.V5PlanningError as exc:
+            allocation = _PLANNING_DIAGNOSTIC.get("budget_allocation")
+            attempt_count = int(_PLANNING_DIAGNOSTIC.get("planning_attempt_count", 0)) + 1
             _PLANNING_DIAGNOSTIC.clear()
+            if allocation is not None:
+                _PLANNING_DIAGNOSTIC["budget_allocation"] = allocation
             _PLANNING_DIAGNOSTIC.update({
                 "status": "budgeted-planning-failed",
+                "planning_attempt_count": attempt_count,
                 "budgeted_error": str(exc),
                 "budgeted_max_cost_usd": getattr(limits, "max_budget_usd", None),
                 "model_calls_before_failure": 0,
@@ -93,9 +98,18 @@ def _install_dynamic_budget() -> None:
         initial_cap = allocation["initial_v5_planning_cap_usd"]
         maximum_cap = allocation["maximum_v5_planning_cap_usd"]
         _PLANNING_DIAGNOSTIC.clear()
-        _PLANNING_DIAGNOSTIC["budget_allocation"] = allocation
+        _PLANNING_DIAGNOSTIC.update({
+            "budget_allocation": allocation,
+            "planning_attempt_count": 0,
+            "adaptive_retry_attempted": False,
+        })
         try:
-            return original_v5(task, root, ledger, models, endpoint_cache, initial_cap)
+            outcome = original_v5(task, root, ledger, models, endpoint_cache, initial_cap)
+            _PLANNING_DIAGNOSTIC.update({
+                "status": "initial-budget-feasible",
+                "final_v5_planning_cap_usd": initial_cap,
+            })
+            return outcome
         except v5_planner.V5PlanningError:
             minimum = _PLANNING_DIAGNOSTIC.get("quality_band_minimum_estimated_cost_usd")
             retry_cap = initial_cap
@@ -105,7 +119,12 @@ def _install_dynamic_budget() -> None:
             _PLANNING_DIAGNOSTIC["adaptive_retry_attempted"] = retry_cap > initial_cap + 1e-12
             if retry_cap <= initial_cap + 1e-12:
                 raise
-            return original_v5(task, root, ledger, models, endpoint_cache, retry_cap)
+            outcome = original_v5(task, root, ledger, models, endpoint_cache, retry_cap)
+            _PLANNING_DIAGNOSTIC.update({
+                "status": "adaptive-budget-feasible",
+                "final_v5_planning_cap_usd": round(retry_cap, 8),
+            })
+            return outcome
 
     base._v5_strategy = dynamically_budgeted_v5
 
@@ -140,6 +159,7 @@ def _annotate(output_dir: str | Path) -> None:
             f"- Structural feasibility: `{_PLANNING_DIAGNOSTIC.get('structural_feasibility', 'not-needed')}`",
             f"- Quality-band estimated cost: `${float(_PLANNING_DIAGNOSTIC.get('quality_band_minimum_estimated_cost_usd', 0.0)):.6f}`",
             f"- Adaptive retry attempted: `{str(bool(_PLANNING_DIAGNOSTIC.get('adaptive_retry_attempted'))).lower()}`",
+            f"- Final V5 planning cap: `${float(_PLANNING_DIAGNOSTIC.get('final_v5_planning_cap_usd', 0.0)):.6f}`",
             "- Independence constraints relaxed: `false`",
             "- Quality requirements relaxed: `false`",
             "- Production cutover allowed: `false`",
