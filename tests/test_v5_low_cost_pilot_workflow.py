@@ -2,34 +2,42 @@ import unittest
 from pathlib import Path
 
 
-class TestV5LowCostPilotWorkflow(unittest.TestCase):
-    def test_workflow_exists_and_validates_before_secret_or_models(self):
-        path = Path(".github/workflows/v5-low-cost-pilot.yml")
-        self.assertTrue(path.is_file())
-        text = path.read_text(encoding="utf-8")
-        self.assertIn("startsWith(github.event.issue.title, '[v5-pilot]')", text)
-        self.assertIn("github.actor == github.repository_owner", text)
-        validate = text.index("Run zero-cost repository validation")
-        secret = text.index("Check OpenRouter secret")
-        execute = text.index("Run bounded low-cost pilot")
-        self.assertLess(validate, secret)
-        self.assertLess(secret, execute)
-        self.assertIn("python -m unittest discover -s tests -v", text)
-        self.assertIn("python -m ruff check --select E9,F63,F7,F82", text)
-        self.assertIn("python -m py_compile open-model-market/*.py", text)
-        self.assertIn("steps.validate.outcome == 'success'", text)
+LEGACY_PAID_WORKFLOWS = (
+    ".github/workflows/v5-live-benchmark.yml",
+    ".github/workflows/v5-live-benchmark-final.yml",
+    ".github/workflows/v5-low-cost-pilot.yml",
+    ".github/workflows/v5-micro-canary.yml",
+)
 
-    def test_workflow_has_bounded_and_non_production_contract(self):
-        text = Path(".github/workflows/v5-low-cost-pilot.yml").read_text(encoding="utf-8")
-        self.assertIn("v5_low_cost_pilot.py prepare", text)
-        self.assertIn("v5_low_cost_pilot.py credit-check", text)
-        self.assertIn("v5_low_cost_pilot_entry.py run", text)
-        self.assertIn("Production cutover eligibility: `false`", text)
-        self.assertIn("Production entrypoint changed: `false`", text)
-        self.assertIn("Model inference calls: `0`", text)
-        self.assertNotIn("pull_request_target", text)
-        self.assertNotIn("workflow_run:", text)
-        self.assertNotIn("contents: write", text)
+
+class TestV5LegacyPaidWorkflowsDisabled(unittest.TestCase):
+    def test_legacy_paid_workflows_are_manual_disabled_stubs(self):
+        for filename in LEGACY_PAID_WORKFLOWS:
+            with self.subTest(filename=filename):
+                path = Path(filename)
+                self.assertTrue(path.is_file())
+                text = path.read_text(encoding="utf-8")
+                self.assertIn("workflow_dispatch:", text)
+                self.assertIn("if: ${{ false }}", text)
+                self.assertNotIn("issues:", text)
+                self.assertNotIn("schedule:", text)
+                self.assertNotIn("OPENROUTER_API_KEY", text)
+                self.assertNotIn("OPENROUTER_MANAGEMENT_KEY", text)
+                self.assertNotIn("secrets.", text)
+                self.assertNotIn("credit-check", text)
+                self.assertNotIn("v5_low_cost_pilot_entry.py run", text)
+                self.assertNotIn("v5_live_benchmark", text)
+                self.assertNotIn("v5_micro_canary.py run", text)
+
+    def test_disabled_stubs_are_read_only_and_zero_call(self):
+        for filename in LEGACY_PAID_WORKFLOWS:
+            with self.subTest(filename=filename):
+                text = Path(filename).read_text(encoding="utf-8")
+                self.assertIn("contents: read", text)
+                self.assertNotIn("contents: write", text)
+                self.assertIn("no model call is made", text.casefold())
+                self.assertNotIn("pull_request_target", text)
+                self.assertNotIn("workflow_run:", text)
 
 
 if __name__ == "__main__":
