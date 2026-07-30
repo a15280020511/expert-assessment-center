@@ -76,6 +76,7 @@ jobs:
           test -s docs/v5-low-cost-pilot.md
           test -s open-model-market/resource_requirements.py
           test -s open-model-market/resource_plan_optimizer.py
+          test -s open-model-market/value_resource_plan_optimizer.py
           test -s open-model-market/resource_plan_compat.py
           test -s open-model-market/resource_runtime_compat.py
           test -s open-model-market/resource_call_budget.py
@@ -115,14 +116,15 @@ jobs:
 
           assert optimization["version"] == 3
           assert optimization["optimizer"] == "google-or-tools-cp-sat"
-          assert optimization["selection_method"] == "resource-demand-first-quality-band-pareto-v3"
+          assert optimization["selection_method"] == "resource-demand-first-cost-performance-v3"
           assert optimization["solver_status"] in {"OPTIMAL", "FEASIBLE"}
           assert optimization["fallback_used"] is False
+          assert optimization["highest_principle"] == "maximum_cost_performance"
           assert optimization["objective_order"] == [
-              "hard_resource_coverage",
-              "maximum_task_quality",
-              "minimum_cost_and_calls_inside_quality_band",
+            "hard_resource_coverage",
+            "maximum_cost_performance",
           ]
+          assert optimization["cost_performance_ratio"] > 0
           assert optimization["expert_count"] == expert_count
           assert len(optimization["selected"]) == expert_count + 1
           assert len(plan["experts"]) == expert_count
