@@ -25,7 +25,9 @@ ALLOWANCE = _allowance()
 def _benchmark_output_allowance(payload: dict[str, Any]) -> dict[str, Any]:
     payload.pop("max_tokens", None)
     payload.pop("max_completion_tokens", None)
-    payload["max_completion_tokens"] = ALLOWANCE
+    # OpenRouter currently exposes max_tokens in direct Endpoint capability lists.
+    # This is a maximum allowance, not required output length.
+    payload["max_tokens"] = ALLOWANCE
     reasoning = payload.get("reasoning")
     if isinstance(reasoning, dict):
         reasoning.pop("max_tokens", None)
@@ -39,8 +41,8 @@ _original_token_paths = hardened._token_ceiling_paths
 
 def _benchmark_token_paths(value: Any, prefix: str = "") -> list[str]:
     paths = _original_token_paths(value, prefix)
-    if isinstance(value, dict) and value.get("max_completion_tokens") == ALLOWANCE:
-        allowed_path = f"{prefix}.max_completion_tokens" if prefix else "max_completion_tokens"
+    if isinstance(value, dict) and value.get("max_tokens") == ALLOWANCE:
+        allowed_path = f"{prefix}.max_tokens" if prefix else "max_tokens"
         paths = [path for path in paths if path != allowed_path]
     return paths
 
@@ -64,6 +66,7 @@ def _annotate(root: Path | None) -> None:
     except (OSError, json.JSONDecodeError):
         return
     audit["benchmark_output_allowance_tokens"] = ALLOWANCE
+    audit["benchmark_output_allowance_parameter"] = "max_tokens"
     audit["benchmark_output_allowance_policy"] = "maximum-permitted-not-required"
     audit["production_policy_changed"] = False
     audit_path.write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
