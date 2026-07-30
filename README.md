@@ -2,6 +2,20 @@
 
 本仓库是正式独立的专家研判中心。GPTs 是本中心与其他业务中心之间唯一的控制与证据中继。
 
+## 最高原则：性价比最高
+
+专家团中心的唯一最高优化原则是：
+
+```text
+满足全部硬约束
+→ 最大化风险调整后的任务效用 ÷ 有效总调用成本
+→ 性价比相同时，再选择费用更低、调用更少、失败风险更低的方案
+```
+
+系统不再把“最大化本任务实时研判质量”设为独立的第一优化阶段，也不再使用质量容差带。质量、任务匹配度、可靠性、证据能力和推理能力仍然进入效用分子；模型价格和总调用费用进入成本分母，由CP-SAT直接求解整体性价比最高的组合。
+
+“性价比最高”不等于单纯选择最便宜模型。不能满足能力、上下文、输出、独立性、预算、安全和任务覆盖要求的方案，价格再低也没有资格进入可行解。
+
 ## 当前架构：先算需求，再选资源
 
 ```text
@@ -11,7 +25,7 @@
 → 需要从OpenRouter提取的市场字段
 → 候选工作包合并方式
 → 模型 × Provider × 提示词模块 × 参数联合矩阵
-→ Google OR-Tools CP-SAT全局求解
+→ Google OR-Tools CP-SAT全局性价比求解
 → 并行动态工作包
 → 动态综合节点
 → GitHub Actions执行、证据与审计
@@ -27,6 +41,7 @@
 - 固定完整提示词模板；
 - 固定参数模板库；
 - 先最小化专家人数；
+- 先最大化质量、再在质量容差带内压低成本；
 - 历史模型绩效账本；
 - 逐席位贪心选模；
 - OpenRouter Auto Router、Fusion或Agent黑箱路由。
@@ -70,17 +85,17 @@ CP-SAT联合决定：
 - 每个工作包选择哪个模型和Provider；
 - 每个模型使用哪些实际支持的参数；
 - 综合节点的模型、提示词和参数；
-- 质量容差带内的最低总费用和调用次数。
+- 满足全部硬约束后的最高整体性价比方案。
 
-优化顺序：
+正式优化顺序：
 
 ```text
 覆盖全部硬资源需求
-→ 最大化本任务实时质量
-→ 在质量容差带内最小化费用和调用数
+→ 最大化风险调整任务效用／有效总调用成本
+→ 性价比相同时最小化费用、调用数和失败风险
 ```
 
-专家数量由质量—费用联合优化产生，不再作为第一阶段目标。
+专家数量由性价比联合优化产生，不再作为第一阶段目标。
 
 ## 任务输入
 
@@ -95,14 +110,27 @@ CP-SAT联合决定：
   "strict_provider_diversity": true,
   "candidate_pool_per_work_package": 16,
   "solver_timeout_seconds": 12,
-  "quality_tolerance_pct": 2,
   "forbidden_models": [],
   "preferred_models": []
 }
 </expert-team-input>
 ```
 
-`max_experts`默认不设固定人数。执行层仅保留最多16次模型调用的安全上限，不代表固定团队模式。`preferred_models`只能作为软偏好，不能突破能力、上下文、预算、覆盖和独立性硬约束。
+`max_experts`默认不设固定人数。执行层仅保留最多16次模型调用的安全上限，不代表固定团队模式。`preferred_models`只能作为软偏好，不能突破能力、上下文、预算、覆盖、独立性和安全硬约束。
+
+## 性价比定义
+
+当前直接优化目标为：
+
+```text
+风险调整后的任务效用
+────────────────────
+预计模型调用总费用 + 零价格保护项
+```
+
+效用分子综合任务匹配、Benchmark、可靠性、上下文适配、推理强度、提示词适配和工作重要性。失败概率与质量不确定性会降低有效效用。
+
+零价格保护项仅用于避免免费模型导致数学除零，每次调用为一百万分之一美元，不承担人为偏好作用。相同性价比下，系统再用实际费用、调用数和失败风险进行确定性排序。
 
 ## 动态提示词与参数
 
@@ -130,7 +158,7 @@ open-model-market/FULL_DYNAMIC_RESOURCE_PLANNING.md
 
 主要借鉴：HuggingGPT、LLMCompiler、Microsoft Foundry Model Router、Amazon Bedrock Intelligent Prompt Routing、Not Diamond、RouteLLM、Mixture-of-Agents、AutoGen SelectorGroupChat和DSPy。
 
-这些方案只用于吸收任务规划、DAG、质量容差带、Pareto优化、动态协作和提示词程序化思想，不增加外部运行依赖。
+这些方案只用于吸收任务规划、DAG、Pareto剪枝、动态协作、联合资源优化和提示词程序化思想，不增加外部运行依赖。
 
 ## 审计产物
 
@@ -138,17 +166,30 @@ open-model-market/FULL_DYNAMIC_RESOURCE_PLANNING.md
 
 - `task-resource-requirements.json`：原子工作和完整资源需求；
 - `task-parameter-matrix.json`：兼容名称，内容升级为V3资源矩阵；
-- `team-optimization.json`：候选工作包、提示词、参数、模型、Provider、质量边界和费用；
+- `team-optimization.json`：候选工作包、提示词、参数、模型、Provider、性价比目标和费用；
 - `model-selection.json`：运行时选择证据；
 - `benchmark-market.json`：Benchmark来源与降级状态；
 - `artifact-manifest.json`：产物SHA与完整性清单。
+
+优化产物必须明确记录：
+
+```text
+quality_first_phase_used = false
+quality_tolerance_band_used = false
+objective_order = hard constraints → maximum cost-performance → tie-breaks
+```
 
 无可行解时直接报告冲突约束，不回退旧选择器。
 
 ## 关键实现
 
 - `open-model-market/resource_requirements.py`
-- `open-model-market/resource_plan_optimizer.py`
+- `open-model-market/cost_performance_solver.py`
+- `open-model-market/cost_performance_optimizer.py`
+- `open-model-market/resource_plan_optimizer.py`：保留候选构造兼容能力，不再作为正式求解入口
+- `open-model-market/v5_value_planner.py`
+- `open-model-market/v5_planner.py`：保留V5市场、候选图和验证基础能力
+- `open-model-market/v5_pipeline.py`
 - `open-model-market/resource_runtime_compat.py`
 - `open-model-market/resource_call_budget.py`
 - `open-model-market/benchmark_selection.py`
