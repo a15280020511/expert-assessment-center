@@ -78,7 +78,7 @@ class TestV5ProductionResilience(unittest.TestCase):
         )
 
     @staticmethod
-    def run():
+    def run_config():
         return SimpleNamespace(parallel_workers=4, model_max_retries=0, model_timeout_seconds=30, api_key="test")
 
     @staticmethod
@@ -117,7 +117,7 @@ class TestV5ProductionResilience(unittest.TestCase):
         p1, p2, p3 = self.patched()
         with p1, p2, p3, tempfile.TemporaryDirectory() as temp:
             result = resilience.execute_v5_graph(
-                self.graph(), self.run(), "测试任务", call_fn=fake_call, output_dir=temp,
+                self.graph(), self.run_config(), "测试任务", call_fn=fake_call, output_dir=temp,
                 limits=GraphLimits(max_retries=0, max_replacements=0),
             )
             self.assertEqual(result["status"], "success")
@@ -151,7 +151,7 @@ class TestV5ProductionResilience(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             with self.assertRaisesRegex(executor.V5ExecutionError, "no model call was made"):
                 resilience.execute_v5_graph(
-                    self.graph(costs=(0.05, 0.05, 0.05)), self.run(), "测试任务",
+                    self.graph(costs=(0.05, 0.05, 0.05)), self.run_config(), "测试任务",
                     call_fn=fake_call, output_dir=temp,
                     limits=GraphLimits(max_retries=0, max_replacements=0, max_budget_usd=0.10),
                 )
