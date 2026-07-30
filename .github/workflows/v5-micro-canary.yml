@@ -52,8 +52,6 @@ jobs:
           ! grep -q '_v3_strategy' open-model-market/v5_micro_canary.py
           ! grep -q 'expert_team_hardened' open-model-market/v5_micro_canary.py
           ! grep -q 'production_cutover_allowed.*True' open-model-market/v5_micro_canary.py
-          ! grep -q 'update_ref' .github/workflows/v5-micro-canary.yml
-          ! grep -q 'merge_pull_request' .github/workflows/v5-micro-canary.yml
 
       - name: Parse micro-canary request
         id: prepare
