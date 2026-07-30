@@ -12,6 +12,7 @@ from typing import Sequence
 import v5_capability_calibration
 import v5_output_contract_delivery
 import v5_planner
+import v5_production_resilience
 from v5_planner import CandidateNode
 
 _INSTALLED = False
@@ -112,10 +113,9 @@ def install() -> None:
     if _INSTALLED:
         return
     v5_planner.pareto_prune = diversity_preserving_pareto_prune
-    # Candidate qualification, diversity preservation, and output-contract
-    # delivery form one formal V5 execution-safety unit. The delivery policy
-    # converts contract metadata into direct required fields and forbids schema
-    # echo, preventing bounded responses from truncating before valid output.
+    # The formal V5 safety unit is installed in dependency order: capability
+    # calibration, resilient execution/cost control, then contract delivery.
     v5_capability_calibration.install()
+    v5_production_resilience.install()
     v5_output_contract_delivery.install()
     _INSTALLED = True
