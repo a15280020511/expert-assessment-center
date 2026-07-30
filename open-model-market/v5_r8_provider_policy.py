@@ -1,4 +1,4 @@
-"""Provider-diversity repair for R8 preflight without sacrificing availability."""
+"""Budget-safe reliability and provider-diversity preflight for R8."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -6,24 +6,77 @@ from typing import Any, Mapping
 
 import v5_r8_executor as runtime
 from execution_graph import ExecutionGraph, GraphLimits
+from v5_budget_runtime_parity import planning_raw_budget_usd
 
 _INSTALLED = False
-_ORIGINAL_PREFLIGHT = runtime._preflight
 
 
 def diversity_aware_preflight(
     graph: ExecutionGraph,
     limits: GraphLimits,
 ) -> tuple[ExecutionGraph, dict[str, Any]]:
-    adjusted, report = _ORIGINAL_PREFLIGHT(graph, limits)
-    blockers = [
-        value for value in report.get("blockers", [])
-        if value != "provider-concentration-above-production-limit"
-    ]
-    warnings: list[str] = []
+    """Apply all runtime substitutions without invalidating the hard cost budget.
+
+    Reliability is a hard delivery constraint for required nodes. Provider diversity
+    is a soft target unless the graph explicitly marks it required. Neither policy is
+    allowed to replace a budget-feasible node with a graph that cannot run.
+    """
     recovery = graph.metadata.get("recovery_pool", {}) if isinstance(graph.metadata, Mapping) else {}
-    nodes = {node.node_id: node for node in adjusted.nodes}
-    substitutions = list(report.get("substitutions", []))
+    nodes = {node.node_id: node for node in graph.nodes}
+    substitutions: list[dict[str, Any]] = []
+    rejected_substitutions: list[dict[str, Any]] = []
+    blockers: list[str] = []
+    warnings: list[str] = []
+    raw_budget = planning_raw_budget_usd(limits)
+
+    def raw_cost() -> float:
+        return sum(node.estimated_cost for node in nodes.values())
+
+    def budget_safe(node_id: str, alternative: Any) -> bool:
+        if raw_budget is None:
+            return True
+        projected = raw_cost() - nodes[node_id].estimated_cost + alternative.estimated_cost
+        return projected <= raw_budget + 1e-12
+
+    # First satisfy the hard per-node reliability policy. Only an alternative that
+    # also preserves the runtime budget may be installed.
+    for selected in graph.nodes:
+        active = nodes[selected.node_id]
+        if active.failure_probability <= limits.max_node_failure_probability:
+            continue
+        rows = recovery.get(selected.node_id, []) if isinstance(recovery, Mapping) else []
+        alternatives = [runtime._candidate(row, selected) for row in rows]
+        alternatives = [
+            item for item in alternatives
+            if item.failure_probability < active.failure_probability
+            and item.failure_probability <= limits.max_node_failure_probability
+        ]
+        alternatives.sort(key=lambda item: (
+            item.failure_probability,
+            item.estimated_cost,
+            -item.estimated_quality,
+        ))
+        safe = next((item for item in alternatives if budget_safe(selected.node_id, item)), None)
+        if safe is not None:
+            previous = nodes[selected.node_id]
+            nodes[selected.node_id] = safe
+            substitutions.append({
+                "node_id": selected.node_id,
+                "reason": "failure-probability-above-production-threshold",
+                "from": previous.provider_endpoint,
+                "to": safe.provider_endpoint,
+            })
+            continue
+        for alternative in alternatives:
+            rejected_substitutions.append({
+                "node_id": selected.node_id,
+                "reason": "reliability-replacement-would-exceed-raw-budget",
+                "candidate": alternative.provider_endpoint,
+            })
+        if selected.node_id in graph.final_nodes or "synthesis" not in selected.functions:
+            blockers.append(f"required-node-risk-above-threshold:{selected.node_id}")
+        else:
+            warnings.append(f"optional-node-risk-above-threshold:{selected.node_id}")
 
     def counts() -> dict[str, int]:
         result: dict[str, int] = {}
@@ -32,6 +85,8 @@ def diversity_aware_preflight(
             result[provider] = result.get(provider, 0) + 1
         return result
 
+    # Rebalance only when a different-provider candidate remains inside the raw
+    # planning budget implied by the runtime risk multiplier.
     if len(nodes) >= 3 and limits.max_provider_share < 1.0:
         for _ in range(len(nodes)):
             current = counts()
@@ -39,6 +94,7 @@ def diversity_aware_preflight(
             if count / len(nodes) <= limits.max_provider_share + 1e-12:
                 break
             candidates: list[tuple[float, str, Any]] = []
+            unsafe: list[tuple[str, Any]] = []
             for node_id, node in nodes.items():
                 if runtime._provider(node) != overloaded:
                     continue
@@ -46,15 +102,24 @@ def diversity_aware_preflight(
                 for row in rows:
                     alternative = runtime._candidate(row, node)
                     if (
-                        runtime._provider(alternative) != overloaded
-                        and alternative.failure_probability <= limits.max_node_failure_probability
+                        runtime._provider(alternative) == overloaded
+                        or alternative.failure_probability > limits.max_node_failure_probability
                     ):
-                        penalty = (
-                            max(0.0, alternative.estimated_cost - node.estimated_cost)
-                            + max(0.0, node.estimated_quality - alternative.estimated_quality)
-                        )
-                        candidates.append((penalty, node_id, alternative))
+                        continue
+                    if not budget_safe(node_id, alternative):
+                        unsafe.append((node_id, alternative))
+                        continue
+                    penalty = (
+                        max(0.0, alternative.estimated_cost - node.estimated_cost)
+                        + max(0.0, node.estimated_quality - alternative.estimated_quality)
+                    )
+                    candidates.append((penalty, node_id, alternative))
             if not candidates:
+                rejected_substitutions.extend({
+                    "node_id": node_id,
+                    "reason": "provider-rebalance-would-exceed-raw-budget",
+                    "candidate": alternative.provider_endpoint,
+                } for node_id, alternative in unsafe)
                 break
             candidates.sort(key=lambda value: (
                 value[0],
@@ -82,31 +147,34 @@ def diversity_aware_preflight(
         if strict:
             blockers.append("provider-concentration-above-production-limit")
         else:
-            warnings.append("provider-concentration-above-target-no-safe-alternative")
+            warnings.append("provider-concentration-above-target-no-budget-safe-alternative")
 
     rebuilt = replace(
-        adjusted,
-        nodes=tuple(nodes[node.node_id] for node in adjusted.nodes),
-        estimated_total_cost=round(sum(node.estimated_cost for node in nodes.values()), 8),
+        graph,
+        nodes=tuple(nodes[node.node_id] for node in graph.nodes),
+        estimated_total_cost=round(raw_cost(), 8),
     )
     risk_cost = rebuilt.estimated_total_cost * max(1.0, limits.cost_risk_multiplier)
-    blockers = [
-        value for value in blockers
-        if value != "preflight-risk-adjusted-cost-above-hard-budget"
-    ]
     if limits.max_budget_usd is not None and risk_cost > limits.max_budget_usd + 1e-12:
         blockers.append("preflight-risk-adjusted-cost-above-hard-budget")
 
-    report.update({
+    blockers = sorted(set(blockers))
+    report = {
         "status": "rejected" if blockers else "pass",
         "estimated_initial_cost_usd": rebuilt.estimated_total_cost,
+        "planning_raw_budget_usd": raw_budget,
         "risk_adjusted_cost_upper_usd": round(risk_cost, 8),
+        "max_budget_usd": limits.max_budget_usd,
+        "cost_risk_multiplier": max(1.0, limits.cost_risk_multiplier),
         "provider_counts": provider_counts,
         "provider_max_share": round(max_share, 6),
+        "provider_diversity_required": strict,
         "substitutions": substitutions,
-        "warnings": warnings,
-        "blockers": sorted(set(blockers)),
-    })
+        "rejected_substitutions": rejected_substitutions,
+        "warnings": sorted(set(warnings)),
+        "blockers": blockers,
+        "policy": "R8 exact budget-safe reliability and provider preflight before first call",
+    }
     return rebuilt, report
 
 
