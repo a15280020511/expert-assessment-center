@@ -15,9 +15,12 @@ from execution_graph import ExecutionGraph, GraphLimits
 from resource_matrix import compile_v5_task_resources
 from task_resource_artifacts import write_task_resource_artifacts
 from v5_benchmark import planning_benchmark, write_benchmark
-from v5_executor import build_node_payload, execute_v5_graph
 from v5_planner import fetch_live_endpoint_payloads
-from v5_value_optimizer import compile_and_optimize_v5
+from v5_production_hardening import (
+    build_node_payload,
+    compile_and_optimize_v5,
+    execute_v5_graph,
+)
 
 
 def _load_json(path: str | Path) -> Mapping[str, Any]:
