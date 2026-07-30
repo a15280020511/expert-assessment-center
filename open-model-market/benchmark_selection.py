@@ -10,11 +10,11 @@ from typing import Any, Dict, Mapping, Sequence, Tuple
 
 import history_free_runtime_compat
 import model_market as market
-import resource_plan_optimizer
 import resource_plan_compat  # noqa: F401 - installs feasibility guards
 import resource_runtime_compat
 import seat_scoring as base
 import task_matrix_optimizer as legacy
+import value_resource_plan_optimizer as resource_plan_optimizer
 from model_market import ModelInfo, RunConfig, SelectedExpert, SelectedJudge, TaskProfile
 
 DATE_SUFFIX_RE = re.compile(r"-(?:20\d{2}(?:-\d{2}-\d{2})?|20\d{6})$")
@@ -101,7 +101,7 @@ def select_team(
     profile: TaskProfile,
     run: RunConfig,
 ) -> Tuple[list[SelectedExpert], SelectedJudge, float]:
-    """Normalize live benchmarks, then run the two-stage resource planner."""
+    """Normalize live benchmarks, then run cost-performance-first planning."""
     original_request = base.request_json
     stable_models = legacy._eligible_pool(ranked, profile)
 
