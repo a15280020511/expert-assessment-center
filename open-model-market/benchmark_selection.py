@@ -8,13 +8,13 @@ from collections import defaultdict
 from dataclasses import replace
 from typing import Any, Dict, Mapping, Sequence, Tuple
 
-import cost_performance_optimizer
 import history_free_runtime_compat
 import model_market as market
 import resource_plan_compat  # noqa: F401 - installs feasibility guards
 import resource_runtime_compat
 import seat_scoring as base
 import task_matrix_optimizer as legacy
+import value_resource_plan_optimizer
 from model_market import ModelInfo, RunConfig, SelectedExpert, SelectedJudge, TaskProfile
 
 DATE_SUFFIX_RE = re.compile(r"-(?:20\d{2}(?:-\d{2}-\d{2})?|20\d{6})$")
@@ -113,7 +113,9 @@ def select_team(
 
     base.request_json = request_with_aliases
     try:
-        experts, judge, estimated = cost_performance_optimizer.select_team(ranked, profile, run)
+        experts, judge, estimated = value_resource_plan_optimizer.select_team(
+            ranked, profile, run
+        )
     finally:
         base.request_json = original_request
     history_free_runtime_compat.bind(run, profile, ranked, experts, judge)
