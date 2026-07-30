@@ -5,10 +5,14 @@ then repeated that metadata instead of filling the required fields, and bounded
 outputs were truncated before the JSON object closed. This module replaces the
 system prompt with an executable contract and strengthens the quality gate so
 schema echoes cannot masquerade as completed work.
+
+Formal V5 output remains unrestricted. A narrowly scoped environment flag enables
+an extra compact-delivery profile for the sub-cent micro canary only.
 """
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Mapping
 
 import v5_executor
@@ -17,6 +21,7 @@ from execution_graph import SelectedNode
 _INSTALLED = False
 _ORIGINAL_SYSTEM_PROMPT = v5_executor._system_prompt
 _ORIGINAL_QUALITY_GATE = v5_executor.quality_gate
+COMPACT_MODE_ENV = "V5_COMPACT_OUTPUT_CONTRACT"
 CONTRACT_METADATA_KEYS = (
     "machine_readable_required",
     "must_separate_fact_assumption_inference",
@@ -32,12 +37,37 @@ def _required_fields(node: SelectedNode) -> list[str]:
     ]
 
 
+def _compact_mode_enabled() -> bool:
+    return os.getenv(COMPACT_MODE_ENV, "").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _compact_delivery_rule(fields: list[str]) -> str:
+    """Return canary-only brevity limits sized to the number of required fields."""
+    field_count = max(1, len(fields))
+    maximum_items = 1 if field_count >= 6 else 2
+    maximum_chars = 36 if field_count >= 6 else 48
+    return (
+        "这是受限Token的微型Canary精简模式，仅用于验证执行链。"
+        "先确保JSON骨架和全部顶层键完整，再填写最关键内容。"
+        f"每个普通字段最多{maximum_items}条；每条不超过{maximum_chars}个中文字符。"
+        "acceptance_tests字段最多3条，每条不超过48个中文字符。"
+        "禁止复述题目、背景、字段含义或相同结论；只保留最高严重度风险、最关键证据和可执行动作。"
+        "整个JSON尽量控制在450个中文字符以内，并必须在输出上限前闭合所有括号和引号。"
+    )
+
+
 def _delivery_rule(node: SelectedNode) -> str:
     fields = _required_fields(node)
     quoted_fields = json.dumps(fields, ensure_ascii=False)
     separate = bool(
         node.output_contract.get("must_separate_fact_assumption_inference")
     )
+    compact_rule = _compact_delivery_rule(fields) if _compact_mode_enabled() else ""
     if node.output_contract.get("machine_readable_required"):
         separation_rule = (
             "事实、假设、推断和不确定性必须在相应字段内明确区分。"
@@ -53,6 +83,7 @@ def _delivery_rule(node: SelectedNode) -> str:
             "等契约元数据。"
             f"{separation_rule}"
             "内容必须精炼，避免重复；在篇幅受限时优先保证所有必填键存在且JSON语法完整闭合。"
+            f"{compact_rule}"
         )
     field_text = "、".join(fields) if fields else "任务要求的交付内容"
     separation_rule = (
@@ -65,6 +96,7 @@ def _delivery_rule(node: SelectedNode) -> str:
         "禁止复述输出契约、字段清单或模式定义。"
         f"{separation_rule}"
         "内容应精炼、完整、可直接使用。"
+        f"{compact_rule}"
     )
 
 

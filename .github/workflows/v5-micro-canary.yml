@@ -72,6 +72,7 @@ jobs:
           - Maximum paid calls: ${{ steps.prepare.outputs.max_calls }}
           - Hard actual-cost ceiling: ${{ steps.prepare.outputs.max_actual_cost_usd }} USD
           - Output allowance: up to ${{ steps.prepare.outputs.output_allowance_tokens }} completion tokens
+          - Compact JSON delivery: enabled for this Canary only; formal V5 default unchanged
           - Optional reasoning: disabled; mandatory reasoning: lowest supported effort
           - Retries: 0
           - Replacements: 0
@@ -118,6 +119,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_APP_NAME: Expert Assessment Center V5 Micro Canary
           OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
+          V5_COMPACT_OUTPUT_CONTRACT: "1"
         run: |
           set -o pipefail
           python open-model-market/v5_micro_canary.py run \

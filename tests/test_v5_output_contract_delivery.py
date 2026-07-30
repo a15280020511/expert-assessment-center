@@ -1,7 +1,9 @@
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
@@ -43,7 +45,8 @@ def _node(*, machine_readable: bool = True) -> SelectedNode:
 
 class TestV5OutputContractDelivery(unittest.TestCase):
     def test_machine_readable_prompt_demands_actual_json_fields(self):
-        prompt = delivery.contract_aware_system_prompt(_node())
+        with patch.dict(os.environ, {delivery.COMPACT_MODE_ENV: ""}, clear=False):
+            prompt = delivery.contract_aware_system_prompt(_node())
         self.assertIn("最终响应必须只包含一个合法JSON对象", prompt)
         self.assertIn('"assumptions"', prompt)
         self.assertIn('"evidence_gaps"', prompt)
@@ -51,15 +54,62 @@ class TestV5OutputContractDelivery(unittest.TestCase):
         self.assertIn("优先保证所有必填键存在且JSON语法完整闭合", prompt)
         self.assertNotIn("输出契约：{", prompt)
         self.assertNotIn('"machine_readable_required": true', prompt)
+        self.assertNotIn("微型Canary精简模式", prompt)
+        self.assertNotIn("450个中文字符", prompt)
+
+    def test_compact_mode_is_explicit_and_canary_scoped(self):
+        with patch.dict(
+            os.environ,
+            {delivery.COMPACT_MODE_ENV: "1"},
+            clear=False,
+        ):
+            prompt = delivery.contract_aware_system_prompt(_node())
+        self.assertIn("微型Canary精简模式", prompt)
+        self.assertIn("每个普通字段最多2条", prompt)
+        self.assertIn("每条不超过48个中文字符", prompt)
+        self.assertIn("acceptance_tests字段最多3条", prompt)
+        self.assertIn("450个中文字符以内", prompt)
+        self.assertIn("必须在输出上限前闭合所有括号和引号", prompt)
+
+    def test_compact_mode_tightens_many_field_contracts(self):
+        node = _node()
+        node = SelectedNode(
+            **{
+                **node.to_dict(),
+                "assigned_work": tuple(node.assigned_work),
+                "functions": tuple(node.functions),
+                "output_contract": {
+                    **dict(node.output_contract),
+                    "required_fields": [
+                        "assumptions",
+                        "evidence_gaps",
+                        "conclusions",
+                        "recommendations",
+                        "risks",
+                        "acceptance_tests",
+                    ],
+                },
+            }
+        )
+        with patch.dict(
+            os.environ,
+            {delivery.COMPACT_MODE_ENV: "true"},
+            clear=False,
+        ):
+            prompt = delivery.contract_aware_system_prompt(node)
+        self.assertIn("每个普通字段最多1条", prompt)
+        self.assertIn("每条不超过36个中文字符", prompt)
 
     def test_non_machine_readable_prompt_still_forbids_schema_echo(self):
-        prompt = delivery.contract_aware_system_prompt(
-            _node(machine_readable=False)
-        )
+        with patch.dict(os.environ, {delivery.COMPACT_MODE_ENV: ""}, clear=False):
+            prompt = delivery.contract_aware_system_prompt(
+                _node(machine_readable=False)
+            )
         self.assertIn("最终响应必须直接交付以下内容", prompt)
         self.assertIn("assumptions", prompt)
         self.assertIn("禁止复述输出契约", prompt)
         self.assertNotIn("最终响应必须只包含一个合法JSON对象", prompt)
+        self.assertNotIn("微型Canary精简模式", prompt)
 
     def test_valid_direct_json_delivery_passes_quality_gate(self):
         node = _node()
@@ -127,8 +177,24 @@ class TestV5OutputContractDelivery(unittest.TestCase):
             v5_executor.quality_gate,
             delivery.contract_aware_quality_gate,
         )
-        prompt = v5_executor._system_prompt(_node())
+        with patch.dict(os.environ, {delivery.COMPACT_MODE_ENV: ""}, clear=False):
+            prompt = v5_executor._system_prompt(_node())
         self.assertIn("JSON语法完整闭合", prompt)
+        self.assertNotIn("微型Canary精简模式", prompt)
+
+    def test_micro_canary_workflow_enables_compact_mode_only_for_run_step(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "v5-micro-canary.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn('V5_COMPACT_OUTPUT_CONTRACT: "1"', workflow)
+        self.assertIn(
+            "Compact JSON delivery: enabled for this Canary only; formal V5 default unchanged",
+            workflow,
+        )
+        formal_workflow = (
+            ROOT / ".github" / "workflows" / "execution-ticket.yml"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("V5_COMPACT_OUTPUT_CONTRACT", formal_workflow)
 
 
 if __name__ == "__main__":
