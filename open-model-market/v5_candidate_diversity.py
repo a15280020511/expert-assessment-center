@@ -7,6 +7,7 @@ filling the remaining group capacity from the Pareto frontier.
 """
 from __future__ import annotations
 
+import sys
 from typing import Sequence
 
 import v5_capability_calibration
@@ -66,8 +67,8 @@ def diversity_preserving_pareto_prune(
         selected: list[CandidateNode] = []
         selected_ids: set[str] = set()
 
-        # Independence and recovery need different models even when they are
-        # dominated on the ordinary Pareto axes.
+        # Explicit independent groups and recovery need different models even
+        # when those alternatives are dominated on the ordinary Pareto axes.
         for row in sorted(best_by_model.values(), key=_order_key):
             selected.append(row)
             selected_ids.add(row.candidate_id)
@@ -118,6 +119,15 @@ def install() -> None:
     # conservative cost control and resilient partial-success synthesis form one
     # production safety unit. No V3 runtime or production entry is changed here.
     v5_capability_calibration.install()
+
+    # ``v5_planner`` retains a legacy optimizer for compatibility, while all
+    # formal V5 entrypoints use ``v5_value_optimizer``. When that module is
+    # loaded, align the planner's runtime global as well so no installed V5 path
+    # can silently reintroduce the old all-copies diversity constraint.
+    optimizer = sys.modules.get("v5_value_optimizer")
+    if optimizer is not None:
+        v5_planner.optimize_execution_graph = optimizer.optimize_execution_graph
+
     v5_output_contract_delivery.install()
     v5_production_hardening.install()
     _INSTALLED = True
