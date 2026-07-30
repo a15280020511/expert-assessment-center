@@ -115,6 +115,19 @@ def _work_requires_distinct_model(
     )
 
 
+def _raw_planning_budget(limits: GraphLimits) -> float | None:
+    """Convert the execution hard cap into the optimizer's pre-risk raw cap.
+
+    Runtime applies ``cost_risk_multiplier`` before allowing any paid request.
+    Planning must reserve that multiplier rather than selecting a graph that is
+    raw-feasible but deterministically rejected seconds later.
+    """
+    if limits.max_budget_usd is None:
+        return None
+    multiplier = max(1.0, float(limits.cost_risk_multiplier))
+    return max(0.0, float(limits.max_budget_usd) / multiplier)
+
+
 def optimize_execution_graph(
     candidate_bundle: Mapping[str, Any],
     *,
@@ -167,8 +180,10 @@ def optimize_execution_graph(
         for index, candidate in enumerate(candidates)
     ]
     actual_cost = sum(actual_cost_terms)
-    if limits.max_budget_usd is not None:
-        model.Add(actual_cost <= int(round(limits.max_budget_usd * COST_SCALE)))
+    raw_planning_budget_usd = _raw_planning_budget(limits)
+    if raw_planning_budget_usd is not None:
+        raw_budget_scaled = int(math.floor(raw_planning_budget_usd * COST_SCALE + 1e-9))
+        model.Add(actual_cost <= raw_budget_scaled)
 
     hard_independence_constraints: list[dict[str, Any]] = []
     for interpretation_id, meta in interpretations.items():
@@ -277,6 +292,16 @@ def optimize_execution_graph(
     graph_data["metadata"]["cost_performance_definition"] = (
         "risk_adjusted_task_utility_divided_by_estimated_model_cost_plus_call_overhead"
     )
+    graph_data["metadata"]["budget_alignment"] = {
+        "execution_hard_budget_usd": limits.max_budget_usd,
+        "cost_risk_multiplier": float(limits.cost_risk_multiplier),
+        "optimizer_raw_cost_ceiling_usd": (
+            round(raw_planning_budget_usd, 8)
+            if raw_planning_budget_usd is not None
+            else None
+        ),
+        "policy": "raw-selected-cost-times-risk-multiplier-must-fit-execution-budget",
+    }
     graph_data["metadata"]["independence_policy"] = {
         "hard_model_diversity_scope": "explicit-independence-groups-only",
         "hard_provider_diversity_scope": "none",
@@ -301,6 +326,13 @@ def optimize_execution_graph(
         "objective_order": ["hard_constraints", "maximum_cost_performance"],
         "cost_performance_definition": (
             "risk_adjusted_task_utility_divided_by_estimated_model_cost_plus_call_overhead"
+        ),
+        "execution_hard_budget_usd": limits.max_budget_usd,
+        "cost_risk_multiplier": float(limits.cost_risk_multiplier),
+        "optimizer_raw_cost_ceiling_usd": (
+            round(raw_planning_budget_usd, 8)
+            if raw_planning_budget_usd is not None
+            else None
         ),
         "selected_quality_objective_scaled": selected_quality,
         "selected_effective_cost_scaled": selected_effective_cost,
