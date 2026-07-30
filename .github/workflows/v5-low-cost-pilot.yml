@@ -60,15 +60,15 @@ jobs:
           cat > pilot-accepted.md <<EOF
           ## V5_PILOT_ACCEPTED
 
-          - Pilot ID: `${{ steps.prepare.outputs.pilot_id }}`
-          - Task: `${{ steps.prepare.outputs.task_id }}`
-          - Strategies: `V5, V3, strongest single, lowest-price single, fixed 3+1, random feasible`
-          - Blind judges: `at least 2 different model/provider endpoints`
-          - Hard actual-cost ceiling: `${{ steps.prepare.outputs.max_cost_usd }} USD`
-          - Hard paid-call ceiling: `${{ steps.prepare.outputs.max_calls }}`
-          - Output allowance: `up to ${{ steps.prepare.outputs.output_allowance_tokens }} tokens; not required output`
-          - Production cutover eligibility: `false`
-          - Run: `${RUN_URL}`
+          - Pilot ID: \`${{ steps.prepare.outputs.pilot_id }}\`
+          - Task: \`${{ steps.prepare.outputs.task_id }}\`
+          - Strategies: \`V5, V3, strongest single, lowest-price single, fixed 3+1, random feasible\`
+          - Blind judges: \`at least 2 different model/provider endpoints\`
+          - Hard actual-cost ceiling: \`${{ steps.prepare.outputs.max_cost_usd }} USD\`
+          - Hard paid-call ceiling: \`${{ steps.prepare.outputs.max_calls }}\`
+          - Output allowance: \`up to ${{ steps.prepare.outputs.output_allowance_tokens }} tokens; not required output\`
+          - Production cutover eligibility: \`false\`
+          - Run: \`${RUN_URL}\`
           EOF
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@pilot-accepted.md
 
@@ -89,11 +89,11 @@ jobs:
           cat > pilot-rejected.md <<EOF
           ## V5_PILOT_REJECTED
 
-          The repository is missing the Actions Secret `OPENROUTER_API_KEY`.
+          The repository is missing the Actions Secret \`OPENROUTER_API_KEY\`.
 
-          - Model inference calls: `0`
-          - Production entrypoint changed: `false`
-          - Run: `${RUN_URL}`
+          - Model inference calls: \`0\`
+          - Production entrypoint changed: \`false\`
+          - Run: \`${RUN_URL}\`
           EOF
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@pilot-rejected.md
 
@@ -190,16 +190,16 @@ jobs:
 
           No complete pilot result was generated.
 
-          - Execute outcome: `${{ steps.execute.outcome }}`
-          - Production entrypoint changed: `false`
-          - Run: `${RUN_URL}`
+          - Execute outcome: \`${{ steps.execute.outcome }}\`
+          - Production entrypoint changed: \`false\`
+          - Run: \`${RUN_URL}\`
           EOF
           fi
           cat >> pilot-result.md <<EOF
 
-          - Artifact ID: `${{ steps.upload.outputs.artifact-id }}`
-          - Artifact URL: `${{ steps.upload.outputs.artifact-url }}`
-          - Artifact digest: `${{ steps.upload.outputs.artifact-digest }}`
+          - Artifact ID: \`${{ steps.upload.outputs.artifact-id }}\`
+          - Artifact URL: \`${{ steps.upload.outputs.artifact-url }}\`
+          - Artifact digest: \`${{ steps.upload.outputs.artifact-digest }}\`
           EOF
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@pilot-result.md
 
