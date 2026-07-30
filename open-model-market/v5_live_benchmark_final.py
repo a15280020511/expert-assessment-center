@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import v5_candidate_diversity
 import v5_live_benchmark as base
 import v5_live_benchmark_hardened as hardened
 import v5_value_optimizer
@@ -146,6 +147,9 @@ def _install_final_v3_entry() -> None:
 
 
 def install_final_alignment() -> None:
+    # The live benchmark must use exactly the same calibrated candidate market
+    # and diversity-preserving Pareto policy as the formal V5 pipeline.
+    v5_candidate_diversity.install()
     base.compile_and_optimize_v5 = v5_value_optimizer.compile_and_optimize_v5
     hardened.credit_preflight = credit_preflight
     hardened._install_v3_entry = _install_final_v3_entry
