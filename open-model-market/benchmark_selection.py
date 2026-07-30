@@ -1,10 +1,9 @@
-"""Benchmark-aware selection wrapper with conservative model alias resolution.
+"""Benchmark alias normalization before OR-Tools global team optimization.
 
 OpenRouter's models catalog exposes request ``id`` and permanent
 ``canonical_slug`` values, while the benchmarks endpoint identifies rows by
-``model_permaslug``. The public endpoints can therefore describe the same model
-with different slugs. This module augments benchmark rows with audited aliases
-before delegating to the existing deterministic seat selector.
+``model_permaslug``. This module augments benchmark rows with audited aliases,
+then delegates model/seat/parameter composition to Google OR-Tools CP-SAT.
 """
 from __future__ import annotations
 
@@ -14,6 +13,7 @@ import unicodedata
 from collections import defaultdict
 from typing import Any, Dict, Mapping, Sequence, Tuple
 
+import optimizer_compat
 import seat_scoring as base
 from model_market import ModelInfo, RunConfig, SelectedExpert, SelectedJudge, TaskProfile
 
@@ -102,7 +102,7 @@ def select_team(
     profile: TaskProfile,
     run: RunConfig,
 ) -> Tuple[list[SelectedExpert], SelectedJudge, float]:
-    """Delegate to the existing selector with scoped benchmark alias support."""
+    """Run benchmark alias resolution and delegate to the guarded CP-SAT optimizer."""
     original_request = base.request_json
     stable_models = base._stable_pool(ranked, profile)
 
@@ -114,6 +114,6 @@ def select_team(
 
     base.request_json = request_with_aliases
     try:
-        return base.select_team(ranked, profile, run)
+        return optimizer_compat.select_team(ranked, profile, run)
     finally:
         base.request_json = original_request

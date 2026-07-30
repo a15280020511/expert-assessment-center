@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "policy": "Only audited discrete templates may be selected; arbitrary continuous parameter search is forbidden.",
+  "templates": {
+    "concise": {
+      "effort": "low",
+      "temperature": 0.05,
+      "verbosity": "low",
+      "expected_output_tokens": 900,
+      "structured_output": false
+    },
+    "balanced": {
+      "effort": "medium",
+      "temperature": 0.10,
+      "verbosity": "low",
+      "expected_output_tokens": 1500,
+      "structured_output": false
+    },
+    "deep": {
+      "effort": "high",
+      "temperature": 0.06,
+      "verbosity": "low",
+      "expected_output_tokens": 2400,
+      "structured_output": false
+    },
+    "red_team": {
+      "effort": "high",
+      "temperature": 0.14,
+      "verbosity": "medium",
+      "expected_output_tokens": 2000,
+      "structured_output": false
+    },
+    "judge": {
+      "effort": "high",
+      "temperature": 0.04,
+      "verbosity": "low",
+      "expected_output_tokens": 2600,
+      "structured_output": false
+    }
+  }
+}

@@ -1,6 +1,6 @@
 {
   "selection": {
-    "team_pattern": "three-experts-plus-one-judge",
+    "team_pattern": "dynamic-one-to-four-experts-plus-one-judge",
     "quality_tier": "value",
     "ranking_limit": 50,
     "minimum_context_length": 16384,
@@ -18,6 +18,12 @@
       "benchmark_fallback": "official_intelligence_rank",
       "speed_used": false,
       "popularity_used": false
+    },
+    "optimizer": {
+      "engine": "google-or-tools-cp-sat",
+      "policy_file": "optimization_policy.json",
+      "parameter_templates_file": "parameter_templates.json",
+      "fallback_to_legacy_greedy_selector": false
     },
     "soft_price_caps_per_million": {
       "budget": 3.0,
@@ -49,7 +55,7 @@
     "model_timeout_seconds": 240,
     "model_max_retries": 0,
     "maximum_replacements": 2,
-    "parallel_workers": 3,
+    "parallel_workers": 4,
     "judge_context_budget_chars": 120000,
     "require_all_experts": true
   },
