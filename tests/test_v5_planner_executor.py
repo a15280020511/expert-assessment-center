@@ -12,7 +12,7 @@ from execution_graph import ExecutionGraph, GraphLimits  # noqa: E402
 from execution_graph_validator import validate_execution_graph  # noqa: E402
 from resource_matrix import compile_v5_task_resources  # noqa: E402
 from v5_benchmark import live_cutover_gate, planning_benchmark  # noqa: E402
-from v5_executor import execute_v5_graph  # noqa: E402
+from v5_executor import V5ExecutionError, execute_v5_graph  # noqa: E402
 from v5_planner import compile_and_optimize_v5  # noqa: E402
 
 
@@ -122,17 +122,21 @@ class TestV5PlannerExecutor(unittest.TestCase):
             self.assertEqual(len(rows), len({row.model for row in rows}))
             self.assertEqual(len(rows), len({row.provider_endpoint for row in rows}))
 
-    def test_layered_executor_recovers_with_a_different_candidate(self):
-        planner = self.planner()
-        graph = ExecutionGraph.from_mapping(planner["optimization"]["execution_graph"])
-        state = {"failed_once": False}
+    @staticmethod
+    def complete_answer():
         required_words = " ".join([
             "conclusions assumptions uncertainties evidence_gaps variables formulas calculations sensitivity",
             "scenarios triggers forecast_horizon failure_modes counterexamples rejection_conditions",
             "options criteria tradeoffs ranking agreements disagreements conflict_resolution final_recommendation",
             "validated_claims unsupported_claims verification_limits dependencies steps acceptance_tests rollback_conditions",
         ])
-        answer = (required_words + "。这是完整、结构化、可交付的节点结果，明确区分事实、假设、推断和不确定性。") * 8
+        return (required_words + "。这是完整、结构化、可交付的节点结果，明确区分事实、假设、推断和不确定性。") * 8
+
+    def test_layered_executor_recovers_with_a_different_candidate(self):
+        planner = self.planner()
+        graph = ExecutionGraph.from_mapping(planner["optimization"]["execution_graph"])
+        state = {"failed_once": False}
+        answer = self.complete_answer()
 
         def fake_call(run, payload):
             if not state["failed_once"]:
@@ -157,10 +161,33 @@ class TestV5PlannerExecutor(unittest.TestCase):
             )
             self.assertEqual(result["status"], "success")
             self.assertTrue(result["recovery_used"])
+            self.assertLessEqual(result["execution_budget"]["replacements_reserved"], 2)
             self.assertTrue((Path(temp) / "v5-final-report.md").exists())
             audit = json.loads((Path(temp) / "v5-request-audit.json").read_text(encoding="utf-8"))
             self.assertEqual(audit["status"], "PASS")
             self.assertFalse(audit["artificial_token_ceiling_sent"])
+
+    def test_replacement_limit_is_shared_by_the_whole_graph(self):
+        graph = ExecutionGraph.from_mapping(self.planner()["optimization"]["execution_graph"])
+
+        def always_fail(run, payload):
+            raise RuntimeError("all endpoints fail")
+
+        with tempfile.TemporaryDirectory() as temp:
+            with self.assertRaises(V5ExecutionError):
+                execute_v5_graph(
+                    graph,
+                    self.run("测试任务"),
+                    "测试任务",
+                    call_fn=always_fail,
+                    output_dir=temp,
+                    limits=GraphLimits(max_retries=0, max_replacements=2),
+                )
+            summary = json.loads((Path(temp) / "v5-execution-summary.json").read_text(encoding="utf-8"))
+            budget = summary["execution_budget"]
+            self.assertLessEqual(budget["replacements_reserved"], 2)
+            self.assertLessEqual(budget["calls_reserved"], len(graph.nodes) + 2)
+            self.assertTrue(any(row["reason"] == "global-replacement-limit-exhausted" for row in budget["denials"]))
 
     def test_planning_benchmark_never_authorizes_production_cutover(self):
         benchmark = planning_benchmark(self.planner())
@@ -170,7 +197,8 @@ class TestV5PlannerExecutor(unittest.TestCase):
         self.assertFalse(benchmark["strategies"]["strongest_single_model"]["feasible"])
         self.assertTrue(benchmark["strategies"]["strongest_single_model"]["hard_constraint_violations"])
 
-    def test_live_cutover_gate_requires_real_multi_task_advantage(self):
+    @staticmethod
+    def live_records():
         records = []
         strategies = ["v5_joint_graph", "v3", "strongest_single_model", "lowest_price_single_model", "fixed_3_plus_1", "random_feasible"]
         for task_index in range(5):
@@ -184,11 +212,27 @@ class TestV5PlannerExecutor(unittest.TestCase):
                     "actual_cost_usd": 0.10 if v5 else 0.09,
                     "latency_seconds": 2.0,
                     "safety_failure": False,
+                    "blind_fatal_error": False,
+                    "blind_judge_count": 2,
+                    "blind_judge_models": ["judge/a", "judge/b"],
+                    "blind_judge_providers": ["provider-a", "provider-b"],
+                    "blind_judge_disagreement_points": 5.0,
                 })
+        return records
+
+    def test_live_cutover_gate_requires_real_multi_task_advantage(self):
+        records = self.live_records()
         decision = live_cutover_gate(records)
         self.assertTrue(decision["production_cutover_allowed"])
         records[0]["safety_failure"] = True
         self.assertFalse(live_cutover_gate(records)["production_cutover_allowed"])
+
+    def test_live_cutover_gate_rejects_non_independent_judging(self):
+        records = self.live_records()
+        records[0]["blind_judge_providers"] = ["provider-a", "provider-a"]
+        decision = live_cutover_gate(records)
+        self.assertFalse(decision["production_cutover_allowed"])
+        self.assertIn("v5_joint_graph:invalid-independent-blind-judging", decision["blockers"])
 
 
 if __name__ == "__main__":

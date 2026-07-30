@@ -1,11 +1,12 @@
-"""NetworkX-stage V5 executor with dynamic quality gates and bounded recovery."""
+"""NetworkX-stage V5 executor with dynamic quality gates and graph-wide recovery limits."""
 from __future__ import annotations
 
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from threading import Lock
 from typing import Any, Callable, Mapping, Sequence
 
 from execution_graph import ExecutionGraph, GraphLimits, SelectedNode
@@ -53,6 +54,7 @@ class NodeAttempt:
     response_provider: str | None
     error: str | None = None
     replacement: bool = False
+    retry: bool = False
 
 
 @dataclass
@@ -67,6 +69,88 @@ class NodeExecutionResult:
     quality_score: float
     attempts: list[NodeAttempt]
     actual_cost_usd: float
+
+
+@dataclass
+class ExecutionBudget:
+    """One graph-wide ledger for paid calls, retries, replacements, and cost."""
+
+    max_planned_calls: int
+    max_retries: int
+    max_replacements: int
+    max_budget_usd: float | None
+    calls_reserved: int = 0
+    initial_calls_reserved: int = 0
+    retries_reserved: int = 0
+    replacements_reserved: int = 0
+    estimated_cost_reserved_usd: float = 0.0
+    actual_cost_usd: float = 0.0
+    denials: list[dict[str, Any]] = field(default_factory=list)
+    _lock: Lock = field(default_factory=Lock, repr=False)
+
+    @property
+    def maximum_total_calls(self) -> int:
+        return self.max_planned_calls + self.max_retries + self.max_replacements
+
+    def reserve(self, kind: str, estimated_cost_usd: float, node_id: str) -> tuple[bool, str]:
+        estimated = max(0.0, float(estimated_cost_usd))
+        with self._lock:
+            reason = ""
+            if kind == "initial" and self.initial_calls_reserved >= self.max_planned_calls:
+                reason = "planned-call-limit-exhausted"
+            elif kind == "retry" and self.retries_reserved >= self.max_retries:
+                reason = "global-retry-limit-exhausted"
+            elif kind == "replacement" and self.replacements_reserved >= self.max_replacements:
+                reason = "global-replacement-limit-exhausted"
+            elif self.calls_reserved >= self.maximum_total_calls:
+                reason = "global-total-call-limit-exhausted"
+            elif self.max_budget_usd is not None:
+                projected = max(self.actual_cost_usd, self.estimated_cost_reserved_usd) + estimated
+                if projected > self.max_budget_usd + 1e-12:
+                    reason = "global-estimated-budget-exhausted"
+            if reason:
+                self.denials.append({
+                    "node_id": node_id,
+                    "kind": kind,
+                    "estimated_cost_usd": round(estimated, 8),
+                    "reason": reason,
+                })
+                return False, reason
+            self.calls_reserved += 1
+            self.estimated_cost_reserved_usd += estimated
+            if kind == "initial":
+                self.initial_calls_reserved += 1
+            elif kind == "retry":
+                self.retries_reserved += 1
+            elif kind == "replacement":
+                self.replacements_reserved += 1
+            return True, ""
+
+    def reconcile(self, actual_cost_usd: float) -> bool:
+        actual = max(0.0, float(actual_cost_usd))
+        with self._lock:
+            self.actual_cost_usd += actual
+            return bool(
+                self.max_budget_usd is not None
+                and self.actual_cost_usd > self.max_budget_usd + 1e-12
+            )
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "max_planned_calls": self.max_planned_calls,
+                "max_retries": self.max_retries,
+                "max_replacements": self.max_replacements,
+                "maximum_total_calls": self.maximum_total_calls,
+                "max_budget_usd": self.max_budget_usd,
+                "calls_reserved": self.calls_reserved,
+                "initial_calls_reserved": self.initial_calls_reserved,
+                "retries_reserved": self.retries_reserved,
+                "replacements_reserved": self.replacements_reserved,
+                "estimated_cost_reserved_usd": round(self.estimated_cost_reserved_usd, 8),
+                "actual_cost_usd": round(self.actual_cost_usd, 8),
+                "denials": list(self.denials),
+            }
 
 
 def _json_copy(value: Any) -> Any:
@@ -230,6 +314,7 @@ def _attempt(
     attempt_index: int,
     *,
     replacement: bool,
+    retry: bool,
 ) -> NodeAttempt:
     payload = build_node_payload(node, original_task, upstream)
     response: Mapping[str, Any] = {}
@@ -255,6 +340,7 @@ def _attempt(
             response_model=str(response.get("model") or node.model) or None,
             response_provider=str(response.get("provider") or "") or None,
             replacement=replacement,
+            retry=retry,
         )
     except Exception as exc:  # noqa: BLE001 - converted into audited attempt
         return NodeAttempt(
@@ -274,7 +360,39 @@ def _attempt(
             response_provider=None,
             error=str(exc),
             replacement=replacement,
+            retry=retry,
         )
+
+
+def _reserved_attempt(
+    node: SelectedNode,
+    selected_node_id: str,
+    kind: str,
+    original_task: str,
+    upstream: Sequence[Mapping[str, Any]],
+    run: Any,
+    call_fn: Callable[[Any, Mapping[str, Any]], tuple[Mapping[str, Any], float]],
+    attempt_index: int,
+    budget: ExecutionBudget,
+) -> NodeAttempt | None:
+    allowed, reason = budget.reserve(kind, node.estimated_cost, selected_node_id)
+    if not allowed:
+        return None
+    attempt = _attempt(
+        node,
+        original_task,
+        upstream,
+        run,
+        call_fn,
+        attempt_index,
+        replacement=kind == "replacement",
+        retry=kind == "retry",
+    )
+    if budget.reconcile(_actual_cost({"usage": attempt.usage})):
+        attempt.status = "budget_exceeded"
+        if "actual-budget-exceeded" not in attempt.gate_reasons:
+            attempt.gate_reasons.append("actual-budget-exceeded")
+    return attempt
 
 
 def _execute_node(
@@ -284,36 +402,74 @@ def _execute_node(
     run: Any,
     call_fn: Callable[[Any, Mapping[str, Any]], tuple[Mapping[str, Any], float]],
     recovery_rows: Sequence[Mapping[str, Any]],
-    limits: GraphLimits,
+    budget: ExecutionBudget,
 ) -> NodeExecutionResult:
     attempts: list[NodeAttempt] = []
-    attempt_index = 0
+    attempt_index = 1
     active = selected
-    candidates = [selected] + [_node_from_candidate(row, selected) for row in recovery_rows[: limits.max_replacements]]
-    for candidate_index, candidate in enumerate(candidates):
-        same_endpoint_attempts = 1 + (limits.max_retries if candidate_index == 0 else 0)
-        for _ in range(same_endpoint_attempts):
-            attempt_index += 1
-            attempt = _attempt(
-                candidate, original_task, upstream, run, call_fn, attempt_index,
-                replacement=candidate_index > 0,
+    initial = _reserved_attempt(
+        selected, selected.node_id, "initial", original_task, upstream, run, call_fn, attempt_index, budget
+    )
+    if initial is not None:
+        attempts.append(initial)
+        if initial.status == "passed":
+            return NodeExecutionResult(
+                node_id=selected.node_id,
+                assigned_work=selected.assigned_work,
+                status="success",
+                selected_model=selected.model,
+                resolved_model=initial.response_model or selected.model,
+                provider_endpoint=selected.provider_endpoint,
+                answer=initial.answer,
+                quality_score=initial.quality_score,
+                attempts=attempts,
+                actual_cost_usd=round(sum(_actual_cost({"usage": row.usage}) for row in attempts), 8),
             )
-            attempts.append(attempt)
-            if attempt.status == "passed":
-                actual_cost = sum(_actual_cost({"usage": row.usage}) for row in attempts)
-                return NodeExecutionResult(
-                    node_id=selected.node_id,
-                    assigned_work=selected.assigned_work,
-                    status="success_recovered" if candidate_index > 0 else "success",
-                    selected_model=selected.model,
-                    resolved_model=attempt.response_model or candidate.model,
-                    provider_endpoint=candidate.provider_endpoint,
-                    answer=attempt.answer,
-                    quality_score=attempt.quality_score,
-                    attempts=attempts,
-                    actual_cost_usd=round(actual_cost, 8),
-                )
+
+    attempt_index += 1
+    retry = _reserved_attempt(
+        selected, selected.node_id, "retry", original_task, upstream, run, call_fn, attempt_index, budget
+    )
+    if retry is not None:
+        attempts.append(retry)
+        if retry.status == "passed":
+            return NodeExecutionResult(
+                node_id=selected.node_id,
+                assigned_work=selected.assigned_work,
+                status="success_retried",
+                selected_model=selected.model,
+                resolved_model=retry.response_model or selected.model,
+                provider_endpoint=selected.provider_endpoint,
+                answer=retry.answer,
+                quality_score=retry.quality_score,
+                attempts=attempts,
+                actual_cost_usd=round(sum(_actual_cost({"usage": row.usage}) for row in attempts), 8),
+            )
+
+    for row in recovery_rows:
+        candidate = _node_from_candidate(row, selected)
+        attempt_index += 1
+        replacement = _reserved_attempt(
+            candidate, selected.node_id, "replacement", original_task, upstream, run, call_fn, attempt_index, budget
+        )
+        if replacement is None:
+            continue
         active = candidate
+        attempts.append(replacement)
+        if replacement.status == "passed":
+            return NodeExecutionResult(
+                node_id=selected.node_id,
+                assigned_work=selected.assigned_work,
+                status="success_recovered",
+                selected_model=selected.model,
+                resolved_model=replacement.response_model or candidate.model,
+                provider_endpoint=candidate.provider_endpoint,
+                answer=replacement.answer,
+                quality_score=replacement.quality_score,
+                attempts=attempts,
+                actual_cost_usd=round(sum(_actual_cost({"usage": item.usage}) for item in attempts), 8),
+            )
+
     return NodeExecutionResult(
         node_id=selected.node_id,
         assigned_work=selected.assigned_work,
@@ -341,7 +497,7 @@ def execute_v5_graph(
     output_dir: str | Path | None = None,
     limits: GraphLimits | None = None,
 ) -> dict[str, Any]:
-    """Execute each DAG generation in parallel; stop closed on unrecovered work loss."""
+    """Execute DAG generations in parallel and stop closed on unrecovered work loss."""
     graph = graph if isinstance(graph, ExecutionGraph) else ExecutionGraph.from_mapping(graph)
     limits = limits or GraphLimits()
     issues = validate_execution_graph(graph, limits)
@@ -352,6 +508,12 @@ def execute_v5_graph(
     incoming: dict[str, list[str]] = {node.node_id: [] for node in graph.nodes}
     for edge in graph.edges:
         incoming[edge.target].append(edge.source)
+    budget = ExecutionBudget(
+        max_planned_calls=limits.max_model_calls,
+        max_retries=limits.max_retries,
+        max_replacements=limits.max_replacements,
+        max_budget_usd=limits.max_budget_usd,
+    )
     outputs: dict[str, NodeExecutionResult] = {}
     recovery = graph.metadata.get("recovery_pool", {}) if isinstance(graph.metadata, Mapping) else {}
     stage_records: list[dict[str, Any]] = []
@@ -367,9 +529,13 @@ def execute_v5_graph(
                 ]
                 futures[pool.submit(
                     _execute_node,
-                    node_by_id[node_id], original_task, upstream, run, call,
+                    node_by_id[node_id],
+                    original_task,
+                    upstream,
+                    run,
+                    call,
                     list(recovery.get(node_id, [])) if isinstance(recovery, Mapping) else [],
-                    limits,
+                    budget,
                 )] = node_id
             stage_results = [future.result() for future in as_completed(futures)]
         stage_results.sort(key=lambda row: row.node_id)
@@ -384,9 +550,18 @@ def execute_v5_graph(
         })
         if failed:
             break
-    successful_finals = [outputs[node_id] for node_id in graph.final_nodes if node_id in outputs and outputs[node_id].status.startswith("success")]
-    complete = len(outputs) == len(graph.nodes) and all(result.status.startswith("success") for result in outputs.values()) and len(successful_finals) == len(graph.final_nodes)
+    successful_finals = [
+        outputs[node_id]
+        for node_id in graph.final_nodes
+        if node_id in outputs and outputs[node_id].status.startswith("success")
+    ]
+    complete = (
+        len(outputs) == len(graph.nodes)
+        and all(result.status.startswith("success") for result in outputs.values())
+        and len(successful_finals) == len(graph.final_nodes)
+    )
     final_answer = "\n\n".join(result.answer or "" for result in successful_finals).strip()
+    budget_snapshot = budget.snapshot()
     result = {
         "version": 5,
         "status": "success" if complete else "failed",
@@ -394,9 +569,10 @@ def execute_v5_graph(
         "node_results": [asdict(outputs[node_id]) for node_id in sorted(outputs)],
         "final_node_ids": list(graph.final_nodes),
         "final_answer": final_answer or None,
-        "actual_cost_usd": round(sum(result.actual_cost_usd for result in outputs.values()), 8),
-        "recovery_used": any(attempt.replacement for result in outputs.values() for attempt in result.attempts),
-        "stop_reason": "all-quality-gates-passed" if complete else "unrecovered-node-failure",
+        "actual_cost_usd": round(sum(row.actual_cost_usd for row in outputs.values()), 8),
+        "recovery_used": any(attempt.replacement or attempt.retry for row in outputs.values() for attempt in row.attempts),
+        "execution_budget": budget_snapshot,
+        "stop_reason": "all-quality-gates-passed" if complete else "unrecovered-node-failure-or-global-limit",
     }
     if output_dir is not None:
         root = Path(output_dir)
@@ -407,10 +583,14 @@ def execute_v5_graph(
             "status": "PASS" if all(not FORBIDDEN_FIELDS.intersection(attempt.request) for row in outputs.values() for attempt in row.attempts) else "FAIL",
             "request_count": sum(len(row.attempts) for row in outputs.values()),
             "requests": [attempt.request for row in outputs.values() for attempt in row.attempts],
-            "artificial_token_ceiling_sent": any("max_tokens" in attempt.request or "max_completion_tokens" in attempt.request for row in outputs.values() for attempt in row.attempts),
+            "artificial_token_ceiling_sent": any(
+                "max_tokens" in attempt.request or "max_completion_tokens" in attempt.request
+                for row in outputs.values() for attempt in row.attempts
+            ),
             "external_tools_allowed": False,
+            "global_limits": budget_snapshot,
         })
         (root / "v5-final-report.md").write_text(final_answer or "# V5 execution failed\n", encoding="utf-8")
     if not complete:
-        raise V5ExecutionError("V5 execution stopped because one or more required nodes failed quality and recovery gates.")
+        raise V5ExecutionError("V5 execution stopped because one or more required nodes failed quality, recovery, call, or budget gates.")
     return result
