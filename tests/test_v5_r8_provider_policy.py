@@ -9,7 +9,7 @@ from execution_graph import ExecutionGraph, GraphLimits, SelectedNode  # noqa: E
 import v5_r8_provider_policy as policy  # noqa: E402
 
 
-def node(name, provider):
+def node(name, provider, *, cost=0.01, failure=0.05):
     return SelectedNode(
         node_id=name,
         assigned_work=(f"work-{name}",),
@@ -26,8 +26,8 @@ def node(name, provider):
         },
         estimated_quality=0.8,
         quality_uncertainty=0.1,
-        estimated_cost=0.01,
-        failure_probability=0.05,
+        estimated_cost=cost,
+        failure_probability=failure,
         request_config={
             "provider": {
                 "order": [provider],
@@ -39,27 +39,33 @@ def node(name, provider):
     )
 
 
+def graph(nodes, *, recovery=None, metadata=None):
+    data = dict(metadata or {})
+    if recovery is not None:
+        data["recovery_pool"] = recovery
+    return ExecutionGraph(
+        nodes=tuple(nodes),
+        edges=(),
+        execution_stages=(tuple(row.node_id for row in nodes),),
+        entry_nodes=tuple(row.node_id for row in nodes),
+        final_nodes=tuple(row.node_id for row in nodes),
+        required_work=tuple(f"work-{row.node_id}" for row in nodes),
+        estimated_quality=0.8,
+        quality_floor=0.6,
+        estimated_total_cost=sum(row.estimated_cost for row in nodes),
+        metadata=data,
+    )
+
+
 class TestProviderPolicy(unittest.TestCase):
     def test_concentration_without_alternative_warns_but_does_not_destroy_availability(self):
         nodes = tuple(node(name, "p1") for name in ("a", "b", "c"))
-        graph = ExecutionGraph(
-            nodes=nodes,
-            edges=(),
-            execution_stages=(("a", "b", "c"),),
-            entry_nodes=("a", "b", "c"),
-            final_nodes=("a", "b", "c"),
-            required_work=tuple(f"work-{name}" for name in ("a", "b", "c")),
-            estimated_quality=0.8,
-            quality_floor=0.6,
-            estimated_total_cost=0.03,
-            metadata={},
-        )
         _, report = policy.diversity_aware_preflight(
-            graph, GraphLimits(max_provider_share=0.60)
+            graph(nodes), GraphLimits(max_provider_share=0.60)
         )
         self.assertEqual(report["status"], "pass")
         self.assertIn(
-            "provider-concentration-above-target-no-safe-alternative",
+            "provider-concentration-above-target-no-budget-safe-alternative",
             report["warnings"],
         )
 
@@ -79,20 +85,9 @@ class TestProviderPolicy(unittest.TestCase):
                 }
             },
         }
-        graph = ExecutionGraph(
-            nodes=nodes,
-            edges=(),
-            execution_stages=(("a", "b", "c"),),
-            entry_nodes=("a", "b", "c"),
-            final_nodes=("a", "b", "c"),
-            required_work=tuple(f"work-{name}" for name in ("a", "b", "c")),
-            estimated_quality=0.8,
-            quality_floor=0.6,
-            estimated_total_cost=0.03,
-            metadata={"recovery_pool": {"a": [alternative]}},
-        )
         adjusted, report = policy.diversity_aware_preflight(
-            graph, GraphLimits(max_provider_share=0.67)
+            graph(nodes, recovery={"a": [alternative]}),
+            GraphLimits(max_provider_share=0.67),
         )
         self.assertEqual(report["provider_counts"], {"p2": 1, "p1": 2})
         self.assertEqual(report["status"], "pass")
@@ -101,6 +96,44 @@ class TestProviderPolicy(unittest.TestCase):
             for row in report["substitutions"]
         ))
         self.assertEqual(adjusted.nodes[0].provider_endpoint, "vendor/a2@p2")
+
+    def test_expensive_provider_rebalance_is_rejected_and_original_graph_survives(self):
+        nodes = tuple(node(name, "p1", cost=0.02) for name in ("a", "b", "c"))
+        expensive = {
+            **nodes[0].to_dict(),
+            "candidate_id": "a-expensive",
+            "model": "vendor/a2",
+            "provider_endpoint": "vendor/a2@p2",
+            "estimated_cost": 0.12,
+            "request_config": {
+                "provider": {
+                    "order": ["p2"],
+                    "only": ["p2"],
+                    "allow_fallbacks": False,
+                    "require_parameters": True,
+                }
+            },
+        }
+        adjusted, report = policy.diversity_aware_preflight(
+            graph(nodes, recovery={"a": [expensive]}),
+            GraphLimits(max_provider_share=0.60, max_budget_usd=0.10, cost_risk_multiplier=1.25),
+        )
+        self.assertEqual(report["status"], "pass")
+        self.assertEqual(adjusted.estimated_total_cost, 0.06)
+        self.assertEqual(adjusted.nodes[0].provider_endpoint, "vendor/a@p1")
+        self.assertTrue(any(
+            row["reason"] == "provider-rebalance-would-exceed-raw-budget"
+            for row in report["rejected_substitutions"]
+        ))
+
+    def test_strict_provider_diversity_fails_closed_without_budget_safe_alternative(self):
+        nodes = tuple(node(name, "p1", cost=0.02) for name in ("a", "b", "c"))
+        _, report = policy.diversity_aware_preflight(
+            graph(nodes, metadata={"provider_diversity_required": True}),
+            GraphLimits(max_provider_share=0.60, max_budget_usd=0.10),
+        )
+        self.assertEqual(report["status"], "rejected")
+        self.assertIn("provider-concentration-above-production-limit", report["blockers"])
 
 
 if __name__ == "__main__":
