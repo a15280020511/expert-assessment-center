@@ -10,11 +10,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
 import v5_live_benchmark as base  # noqa: E402
+import v5_live_benchmark_economy as economy  # noqa: E402
 import v5_live_benchmark_final as final  # noqa: E402
 import v5_value_optimizer  # noqa: E402
 
 
-class TestFinalFiveTaskBenchmark(unittest.TestCase):
+class TestFinalBenchmarkAlignment(unittest.TestCase):
     def test_final_alignment_uses_active_cost_performance_v5(self):
         original = base.compile_and_optimize_v5
         try:
@@ -26,7 +27,7 @@ class TestFinalFiveTaskBenchmark(unittest.TestCase):
         finally:
             base.compile_and_optimize_v5 = original
 
-    def test_unbounded_key_without_management_credit_evidence_is_rejected(self):
+    def test_legacy_full_preflight_still_requires_verified_account_reserve(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             config = root / "benchmark-config.json"
@@ -52,98 +53,155 @@ class TestFinalFiveTaskBenchmark(unittest.TestCase):
                 code = final.credit_preflight(config, root)
             report = json.loads((root / "credit-preflight.json").read_text(encoding="utf-8"))
             self.assertEqual(code, 3)
-            self.assertEqual(report["status"], "insufficient-or-unverified")
             self.assertIn("verified-account-credit-reserve-required", report["blockers"])
-            self.assertEqual(report["runtime_global_cost_ceiling_usd"], 20.0)
             self.assertFalse(report["production_entrypoint_changed"])
             self.assertFalse(report["v3_deleted"])
 
-    def test_verified_management_credit_reserve_is_accepted(self):
+
+class TestEconomyProgressiveBenchmark(unittest.TestCase):
+    def test_prepare_defaults_to_three_tasks_and_low_hard_limits(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            event = root / "event.json"
+            event.write_text(json.dumps({"issue": {"number": 39, "body": ""}}), encoding="utf-8")
+            code = economy.prepare(event, root / "out")
+            config = json.loads((root / "out" / "benchmark-config.json").read_text(encoding="utf-8"))
+            self.assertEqual(code, 0)
+            self.assertEqual(config["mode"], "economy-cutover")
+            self.assertEqual(config["task_ids"], list(economy.DEFAULT_TASK_IDS))
+            self.assertEqual(config["strategies"], ["v5_joint_graph", "v3"])
+            self.assertEqual(config["max_cost_usd"], 1.5)
+            self.assertLessEqual(config["max_cost_usd"], economy.HARD_MAX_COST_USD)
+            self.assertEqual(config["max_calls"], 45)
+            self.assertEqual(config["output_allowance_tokens"], 1800)
+            self.assertFalse(config["production_entrypoint_changed"])
+            self.assertFalse(config["v3_deleted"])
+
+    def test_prepare_rejects_more_than_three_tasks(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            event = root / "event.json"
+            event.write_text(
+                json.dumps(
+                    {
+                        "issue": {
+                            "number": 39,
+                            "body": json.dumps(
+                                {
+                                    "task_ids": [
+                                        "municipal-investment-portfolio",
+                                        "retail-expansion-unit-economics",
+                                        "software-job-runner-security",
+                                        "dual-source-supply-chain",
+                                    ]
+                                }
+                            ),
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(base.LiveBenchmarkError):
+                economy.prepare(event, root / "out")
+
+    def test_unbounded_key_is_accepted_under_two_dollar_hard_ceiling(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             config = root / "benchmark-config.json"
             config.write_text(
-                json.dumps({"max_cost_usd": 20.0, "max_calls": 200}),
+                json.dumps({"max_cost_usd": 1.5, "max_calls": 45, "output_allowance_tokens": 1800}),
                 encoding="utf-8",
             )
             key_payload = {
                 "data": {
-                    "label": "benchmark-key",
+                    "label": "unbounded-key",
                     "limit": None,
                     "limit_remaining": None,
                     "usage": 1.0,
-                    "is_free_tier": False,
-                    "is_management_key": False,
                 }
             }
-            credits_payload = {
-                "data": {
-                    "total_credits": 50.0,
-                    "total_usage": 10.0,
-                }
-            }
-            with patch.object(
-                final.hardened,
-                "request_json",
-                side_effect=[key_payload, credits_payload],
-            ), patch.dict(
+            with patch.object(economy.hardened, "request_json", return_value=key_payload), patch.dict(
                 os.environ,
-                {
-                    "OPENROUTER_API_KEY": "test-key",
-                    "OPENROUTER_MANAGEMENT_KEY": "management-key",
-                },
+                {"OPENROUTER_API_KEY": "test-key", "OPENROUTER_MANAGEMENT_KEY": ""},
                 clear=False,
             ):
-                code = final.credit_preflight(config, root)
+                code = economy.credit_preflight(config, root)
             report = json.loads((root / "credit-preflight.json").read_text(encoding="utf-8"))
             self.assertEqual(code, 0)
-            self.assertEqual(report["status"], "verified")
+            self.assertEqual(report["status"], "bounded-key-accepted")
+            self.assertEqual(report["hard_reserve_ceiling_usd"], 2.0)
             self.assertFalse(report["blockers"])
-            self.assertEqual(report["account_credits"]["remaining_usd"], 40.0)
 
-    def test_known_low_finite_limit_remains_a_hard_blocker(self):
+    def test_known_low_finite_limit_is_rejected_before_model_calls(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             config = root / "benchmark-config.json"
             config.write_text(
-                json.dumps({"max_cost_usd": 20.0, "max_calls": 200}),
+                json.dumps({"max_cost_usd": 1.5, "max_calls": 45, "output_allowance_tokens": 1800}),
                 encoding="utf-8",
             )
             key_payload = {
                 "data": {
                     "label": "bounded-key",
-                    "limit": 20.0,
-                    "limit_remaining": 0.5,
-                    "usage": 19.5,
-                    "is_free_tier": False,
-                    "is_management_key": False,
+                    "limit": 2.0,
+                    "limit_remaining": 0.25,
+                    "usage": 1.75,
                 }
             }
-            credits_payload = {
-                "data": {
-                    "total_credits": 50.0,
-                    "total_usage": 10.0,
-                }
-            }
-            with patch.object(
-                final.hardened,
-                "request_json",
-                side_effect=[key_payload, credits_payload],
-            ), patch.dict(
+            with patch.object(economy.hardened, "request_json", return_value=key_payload), patch.dict(
                 os.environ,
-                {
-                    "OPENROUTER_API_KEY": "test-key",
-                    "OPENROUTER_MANAGEMENT_KEY": "management-key",
-                },
+                {"OPENROUTER_API_KEY": "test-key", "OPENROUTER_MANAGEMENT_KEY": ""},
                 clear=False,
             ):
-                code = final.credit_preflight(config, root)
+                code = economy.credit_preflight(config, root)
             report = json.loads((root / "credit-preflight.json").read_text(encoding="utf-8"))
             self.assertEqual(code, 3)
-            self.assertIn(
-                "api-key-limit-remaining-below-benchmark-reserve",
-                report["blockers"],
-            )
+            self.assertIn("api-key-limit-remaining-below-economy-reserve", report["blockers"])
+            self.assertEqual(report["model_inference_calls"], 0)
+
+    @staticmethod
+    def _record(task_id: str, strategy: str, quality: float, cost: float) -> dict:
+        return {
+            "task_id": task_id,
+            "strategy": strategy,
+            "status": "success",
+            "safety_failure": False,
+            "blind_fatal_error": False,
+            "blind_quality_score": quality,
+            "actual_cost_usd": cost,
+            "blind_judge_count": 2,
+            "blind_judge_models": ["judge-model-a", "judge-model-b"],
+            "blind_judge_providers": ["judge-provider-a", "judge-provider-b"],
+            "blind_judge_disagreement_points": 0.0,
+            "blind_decisive_single_judge": True,
+            "blind_primary_margin_points": 10.0,
+        }
+
+    def test_three_task_v5_v3_evidence_can_authorize_cutover(self):
+        records = []
+        for task_id in ("t1", "t2", "t3"):
+            records.append(self._record(task_id, "v5_joint_graph", 0.84, 0.10))
+            records.append(self._record(task_id, "v3", 0.80, 0.11))
+        gate = economy.economy_cutover_gate(records)
+        self.assertTrue(gate["production_cutover_allowed"])
+        self.assertEqual(gate["task_wins_v5"], 3)
+        self.assertFalse(gate["blockers"])
+        self.assertEqual(gate["cutover_policy"]["minimum_tasks"], 3)
+        self.assertEqual(gate["cutover_policy"]["required_strategies"], ["v5_joint_graph", "v3"])
+
+    def test_single_judge_evidence_blocks_cutover(self):
+        records = []
+        for task_id in ("t1", "t2", "t3"):
+            v5 = self._record(task_id, "v5_joint_graph", 0.84, 0.10)
+            v3 = self._record(task_id, "v3", 0.80, 0.11)
+            for row in (v5, v3):
+                row["blind_judge_count"] = 1
+                row["blind_judge_models"] = ["judge-model-a"]
+                row["blind_judge_providers"] = ["judge-provider-a"]
+            records.extend([v5, v3])
+        gate = economy.economy_cutover_gate(records)
+        self.assertFalse(gate["production_cutover_allowed"])
+        self.assertIn("v5_joint_graph:invalid-independent-blind-judging", gate["blockers"])
 
     def test_v3_production_entry_is_not_replaced_or_deleted(self):
         execution = (ROOT / ".github" / "workflows" / "execution-ticket.yml").read_text(encoding="utf-8")
@@ -153,10 +211,12 @@ class TestFinalFiveTaskBenchmark(unittest.TestCase):
         self.assertIn("max_tokens", benchmark_entry)
         self.assertIn('provider["require_parameters"] = False', benchmark_entry)
 
-    def test_final_workflow_is_benchmark_only(self):
+    def test_default_cutover_workflow_is_economical_and_benchmark_only(self):
         workflow = (ROOT / ".github" / "workflows" / "v5-live-benchmark-final.yml").read_text(encoding="utf-8")
-        self.assertIn("[v5-benchmark-final]", workflow)
-        self.assertIn("v5_live_benchmark_final.py run", workflow)
+        self.assertIn("[v5-benchmark-economy]", workflow)
+        self.assertIn("v5_live_benchmark_economy.py run", workflow)
+        self.assertIn('V5_BENCHMARK_OUTPUT_ALLOWANCE_TOKENS: "1800"', workflow)
+        self.assertNotIn("v5_live_benchmark_final.py run", workflow)
         self.assertNotIn("update_ref", workflow)
         self.assertNotIn("merge_pull_request", workflow)
 

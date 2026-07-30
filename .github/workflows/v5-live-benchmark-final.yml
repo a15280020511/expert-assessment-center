@@ -1,4 +1,4 @@
-name: V5 Final Five-Task Blind Benchmark
+name: V5 Economy Blind Benchmark
 
 on:
   issues:
@@ -10,23 +10,23 @@ permissions:
   actions: read
 
 concurrency:
-  group: v5-final-five-task-blind-benchmark
+  group: v5-economy-blind-benchmark
   cancel-in-progress: false
 
 jobs:
   benchmark:
     if: >-
       github.actor == github.repository_owner &&
-      startsWith(github.event.issue.title, '[v5-benchmark-final]')
+      startsWith(github.event.issue.title, '[v5-benchmark-economy]')
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 180
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
       MODEL_HISTORY_PATH: v5-live-benchmark-artifacts/runtime-state/model-performance.json
-      V5_BENCHMARK_OUTPUT_ALLOWANCE_TOKENS: "10000"
+      V5_BENCHMARK_OUTPUT_ALLOWANCE_TOKENS: "1800"
 
     steps:
       - name: Checkout pinned source
@@ -49,25 +49,25 @@ jobs:
           python -m pip check
           python -m py_compile open-model-market/*.py
 
-      - name: Parse bounded benchmark request
+      - name: Parse economical benchmark request
         id: prepare
         run: |
-          python open-model-market/v5_live_benchmark.py prepare \
+          python open-model-market/v5_live_benchmark_economy.py prepare \
             --event-path "$GITHUB_EVENT_PATH" \
             --output-dir v5-live-benchmark-artifacts
 
       - name: Publish benchmark acceptance
         run: |
           cat > benchmark-accepted.md <<EOF
-          ## V5_FINAL_BENCHMARK_ACCEPTED
+          ## V5_ECONOMY_BENCHMARK_ACCEPTED
 
-          - Benchmark ID: ${{ steps.prepare.outputs.benchmark_id }}
-          - Tasks: 5 independent real tasks
-          - Strategies: active V5 cost-performance graph, active V3, strongest single, lowest-price single, fixed 3+1, random feasible
-          - Blind judges: at least 2 distinct models and providers per task
+          - Tasks: ${{ steps.prepare.outputs.task_count }} diverse real tasks
+          - Strategies: active V5 cost-performance graph versus preserved V3 only
+          - Blind judges: two distinct models/providers per task; third only when disagreement exceeds 15 points
           - Global actual-cost ceiling: ${{ steps.prepare.outputs.max_cost_usd }} USD
           - Global paid-call ceiling: ${{ steps.prepare.outputs.max_calls }}
-          - Output allowance: up to 10,000 completion tokens; not required output
+          - Output allowance: up to ${{ steps.prepare.outputs.output_allowance_tokens }} completion tokens; not required output
+          - Expensive strongest/cheapest/fixed/random reference baselines: not executed
           - V3 production entry: preserved and unchanged during benchmark
           - Run: ${RUN_URL}
           EOF
@@ -88,7 +88,7 @@ jobs:
         if: steps.secret.outputs.present != 'true'
         run: |
           cat > benchmark-rejected.md <<EOF
-          ## V5_FINAL_BENCHMARK_REJECTED
+          ## V5_ECONOMY_BENCHMARK_REJECTED
 
           The repository is missing the Actions Secret OPENROUTER_API_KEY.
 
@@ -107,7 +107,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MANAGEMENT_KEY: ${{ secrets.OPENROUTER_MANAGEMENT_KEY }}
         run: |
-          python open-model-market/v5_live_benchmark_final.py credit-check \
+          python open-model-market/v5_live_benchmark_economy.py credit-check \
             --config v5-live-benchmark-artifacts/benchmark-config.json \
             --output-dir v5-live-benchmark-artifacts
 
@@ -119,9 +119,9 @@ jobs:
           from pathlib import Path
           path = Path("v5-live-benchmark-artifacts/credit-preflight.json")
           data = json.loads(path.read_text()) if path.exists() else {}
-          print("## V5_FINAL_BENCHMARK_REJECTED")
+          print("## V5_ECONOMY_BENCHMARK_REJECTED")
           print()
-          print("已在任何模型推理前停止：可验证的OpenRouter额度低于本次全局硬上限。")
+          print("已在任何模型推理前停止：可验证额度低于本次低成本硬上限。")
           print()
           print(f"- Required reserve: `{data.get('required_reserve_usd', 'unknown')} USD`")
           print(f"- Status: `{data.get('status', 'unknown')}`")
@@ -133,19 +133,19 @@ jobs:
           printf '\n- Run: `%s`\n' "$RUN_URL" >> benchmark-credit-rejected.md
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@benchmark-credit-rejected.md
 
-      - name: Run final five-task live blind benchmark
+      - name: Run economical live blind benchmark
         id: execute
         if: steps.secret.outputs.present == 'true' && steps.credit.outcome == 'success'
         continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_APP_NAME: Expert Assessment Center Final Five-Task Benchmark
+          OPENROUTER_APP_NAME: Expert Assessment Center Economy Benchmark
           OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
         run: |
           set -o pipefail
           mkdir -p "$(dirname "$MODEL_HISTORY_PATH")"
           printf '{"version":1,"models":{}}\n' > "$MODEL_HISTORY_PATH"
-          python open-model-market/v5_live_benchmark_final.py run \
+          python open-model-market/v5_live_benchmark_economy.py run \
             --config v5-live-benchmark-artifacts/benchmark-config.json \
             --suite open-model-market/v5_live_benchmark_suite.json \
             --output-dir v5-live-benchmark-artifacts \
@@ -165,13 +165,13 @@ jobs:
           write_manifest(root)
           PY
 
-      - name: Upload final benchmark artifacts
+      - name: Upload economical benchmark artifacts
         id: upload
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: v5-final-five-task-benchmark-${{ github.event.issue.number }}-${{ github.run_id }}
+          name: v5-economy-benchmark-${{ github.event.issue.number }}-${{ github.run_id }}
           path: v5-live-benchmark-artifacts/
           if-no-files-found: error
           retention-days: 90
@@ -186,7 +186,7 @@ jobs:
               --run-url "$RUN_URL" > benchmark-result.md
           else
             cat > benchmark-result.md <<EOF
-          ## V5_FINAL_BENCHMARK_FAILED
+          ## V5_ECONOMY_BENCHMARK_FAILED
 
           No complete benchmark result was generated.
 
