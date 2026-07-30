@@ -44,16 +44,19 @@ jobs:
 
       - name: Prove zero-inference contract
         run: |
-          python -m py_compile open-model-market/v5_economy_zero_call_diagnostic.py
-          ! grep -q 'CHAT_URL' open-model-market/v5_economy_zero_call_diagnostic.py
-          ! grep -q 'execute_v5_graph' open-model-market/v5_economy_zero_call_diagnostic.py
-          ! grep -q '_direct_call' open-model-market/v5_economy_zero_call_diagnostic.py
-          ! grep -q '_v3_strategy' open-model-market/v5_economy_zero_call_diagnostic.py
+          python -m py_compile \
+            open-model-market/v5_economy_zero_call_diagnostic.py \
+            open-model-market/v5_zero_call_budget_policy.py
+          ! grep -q 'CHAT_URL' open-model-market/v5_zero_call_budget_policy.py
+          ! grep -q 'execute_v5_graph' open-model-market/v5_zero_call_budget_policy.py
+          ! grep -q '_direct_call' open-model-market/v5_zero_call_budget_policy.py
+          ! grep -q '_v3_strategy' open-model-market/v5_zero_call_budget_policy.py
+          python -m unittest tests.test_v5_zero_call_budget_policy -v
 
       - name: Parse diagnostic request
         id: prepare
         run: |
-          python open-model-market/v5_economy_zero_call_diagnostic.py prepare \
+          python open-model-market/v5_zero_call_budget_policy.py prepare \
             --event-path "$GITHUB_EVENT_PATH" \
             --output-dir v5-economy-zero-call-artifacts
 
@@ -65,6 +68,7 @@ jobs:
           - Tasks: ${{ steps.prepare.outputs.task_count }}
           - Paid model calls allowed: ${{ steps.prepare.outputs.paid_model_calls_allowed }}
           - Actual model-cost ceiling: 0 USD
+          - V5 per-strategy task readiness cap: ${{ steps.prepare.outputs.target_v5_budget_ceiling_usd }} USD
           - Scope: catalog metadata, provider endpoint metadata, candidate generation and CP-SAT feasibility only
           - V3 execution: forbidden
           - V5 model execution: forbidden
@@ -95,7 +99,7 @@ jobs:
           OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
         run: |
           set -o pipefail
-          python open-model-market/v5_economy_zero_call_diagnostic.py run \
+          python open-model-market/v5_zero_call_budget_policy.py run \
             --config v5-economy-zero-call-artifacts/zero-call-diagnostic-config.json \
             --suite open-model-market/v5_live_benchmark_suite.json \
             --output-dir v5-economy-zero-call-artifacts \
