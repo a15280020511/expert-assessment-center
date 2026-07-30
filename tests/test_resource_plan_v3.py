@@ -11,8 +11,8 @@ sys.path.insert(0, str(ROOT / "open-model-market"))
 
 import model_market  # noqa: E402
 import resource_call_budget  # noqa: E402
-import resource_plan_optimizer as optimizer  # noqa: E402
 import resource_requirements as requirements  # noqa: E402
+import value_resource_plan_optimizer as optimizer  # noqa: E402
 
 
 class ResourcePlanV3Tests(unittest.TestCase):
@@ -117,7 +117,7 @@ class ResourcePlanV3Tests(unittest.TestCase):
         self.assertTrue(all(row["id"].startswith("prompt-") for row in prompts))
         self.assertTrue(all(row["id"].startswith("params-") for row in params))
 
-    def test_full_selector_uses_quality_band_then_cost(self):
+    def test_full_selector_maximizes_cost_performance(self):
         models = [self.model(index) for index in range(8)]
         with tempfile.TemporaryDirectory() as temp:
             run = self.run_config("比较两个商业投资方案并给出最优选择", Path(temp))
@@ -130,9 +130,12 @@ class ResourcePlanV3Tests(unittest.TestCase):
         self.assertTrue(judge.model_id)
         self.assertGreater(estimated, 0)
         self.assertEqual(plan["version"], 3)
-        self.assertEqual(plan["objective_order"][0], "hard_resource_coverage")
-        self.assertEqual(plan["objective_order"][1], "maximum_task_quality")
-        self.assertIn("minimum_cost", plan["objective_order"][2])
+        self.assertEqual(plan["highest_principle"], "maximum_cost_performance")
+        self.assertEqual(
+            plan["objective_order"],
+            ["hard_resource_coverage", "maximum_cost_performance"],
+        )
+        self.assertGreater(plan["cost_performance_ratio"], 0)
         self.assertTrue(all(row["prompt_modules"] for row in plan["selected"].values()))
         self.assertTrue(all(row["resource_profile_id"].startswith("params-") for row in plan["selected"].values()))
 

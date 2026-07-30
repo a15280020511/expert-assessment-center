@@ -2,6 +2,24 @@
 
 本仓库是正式独立的专家研判中心。GPTs 是本中心与其他业务中心之间唯一的控制与证据中继。
 
+## 最高原则：性价比最高
+
+专家团中心的最高原则只有一个：
+
+```text
+在满足全部硬约束的可行方案中，选择综合性价比最高的方案。
+```
+
+这里的“性价比”不是单纯追求最低价格，也不是先追求最高质量，而是直接计算：
+
+```text
+风险调整后的任务效用
+÷
+（预计模型费用 + 调用开销）
+```
+
+任务覆盖、能力、上下文、输出、独立性、预算、安全和工具禁用属于硬约束，任何低价方案都不能突破。通过硬约束后，模型、Provider、提示词、参数、工作包组合、专家数量和综合节点统一按整体性价比求解。
+
 ## 当前架构：先算需求，再选资源
 
 ```text
@@ -27,6 +45,7 @@
 - 固定完整提示词模板；
 - 固定参数模板库；
 - 先最小化专家人数；
+- 先最大化质量、再在质量容差带内降成本；
 - 历史模型绩效账本；
 - 逐席位贪心选模；
 - OpenRouter Auto Router、Fusion或Agent黑箱路由。
@@ -70,17 +89,16 @@ CP-SAT联合决定：
 - 每个工作包选择哪个模型和Provider；
 - 每个模型使用哪些实际支持的参数；
 - 综合节点的模型、提示词和参数；
-- 质量容差带内的最低总费用和调用次数。
+- 哪个完整执行方案的风险调整效用与有效成本之比最高。
 
-优化顺序：
+正式优化顺序：
 
 ```text
 覆盖全部硬资源需求
-→ 最大化本任务实时质量
-→ 在质量容差带内最小化费用和调用数
+→ 最大化综合性价比
 ```
 
-专家数量由质量—费用联合优化产生，不再作为第一阶段目标。
+专家数量由整体性价比优化产生，不再作为第一阶段目标。
 
 ## 任务输入
 
@@ -95,7 +113,6 @@ CP-SAT联合决定：
   "strict_provider_diversity": true,
   "candidate_pool_per_work_package": 16,
   "solver_timeout_seconds": 12,
-  "quality_tolerance_pct": 2,
   "forbidden_models": [],
   "preferred_models": []
 }
@@ -103,6 +120,8 @@ CP-SAT联合决定：
 ```
 
 `max_experts`默认不设固定人数。执行层仅保留最多16次模型调用的安全上限，不代表固定团队模式。`preferred_models`只能作为软偏好，不能突破能力、上下文、预算、覆盖和独立性硬约束。
+
+旧版 `quality_tolerance_pct` 输入仅为兼容历史票据而保留，当前优化器明确忽略，不再影响选模和组团。
 
 ## 动态提示词与参数
 
@@ -130,7 +149,7 @@ open-model-market/FULL_DYNAMIC_RESOURCE_PLANNING.md
 
 主要借鉴：HuggingGPT、LLMCompiler、Microsoft Foundry Model Router、Amazon Bedrock Intelligent Prompt Routing、Not Diamond、RouteLLM、Mixture-of-Agents、AutoGen SelectorGroupChat和DSPy。
 
-这些方案只用于吸收任务规划、DAG、质量容差带、Pareto优化、动态协作和提示词程序化思想，不增加外部运行依赖。
+这些方案只用于吸收任务规划、DAG、Pareto权衡、动态协作和提示词程序化思想，不增加外部运行依赖。本中心最终采用可审计的整体性价比目标，而不采用“最高质量优先”的路由原则。
 
 ## 审计产物
 
@@ -138,22 +157,27 @@ open-model-market/FULL_DYNAMIC_RESOURCE_PLANNING.md
 
 - `task-resource-requirements.json`：原子工作和完整资源需求；
 - `task-parameter-matrix.json`：兼容名称，内容升级为V3资源矩阵；
-- `team-optimization.json`：候选工作包、提示词、参数、模型、Provider、质量边界和费用；
+- `team-optimization.json`：候选工作包、提示词、参数、模型、Provider、质量效用、有效成本和性价比；
 - `model-selection.json`：运行时选择证据；
 - `benchmark-market.json`：Benchmark来源与降级状态；
-- `artifact-manifest.json`：产物SHA与完整性清单。
+- `artifact-manifest.json`：产物SHA与完整性清单；
+- V5路径额外生成 `v5-optimization.json` 和 `v5-execution-graph.json`。
 
 无可行解时直接报告冲突约束，不回退旧选择器。
 
 ## 关键实现
 
 - `open-model-market/resource_requirements.py`
-- `open-model-market/resource_plan_optimizer.py`
+- `open-model-market/value_resource_plan_optimizer.py`
+- `open-model-market/benchmark_selection.py`
+- `open-model-market/v5_value_optimizer.py`
+- `open-model-market/v5_pipeline.py`
 - `open-model-market/resource_runtime_compat.py`
 - `open-model-market/resource_call_budget.py`
-- `open-model-market/benchmark_selection.py`
 - `open-model-market/FULL_DYNAMIC_RESOURCE_PLANNING.md`
 - `requirements-runtime.txt`
+
+`resource_plan_optimizer.py`和`v5_planner.py`中的旧质量带求解函数仅保留为历史兼容实现，正式V3和V5入口均已切换到性价比优先优化器。
 
 ## 隔离边界
 

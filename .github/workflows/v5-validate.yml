@@ -46,6 +46,7 @@ jobs:
             open-model-market/atomic_work_graph.py \
             open-model-market/resource_matrix.py \
             open-model-market/v5_planner.py \
+            open-model-market/v5_value_optimizer.py \
             open-model-market/v5_executor.py \
             open-model-market/v5_benchmark.py \
             open-model-market/v5_pipeline.py
@@ -87,6 +88,10 @@ jobs:
           assert optimization["optimizer"] == "google-or-tools-cp-sat"
           assert optimization["solver_status"] in {"OPTIMAL", "FEASIBLE"}
           assert optimization["fallback_used"] is False
+          assert optimization["highest_principle"] == "maximum_cost_performance"
+          assert optimization["objective_order"] == ["hard_constraints", "maximum_cost_performance"]
+          assert optimization["cost_performance_ratio"] > 0
+          assert graph["metadata"]["highest_principle"] == "maximum_cost_performance"
           assert 1 <= len(graph["nodes"]) <= 16
           assert len(graph["execution_stages"]) <= 8
           assert graph["entry_nodes"]
