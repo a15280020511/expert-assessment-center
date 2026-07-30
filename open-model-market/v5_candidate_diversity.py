@@ -130,5 +130,6 @@ def install() -> None:
         benchmark.execute_v5_graph = v5_production_resilience.execute_v5_graph
     except ImportError:
         pass
+    v5_output_contract_delivery._ORIGINAL_QUALITY_GATE = v5_production_resilience.quality_gate
     v5_output_contract_delivery.install()
     _INSTALLED = True
