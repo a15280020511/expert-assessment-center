@@ -59,14 +59,14 @@ jobs:
           cat > benchmark-accepted.md <<EOF
           ## V5_BENCHMARK_ACCEPTED
 
-          - Benchmark ID: `${{ steps.prepare.outputs.benchmark_id }}`
-          - Task suite: `5 self-contained tasks unless explicitly narrowed`
-          - Strategies: `V5, V3, strongest single, lowest-price single, fixed 3+1, random feasible`
-          - Blind judges: `at least 2 distinct models and providers per task`
-          - Global cost ceiling: `${{ steps.prepare.outputs.max_cost_usd }} USD`
-          - Global paid-call ceiling: `${{ steps.prepare.outputs.max_calls }}`
-          - Production entrypoint: `unchanged until the live cutover gate passes`
-          - Run: `${RUN_URL}`
+          - Benchmark ID: \`${{ steps.prepare.outputs.benchmark_id }}\`
+          - Task suite: \`5 self-contained tasks unless explicitly narrowed\`
+          - Strategies: \`V5, V3, strongest single, lowest-price single, fixed 3+1, random feasible\`
+          - Blind judges: \`at least 2 distinct models and providers per task\`
+          - Global cost ceiling: \`${{ steps.prepare.outputs.max_cost_usd }} USD\`
+          - Global paid-call ceiling: \`${{ steps.prepare.outputs.max_calls }}\`
+          - Production entrypoint: \`unchanged until the live cutover gate passes\`
+          - Run: \`${RUN_URL}\`
           EOF
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@benchmark-accepted.md
 
@@ -87,11 +87,11 @@ jobs:
           cat > benchmark-rejected.md <<EOF
           ## V5_BENCHMARK_REJECTED
 
-          The repository is missing the Actions Secret `OPENROUTER_API_KEY`.
+          The repository is missing the Actions Secret \`OPENROUTER_API_KEY\`.
 
-          - Paid model calls: `0`
-          - Production entrypoint changed: `false`
-          - Run: `${RUN_URL}`
+          - Paid model calls: \`0\`
+          - Production entrypoint changed: \`false\`
+          - Run: \`${RUN_URL}\`
           EOF
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@benchmark-rejected.md
 
@@ -152,18 +152,18 @@ jobs:
 
           No complete benchmark result was generated.
 
-          - Execute outcome: `${{ steps.execute.outcome }}`
-          - Artifact ID: `${{ steps.upload.outputs.artifact-id }}`
-          - Artifact digest: `${{ steps.upload.outputs.artifact-digest }}`
-          - Production entrypoint changed: `false`
-          - Run: `${RUN_URL}`
+          - Execute outcome: \`${{ steps.execute.outcome }}\`
+          - Artifact ID: \`${{ steps.upload.outputs.artifact-id }}\`
+          - Artifact digest: \`${{ steps.upload.outputs.artifact-digest }}\`
+          - Production entrypoint changed: \`false\`
+          - Run: \`${RUN_URL}\`
           EOF
           fi
           cat >> benchmark-result.md <<EOF
 
-          - Artifact ID: `${{ steps.upload.outputs.artifact-id }}`
-          - Artifact URL: `${{ steps.upload.outputs.artifact-url }}`
-          - Artifact digest: `${{ steps.upload.outputs.artifact-digest }}`
+          - Artifact ID: \`${{ steps.upload.outputs.artifact-id }}\`
+          - Artifact URL: \`${{ steps.upload.outputs.artifact-url }}\`
+          - Artifact digest: \`${{ steps.upload.outputs.artifact-digest }}\`
           EOF
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@benchmark-result.md
 
