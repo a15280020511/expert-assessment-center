@@ -10,13 +10,20 @@ LEGACY_PAID_WORKFLOWS = (
 )
 
 
+def executable_yaml(text: str) -> str:
+    return "\n".join(
+        line for line in text.splitlines()
+        if not line.lstrip().startswith("#")
+    )
+
+
 class TestV5LegacyPaidWorkflowsDisabled(unittest.TestCase):
     def test_legacy_paid_workflows_are_manual_disabled_stubs(self):
         for filename in LEGACY_PAID_WORKFLOWS:
             with self.subTest(filename=filename):
                 path = Path(filename)
                 self.assertTrue(path.is_file())
-                text = path.read_text(encoding="utf-8")
+                text = executable_yaml(path.read_text(encoding="utf-8"))
                 self.assertIn("workflow_dispatch:", text)
                 self.assertIn("if: ${{ false }}", text)
                 self.assertNotIn("issues:", text)
@@ -32,7 +39,7 @@ class TestV5LegacyPaidWorkflowsDisabled(unittest.TestCase):
     def test_disabled_stubs_are_read_only_and_zero_call(self):
         for filename in LEGACY_PAID_WORKFLOWS:
             with self.subTest(filename=filename):
-                text = Path(filename).read_text(encoding="utf-8")
+                text = executable_yaml(Path(filename).read_text(encoding="utf-8"))
                 self.assertIn("contents: read", text)
                 self.assertNotIn("contents: write", text)
                 self.assertIn("no model call is made", text.casefold())
