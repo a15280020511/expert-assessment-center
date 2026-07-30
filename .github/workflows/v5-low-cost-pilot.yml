@@ -145,7 +145,7 @@ jobs:
           set -o pipefail
           mkdir -p "$(dirname "$MODEL_HISTORY_PATH")"
           printf '{"version":1,"models":{}}\n' > "$MODEL_HISTORY_PATH"
-          python open-model-market/v5_low_cost_pilot.py run \
+          python open-model-market/v5_low_cost_pilot_entry.py run \
             --config v5-pilot-artifacts/pilot-config.json \
             --suite open-model-market/v5_live_benchmark_suite.json \
             --output-dir v5-pilot-artifacts \
