@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Sequence
 
 import v5_capability_calibration
+import v5_output_contract_delivery
 import v5_planner
 from v5_planner import CandidateNode
 
@@ -111,8 +112,10 @@ def install() -> None:
     if _INSTALLED:
         return
     v5_planner.pareto_prune = diversity_preserving_pareto_prune
-    # Candidate diversity and hard-capability calibration are one safety unit:
-    # calibration restores eligible distinct models, while this pruner prevents
-    # ordinary Pareto dominance from deleting those alternatives afterward.
+    # Candidate qualification, diversity preservation, and output-contract
+    # delivery form one formal V5 execution-safety unit. The delivery policy
+    # converts contract metadata into direct required fields and forbids schema
+    # echo, preventing bounded responses from truncating before valid output.
     v5_capability_calibration.install()
+    v5_output_contract_delivery.install()
     _INSTALLED = True
