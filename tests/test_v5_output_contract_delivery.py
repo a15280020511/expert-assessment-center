@@ -80,7 +80,7 @@ class TestV5OutputContractDelivery(unittest.TestCase):
             },
             ensure_ascii=False,
         )
-        passed, score, reasons = v5_executor.quality_gate(
+        passed, score, reasons = delivery.contract_aware_quality_gate(
             node,
             {"choices": [{"finish_reason": "stop"}]},
             answer,
@@ -105,20 +105,27 @@ class TestV5OutputContractDelivery(unittest.TestCase):
             },
             ensure_ascii=False,
         )
-        passed, score, reasons = v5_executor.quality_gate(
+        passed, score, reasons = delivery.contract_aware_quality_gate(
             node,
             {"choices": [{"finish_reason": "stop"}]},
             answer,
         )
         self.assertFalse(passed)
         self.assertLess(score, 0.6)
-        self.assertTrue(reasons or score < 0.6)
+        self.assertIn("contract-metadata-echo", reasons)
+        self.assertTrue(
+            any(reason.startswith("missing-required-json-keys:") for reason in reasons)
+        )
 
-    def test_formal_v5_safety_installer_patches_executor_prompt(self):
+    def test_formal_v5_safety_installer_patches_prompt_and_gate(self):
         v5_candidate_diversity.install()
         self.assertIs(
             v5_executor._system_prompt,
             delivery.contract_aware_system_prompt,
+        )
+        self.assertIs(
+            v5_executor.quality_gate,
+            delivery.contract_aware_quality_gate,
         )
         prompt = v5_executor._system_prompt(_node())
         self.assertIn("JSON语法完整闭合", prompt)
