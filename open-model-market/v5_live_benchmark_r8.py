@@ -13,6 +13,7 @@ import v5_live_benchmark as base
 import v5_live_benchmark_economy as economy
 import v5_live_benchmark_economy_r6 as r6
 import v5_production_hardening as production
+import v5_r8_fail_fast_benchmark as fail_fast
 from execution_graph import GraphLimits as OriginalGraphLimits
 from v5_r8_single_key_preflight import check_single_api_key
 
@@ -223,6 +224,7 @@ def install_r8_stage_d() -> None:
     base.GraphLimits = _r8_limits
     economy.economy_cutover_gate = stage_d_gate
     economy.hardened.credit_preflight = credit_preflight
+    base.run_benchmark = fail_fast.run_benchmark
     os.environ.setdefault("V5_BENCHMARK_OUTPUT_ALLOWANCE_TOKENS", str(OUTPUT_ALLOWANCE_TOKENS))
     _annotate_v5_strategy()
 

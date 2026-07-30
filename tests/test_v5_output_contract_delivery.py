@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
 import v5_candidate_diversity  # noqa: E402
+import v5_dynamic_prompt_delivery as dynamic_prompt  # noqa: E402
 import v5_executor  # noqa: E402
 import v5_output_contract_delivery as delivery  # noqa: E402
 from execution_graph import SelectedNode  # noqa: E402
@@ -167,11 +168,11 @@ class TestV5OutputContractDelivery(unittest.TestCase):
             any(reason.startswith("missing-required-json-keys:") for reason in reasons)
         )
 
-    def test_formal_v5_safety_installer_patches_prompt_and_gate(self):
+    def test_formal_v5_safety_installer_layers_dynamic_role_over_contract_prompt(self):
         v5_candidate_diversity.install()
         self.assertIs(
             v5_executor._system_prompt,
-            delivery.contract_aware_system_prompt,
+            dynamic_prompt.dynamic_system_prompt,
         )
         self.assertIs(
             v5_executor.quality_gate,
