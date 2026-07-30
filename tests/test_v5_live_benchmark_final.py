@@ -26,7 +26,7 @@ class TestFinalFiveTaskBenchmark(unittest.TestCase):
         finally:
             base.compile_and_optimize_v5 = original
 
-    def test_unbounded_key_is_controlled_by_runtime_global_ledger(self):
+    def test_unbounded_key_without_management_credit_evidence_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             config = root / "benchmark-config.json"
@@ -51,11 +51,55 @@ class TestFinalFiveTaskBenchmark(unittest.TestCase):
             ):
                 code = final.credit_preflight(config, root)
             report = json.loads((root / "credit-preflight.json").read_text(encoding="utf-8"))
-            self.assertEqual(code, 0)
-            self.assertEqual(report["status"], "runtime-ledger-bounded")
-            self.assertFalse(report["blockers"])
+            self.assertEqual(code, 3)
+            self.assertEqual(report["status"], "insufficient-or-unverified")
+            self.assertIn("verified-account-credit-reserve-required", report["blockers"])
             self.assertEqual(report["runtime_global_cost_ceiling_usd"], 20.0)
-            self.assertEqual(report["runtime_global_call_ceiling"], 200)
+            self.assertFalse(report["production_entrypoint_changed"])
+            self.assertFalse(report["v3_deleted"])
+
+    def test_verified_management_credit_reserve_is_accepted(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = root / "benchmark-config.json"
+            config.write_text(
+                json.dumps({"max_cost_usd": 20.0, "max_calls": 200}),
+                encoding="utf-8",
+            )
+            key_payload = {
+                "data": {
+                    "label": "benchmark-key",
+                    "limit": None,
+                    "limit_remaining": None,
+                    "usage": 1.0,
+                    "is_free_tier": False,
+                    "is_management_key": False,
+                }
+            }
+            credits_payload = {
+                "data": {
+                    "total_credits": 50.0,
+                    "total_usage": 10.0,
+                }
+            }
+            with patch.object(
+                final.hardened,
+                "request_json",
+                side_effect=[key_payload, credits_payload],
+            ), patch.dict(
+                os.environ,
+                {
+                    "OPENROUTER_API_KEY": "test-key",
+                    "OPENROUTER_MANAGEMENT_KEY": "management-key",
+                },
+                clear=False,
+            ):
+                code = final.credit_preflight(config, root)
+            report = json.loads((root / "credit-preflight.json").read_text(encoding="utf-8"))
+            self.assertEqual(code, 0)
+            self.assertEqual(report["status"], "verified")
+            self.assertFalse(report["blockers"])
+            self.assertEqual(report["account_credits"]["remaining_usd"], 40.0)
 
     def test_known_low_finite_limit_remains_a_hard_blocker(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -65,7 +109,7 @@ class TestFinalFiveTaskBenchmark(unittest.TestCase):
                 json.dumps({"max_cost_usd": 20.0, "max_calls": 200}),
                 encoding="utf-8",
             )
-            payload = {
+            key_payload = {
                 "data": {
                     "label": "bounded-key",
                     "limit": 20.0,
@@ -75,15 +119,27 @@ class TestFinalFiveTaskBenchmark(unittest.TestCase):
                     "is_management_key": False,
                 }
             }
-            with patch.object(final.hardened, "request_json", return_value=payload), patch.dict(
+            credits_payload = {
+                "data": {
+                    "total_credits": 50.0,
+                    "total_usage": 10.0,
+                }
+            }
+            with patch.object(
+                final.hardened,
+                "request_json",
+                side_effect=[key_payload, credits_payload],
+            ), patch.dict(
                 os.environ,
-                {"OPENROUTER_API_KEY": "test-key", "OPENROUTER_MANAGEMENT_KEY": ""},
+                {
+                    "OPENROUTER_API_KEY": "test-key",
+                    "OPENROUTER_MANAGEMENT_KEY": "management-key",
+                },
                 clear=False,
             ):
                 code = final.credit_preflight(config, root)
             report = json.loads((root / "credit-preflight.json").read_text(encoding="utf-8"))
             self.assertEqual(code, 3)
-            self.assertEqual(report["status"], "insufficient")
             self.assertIn(
                 "api-key-limit-remaining-below-benchmark-reserve",
                 report["blockers"],
