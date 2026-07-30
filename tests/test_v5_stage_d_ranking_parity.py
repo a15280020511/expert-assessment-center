@@ -8,7 +8,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-import v5_executor
 import v5_live_benchmark_r8 as stage_d
 import v5_r8_executor as runtime
 import v5_stage_d_ranking_parity as parity
@@ -29,23 +28,22 @@ class V5StageDRankingParityTests(unittest.TestCase):
         self.assertNotIn("ranked[:24]", combined)
         self.assertNotIn("maximum_models=24", combined)
 
-    def test_stage_d_resolves_executor_after_r8_hardening_install(self):
+    def test_stage_d_calls_the_r8_entrypoint_directly(self):
         module_source = inspect.getsource(parity)
         strategy_source = inspect.getsource(parity.production_parity_v5_strategy)
-        self.assertIn("import v5_executor", module_source)
-        self.assertNotIn(
-            "from v5_executor import V5ExecutionError, execute_v5_graph",
-            module_source,
+        self.assertNotIn("import v5_executor", module_source)
+        self.assertIn("runtime.resilient_execute_v5_graph(", strategy_source)
+        self.assertNotIn("v5_executor.execute_v5_graph(", strategy_source)
+        self.assertEqual(
+            runtime.resilient_execute_v5_graph.__module__,
+            "v5_r8_executor",
         )
-        self.assertIn("v5_executor.execute_v5_graph(", strategy_source)
-        runtime.install()
-        self.assertIs(v5_executor.execute_v5_graph, runtime.resilient_execute_v5_graph)
 
     def test_output_directory_exists_before_first_evidence_write(self):
         source = inspect.getsource(parity.production_parity_v5_strategy)
         mkdir = source.index("root.mkdir(parents=True, exist_ok=True)")
         first_write = source.index("base._write_json(")
-        execution = source.index("v5_executor.execute_v5_graph(")
+        execution = source.index("runtime.resilient_execute_v5_graph(")
         self.assertLess(mkdir, first_write)
         self.assertLess(mkdir, execution)
 
