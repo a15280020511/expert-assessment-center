@@ -125,12 +125,12 @@ CP-SAT联合决定：
 ```text
 风险调整后的任务效用
 ────────────────────
-预计模型调用总费用 + 零价格保护项
+预计模型调用总费用 + 极小调用开销／零价格保护项
 ```
 
 效用分子综合任务匹配、Benchmark、可靠性、上下文适配、推理强度、提示词适配和工作重要性。失败概率与质量不确定性会降低有效效用。
 
-零价格保护项仅用于避免免费模型导致数学除零，每次调用为一百万分之一美元，不承担人为偏好作用。相同性价比下，系统再用实际费用、调用数和失败风险进行确定性排序。
+极小调用开销用于避免免费模型导致数学除零，并把无必要的额外调用计入成本；具体数值写入优化审计产物。相同性价比下，系统再用实际费用、调用数和失败风险进行确定性排序。
 
 ## 动态提示词与参数
 
@@ -171,12 +171,20 @@ open-model-market/FULL_DYNAMIC_RESOURCE_PLANNING.md
 - `benchmark-market.json`：Benchmark来源与降级状态；
 - `artifact-manifest.json`：产物SHA与完整性清单。
 
-优化产物必须明确记录：
+V3生产优化产物必须记录：
+
+```text
+highest_principle = maximum_cost_performance
+objective_order = hard_resource_coverage → maximum_cost_performance
+cost_performance_ratio > 0
+```
+
+V5优化产物必须记录：
 
 ```text
 quality_first_phase_used = false
 quality_tolerance_band_used = false
-objective_order = hard constraints → maximum cost-performance → tie-breaks
+objective_order = hard_constraints → maximum_cost_performance → tie-breaks
 ```
 
 无可行解时直接报告冲突约束，不回退旧选择器。
@@ -184,15 +192,15 @@ objective_order = hard constraints → maximum cost-performance → tie-breaks
 ## 关键实现
 
 - `open-model-market/resource_requirements.py`
-- `open-model-market/cost_performance_solver.py`
-- `open-model-market/cost_performance_optimizer.py`
+- `open-model-market/value_resource_plan_optimizer.py`：V3生产性价比求解器
+- `open-model-market/benchmark_selection.py`：V3正式选择入口
 - `open-model-market/resource_plan_optimizer.py`：保留候选构造兼容能力，不再作为正式求解入口
-- `open-model-market/v5_value_planner.py`
+- `open-model-market/cost_performance_solver.py`：V5分式目标公共求解器
+- `open-model-market/v5_value_planner.py`：V5正式性价比规划器
 - `open-model-market/v5_planner.py`：保留V5市场、候选图和验证基础能力
-- `open-model-market/v5_pipeline.py`
+- `open-model-market/v5_pipeline.py`：V5正式流水线入口
 - `open-model-market/resource_runtime_compat.py`
 - `open-model-market/resource_call_budget.py`
-- `open-model-market/benchmark_selection.py`
 - `open-model-market/FULL_DYNAMIC_RESOURCE_PLANNING.md`
 - `requirements-runtime.txt`
 
