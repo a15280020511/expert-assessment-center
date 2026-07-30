@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
 import v5_cost_reliability_hardening as legacy_cost  # noqa: E402
+import v5_dynamic_configuration as dynamic_configuration  # noqa: E402
 import v5_planner  # noqa: E402
 import v5_production_hardening  # noqa: E402
 import v5_token_cost_policy as token_cost  # noqa: E402
@@ -145,7 +146,7 @@ class TestV5TokenCostPolicy(unittest.TestCase):
             0.84,
         )
 
-    def test_production_hardening_installs_usage_policy(self):
+    def test_production_hardening_installs_usage_policy_then_dynamic_layer(self):
         v5_production_hardening.install()
         self.assertIs(
             v5_planner._estimated_cost,
@@ -153,6 +154,10 @@ class TestV5TokenCostPolicy(unittest.TestCase):
         )
         self.assertIs(
             v5_planner._candidate_for,
+            dynamic_configuration.dynamic_candidate_for,
+        )
+        self.assertIs(
+            dynamic_configuration._ORIGINAL_CANDIDATE_FOR,
             token_cost.usage_audited_candidate_for,
         )
         self.assertIs(
