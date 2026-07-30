@@ -8,6 +8,7 @@ from collections import defaultdict
 from dataclasses import replace
 from typing import Any, Dict, Mapping, Sequence, Tuple
 
+import history_free_runtime_compat
 import model_market as market
 import task_matrix_optimizer
 import seat_scoring as base
@@ -23,18 +24,37 @@ def _language_neutral_live_rank(models, profile, run):
 
 market.rank_models = _language_neutral_live_rank
 _ORIGINAL_GENERATE_SEATS = task_matrix_optimizer.generate_seats
+_ORIGINAL_POOL_FOR_SEAT = task_matrix_optimizer._pool_for_seat
 
 
 def _compatible_generate_seats(matrix, profile):
+    """Keep the public red-seat key and require a dedicated primary task owner."""
     rows = _ORIGINAL_GENERATE_SEATS(matrix, profile)
+    primary_demand = f"domain:{profile.primary_domain}"
     for row in rows:
         spec = row.get("spec")
-        if isinstance(spec, SeatSpec) and spec.key == "adversarial":
+        if not isinstance(spec, SeatSpec):
+            continue
+        if spec.key != "primary":
+            row["covers"] = [demand for demand in row.get("covers", []) if demand != primary_demand]
+        if spec.key == "adversarial":
             row["spec"] = SeatSpec("red", spec.function, spec.profession, spec.domain_focus, spec.mission)
     return rows
 
 
+def _compatible_pool_for_seat(pool, seat, kind, limit):
+    """Treat maximum red-team fit as a qualification gate, not a small bonus."""
+    rows = list(pool)
+    if kind == "adversarial":
+        maximum = max((base._term_fit(model, base.RISK_TERMS) for model in rows), default=0.0)
+        strongest = [model for model in rows if maximum > 0 and base._term_fit(model, base.RISK_TERMS) == maximum]
+        if strongest:
+            rows = strongest
+    return _ORIGINAL_POOL_FOR_SEAT(rows, seat, kind, limit)
+
+
 task_matrix_optimizer.generate_seats = _compatible_generate_seats
+task_matrix_optimizer._pool_for_seat = _compatible_pool_for_seat
 
 
 def _normalized_name(value: Any) -> str:
@@ -101,7 +121,7 @@ def augment_benchmark_payload(payload: Mapping[str, Any], models: Sequence[Model
 
 
 def select_team(ranked: Sequence[ModelInfo], profile: TaskProfile, run: RunConfig) -> Tuple[list[SelectedExpert], SelectedJudge, float]:
-    """Normalize benchmarks, run CP-SAT, and preserve stable external seat contracts."""
+    """Normalize benchmarks, run CP-SAT, and preserve stable external contracts."""
     original_request = base.request_json
     stable_models = task_matrix_optimizer._eligible_pool(ranked, profile)
 
@@ -116,6 +136,7 @@ def select_team(ranked: Sequence[ModelInfo], profile: TaskProfile, run: RunConfi
         experts, judge, estimated = task_matrix_optimizer.select_team(ranked, profile, run)
     finally:
         base.request_json = original_request
+    history_free_runtime_compat.bind(run, profile, ranked, experts, judge)
     by_id = {model.id: model for model in ranked}
     experts = [
         replace(
