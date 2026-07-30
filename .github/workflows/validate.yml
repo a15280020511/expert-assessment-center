@@ -9,8 +9,10 @@ on:
       - ".github/workflows/expert-team.yml"
       - ".github/workflows/expert-team-canary.yml"
       - ".github/workflows/expert-integrity-validate.yml"
+      - ".github/workflows/v5-low-cost-pilot.yml"
       - ".github/workflows/validate.yml"
       - ".github/dependabot.yml"
+      - "docs/v5-low-cost-pilot.md"
       - "requirements*.txt"
       - "README.md"
   push:
@@ -22,8 +24,10 @@ on:
       - ".github/workflows/expert-team.yml"
       - ".github/workflows/expert-team-canary.yml"
       - ".github/workflows/expert-integrity-validate.yml"
+      - ".github/workflows/v5-low-cost-pilot.yml"
       - ".github/workflows/validate.yml"
       - ".github/dependabot.yml"
+      - "docs/v5-low-cost-pilot.md"
       - "requirements*.txt"
       - "README.md"
 
@@ -67,6 +71,9 @@ jobs:
           test -s .github/workflows/expert-team-canary.yml
           test -s .github/workflows/expert-team.yml
           test -s .github/workflows/execution-ticket.yml
+          test -s open-model-market/v5_low_cost_pilot.py
+          test -s open-model-market/v5_low_cost_pilot_entry.py
+          test -s docs/v5-low-cost-pilot.md
           test -s open-model-market/resource_requirements.py
           test -s open-model-market/resource_plan_optimizer.py
           test -s open-model-market/resource_plan_compat.py
