@@ -12,7 +12,7 @@ import v5_value_optimizer  # noqa: E402
 from execution_graph import GraphLimits  # noqa: E402
 
 
-def _resource_bundle(required_copies: int = 2):
+def _resource_bundle(required_copies: int = 2, *, different_model_required=True):
     interpretation_id = "interpretation-test"
     work = {
         "work_id": "work-1",
@@ -33,7 +33,9 @@ def _resource_bundle(required_copies: int = 2):
             "machine_readable_required": False,
         },
         "independence_requirements": {
-            "independent_execution_preferred": required_copies > 1,
+            "independent_execution_preferred": bool(different_model_required),
+            "different_model_required": bool(different_model_required),
+            "different_provider_preferred": bool(different_model_required),
         },
     }
     return {
@@ -74,7 +76,15 @@ def _resource_bundle(required_copies: int = 2):
     }
 
 
-def _endpoint(model: str, provider: str, score: float, cost: float):
+def _endpoint(
+    model: str,
+    provider: str,
+    score: float,
+    cost: float,
+    *,
+    benchmark_score: float = 0.8,
+    benchmark_confidence: float = 0.9,
+):
     return {
         "endpoint_id": f"endpoint-{model}-{provider}",
         "model_id": model,
@@ -89,8 +99,8 @@ def _endpoint(model: str, provider: str, score: float, cost: float):
         "input_modalities": ["text"],
         "output_modalities": ["text"],
         "capability_scores": {"domain:business": score},
-        "benchmark_score": 0.8,
-        "benchmark_confidence": 0.9,
+        "benchmark_score": benchmark_score,
+        "benchmark_confidence": benchmark_confidence,
         "reliability": 0.98,
         "synthetic_fixture_only": False,
     }
@@ -102,7 +112,7 @@ class TestV5CapabilityCalibration(unittest.TestCase):
         # Formal V5 always installs calibration and diversity as one safety unit.
         v5_candidate_diversity.install()
 
-    def test_existing_floor_restores_required_independent_models(self):
+    def test_rank_backed_adaptive_proxy_restores_required_models(self):
         resources = _resource_bundle(required_copies=2)
         market = {
             "endpoints": [
@@ -116,13 +126,20 @@ class TestV5CapabilityCalibration(unittest.TestCase):
         ]["work_calibrations"][0]
 
         self.assertTrue(audit["calibration_applied"])
-        self.assertEqual(audit["calibration_status"], "absolute-floor-calibrated")
+        self.assertEqual(
+            audit["calibration_status"],
+            "rank-backed-adaptive-proxy-calibrated",
+        )
         self.assertEqual(audit["static_eligible_model_count"], 0)
-        self.assertEqual(audit["floor_eligible_model_count"], 2)
-        self.assertEqual(audit["absolute_hard_evidence_floor"], 0.48)
+        self.assertEqual(audit["adaptive_eligible_model_count"], 2)
+        self.assertEqual(audit["adaptive_proxy_floor"], 0.52)
+        self.assertEqual(audit["proxy_capability_floor"], 0.30)
+        self.assertEqual(audit["required_distinct_models"], 2)
         self.assertFalse(audit["capability_scores_modified"])
         self.assertFalse(audit["task_demands_modified"])
-        self.assertFalse(audit["hard_floor_lowered"])
+        self.assertFalse(
+            audit["catalog_description_proxy_treated_as_measured_benchmark"]
+        )
 
         candidate_models = {row["model"] for row in bundle["candidates"]}
         self.assertEqual(candidate_models, {"vendor/model-a", "vendor/model-b"})
@@ -142,12 +159,12 @@ class TestV5CapabilityCalibration(unittest.TestCase):
         self.assertEqual(len(graph["nodes"]), 2)
         self.assertEqual(len({node["model"] for node in graph["nodes"]}), 2)
 
-    def test_floor_insufficient_remains_fail_closed(self):
+    def test_proxy_baseline_insufficient_remains_fail_closed(self):
         resources = _resource_bundle(required_copies=2)
         market = {
             "endpoints": [
                 _endpoint("vendor/model-a", "provider-a", 0.55, 1.0),
-                _endpoint("vendor/model-b", "provider-b", 0.47, 1.1),
+                _endpoint("vendor/model-b", "provider-b", 0.29, 1.1),
             ]
         }
         bundle = calibration.generate_calibrated_candidate_graph(resources, market)
@@ -157,9 +174,10 @@ class TestV5CapabilityCalibration(unittest.TestCase):
 
         self.assertFalse(audit["calibration_applied"])
         self.assertEqual(
-            audit["calibration_status"], "absolute-floor-still-insufficient"
+            audit["calibration_status"], "rank-backed-proxy-still-insufficient"
         )
-        self.assertEqual(audit["floor_eligible_model_count"], 1)
+        self.assertEqual(audit["adaptive_eligible_model_count"], 1)
+        self.assertEqual(audit["adaptive_eligible_models"], ["vendor/model-a"])
         with self.assertRaises(v5_planner.V5PlanningError):
             v5_value_optimizer.optimize_execution_graph(
                 bundle,
@@ -173,6 +191,30 @@ class TestV5CapabilityCalibration(unittest.TestCase):
                     max_budget_usd=0.30,
                 ),
             )
+
+    def test_low_rank_model_cannot_enter_adaptive_calibration(self):
+        resources = _resource_bundle(required_copies=2)
+        market = {
+            "endpoints": [
+                _endpoint("vendor/model-a", "provider-a", 0.55, 1.0),
+                _endpoint(
+                    "vendor/model-b",
+                    "provider-b",
+                    0.52,
+                    1.1,
+                    benchmark_score=0.34,
+                ),
+            ]
+        }
+        bundle = calibration.generate_calibrated_candidate_graph(resources, market)
+        audit = bundle["hard_capability_calibration"]["interpretations"][
+            "interpretation-test"
+        ]["work_calibrations"][0]
+        self.assertEqual(
+            audit["calibration_status"], "rank-backed-proxy-still-insufficient"
+        )
+        self.assertEqual(audit["required_distinct_models"], 2)
+        self.assertEqual(audit["adaptive_eligible_models"], ["vendor/model-a"])
 
     def test_static_threshold_remains_when_market_is_sufficient(self):
         resources = _resource_bundle(required_copies=2)
@@ -189,6 +231,42 @@ class TestV5CapabilityCalibration(unittest.TestCase):
         self.assertFalse(audit["calibration_applied"])
         self.assertEqual(audit["calibration_status"], "static-threshold-sufficient")
         self.assertEqual(audit["static_eligible_model_count"], 2)
+
+    def test_ordinary_redundancy_requires_only_one_qualified_model(self):
+        resources = _resource_bundle(
+            required_copies=2,
+            different_model_required=False,
+        )
+        market = {
+            "endpoints": [
+                _endpoint("vendor/model-a", "provider-a", 0.70, 1.0),
+            ]
+        }
+        bundle = calibration.generate_calibrated_candidate_graph(resources, market)
+        audit = bundle["hard_capability_calibration"]["interpretations"][
+            "interpretation-test"
+        ]["work_calibrations"][0]
+        self.assertEqual(audit["required_execution_copies"], 2)
+        self.assertEqual(audit["required_distinct_models"], 1)
+        self.assertFalse(audit["different_model_required"])
+        self.assertEqual(audit["calibration_status"], "static-threshold-sufficient")
+        optimized = v5_value_optimizer.optimize_execution_graph(
+            bundle,
+            limits=GraphLimits(
+                max_nodes=2,
+                max_edges=4,
+                max_stages=2,
+                max_model_calls=2,
+                max_retries=0,
+                max_replacements=0,
+                max_budget_usd=0.30,
+            ),
+        )
+        self.assertEqual(len(optimized["execution_graph"]["nodes"]), 2)
+        self.assertEqual(
+            {row["model"] for row in optimized["execution_graph"]["nodes"]},
+            {"vendor/model-a"},
+        )
 
     def test_install_patches_formal_optimizer_and_preserves_diversity(self):
         v5_candidate_diversity.install()
