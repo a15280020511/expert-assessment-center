@@ -57,10 +57,13 @@ class TestV5LowCostPilotV2(unittest.TestCase):
             self.assertIn("Reserved for other strategies: `$0.150000`", summary)
             self.assertIn("Production cutover allowed: `false`", summary)
 
-    def test_entrypoint_uses_dynamic_budget_layer(self):
-        text = (ROOT / "open-model-market" / "v5_low_cost_pilot_entry.py").read_text(encoding="utf-8")
-        self.assertIn("import v5_low_cost_pilot_v2 as pilot_v2", text)
-        self.assertIn("return pilot_v2.run(config, suite, output)", text)
+    def test_entrypoint_uses_dynamic_budget_and_diversity_layers(self):
+        entry = (ROOT / "open-model-market" / "v5_low_cost_pilot_entry.py").read_text(encoding="utf-8")
+        layer = (ROOT / "open-model-market" / "v5_low_cost_pilot_v3.py").read_text(encoding="utf-8")
+        self.assertIn("import v5_low_cost_pilot_v3 as pilot_v3", entry)
+        self.assertIn("return pilot_v3.run(config, suite, output)", entry)
+        self.assertIn("import v5_low_cost_pilot_v2", layer)
+        self.assertIn("return v5_low_cost_pilot_v2.run", layer)
 
 
 if __name__ == "__main__":
