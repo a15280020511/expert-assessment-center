@@ -117,5 +117,18 @@ def install() -> None:
     # calibration, resilient execution/cost control, then contract delivery.
     v5_capability_calibration.install()
     v5_production_resilience.install()
+    # Formal entrypoints import executor functions early; refresh those aliases
+    # after the resilience overlay is installed.
+    try:
+        import v5_pipeline as pipeline
+        pipeline.build_node_payload = v5_production_resilience.build_node_payload
+        pipeline.execute_v5_graph = v5_production_resilience.execute_v5_graph
+    except ImportError:
+        pass
+    try:
+        import v5_live_benchmark as benchmark
+        benchmark.execute_v5_graph = v5_production_resilience.execute_v5_graph
+    except ImportError:
+        pass
     v5_output_contract_delivery.install()
     _INSTALLED = True
