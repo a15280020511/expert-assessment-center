@@ -114,7 +114,7 @@ class TestCostPerformancePrinciple(unittest.TestCase):
     def test_formal_entrypoints_use_cost_performance_modules(self):
         production = (ROOT / "open-model-market" / "benchmark_selection.py").read_text(encoding="utf-8")
         v5 = (ROOT / "open-model-market" / "v5_pipeline.py").read_text(encoding="utf-8")
-        self.assertIn("cost_performance_optimizer.select_team", production)
+        self.assertIn("value_resource_plan_optimizer.select_team", production)
         self.assertIn("from v5_value_planner import compile_and_optimize_v5", v5)
         self.assertNotIn("--quality-tolerance-pct", v5)
 
