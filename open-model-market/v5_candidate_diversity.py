@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
+import v5_capability_calibration
 import v5_planner
 from v5_planner import CandidateNode
 
@@ -16,7 +17,12 @@ _INSTALLED = False
 
 
 def _order_key(row: CandidateNode) -> tuple[float, float, float, str]:
-    return (-row.estimated_quality, row.estimated_cost, row.failure_probability, row.candidate_id)
+    return (
+        -row.estimated_quality,
+        row.estimated_cost,
+        row.failure_probability,
+        row.candidate_id,
+    )
 
 
 def diversity_preserving_pareto_prune(
@@ -34,7 +40,9 @@ def diversity_preserving_pareto_prune(
     limit = max(2, int(maximum_per_group))
     groups: dict[tuple[str, tuple[str, ...]], list[CandidateNode]] = {}
     for candidate in candidates:
-        groups.setdefault((candidate.interpretation_id, candidate.coverage_keys), []).append(candidate)
+        groups.setdefault(
+            (candidate.interpretation_id, candidate.coverage_keys), []
+        ).append(candidate)
 
     kept: list[CandidateNode] = []
     for rows in groups.values():
@@ -42,7 +50,11 @@ def diversity_preserving_pareto_prune(
         frontier = [
             row
             for row in ordered
-            if not any(v5_planner._dominates(other, row) for other in rows if other is not row)
+            if not any(
+                v5_planner._dominates(other, row)
+                for other in rows
+                if other is not row
+            )
         ]
 
         best_by_model: dict[str, CandidateNode] = {}
@@ -99,4 +111,8 @@ def install() -> None:
     if _INSTALLED:
         return
     v5_planner.pareto_prune = diversity_preserving_pareto_prune
+    # Candidate diversity and hard-capability calibration are one safety unit:
+    # calibration restores eligible distinct models, while this pruner prevents
+    # ordinary Pareto dominance from deleting those alternatives afterward.
+    v5_capability_calibration.install()
     _INSTALLED = True
