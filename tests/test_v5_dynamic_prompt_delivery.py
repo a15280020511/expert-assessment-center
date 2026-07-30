@@ -7,6 +7,7 @@ sys.path.insert(0, str(ROOT / "open-model-market"))
 
 from execution_graph import SelectedNode  # noqa: E402
 import v5_dynamic_prompt_delivery as delivery  # noqa: E402
+import v5_output_contract_delivery as contracts  # noqa: E402
 
 
 def node(role="商业与财务·决策优化复合节点"):
@@ -25,7 +26,10 @@ def node(role="商业与财务·决策优化复合节点"):
         parameter_profile={},
         model="vendor/model",
         provider_endpoint="vendor/model@provider",
-        output_contract={"required_fields": ["conclusions"], "machine_readable_required": False},
+        output_contract={
+            "required_fields": ["conclusions"],
+            "machine_readable_required": False,
+        },
         estimated_quality=0.8,
         quality_uncertainty=0.1,
         estimated_cost=0.02,
@@ -42,18 +46,20 @@ def node(role="商业与财务·决策优化复合节点"):
 
 
 class TestV5DynamicPromptDelivery(unittest.TestCase):
-    def test_dynamic_role_is_present_in_real_system_prompt(self):
+    def test_dynamic_role_and_delivery_contract_are_both_present(self):
         prompt = delivery.dynamic_system_prompt(node())
         self.assertIn("动态专业角色：商业与财务·决策优化复合节点", prompt)
         self.assertIn("角色依据领域：business, legal", prompt)
         self.assertIn("不授予任何外部工具", prompt)
         self.assertIn("禁止调用", prompt)
+        self.assertIn("最终响应必须直接交付以下内容", prompt)
+        self.assertIn("禁止复述输出契约", prompt)
 
-    def test_missing_role_preserves_original_prompt(self):
+    def test_missing_role_preserves_contract_aware_prompt(self):
         plain = node(role="")
         self.assertEqual(
             delivery.dynamic_system_prompt(plain),
-            delivery._ORIGINAL_SYSTEM_PROMPT(plain),
+            contracts.contract_aware_system_prompt(plain),
         )
 
 
