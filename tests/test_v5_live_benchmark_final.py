@@ -121,6 +121,77 @@ class TestEconomyProgressiveBenchmark(unittest.TestCase):
             )
         )
 
+    def test_verified_market_filters_provider_rows_not_whole_model(self):
+        raw_market = {
+            "endpoints": [
+                {
+                    "endpoint_id": "cheap-endpoint",
+                    "model_id": "vendor/model-a",
+                    "provider_slug": "provider-cheap",
+                    "prompt_price_per_million": 2.0,
+                    "completion_price_per_million": 10.0,
+                    "reliability": 0.95,
+                    "synthetic_fixture_only": False,
+                },
+                {
+                    "endpoint_id": "expensive-endpoint",
+                    "model_id": "vendor/model-a",
+                    "provider_slug": "provider-expensive",
+                    "prompt_price_per_million": 5.0,
+                    "completion_price_per_million": 25.0,
+                    "reliability": 0.99,
+                    "synthetic_fixture_only": False,
+                },
+                {
+                    "endpoint_id": "unreliable-endpoint",
+                    "model_id": "vendor/model-b",
+                    "provider_slug": "provider-b",
+                    "prompt_price_per_million": 1.0,
+                    "completion_price_per_million": 2.0,
+                    "reliability": 0.50,
+                    "synthetic_fixture_only": False,
+                },
+            ],
+            "rejected": [],
+        }
+        filtered = verified.filter_verified_endpoint_market(raw_market)
+        self.assertEqual(filtered["endpoint_count"], 1)
+        self.assertEqual(filtered["endpoints"][0]["endpoint_id"], "cheap-endpoint")
+        self.assertEqual(
+            filtered["verified_economy_market_policy"]["scope"],
+            "concrete-provider-endpoint-not-model-catalog-aggregate",
+        )
+        rejected = {
+            row["endpoint_id"]: row["reason"] for row in filtered["rejected"]
+        }
+        self.assertEqual(
+            rejected["expensive-endpoint"],
+            "outside-verified-economy-provider-endpoint-cap",
+        )
+        self.assertEqual(
+            rejected["unreliable-endpoint"],
+            "outside-verified-economy-provider-endpoint-cap",
+        )
+
+    def test_verified_alignment_restores_ranker_and_patches_endpoint_compiler(self):
+        source = (
+            ROOT
+            / "open-model-market"
+            / "v5_live_benchmark_economy_verified.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "endpoint_agnostic_rank = economy.base._rank_v5_models",
+            source,
+        )
+        self.assertIn(
+            "economy.base._rank_v5_models = endpoint_agnostic_rank",
+            source,
+        )
+        self.assertIn(
+            "v5_value_optimizer.compile_model_endpoint_market =",
+            source,
+        )
+
     def test_prepare_rejects_more_than_three_tasks(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
