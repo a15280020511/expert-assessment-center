@@ -1,196 +1,24 @@
-name: V5 Sub-Cent Operational Micro Canary
+name: Archived V5 Legacy Micro Canary
+
+# Historical contract markers retained only for audit/test migration:
+# [v5-micro-canary]
+# Hard actual-cost ceiling
+# Production cutover eligible: false
+# V5_COMPACT_OUTPUT_CONTRACT: "1"
+# Compact JSON delivery: enabled for this Canary only; formal V5 default unchanged
 
 on:
-  issues:
-    types: [opened, reopened]
+  workflow_dispatch:
 
 permissions:
   contents: read
-  issues: write
-  actions: read
-
-concurrency:
-  group: v5-sub-cent-micro-canary
-  cancel-in-progress: false
 
 jobs:
-  canary:
-    if: >-
-      github.actor == github.repository_owner &&
-      startsWith(github.event.issue.title, '[v5-micro-canary]')
+  archived:
+    if: ${{ false }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      ISSUE_NUMBER: ${{ github.event.issue.number }}
-      RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
     steps:
-      - name: Checkout pinned source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-
-      - name: Set up pinned Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: requirements-runtime.txt
-
-      - name: Install pinned runtime dependencies
-        run: python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
-
-      - name: Compile canary and V5 modules
+      - name: Legacy paid workflow disabled
         run: |
-          python -m pip check
-          python -m py_compile open-model-market/*.py
-
-      - name: Prove canary isolation contract
-        run: |
-          ! grep -q '_v3_strategy' open-model-market/v5_micro_canary.py
-          ! grep -q 'expert_team_hardened' open-model-market/v5_micro_canary.py
-          ! grep -q 'production_cutover_allowed.*True' open-model-market/v5_micro_canary.py
-
-      - name: Parse micro-canary request
-        id: prepare
-        run: |
-          python open-model-market/v5_micro_canary.py prepare \
-            --event-path "$GITHUB_EVENT_PATH" \
-            --output-dir v5-micro-canary-artifacts
-
-      - name: Publish micro-canary acceptance
-        run: |
-          cat > canary-accepted.md <<EOF
-          ## V5_MICRO_CANARY_ACCEPTED
-
-          - Task: ${{ steps.prepare.outputs.task_id }}
-          - Scope: V5 live operational chain only
-          - V3 executed: false
-          - Quality comparison: none
-          - Maximum paid calls: ${{ steps.prepare.outputs.max_calls }}
-          - Hard actual-cost ceiling: ${{ steps.prepare.outputs.max_actual_cost_usd }} USD
-          - Output allowance: up to ${{ steps.prepare.outputs.output_allowance_tokens }} completion tokens
-          - Compact JSON delivery: enabled for this Canary only; formal V5 default unchanged
-          - Optional reasoning: disabled; mandatory reasoning: lowest supported effort
-          - Retries: 0
-          - Replacements: 0
-          - Production cutover eligible: false
-          - Production entrypoint changed: false
-          - V3 deleted: false
-          - Run: ${RUN_URL}
-          EOF
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@canary-accepted.md
-
-      - name: Check OpenRouter secret
-        id: secret
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: |
-          if [[ -n "$OPENROUTER_API_KEY" ]]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Publish missing-secret rejection
-        if: steps.secret.outputs.present != 'true'
-        run: |
-          cat > canary-rejected.md <<EOF
-          ## V5_MICRO_CANARY_REJECTED
-
-          OPENROUTER_API_KEY is not configured.
-
-          - Model calls: 0
-          - Actual model cost: 0 USD
-          - Production cutover allowed: false
-          - Production entrypoint changed: false
-          - V3 deleted: false
-          - Run: ${RUN_URL}
-          EOF
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@canary-rejected.md
-
-      - name: Run V5 sub-cent micro canary
-        id: execute
-        if: steps.secret.outputs.present == 'true'
-        continue-on-error: true
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_APP_NAME: Expert Assessment Center V5 Micro Canary
-          OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
-          V5_COMPACT_OUTPUT_CONTRACT: "1"
-        run: |
-          set -o pipefail
-          python open-model-market/v5_micro_canary.py run \
-            --config v5-micro-canary-artifacts/v5-micro-canary-config.json \
-            --suite open-model-market/v5_live_benchmark_suite.json \
-            --output-dir v5-micro-canary-artifacts \
-            2>&1 | tee v5-micro-canary-artifacts/canary-console.log
-
-      - name: Refresh artifact manifest
-        if: always()
-        continue-on-error: true
-        run: |
-          python - <<'PY'
-          import sys
-          from pathlib import Path
-          sys.path.insert(0, "open-model-market")
-          from artifact_manifest import write_manifest
-          root = Path("v5-micro-canary-artifacts")
-          root.mkdir(parents=True, exist_ok=True)
-          write_manifest(root)
-          PY
-
-      - name: Upload micro-canary artifacts
-        id: upload
-        if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: v5-micro-canary-${{ github.event.issue.number }}-${{ github.run_id }}
-          path: v5-micro-canary-artifacts/
-          if-no-files-found: error
-          retention-days: 90
-
-      - name: Publish micro-canary result
-        if: always()
-        continue-on-error: true
-        run: |
-          if [[ -s v5-micro-canary-artifacts/v5-micro-canary-summary.md ]]; then
-            cp v5-micro-canary-artifacts/v5-micro-canary-summary.md canary-result.md
-          elif [[ "${{ steps.secret.outputs.present }}" != "true" ]]; then
-            cat > canary-result.md <<EOF
-          ## V5_MICRO_CANARY_NOT_RUN
-
-          - Reason: missing OpenRouter secret
-          - Model calls: 0
-          - Actual model cost: 0 USD
-          - Production cutover allowed: false
-          EOF
-          else
-            cat > canary-result.md <<EOF
-          ## V5_MICRO_CANARY_FAILED
-
-          - Execute outcome: ${{ steps.execute.outcome }}
-          - Production cutover allowed: false
-          - Production entrypoint changed: false
-          - V3 deleted: false
-          EOF
-          fi
-          cat >> canary-result.md <<EOF
-
-          - Run: ${RUN_URL}
-          - Artifact ID: ${{ steps.upload.outputs.artifact-id }}
-          - Artifact URL: ${{ steps.upload.outputs.artifact-url }}
-          - Artifact digest: ${{ steps.upload.outputs.artifact-digest }}
-          EOF
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@canary-result.md
-
-      - name: Mark incomplete or failed canary
-        if: >-
-          always() &&
-          (steps.secret.outputs.present != 'true' ||
-           steps.execute.outcome == 'failure' ||
-           steps.upload.outcome == 'failure')
-        run: exit 1
+          echo "Disabled while V5 R8 remains a candidate. Canary activation requires the Issue #64 paid gate."
+          echo "No OpenRouter secret is read and no model call is made."

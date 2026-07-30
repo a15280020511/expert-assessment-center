@@ -54,13 +54,22 @@ class TestV5BenchmarkR6(unittest.TestCase):
             config = json.loads((output / "benchmark-config.json").read_text(encoding="utf-8"))
             self.assertEqual(config["output_allowance_tokens"], 10000)
 
-    def test_workflow_uses_r6_and_active_10000_allowance(self):
+    def test_r6_workflow_is_archived_and_cannot_read_secrets_or_run(self):
         workflow = (
             ROOT / ".github" / "workflows" / "v5-live-benchmark-final.yml"
         ).read_text(encoding="utf-8")
+        active = "\n".join(
+            line for line in workflow.splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        self.assertIn("Archived V5 R6 Economy Benchmark", active)
+        self.assertIn("workflow_dispatch:", active)
+        self.assertIn("if: ${{ false }}", active)
+        self.assertNotIn("issues:", active)
+        self.assertNotIn("OPENROUTER_API_KEY", active)
+        self.assertNotIn("OPENROUTER_MANAGEMENT_KEY", active)
+        self.assertNotIn("v5_live_benchmark_economy_r6.py", active)
         self.assertIn('V5_BENCHMARK_OUTPUT_ALLOWANCE_TOKENS: "10000"', workflow)
-        self.assertGreaterEqual(workflow.count("v5_live_benchmark_economy_r6.py"), 3)
-        self.assertNotIn("secrets.OPENROUTER_MANAGEMENT_KEY", workflow)
 
 
 if __name__ == "__main__":
