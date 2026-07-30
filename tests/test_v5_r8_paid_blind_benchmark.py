@@ -113,14 +113,20 @@ class TestV5R8PaidBlindBenchmark(unittest.TestCase):
             self.assertFalse(report["production_entrypoint_changed"])
             self.assertFalse(report["v3_deleted"])
 
-    def test_workflow_is_exact_manual_unlock_and_single_key(self):
+    def test_workflow_is_exact_manual_unlock_single_key_and_joint_gated(self):
         workflow = (ROOT / ".github/workflows/v5-r8-stage-d-paid-blind.yml").read_text(encoding="utf-8")
         self.assertIn("issue_comment:", workflow)
         self.assertIn("github.event.issue.number == 64", workflow)
-        self.assertIn("RUN_V5_R8_STAGE_D_20260731_R8B", workflow)
+        self.assertIn("RUN_V5_R8_STAGE_D_20260731_R8H", workflow)
+        self.assertNotIn("RUN_V5_R8_STAGE_D_20260731_R8B'", workflow)
         self.assertNotIn("RUN_V5_R8_STAGE_D_20260731_R8A'", workflow)
         self.assertIn("secrets.OPENROUTER_API_KEY", workflow)
         self.assertNotIn("OPENROUTER_MANAGEMENT_KEY", workflow)
+        self.assertIn("Exact nine-node zero-inference planning preflight", workflow)
+        self.assertIn("steps.planning.outcome == 'success'", workflow)
+        self.assertIn("v5_r8_zero_call_joint_gate.py", workflow)
+        self.assertIn("--max-nodes 9", workflow)
+        self.assertIn("--max-cost-usd 0.25", workflow)
         self.assertIn("Production default switch allowed: `false`", workflow)
         self.assertIn("V3 deletion allowed: `false`", workflow)
 
