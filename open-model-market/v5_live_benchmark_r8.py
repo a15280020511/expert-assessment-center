@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import traceback
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -24,6 +25,7 @@ MAX_STRATEGY_COST_USD = 0.25
 MAX_GLOBAL_COST_USD = 1.50
 MAX_GLOBAL_CALLS = 45
 OUTPUT_ALLOWANCE_TOKENS = 10_000
+_ORIGINAL_ECONOMY_GATE = economy.economy_cutover_gate
 _INSTALLED = False
 
 
@@ -77,6 +79,31 @@ def _r8_limits(**kwargs: Any) -> OriginalGraphLimits:
     return OriginalGraphLimits(**kwargs)
 
 
+def _write_strategy_exception(root: Path, task: Mapping[str, Any], exc: BaseException) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    audit_path = root / "v5-request-audit.json"
+    known_calls = None
+    if audit_path.exists():
+        try:
+            audit = json.loads(audit_path.read_text(encoding="utf-8"))
+            known_calls = int(audit.get("request_count", len(audit.get("requests", []))))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            known_calls = None
+    report = {
+        "version": 1,
+        "task_id": str(task.get("task_id") or ""),
+        "exception_type": type(exc).__name__,
+        "error": str(exc),
+        "traceback": traceback.format_exc(),
+        "known_model_request_count": known_calls,
+        "production_entrypoint_changed": False,
+        "v3_deleted": False,
+    }
+    (root / "v5-r8-strategy-exception.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
 def _annotate_v5_strategy() -> None:
     original = base._v5_strategy
 
@@ -86,7 +113,11 @@ def _annotate_v5_strategy() -> None:
         *args: Any,
         **kwargs: Any,
     ) -> Any:
-        outcome, market = original(task, root, *args, **kwargs)
+        try:
+            outcome, market = original(task, root, *args, **kwargs)
+        except Exception as exc:
+            _write_strategy_exception(Path(root), task, exc)
+            raise
         summary_path = Path(root) / "v5-execution-summary.json"
         summary: Mapping[str, Any] = {}
         if summary_path.exists():
@@ -117,7 +148,7 @@ def _annotate_v5_strategy() -> None:
 
 def stage_d_gate(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Apply Issue #64 Stage-D gates without granting production cutover."""
-    gate = economy.economy_cutover_gate(records)
+    gate = _ORIGINAL_ECONOMY_GATE(records)
     blockers = set(gate.get("blockers") or [])
     blockers.discard("v5-quality-improvement-below-2-percent")
     blockers.discard("v5-cost-regression-above-policy")

@@ -18,7 +18,7 @@ jobs:
     if: >-
       github.actor == github.repository_owner &&
       github.event.issue.number == 64 &&
-      github.event.comment.body == 'RUN_V5_R8_STAGE_D_20260731_R8A'
+      github.event.comment.body == 'RUN_V5_R8_STAGE_D_20260731_R8B'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
@@ -58,7 +58,7 @@ jobs:
           import json
           from pathlib import Path
           config = {
-              "benchmark_id": "v5-r8-stage-d-20260731-r8a",
+              "benchmark_id": "v5-r8-stage-d-20260731-r8b",
               "max_cost_usd": 1.50,
               "max_calls": 45,
               "max_strategy_cost_usd": 0.25,
@@ -110,6 +110,7 @@ jobs:
           cat > r8-accepted.md <<EOF
           ## V5_R8_STAGE_D_ACCEPTED
 
+          - Attempt: R8B diagnostic-safe retry after zero-call R8A recursion failure
           - Fixed tasks: 3
           - Strategies: V5 R8 versus preserved V3 only
           - Per-strategy per-task hard cap: 0.25 USD
@@ -196,6 +197,16 @@ jobs:
           print(f"- Single-key preflight: `{credit.get('status', 'not-run')}`")
           blockers = gate.get("blockers") or []
           print(f"- Blockers: `{','.join(blockers) if blockers else 'none'}`")
+          if result.get("error"):
+              print(f"- Benchmark error: `{str(result.get('error'))[:1000]}`")
+          exception_paths = sorted(root.glob("tasks/*/v5_joint_graph/v5-r8-strategy-exception.json"))
+          for path in exception_paths:
+              diagnostic = json.loads(path.read_text())
+              print(
+                  f"- V5 diagnostic {diagnostic.get('task_id')}: "
+                  f"`{diagnostic.get('exception_type')}: {str(diagnostic.get('error'))[:1000]}`; "
+                  f"known requests=`{diagnostic.get('known_model_request_count')}`"
+              )
           for strategy, row in sorted((gate.get("summaries") or {}).items()):
               print(
                   f"- {strategy}: success={float(row.get('success_rate', 0.0)):.3f}, "
