@@ -1,0 +1,10 @@
+{
+  "alpha/prime": {"data":{"endpoints":[{"tag":"alpha-cloud","context_length":131072,"max_completion_tokens":16000,"pricing":{"prompt":8.0,"completion":24.0},"supported_parameters":["reasoning","structured_outputs"],"uptime":0.995}]}},
+  "theta/code": {"data":{"endpoints":[{"tag":"theta-cloud","context_length":131072,"max_completion_tokens":16000,"pricing":{"prompt":4.0,"completion":12.0},"supported_parameters":["reasoning","structured_outputs"],"uptime":0.985}]}},
+  "iota/finance": {"data":{"endpoints":[{"tag":"iota-cloud","context_length":131072,"max_completion_tokens":12000,"pricing":{"prompt":3.0,"completion":9.0},"supported_parameters":["reasoning","structured_outputs"],"uptime":0.99}]}},
+  "beta/value": {"data":{"endpoints":[{"tag":"beta-cloud","context_length":131072,"max_completion_tokens":12000,"pricing":{"prompt":2.0,"completion":6.0},"supported_parameters":["reasoning","structured_outputs"],"uptime":0.99}]}},
+  "deepseek/china": {"data":{"endpoints":[{"tag":"deepseek-cloud","context_length":65536,"max_completion_tokens":12000,"pricing":{"prompt":1.0,"completion":4.0},"supported_parameters":["reasoning"],"uptime":0.98}]}},
+  "kappa/risk": {"data":{"endpoints":[{"tag":"kappa-cloud","context_length":131072,"max_completion_tokens":12000,"pricing":{"prompt":3.5,"completion":10.0},"supported_parameters":["reasoning","structured_outputs"],"uptime":0.99}]}},
+  "delta/long": {"data":{"endpoints":[{"tag":"delta-cloud","context_length":1000000,"max_completion_tokens":16000,"pricing":{"prompt":3.0,"completion":9.0},"supported_parameters":["reasoning","structured_outputs"],"uptime":0.985}]}},
+  "gamma/fast": {"data":{"endpoints":[{"tag":"gamma-cloud","context_length":65536,"max_completion_tokens":12000,"pricing":{"prompt":0.5,"completion":1.5},"supported_parameters":[],"uptime":0.97}]}}
+}
