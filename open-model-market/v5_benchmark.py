@@ -11,15 +11,40 @@ def _coverage(candidate: Mapping[str, Any]) -> set[str]:
     return {str(x) for x in candidate.get("coverage_keys", [])}
 
 
-def _metrics(rows: Sequence[Mapping[str, Any]], required: set[str]) -> dict[str, Any]:
+def _metrics(
+    rows: Sequence[Mapping[str, Any]],
+    required: set[str],
+    copies_by_work: Mapping[str, Any],
+) -> dict[str, Any]:
     covered = set().union(*(_coverage(row) for row in rows)) if rows else set()
+    violations: list[str] = []
+    for work_id, copies_raw in copies_by_work.items():
+        copies = int(copies_raw)
+        if copies < 2:
+            continue
+        selected_by_copy = []
+        for copy_index in range(copies):
+            key = f"{work_id}#{copy_index}"
+            matches = [row for row in rows if key in _coverage(row)]
+            if len(matches) != 1:
+                violations.append(f"{work_id}:copy-{copy_index}-selection-count={len(matches)}")
+                continue
+            selected_by_copy.append(matches[0])
+        if len(selected_by_copy) == copies:
+            models = [str(row.get("model") or "") for row in selected_by_copy]
+            endpoints = [str(row.get("provider_endpoint") or "") for row in selected_by_copy]
+            if len(set(models)) != copies:
+                violations.append(f"{work_id}:independent-copies-reuse-model")
+            if len(set(endpoints)) != copies:
+                violations.append(f"{work_id}:independent-copies-reuse-endpoint")
     quality = sum(float(row.get("estimated_quality", 0.0)) for row in rows) / max(1, len(rows))
     return {
-        "feasible": required <= covered,
+        "feasible": required <= covered and not violations,
         "coverage_ratio": round(len(required & covered) / max(1, len(required)), 6),
         "estimated_quality": round(quality, 6),
         "estimated_cost_usd": round(sum(float(row.get("estimated_cost", 0.0)) for row in rows), 8),
         "node_count": len(rows),
+        "hard_constraint_violations": violations,
         "models": sorted({str(row.get("model") or "") for row in rows}),
         "provider_endpoints": sorted({str(row.get("provider_endpoint") or "") for row in rows}),
     }
@@ -85,13 +110,13 @@ def planning_benchmark(planner_bundle: Mapping[str, Any], *, random_seed: int = 
     random_plan = _greedy(required, randomized, lambda row, gain: (-gain, rng.random()), maximum_nodes=16)
     cheapest_feasible = _greedy(required, candidates, lambda row, gain: (-gain, float(row["estimated_cost"]), -float(row["estimated_quality"])), maximum_nodes=16)
     strategies = {
-        "v5_joint_graph": _metrics(selected, required),
-        "strongest_single_model": _metrics(strongest_single, required),
-        "lowest_price_single_model": _metrics(cheapest_single, required),
-        "fixed_3_plus_1": _metrics(fixed, required),
-        "v3_compatibility_baseline": _metrics(fixed, required),
-        "random_feasible": _metrics(random_plan, required),
-        "lowest_cost_feasible": _metrics(cheapest_feasible, required),
+        "v5_joint_graph": _metrics(selected, required, meta["copies_by_work"]),
+        "strongest_single_model": _metrics(strongest_single, required, meta["copies_by_work"]),
+        "lowest_price_single_model": _metrics(cheapest_single, required, meta["copies_by_work"]),
+        "fixed_3_plus_1": _metrics(fixed, required, meta["copies_by_work"]),
+        "v3_compatibility_baseline": _metrics(fixed, required, meta["copies_by_work"]),
+        "random_feasible": _metrics(random_plan, required, meta["copies_by_work"]),
+        "lowest_cost_feasible": _metrics(cheapest_feasible, required, meta["copies_by_work"]),
     }
     v5 = strategies["v5_joint_graph"]
     dominated = []
