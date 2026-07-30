@@ -20,7 +20,7 @@ def _content_work_ids(graph: ExecutionGraph) -> set[str]:
     content = _ORIGINAL_CONTENT_WORK_IDS(graph)
     metadata = graph.metadata if isinstance(graph.metadata, Mapping) else {}
     optional = {str(value) for value in metadata.get("optional_work_ids", [])}
-    return content - optional or content
+    return content - optional
 
 
 def _write_failed_artifacts(
@@ -87,28 +87,24 @@ def execute_with_graph_limits(
         str(value)
         for value in result.get("work_coverage", {}).get("missing_work_ids", [])
     }
+    required_content = {
+        str(value)
+        for value in result.get("work_coverage", {}).get("required_content_work_ids", [])
+    }
+    content_node_ids = {
+        node.node_id
+        for node in graph.nodes
+        if set(node.assigned_work) & required_content
+    }
     successful_content_nodes = {
         str(row.get("node_id"))
         for row in result.get("node_results", [])
         if str(row.get("status", "")).startswith("success")
         and row.get("answer")
-        and "synthesis" not in {
-            str(value) for value in row.get("functions", [])
-        }
+        and str(row.get("node_id")) in content_node_ids
     }
-    # Older serialized node results do not include functions. Count successful
-    # non-final nodes deterministically in that compatibility case.
-    if not successful_content_nodes:
-        final_ids = set(graph.final_nodes)
-        successful_content_nodes = {
-            str(row.get("node_id"))
-            for row in result.get("node_results", [])
-            if str(row.get("status", "")).startswith("success")
-            and row.get("answer")
-            and str(row.get("node_id")) not in final_ids
-        }
-        if not successful_content_nodes and result.get("work_coverage", {}).get("covered_work_ids"):
-            successful_content_nodes = {"covered-content"}
+    if not content_node_ids and result.get("work_coverage", {}).get("covered_work_ids"):
+        successful_content_nodes = {"covered-content"}
 
     blockers: list[str] = []
     if result.get("completion_mode") == "degraded" and not limits.allow_degraded_success:
