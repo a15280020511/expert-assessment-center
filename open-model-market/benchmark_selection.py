@@ -11,6 +11,7 @@ from typing import Any, Dict, Mapping, Sequence, Tuple
 import history_free_runtime_compat
 import model_market as market
 import resource_plan_optimizer
+import resource_plan_compat  # noqa: F401 - installs feasibility guards
 import resource_runtime_compat
 import seat_scoring as base
 import task_matrix_optimizer as legacy
