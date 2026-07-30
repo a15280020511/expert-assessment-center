@@ -20,9 +20,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("v5_production_ticket.py", self.text)
         self.assertIn("v5_execution_auditor.py", self.text)
         self.assertIn("v5_final_status.py", self.text)
-        self.assertNotIn("expert_team_hardened.py", self.text)
-        self.assertNotIn("execution_auditor.py", self.text)
-        self.assertNotIn("final_status.py ", self.text)
+        self.assertNotIn("name: Execute fixed 3+1 expert team", self.text)
+        self.assertNotIn("python open-model-market/execution_auditor.py", self.text)
+        self.assertNotIn("python open-model-market/final_status.py", self.text)
 
     def test_only_issue_open_and_controlled_retry_trigger_execution(self):
         self.assertNotIn("github.event.comment.body == '/run-expert-team'", self.text)
@@ -63,9 +63,12 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("--max-estimated-cost-usd", self.text)
         self.assertIn("TOTAL_MODEL_CALLS", self.text)
 
-    def test_v3_is_not_an_implicit_runtime_fallback(self):
-        self.assertNotIn("expert_team_hardened.py", self.text)
-        self.assertNotIn("fallback", self.text.casefold())
+    def test_v3_is_manual_rollback_documentation_not_active_runtime(self):
+        marker = "python open-model-market/expert_team_hardened.py"
+        self.assertEqual(self.text.count(marker), 1)
+        self.assertIn("manual rollback command", self.text)
+        self.assertIn("never executed", self.text)
+        self.assertNotIn("name: Execute fixed 3+1 expert team", self.text)
         self.assertIn("v5_production_ticket.py", self.text)
 
     def test_obsolete_v3_history_restore_is_removed_from_v5_entrypoint(self):
