@@ -97,6 +97,11 @@ def _endpoint(model: str, provider: str, score: float, cost: float):
 
 
 class TestV5CapabilityCalibration(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Formal V5 always installs calibration and diversity as one safety unit.
+        v5_candidate_diversity.install()
+
     def test_existing_floor_restores_required_independent_models(self):
         resources = _resource_bundle(required_copies=2)
         market = {
