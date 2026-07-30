@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import model_market as market
+import v5_candidate_diversity
 from artifact_manifest import write_manifest
 from execution_graph import ExecutionGraph, GraphLimits
 from resource_matrix import compile_v5_task_resources
@@ -121,6 +122,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     models, catalog_source = market.fetch_catalog(run)
     ranked = _rank_v5_models(models, profile, run)
 
+    # Install the paired candidate-safety layers before every formal V5 plan:
+    # sparse-catalog hard-capability calibration plus diversity-preserving Pareto.
+    v5_candidate_diversity.install()
     resources = compile_v5_task_resources(profile, run)
     write_task_resource_artifacts(resources, output)
 
