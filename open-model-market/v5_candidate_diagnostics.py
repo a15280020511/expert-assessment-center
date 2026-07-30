@@ -11,6 +11,41 @@ import v5_planner
 _INSTALLED = False
 
 
+def _provider_slug(row: Mapping[str, Any]) -> str:
+    value = str(row.get("provider_slug") or "").strip()
+    if value:
+        return value
+    endpoint = str(row.get("provider_endpoint") or "")
+    return endpoint.rsplit("@", 1)[-1] if "@" in endpoint else endpoint
+
+
+def _work_policy(
+    work_id: str,
+    meta: Mapping[str, Any],
+    scoped_candidates: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    explicit = meta.get("independence_policy_by_work")
+    explicit_map = explicit if isinstance(explicit, Mapping) else {}
+    raw = explicit_map.get(work_id)
+    policy = raw if isinstance(raw, Mapping) else {}
+    inferred_model_required = any(
+        work_id in {str(value) for value in row.get("independence_groups", [])}
+        for row in scoped_candidates
+    )
+    return {
+        "different_model_required": bool(
+            policy.get("different_model_required", inferred_model_required)
+        ),
+        "different_provider_required": bool(
+            policy.get("different_provider_required", False)
+        ),
+        "provider_diversity_mode": (
+            "hard" if bool(policy.get("different_provider_required", False))
+            else "preferred-runtime-rebalancing"
+        ),
+    }
+
+
 def analyze_candidate_structure(
     market: Mapping[str, Any],
     candidate_bundle: Mapping[str, Any],
@@ -26,44 +61,62 @@ def analyze_candidate_structure(
         scoped = [row for row in candidates if str(row.get("interpretation_id")) == str(interpretation_id)]
         work_rows: list[dict[str, Any]] = []
         interpretation_blockers: list[str] = []
-        for work_id, copies_raw in copies_by_work.items():
+        for work_id_raw, copies_raw in copies_by_work.items():
+            work_id = str(work_id_raw)
             copies = max(1, int(copies_raw))
+            policy = _work_policy(work_id, meta, scoped)
             per_copy: list[dict[str, Any]] = []
             union_models: set[str] = set()
+            union_providers: set[str] = set()
             union_endpoints: set[str] = set()
             for copy_index in range(copies):
                 key = f"{work_id}#{copy_index}"
                 matches = [row for row in scoped if key in {str(x) for x in row.get("coverage_keys", [])}]
                 models = sorted({str(row.get("model") or "") for row in matches if row.get("model")})
+                providers = sorted({_provider_slug(row) for row in matches if _provider_slug(row)})
                 endpoints = sorted({str(row.get("provider_endpoint") or "") for row in matches if row.get("provider_endpoint")})
                 union_models.update(models)
+                union_providers.update(providers)
                 union_endpoints.update(endpoints)
                 per_copy.append({
                     "coverage_key": key,
                     "candidate_count": len(matches),
                     "distinct_model_count": len(models),
+                    "distinct_provider_count": len(providers),
                     "distinct_endpoint_count": len(endpoints),
                     "models": models,
                 })
                 if not matches:
                     interpretation_blockers.append(f"{key}:no-candidate")
-            if len(union_models) < copies:
+            if policy["different_model_required"] and len(union_models) < copies:
                 interpretation_blockers.append(
                     f"{work_id}:distinct-models={len(union_models)}<required-copies={copies}"
                 )
-            if len(union_endpoints) < copies:
+            if policy["different_provider_required"] and len(union_providers) < copies:
                 interpretation_blockers.append(
-                    f"{work_id}:distinct-endpoints={len(union_endpoints)}<required-copies={copies}"
+                    f"{work_id}:distinct-providers={len(union_providers)}<required-copies={copies}"
                 )
+            copies_have_candidates = all(row["candidate_count"] > 0 for row in per_copy)
+            model_policy_satisfied = (
+                not policy["different_model_required"] or len(union_models) >= copies
+            )
+            provider_policy_satisfied = (
+                not policy["different_provider_required"] or len(union_providers) >= copies
+            )
             work_rows.append({
-                "work_id": str(work_id),
+                "work_id": work_id,
                 "required_copies": copies,
+                "independence_policy": policy,
                 "per_copy": per_copy,
                 "union_distinct_models": sorted(union_models),
                 "union_distinct_model_count": len(union_models),
+                "union_distinct_providers": sorted(union_providers),
+                "union_distinct_provider_count": len(union_providers),
                 "union_distinct_endpoint_count": len(union_endpoints),
-                "local_independence_feasible": len(union_models) >= copies and len(union_endpoints) >= copies and all(
-                    row["candidate_count"] > 0 for row in per_copy
+                "local_independence_feasible": bool(
+                    copies_have_candidates
+                    and model_policy_satisfied
+                    and provider_policy_satisfied
                 ),
             })
         unique_blockers = sorted(set(interpretation_blockers))
@@ -73,6 +126,7 @@ def analyze_candidate_structure(
             "candidate_count_after_pareto": len(scoped),
             "required_coverage_count": sum(max(1, int(value)) for value in copies_by_work.values()),
             "distinct_model_count": len({str(row.get("model") or "") for row in scoped if row.get("model")}),
+            "distinct_provider_count": len({_provider_slug(row) for row in scoped if _provider_slug(row)}),
             "distinct_endpoint_count": len({str(row.get("provider_endpoint") or "") for row in scoped if row.get("provider_endpoint")}),
             "work_coverage": work_rows,
             "local_structure_feasible": not unique_blockers,
@@ -93,6 +147,9 @@ def analyze_candidate_structure(
         "interpretations": report_rows,
         "local_structure_feasible_for_any_interpretation": any(row["local_structure_feasible"] for row in report_rows),
         "blockers": sorted(set(global_blockers)),
+        "independence_policy_basis": (
+            "explicit candidate independence_groups; provider diversity is preferred unless explicitly required"
+        ),
         "model_calls": 0,
     }
 
