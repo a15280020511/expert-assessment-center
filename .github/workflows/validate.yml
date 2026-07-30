@@ -67,16 +67,19 @@ jobs:
           test -s .github/workflows/expert-team-canary.yml
           test -s .github/workflows/expert-team.yml
           test -s .github/workflows/execution-ticket.yml
-          test -s open-model-market/optimization_policy.json
-          test -s open-model-market/parameter_templates.json
-          test -s open-model-market/team_optimizer.py
+          test -s open-model-market/resource_requirements.py
+          test -s open-model-market/resource_plan_optimizer.py
+          test -s open-model-market/resource_plan_compat.py
+          test -s open-model-market/resource_runtime_compat.py
+          test -s open-model-market/resource_call_budget.py
+          test -s open-model-market/FULL_DYNAMIC_RESOURCE_PLANNING.md
           test -s open-model-market/dynamic_runtime.py
       - name: Run unit tests
         shell: bash
         run: |
           set -o pipefail
           python -m unittest discover -s tests -v 2>&1 | tee unit-test.log
-      - name: Verify secure dynamic dry-run
+      - name: Verify secure full-dynamic dry-run
         run: |
           python open-model-market/expert_team_hardened.py \
             --task "Static validation: compare a software investment with technical, financial and risk constraints" \
@@ -84,28 +87,56 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
-          plan = json.loads(Path("validation-artifacts/model-selection.json").read_text())
-          optimization = json.loads(Path("validation-artifacts/team-optimization.json").read_text())
-          dry = json.loads(Path("validation-artifacts/expert-team-dry-run.json").read_text())
-          routing = json.loads(Path("validation-artifacts/task-routing.json").read_text())
-          request_audit = json.loads(Path("validation-artifacts/request-audit.json").read_text())
+
+          root = Path("validation-artifacts")
+          plan = json.loads((root / "model-selection.json").read_text())
+          optimization = json.loads((root / "team-optimization.json").read_text())
+          requirements = json.loads((root / "task-resource-requirements.json").read_text())
+          dry = json.loads((root / "expert-team-dry-run.json").read_text())
+          routing = json.loads((root / "task-routing.json").read_text())
+          request_audit = json.loads((root / "request-audit.json").read_text())
           config = json.loads(Path("open-model-market/config.json").read_text())
           forbidden = {"tools", "tool_choice", "plugins", "web_search_options", "file_search", "models"}
+
           expert_count = int(plan["expert_count"])
-          assert 1 <= expert_count <= 4
+          assert expert_count >= 1
+          assert expert_count + 1 <= 16
           assert config["routing"]["enabled"] is False
           assert config["selection"]["optimizer"]["engine"] == "google-or-tools-cp-sat"
-          assert plan["orchestration"] == "google-or-tools-cp-sat-dynamic-team"
-          assert plan["team_pattern"] == f"{expert_count}-experts-plus-one-judge"
+          assert plan["team_pattern"] == f"{expert_count}-dynamic-work-packages-plus-synthesis"
           assert plan["external_tools_allowed"] is False
+
+          assert optimization["version"] == 3
           assert optimization["optimizer"] == "google-or-tools-cp-sat"
+          assert optimization["selection_method"] == "resource-demand-first-quality-band-pareto-v3"
           assert optimization["solver_status"] in {"OPTIMAL", "FEASIBLE"}
           assert optimization["fallback_used"] is False
+          assert optimization["objective_order"] == [
+              "hard_resource_coverage",
+              "maximum_task_quality",
+              "minimum_cost_and_calls_inside_quality_band",
+          ]
+          assert optimization["expert_count"] == expert_count
+          assert len(optimization["selected"]) == expert_count + 1
           assert len(plan["experts"]) == expert_count
           assert len(plan["inference_parameters"]) == expert_count + 1
-          providers = {item["model_id"].split("/", 1)[0] for item in plan["experts"]}
-          providers.add(plan["judge"]["model_id"].split("/", 1)[0])
-          assert len(providers) == expert_count + 1
+
+          selected_models = {row["model"] for row in optimization["selected"].values()}
+          assert len(selected_models) == expert_count + 1
+          assert all(row["prompt_modules"] for row in optimization["selected"].values())
+          assert all(row["prompt_profile_id"].startswith("prompt-") for row in optimization["selected"].values())
+          assert all(row["resource_profile_id"].startswith("params-") for row in optimization["selected"].values())
+          assert all(row["parameters"] for row in optimization["selected"].values())
+
+          assert requirements["architecture"] == "task-to-resource-requirements-before-market-lookup"
+          assert requirements["atomic_work_units"]
+          assert requirements["requested_market_attributes"]
+          assert requirements["history_input_used"] is False
+          assert requirements["fixed_team_mode_used"] is False
+          assert requirements["fixed_seat_template_used"] is False
+          assert requirements["fixed_prompt_template_used"] is False
+          assert requirements["fixed_parameter_template_used"] is False
+
           assert plan["approved_total_model_calls"] >= expert_count + 1
           assert plan["model_call_allocation"]["semantic_router_calls"] == 0
           assert plan["estimated_cost_policy"] == "provider-max-theoretical-not-a-limit"
@@ -119,13 +150,15 @@ jobs:
           assert dry["optimizer"] == "google-or-tools-cp-sat"
           assert request_audit["status"] == "PASS"
           assert request_audit["expected_request_count"] == 0
+
           for parameters in plan["inference_parameters"].values():
               assert parameters["request_token_ceiling_sent"] is False
               assert parameters["reasoning_token_ceiling_sent"] is False
               assert parameters["output_token_policy"] == "provider-model-limit-only"
-              assert parameters["parameter_template"]
+              assert parameters["parameter_template"].startswith("params-")
               assert "max_tokens" not in parameters
               assert parameters["provider_max_completion_tokens"] > 0
+
           for request in dry["expert_requests"]:
               assert not forbidden.intersection(request)
               assert not request["model"].startswith("openrouter/")
@@ -133,7 +166,10 @@ jobs:
               assert ":batch" not in request["model"]
               assert "max_tokens" not in request
               assert "max_completion_tokens" not in request
-          assert Path("validation-artifacts/artifact-manifest.json").exists()
+              system = str(request.get("messages", [{}])[0].get("content") or "")
+              assert "本次资源矩阵选定的提示词模块" in system
+
+          assert (root / "artifact-manifest.json").exists()
           PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
