@@ -67,10 +67,12 @@ class TestV5CandidateDiversity(unittest.TestCase):
             v5_planner.pareto_prune = original
             diversity._INSTALLED = False
 
-    def test_pilot_entrypoint_reaches_candidate_diversity_through_tiered_layer(self):
+    def test_pilot_entrypoint_reaches_candidate_diversity_through_domain_layer(self):
         entry = (ROOT / "open-model-market" / "v5_low_cost_pilot_entry.py").read_text(encoding="utf-8")
+        domain_layer = (ROOT / "open-model-market" / "v5_low_cost_pilot_v5.py").read_text(encoding="utf-8")
         tiered = (ROOT / "open-model-market" / "v5_low_cost_pilot_v4.py").read_text(encoding="utf-8")
-        self.assertIn("import v5_low_cost_pilot_v4 as pilot_v4", entry)
+        self.assertIn("import v5_low_cost_pilot_v5 as pilot_v5", entry)
+        self.assertIn("return v5_low_cost_pilot_v4.run", domain_layer)
         self.assertIn("v5_candidate_diversity.install()", tiered)
 
 
