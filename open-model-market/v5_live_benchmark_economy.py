@@ -440,10 +440,10 @@ def _install_economy_controls() -> None:
     base._rank_v5_models = affordable_rank
 
     def economy_graph_limits(**kwargs: Any) -> OriginalGraphLimits:
-        kwargs["max_nodes"] = min(int(kwargs.get("max_nodes", 8)), 8)
+        kwargs["max_nodes"] = min(int(kwargs.get("max_nodes", 9)), 9)
         kwargs["max_edges"] = min(int(kwargs.get("max_edges", 32)), 32)
         kwargs["max_stages"] = min(int(kwargs.get("max_stages", 6)), 6)
-        kwargs["max_model_calls"] = min(int(kwargs.get("max_model_calls", 8)), 8)
+        kwargs["max_model_calls"] = min(int(kwargs.get("max_model_calls", 9)), 9)
         kwargs["max_retries"] = 0
         kwargs["max_replacements"] = min(int(kwargs.get("max_replacements", 1)), 1)
         return OriginalGraphLimits(**kwargs)
