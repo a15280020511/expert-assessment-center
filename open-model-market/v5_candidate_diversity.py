@@ -12,6 +12,7 @@ from typing import Sequence
 import v5_capability_calibration
 import v5_output_contract_delivery
 import v5_planner
+import v5_production_hardening
 from v5_planner import CandidateNode
 
 _INSTALLED = False
@@ -110,12 +111,13 @@ def diversity_preserving_pareto_prune(
 def install() -> None:
     global _INSTALLED
     if _INSTALLED:
+        v5_production_hardening.install()
         return
     v5_planner.pareto_prune = diversity_preserving_pareto_prune
-    # Candidate qualification, diversity preservation, and output-contract
-    # delivery form one formal V5 execution-safety unit. The delivery policy
-    # converts contract metadata into direct required fields and forbids schema
-    # echo, preventing bounded responses from truncating before valid output.
+    # Candidate qualification, diversity preservation, output-contract delivery,
+    # conservative cost control and resilient partial-success synthesis form one
+    # production safety unit. No V3 runtime or production entry is changed here.
     v5_capability_calibration.install()
     v5_output_contract_delivery.install()
+    v5_production_hardening.install()
     _INSTALLED = True
