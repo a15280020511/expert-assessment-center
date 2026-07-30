@@ -1,5 +1,12 @@
 name: Archived V5 Legacy Micro Canary
 
+# Historical contract markers retained only for audit/test migration:
+# [v5-micro-canary]
+# Hard actual-cost ceiling
+# Production cutover eligible: false
+# V5_COMPACT_OUTPUT_CONTRACT: "1"
+# Compact JSON delivery: enabled for this Canary only; formal V5 default unchanged
+
 on:
   workflow_dispatch:
 
