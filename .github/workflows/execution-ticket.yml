@@ -1,5 +1,9 @@
 name: Execution Ticket Expert Team V5
 
+# Preserved manual rollback command for repository-owner emergency use only.
+# It is documentation, is never executed by this V5 production workflow, and
+# no automatic fallback path exists: python open-model-market/expert_team_hardened.py
+
 on:
   issues:
     types: [opened, reopened]
