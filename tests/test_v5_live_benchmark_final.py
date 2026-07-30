@@ -67,7 +67,7 @@ class TestEconomyProgressiveBenchmark(unittest.TestCase):
             code = economy.prepare(event, root / "out")
             config = json.loads((root / "out" / "benchmark-config.json").read_text(encoding="utf-8"))
             self.assertEqual(code, 0)
-            self.assertEqual(config["mode"], "economy-progressive-cutover")
+            self.assertEqual(config["mode"], "economy-cutover")
             self.assertEqual(config["task_ids"], list(economy.DEFAULT_TASK_IDS))
             self.assertEqual(config["strategies"], ["v5_joint_graph", "v3"])
             self.assertEqual(config["max_cost_usd"], 1.5)
@@ -169,9 +169,9 @@ class TestEconomyProgressiveBenchmark(unittest.TestCase):
             "blind_fatal_error": False,
             "blind_quality_score": quality,
             "actual_cost_usd": cost,
-            "blind_judge_count": 1,
-            "blind_judge_models": ["judge-model"],
-            "blind_judge_providers": ["judge-provider"],
+            "blind_judge_count": 2,
+            "blind_judge_models": ["judge-model-a", "judge-model-b"],
+            "blind_judge_providers": ["judge-provider-a", "judge-provider-b"],
             "blind_judge_disagreement_points": 0.0,
             "blind_decisive_single_judge": True,
             "blind_primary_margin_points": 10.0,
@@ -189,17 +189,19 @@ class TestEconomyProgressiveBenchmark(unittest.TestCase):
         self.assertEqual(gate["cutover_policy"]["minimum_tasks"], 3)
         self.assertEqual(gate["cutover_policy"]["required_strategies"], ["v5_joint_graph", "v3"])
 
-    def test_inconclusive_single_judge_blocks_cutover(self):
+    def test_single_judge_evidence_blocks_cutover(self):
         records = []
         for task_id in ("t1", "t2", "t3"):
             v5 = self._record(task_id, "v5_joint_graph", 0.84, 0.10)
             v3 = self._record(task_id, "v3", 0.80, 0.11)
-            v5["blind_primary_margin_points"] = 3.0
-            v3["blind_primary_margin_points"] = 3.0
+            for row in (v5, v3):
+                row["blind_judge_count"] = 1
+                row["blind_judge_models"] = ["judge-model-a"]
+                row["blind_judge_providers"] = ["judge-provider-a"]
             records.extend([v5, v3])
         gate = economy.economy_cutover_gate(records)
         self.assertFalse(gate["production_cutover_allowed"])
-        self.assertIn("v5_joint_graph:invalid-adaptive-blind-judging", gate["blockers"])
+        self.assertIn("v5_joint_graph:invalid-independent-blind-judging", gate["blockers"])
 
     def test_v3_production_entry_is_not_replaced_or_deleted(self):
         execution = (ROOT / ".github" / "workflows" / "execution-ticket.yml").read_text(encoding="utf-8")
