@@ -102,7 +102,13 @@ def _adaptive_proxy_eligibility(
     hard_labels: set[str],
     required_distinct_models: int,
 ) -> tuple[list[Mapping[str, Any]], float | None, list[dict[str, Any]]]:
-    """Choose a market-observed proxy floor backed by live rank evidence."""
+    """Choose a market-observed proxy floor backed by live rank evidence.
+
+    When fewer than the required number of models clear the baseline, retain the
+    strongest baseline-qualified candidates for diagnostics and deterministic
+    fail-closed solving. Do not erase the evidence set merely because it is
+    insufficient.
+    """
     eligible = [endpoint for endpoint in endpoints if _rank_backed(endpoint)]
     best_by_model: dict[str, tuple[float, float, Mapping[str, Any]]] = {}
     for endpoint in eligible:
@@ -133,18 +139,17 @@ def _adaptive_proxy_eligibility(
             str(row["model"]),
         ),
     )
-    if len(ranking) < required_distinct_models:
-        return [], None, ranking
-
-    nth_score = float(ranking[required_distinct_models - 1]["proxy_score"])
-    adaptive_floor = max(MIN_PROXY_CAPABILITY_FLOOR, nth_score)
+    adaptive_floor = MIN_PROXY_CAPABILITY_FLOOR
+    if len(ranking) >= required_distinct_models:
+        adaptive_floor = max(
+            MIN_PROXY_CAPABILITY_FLOOR,
+            float(ranking[required_distinct_models - 1]["proxy_score"]),
+        )
     selected = [
         endpoint
         for endpoint in eligible
         if _proxy_score(endpoint, hard_labels) + 1e-12 >= adaptive_floor
     ]
-    if len(_distinct_models(selected)) < required_distinct_models:
-        return [], adaptive_floor, ranking
     return selected, adaptive_floor, ranking
 
 
