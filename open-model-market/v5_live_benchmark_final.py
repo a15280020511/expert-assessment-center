@@ -18,7 +18,7 @@ from typing import Any, Mapping, Sequence
 import v5_candidate_diversity
 import v5_live_benchmark as base
 import v5_live_benchmark_hardened as hardened
-import v5_value_optimizer
+import v5_production_hardening
 
 
 def _number(value: Any) -> float | None:
@@ -147,10 +147,13 @@ def _install_final_v3_entry() -> None:
 
 
 def install_final_alignment() -> None:
-    # The live benchmark must use exactly the same calibrated candidate market
-    # and diversity-preserving Pareto policy as the formal V5 pipeline.
+    # The live benchmark must use exactly the same calibrated candidate market,
+    # strict output contract, worst-case cost envelope, and work-quorum executor
+    # as the formal V5 pipeline.
     v5_candidate_diversity.install()
-    base.compile_and_optimize_v5 = v5_value_optimizer.compile_and_optimize_v5
+    v5_production_hardening.install()
+    base.compile_and_optimize_v5 = v5_production_hardening.compile_and_optimize_v5
+    base.execute_v5_graph = v5_production_hardening.execute_v5_graph
     hardened.credit_preflight = credit_preflight
     hardened._install_v3_entry = _install_final_v3_entry
 
