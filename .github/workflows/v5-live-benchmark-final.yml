@@ -52,7 +52,7 @@ jobs:
       - name: Parse economical benchmark request
         id: prepare
         run: |
-          python open-model-market/v5_live_benchmark_economy.py prepare \
+          python open-model-market/v5_live_benchmark_economy_verified.py prepare \
             --event-path "$GITHUB_EVENT_PATH" \
             --output-dir v5-live-benchmark-artifacts
 
@@ -67,6 +67,9 @@ jobs:
           - Global actual-cost ceiling: ${{ steps.prepare.outputs.max_cost_usd }} USD
           - Global paid-call ceiling: ${{ steps.prepare.outputs.max_calls }}
           - Output allowance: up to ${{ steps.prepare.outputs.output_allowance_tokens }} completion tokens; not required output
+          - Feasibility evidence: zero-call run 30536650572, 3/3 tasks ready
+          - V5 graph ceiling: 10 selected nodes per task; retries and replacements disabled
+          - Endpoint ceiling: prompt 5 USD/M, completion 15 USD/M, reliability at least 0.80
           - Expensive strongest/cheapest/fixed/random reference baselines: not executed
           - V3 production entry: preserved and unchanged during benchmark
           - Run: ${RUN_URL}
@@ -107,7 +110,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MANAGEMENT_KEY: ${{ secrets.OPENROUTER_MANAGEMENT_KEY }}
         run: |
-          python open-model-market/v5_live_benchmark_economy.py credit-check \
+          python open-model-market/v5_live_benchmark_economy_verified.py credit-check \
             --config v5-live-benchmark-artifacts/benchmark-config.json \
             --output-dir v5-live-benchmark-artifacts
 
@@ -145,7 +148,7 @@ jobs:
           set -o pipefail
           mkdir -p "$(dirname "$MODEL_HISTORY_PATH")"
           printf '{"version":1,"models":{}}\n' > "$MODEL_HISTORY_PATH"
-          python open-model-market/v5_live_benchmark_economy.py run \
+          python open-model-market/v5_live_benchmark_economy_verified.py run \
             --config v5-live-benchmark-artifacts/benchmark-config.json \
             --suite open-model-market/v5_live_benchmark_suite.json \
             --output-dir v5-live-benchmark-artifacts \
