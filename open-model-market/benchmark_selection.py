@@ -1,9 +1,10 @@
-"""Benchmark alias normalization before OR-Tools global team optimization.
+"""Benchmark alias normalization before task-matrix global optimization.
 
 OpenRouter's models catalog exposes request ``id`` and permanent
 ``canonical_slug`` values, while the benchmarks endpoint identifies rows by
 ``model_permaslug``. This module augments benchmark rows with audited aliases,
-then delegates model/seat/parameter composition to Google OR-Tools CP-SAT.
+then delegates model, seat, and generated-parameter composition to Google
+OR-Tools CP-SAT.
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ import unicodedata
 from collections import defaultdict
 from typing import Any, Dict, Mapping, Sequence, Tuple
 
-import optimizer_compat
+import task_matrix_optimizer
 import seat_scoring as base
 from model_market import ModelInfo, RunConfig, SelectedExpert, SelectedJudge, TaskProfile
 
@@ -102,9 +103,9 @@ def select_team(
     profile: TaskProfile,
     run: RunConfig,
 ) -> Tuple[list[SelectedExpert], SelectedJudge, float]:
-    """Run benchmark alias resolution and delegate to the guarded CP-SAT optimizer."""
+    """Normalize benchmark aliases and run the history-free task-matrix optimizer."""
     original_request = base.request_json
-    stable_models = base._stable_pool(ranked, profile)
+    stable_models = task_matrix_optimizer._eligible_pool(ranked, profile)
 
     def request_with_aliases(url: str, *args, **kwargs):
         payload = original_request(url, *args, **kwargs)
@@ -114,6 +115,6 @@ def select_team(
 
     base.request_json = request_with_aliases
     try:
-        return optimizer_compat.select_team(ranked, profile, run)
+        return task_matrix_optimizer.select_team(ranked, profile, run)
     finally:
         base.request_json = original_request
