@@ -21,12 +21,13 @@ from typing import Any, Mapping
 import model_market as market
 import v5_candidate_diversity
 import v5_economy_zero_call_diagnostic as diagnostic
+import v5_executor
 import v5_live_benchmark as base
 import v5_planner
 import v5_r8_executor as runtime
 import v5_value_optimizer
 from execution_graph import ExecutionGraph
-from v5_executor import V5ExecutionError, execute_v5_graph
+from v5_executor import V5ExecutionError
 
 _INSTALLED = False
 EXPECTED_GATE = "v5-r8-stage-d-exact-runtime-zero-call-preflight"
@@ -217,15 +218,21 @@ def production_parity_v5_strategy(
     result: Mapping[str, Any] = {}
     error = ""
     try:
-        result = execute_v5_graph(graph, run, run.task, output_dir=root, limits=base.GraphLimits(
-            max_nodes=16,
-            max_edges=64,
-            max_stages=8,
-            max_model_calls=16,
-            max_retries=1,
-            max_replacements=2,
-            max_budget_usd=strategy_cap,
-        ))
+        result = v5_executor.execute_v5_graph(
+            graph,
+            run,
+            run.task,
+            output_dir=root,
+            limits=base.GraphLimits(
+                max_nodes=16,
+                max_edges=64,
+                max_stages=8,
+                max_model_calls=16,
+                max_retries=1,
+                max_replacements=2,
+                max_budget_usd=strategy_cap,
+            ),
+        )
     except V5ExecutionError as exc:
         error = str(exc)
         summary = root / "v5-execution-summary.json"
