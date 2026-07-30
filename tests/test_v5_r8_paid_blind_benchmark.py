@@ -1,4 +1,6 @@
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -34,18 +36,29 @@ def record(task_id, strategy, quality, cost, *, degraded=False):
     }
 
 
+def passing_rows():
+    rows = []
+    for task_id in TASKS:
+        rows.append(record(task_id, "v5_joint_graph", 0.82, 0.10))
+        rows.append(record(task_id, "v3", 0.82, 0.12))
+    return rows
+
+
 class TestV5R8PaidBlindBenchmark(unittest.TestCase):
     def test_equal_quality_and_lower_cost_passes_stage_d_only(self):
-        rows = []
-        for task_id in TASKS:
-            rows.append(record(task_id, "v5_joint_graph", 0.82, 0.10))
-            rows.append(record(task_id, "v3", 0.82, 0.12))
-        gate = r8.stage_d_gate(rows)
+        gate = r8.stage_d_gate(passing_rows())
         self.assertTrue(gate["stage_d_paid_blind_passed"])
         self.assertTrue(gate["canary_allowed"])
         self.assertFalse(gate["production_cutover_allowed"])
         self.assertFalse(gate["v3_deletion_allowed"])
         self.assertEqual(gate["blockers"], [])
+
+    def test_installed_gate_uses_captured_original_without_recursion(self):
+        r8.install_r8_stage_d()
+        self.assertIs(r8.economy.economy_cutover_gate, r8.stage_d_gate)
+        gate = r8.economy.economy_cutover_gate(passing_rows())
+        self.assertTrue(gate["stage_d_paid_blind_passed"])
+        self.assertFalse(gate["production_cutover_allowed"])
 
     def test_two_degraded_v5_results_block_stage_d(self):
         rows = []
@@ -85,11 +98,27 @@ class TestV5R8PaidBlindBenchmark(unittest.TestCase):
         self.assertEqual(limits.max_replacements, 2)
         self.assertEqual(limits.max_output_allowance_tokens, 10000)
 
+    def test_strategy_exception_is_persisted_for_zero_call_diagnosis(self):
+        with tempfile.TemporaryDirectory() as temp:
+            try:
+                raise RuntimeError("planner exploded")
+            except RuntimeError as exc:
+                r8._write_strategy_exception(Path(temp), {"task_id": TASKS[0]}, exc)
+            report = json.loads(
+                (Path(temp) / "v5-r8-strategy-exception.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(report["exception_type"], "RuntimeError")
+            self.assertEqual(report["error"], "planner exploded")
+            self.assertIsNone(report["known_model_request_count"])
+            self.assertFalse(report["production_entrypoint_changed"])
+            self.assertFalse(report["v3_deleted"])
+
     def test_workflow_is_exact_manual_unlock_and_single_key(self):
         workflow = (ROOT / ".github/workflows/v5-r8-stage-d-paid-blind.yml").read_text(encoding="utf-8")
         self.assertIn("issue_comment:", workflow)
         self.assertIn("github.event.issue.number == 64", workflow)
-        self.assertIn("RUN_V5_R8_STAGE_D_20260731_R8A", workflow)
+        self.assertIn("RUN_V5_R8_STAGE_D_20260731_R8B", workflow)
+        self.assertNotIn("RUN_V5_R8_STAGE_D_20260731_R8A'", workflow)
         self.assertIn("secrets.OPENROUTER_API_KEY", workflow)
         self.assertNotIn("OPENROUTER_MANAGEMENT_KEY", workflow)
         self.assertIn("Production default switch allowed: `false`", workflow)
@@ -100,6 +129,7 @@ class TestV5R8PaidBlindBenchmark(unittest.TestCase):
         self.assertNotIn("OPENROUTER_MANAGEMENT_KEY", source)
         self.assertIn("check_single_api_key", source)
         self.assertIn("production.install()", source)
+        self.assertIn("_ORIGINAL_ECONOMY_GATE", source)
 
 
 if __name__ == "__main__":
