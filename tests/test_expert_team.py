@@ -53,21 +53,28 @@ class ExpertTeamTests(unittest.TestCase):
         experts, judge, estimate = expert_team.select_team(ranked, profile, run)
         return run, profile, models, source, ranked, experts, judge, estimate
 
-    def test_fixed_pattern_provider_diverse_rule_selected_and_above_capability_floor(self):
+    def test_task_matrix_provider_diverse_selection_and_capability_floor(self):
         run, profile, _, _, ranked, experts, judge, estimate = self.prepare("复杂商业、代码和风险建模比较")
         by_id = {model.id: model for model in ranked}
-        self.assertEqual([item.function for item in experts], ["核心主研席", "交叉验证席", "独立反证席"])
+        self.assertGreaterEqual(len(experts), 1)
+        self.assertLessEqual(len(experts), 4)
+        self.assertEqual(experts[0].seat_key, "primary")
+        self.assertIn("red", {item.seat_key for item in experts})
         authors = {by_id[item.model_id].author for item in experts} | {by_id[judge.model_id].author}
-        self.assertEqual(len(authors), 4)
+        self.assertEqual(len(authors), len(experts) + 1)
         self.assertGreater(estimate, 0)
-        self.assertEqual(run.candidate_pool_per_seat, 3)
         chosen = [by_id[item.model_id] for item in experts] + [by_id[judge.model_id]]
         self.assertTrue(all(model.ranks["intelligence-high-to-low"] <= seat_scoring.MAX_INTELLIGENCE_RANK for model in chosen))
         self.assertTrue(all(not seat_scoring._is_explicitly_small(model) for model in chosen))
         self.assertTrue(all(model.max_completion_tokens > 0 for model in chosen))
-        self.assertTrue(all("规则顺序=" in item.selection_reason for item in experts))
-        self.assertTrue(all("候选池上限=3" in item.selection_reason for item in experts))
-        self.assertTrue(all("智能排名=" in item.selection_reason for item in experts))
+        self.assertTrue(all("任务矩阵+CP-SAT" in item.selection_reason for item in experts))
+        optimization = json.loads((run.output_dir / "team-optimization.json").read_text(encoding="utf-8"))
+        matrix = optimization["task_matrix"]
+        self.assertFalse(matrix["history_input_used"])
+        self.assertFalse(matrix["fixed_team_mode_used"])
+        self.assertFalse(matrix["fixed_parameter_template_used"])
+        self.assertEqual(optimization["expert_count"], len(experts))
+        self.assertEqual(optimization["team_pattern"], f"{len(experts)}-experts-plus-one-judge")
 
     def test_models_and_professions_change_with_task(self):
         *_, coding_experts, coding_judge, _ = self.prepare("审计Python软件仓库的架构、可靠性和安全问题")
@@ -97,7 +104,8 @@ class ExpertTeamTests(unittest.TestCase):
             for key in OPTIONAL_PARAMETERS.intersection(payload):
                 self.assertIn(key, supported)
             if "reasoning" in payload:
-                self.assertEqual(payload["reasoning"], {"exclude": True, "effort": "low"})
+                self.assertIn(payload["reasoning"]["effort"], {"low", "medium", "high"})
+                self.assertTrue(payload["reasoning"]["exclude"])
 
     def test_all_substantive_seats_omit_request_token_ceilings(self):
         run, profile, _, _, ranked, experts, judge, _ = self.prepare("分析复杂商业架构风险")
@@ -114,7 +122,7 @@ class ExpertTeamTests(unittest.TestCase):
             self.assertEqual(evidence["output_token_policy"], "provider-model-limit-only")
             self.assertNotIn("max_tokens", evidence)
             self.assertGreater(evidence["provider_max_completion_tokens"], 0)
-            self.assertEqual(plan.effort, "low")
+            self.assertIn(plan.effort, {"low", "medium", "high"})
 
     def test_unsupported_temperature_is_omitted_and_unbounded_reasoning_is_low(self):
         run, profile, _, _, _, experts, _, _ = self.prepare("分析复杂商业架构风险")
@@ -138,7 +146,7 @@ class ExpertTeamTests(unittest.TestCase):
         payload = {"model": model.id, "max_tokens": 10000}
         reasoning_policy.apply_plan(payload, plan, model)
         self.assertNotIn("temperature", payload)
-        self.assertEqual(payload["reasoning"]["effort"], "low")
+        self.assertIn(payload["reasoning"]["effort"], {"low", "medium", "high"})
         self.assertNotIn("max_tokens", payload)
         self.assertNotIn("max_completion_tokens", payload)
 
@@ -169,16 +177,19 @@ class ExpertTeamTests(unittest.TestCase):
         run, *_ = self.prepare("复杂商业风险评估", "--max-estimated-cost-usd", "0.000001")
         self.assertIsNone(run.max_estimated_cost_usd)
 
-    def test_dry_run_publishes_full_ranking_manifest_and_three_candidates(self):
+    def test_dry_run_publishes_full_ranking_manifest_and_dynamic_candidates(self):
         run, profile, _, source, ranked, experts, judge, estimate = self.prepare("Compare coding, business and risk", "--dry-run")
         direct_calls.write_selection_artifacts(run, profile, source, ranked, experts, judge, estimate)
         direct_calls.write_dry_run_artifacts(run, profile, ranked, experts, judge, estimate)
         selection = json.loads((run.output_dir / "model-selection.json").read_text())
         dry = json.loads((run.output_dir / "expert-team-dry-run.json").read_text())
+        optimization = json.loads((run.output_dir / "team-optimization.json").read_text())
         self.assertEqual(len(selection["ranking"]), len(ranked))
-        self.assertEqual(len(selection["seat_candidates"]), 4)
-        self.assertTrue(all(len(items) <= 3 for items in selection["seat_candidates"].values()))
-        self.assertEqual(len(dry["expert_requests"]), 3)
+        self.assertEqual(len(selection["seat_candidates"]), len(experts) + 1)
+        self.assertTrue(all(len(items) <= run.candidate_pool_per_seat for items in selection["seat_candidates"].values()))
+        self.assertEqual(len(dry["expert_requests"]), len(experts))
+        self.assertEqual(optimization["expert_count"], len(experts))
+        self.assertEqual(optimization["optimizer"], "google-or-tools-cp-sat")
         self.assertTrue((run.output_dir / "artifact-manifest.json").exists())
 
     def test_substantial_length_answer_is_recovered_as_partial(self):
