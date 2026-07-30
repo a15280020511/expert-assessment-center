@@ -42,7 +42,6 @@ class TestV5CandidateDiversity(unittest.TestCase):
             self.candidate("model-b", 0.85, 0.02, 0.02),
             self.candidate("model-c", 0.75, 0.03, 0.03),
         ]
-        # model-a strictly dominates b and c on all ordinary Pareto axes.
         self.assertTrue(v5_planner._dominates(rows[0], rows[1]))
         self.assertTrue(v5_planner._dominates(rows[0], rows[2]))
         kept = diversity.diversity_preserving_pareto_prune(rows, maximum_per_group=3)
@@ -68,10 +67,11 @@ class TestV5CandidateDiversity(unittest.TestCase):
             v5_planner.pareto_prune = original
             diversity._INSTALLED = False
 
-    def test_pilot_entrypoint_uses_candidate_diversity_layer(self):
-        text = (ROOT / "open-model-market" / "v5_low_cost_pilot_entry.py").read_text(encoding="utf-8")
-        self.assertIn("import v5_low_cost_pilot_v3 as pilot_v3", text)
-        self.assertIn("return pilot_v3.run(config, suite, output)", text)
+    def test_pilot_entrypoint_reaches_candidate_diversity_through_tiered_layer(self):
+        entry = (ROOT / "open-model-market" / "v5_low_cost_pilot_entry.py").read_text(encoding="utf-8")
+        tiered = (ROOT / "open-model-market" / "v5_low_cost_pilot_v4.py").read_text(encoding="utf-8")
+        self.assertIn("import v5_low_cost_pilot_v4 as pilot_v4", entry)
+        self.assertIn("v5_candidate_diversity.install()", tiered)
 
 
 if __name__ == "__main__":
