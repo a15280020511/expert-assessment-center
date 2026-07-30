@@ -60,16 +60,17 @@ class TestFinalBenchmarkAlignment(unittest.TestCase):
 
 
 class TestEconomyProgressiveBenchmark(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        verified.install_verified_alignment()
-
     def test_prepare_defaults_to_three_tasks_and_verified_hard_limits(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             event = root / "event.json"
             event.write_text(json.dumps({"issue": {"number": 39, "body": ""}}), encoding="utf-8")
-            code = economy.prepare(event, root / "out")
+            with patch.object(
+                economy,
+                "DEFAULT_MAX_CALLS",
+                verified.VERIFIED_DEFAULT_MAX_CALLS,
+            ):
+                code = economy.prepare(event, root / "out")
             config = json.loads((root / "out" / "benchmark-config.json").read_text(encoding="utf-8"))
             self.assertEqual(code, 0)
             self.assertEqual(config["mode"], "economy-cutover")
@@ -83,7 +84,7 @@ class TestEconomyProgressiveBenchmark(unittest.TestCase):
             self.assertFalse(config["v3_deleted"])
 
     def test_verified_graph_limits_match_zero_call_evidence(self):
-        limits = economy.base.GraphLimits(
+        limits = verified.verified_graph_limits(
             max_nodes=16,
             max_edges=64,
             max_stages=8,
@@ -99,8 +100,8 @@ class TestEconomyProgressiveBenchmark(unittest.TestCase):
         self.assertEqual(limits.max_budget_usd, 0.25)
 
     def test_verified_price_caps_match_zero_call_feasible_tier(self):
-        self.assertEqual(economy.MAX_PROMPT_PPM, 5.0)
-        self.assertEqual(economy.MAX_COMPLETION_PPM, 15.0)
+        self.assertEqual(verified.VERIFIED_MAX_PROMPT_PPM, 5.0)
+        self.assertEqual(verified.VERIFIED_MAX_COMPLETION_PPM, 15.0)
         self.assertTrue(
             verified._within_verified_price_cap(
                 {
