@@ -176,7 +176,8 @@ class TestV5CapabilityCalibration(unittest.TestCase):
         self.assertEqual(
             audit["calibration_status"], "rank-backed-proxy-still-insufficient"
         )
-        self.assertEqual(audit["adaptive_eligible_model_count"], 0)
+        self.assertEqual(audit["adaptive_eligible_model_count"], 1)
+        self.assertEqual(audit["adaptive_eligible_models"], ["vendor/model-a"])
         with self.assertRaises(v5_planner.V5PlanningError):
             v5_value_optimizer.optimize_execution_graph(
                 bundle,
@@ -213,6 +214,7 @@ class TestV5CapabilityCalibration(unittest.TestCase):
             audit["calibration_status"], "rank-backed-proxy-still-insufficient"
         )
         self.assertEqual(audit["required_distinct_models"], 2)
+        self.assertEqual(audit["adaptive_eligible_models"], ["vendor/model-a"])
 
     def test_static_threshold_remains_when_market_is_sufficient(self):
         resources = _resource_bundle(required_copies=2)
