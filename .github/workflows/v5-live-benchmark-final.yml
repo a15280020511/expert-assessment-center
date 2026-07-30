@@ -1,4 +1,4 @@
-name: V5 Economy Progressive Blind Benchmark
+name: V5 Economy Blind Benchmark
 
 on:
   issues:
@@ -10,7 +10,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: v5-economy-progressive-blind-benchmark
+  group: v5-economy-blind-benchmark
   cancel-in-progress: false
 
 jobs:
@@ -63,7 +63,7 @@ jobs:
 
           - Tasks: ${{ steps.prepare.outputs.task_count }} diverse real tasks
           - Strategies: active V5 cost-performance graph versus preserved V3 only
-          - Blind judges: one when the score margin is decisive; second or third only when needed
+          - Blind judges: two distinct models/providers per task; third only when disagreement exceeds 15 points
           - Global actual-cost ceiling: ${{ steps.prepare.outputs.max_cost_usd }} USD
           - Global paid-call ceiling: ${{ steps.prepare.outputs.max_calls }}
           - Output allowance: up to ${{ steps.prepare.outputs.output_allowance_tokens }} completion tokens; not required output
@@ -133,7 +133,7 @@ jobs:
           printf '\n- Run: `%s`\n' "$RUN_URL" >> benchmark-credit-rejected.md
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@benchmark-credit-rejected.md
 
-      - name: Run economical progressive live blind benchmark
+      - name: Run economical live blind benchmark
         id: execute
         if: steps.secret.outputs.present == 'true' && steps.credit.outcome == 'success'
         continue-on-error: true
