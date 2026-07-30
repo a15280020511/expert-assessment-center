@@ -127,8 +127,23 @@ def _node_audit(node: Mapping[str, Any]) -> dict[str, Any]:
         "recommended_output_allowance_tokens": parameter.get(
             "recommended_output_allowance_tokens"
         ),
+        "estimated_completion_usage_tokens": parameter.get(
+            "estimated_completion_usage_tokens"
+        ),
         "configured_max_tokens": parameter.get("max_tokens"),
         "cost_estimation_policy": parameter.get("cost_estimation_policy"),
+        "output_allowance_is_cost_assumption": parameter.get(
+            "output_allowance_is_cost_assumption"
+        ),
+        "p95_token_usage_multiplier": parameter.get(
+            "p95_token_usage_multiplier"
+        ),
+        "structured_p95_token_usage_multiplier": parameter.get(
+            "structured_p95_token_usage_multiplier"
+        ),
+        "bundle_discount_applied_to_usage_estimate": parameter.get(
+            "bundle_discount_applied_to_usage_estimate"
+        ),
     }
 
 
