@@ -53,6 +53,7 @@ def _activate_without_global_quorum_pollution(
     judge: Any,
 ) -> None:
     """Keep dynamic runtime bindings, but enforce quorum only for a real optimized execution."""
+    import direct_calls
     import expert_team
 
     original_recover = expert_team._recover_substantial_partials
@@ -75,7 +76,16 @@ def _activate_without_global_quorum_pollution(
             )
         return recovered
 
+    def compact_candidate_audit(
+        ranked: Sequence[Any],
+        active_profile: Any,
+        active_run: Any,
+        limit: int = 3,
+    ) -> dict[str, list[dict[str, Any]]]:
+        return dynamic_runtime._candidate_rows(ranked, active_profile, active_run, min(3, limit))
+
     expert_team._recover_substantial_partials = execution_scoped_recover
+    direct_calls.top_candidates_for_evidence = compact_candidate_audit
 
 
 def _audit_reason(
