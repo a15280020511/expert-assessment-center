@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import v5_candidate_diagnostics
 import v5_candidate_diversity
@@ -25,12 +25,60 @@ def _write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
 
+def filter_market_for_active_tier(market: Mapping[str, Any]) -> dict[str, Any]:
+    """Apply the active pilot price/reliability caps to real endpoint rows."""
+    source = [row for row in market.get("endpoints", []) if isinstance(row, Mapping)]
+    kept = [
+        dict(row)
+        for row in source
+        if float(row.get("prompt_price_per_million", float("inf"))) <= float(pilot.MAX_PROMPT_PPM)
+        and float(row.get("completion_price_per_million", float("inf"))) <= float(pilot.MAX_COMPLETION_PPM)
+        and float(row.get("reliability", 0.0)) >= 0.80
+    ]
+    if not kept:
+        raise v5_planner.V5PlanningError(
+            "No real provider endpoint satisfies the active pilot price and reliability tier."
+        )
+    rejected = list(market.get("rejected", []) or [])
+    rejected.extend({
+        "model": str(row.get("model_id") or ""),
+        "provider": str(row.get("provider_slug") or ""),
+        "reason": "outside-active-pilot-price-or-reliability-tier",
+    } for row in source if row not in kept)
+    result = dict(market)
+    result.update({
+        "endpoints": kept,
+        "endpoint_count": len(kept),
+        "real_endpoint_count": sum(not bool(row.get("synthetic_fixture_only")) for row in kept),
+        "synthetic_fixture_count": sum(bool(row.get("synthetic_fixture_only")) for row in kept),
+        "rejected": rejected,
+        "pilot_active_price_tier": {
+            "prompt_usd_per_million": float(pilot.MAX_PROMPT_PPM),
+            "completion_usd_per_million": float(pilot.MAX_COMPLETION_PPM),
+            "minimum_reliability": 0.80,
+        },
+    })
+    return result
+
+
 def _install_tiered_market() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
     _INSTALLED = True
     v5_candidate_diversity.install()
+
+    original_market_compiler = v5_planner.compile_model_endpoint_market
+
+    def tier_filtered_market(
+        ranked: Sequence[Any],
+        resource_bundle: Mapping[str, Any],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        compiled = original_market_compiler(ranked, resource_bundle, **kwargs)
+        return filter_market_for_active_tier(compiled)
+
+    v5_planner.compile_model_endpoint_market = tier_filtered_market
     v5_candidate_diagnostics.install()
     original_budget_installer = pilot_v2._install_dynamic_budget
 
@@ -126,6 +174,7 @@ def _annotate(output_dir: str | Path) -> None:
         "expansion_occurs_before_model_calls": True,
         "hard_actual_run_ceiling_usd": 0.50,
         "maximum_v5_planning_cap_usd": 0.35,
+        "endpoint_tier_enforced_on_real_provider_rows": True,
         "capability_thresholds_relaxed": False,
         "independence_constraints_relaxed": False,
         "quality_requirements_relaxed": False,
@@ -142,6 +191,7 @@ def _annotate(output_dir: str | Path) -> None:
                 f"calls before expansion `{row.get('model_calls', 0)}`"
             )
         lines.extend([
+            "- Real Provider Endpoint price tier enforced: `true`",
             "- Capability thresholds relaxed: `false`",
             "- Independence constraints relaxed: `false`",
             "- Quality requirements relaxed: `false`",
