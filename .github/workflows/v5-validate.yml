@@ -45,7 +45,11 @@ jobs:
             open-model-market/task_semantic_compiler.py \
             open-model-market/atomic_work_graph.py \
             open-model-market/resource_matrix.py \
+            open-model-market/cost_performance_solver.py \
+            open-model-market/cost_performance_optimizer.py \
+            open-model-market/benchmark_selection.py \
             open-model-market/v5_planner.py \
+            open-model-market/v5_value_planner.py \
             open-model-market/v5_executor.py \
             open-model-market/v5_benchmark.py \
             open-model-market/v5_pipeline.py
@@ -53,7 +57,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python -m unittest tests.test_v5_task_resource_compiler tests.test_execution_graph_validator tests.test_execution_graph_properties tests.test_v5_planner_executor -v 2>&1 | tee v5-unit-test.log
+          python -m unittest tests.test_cost_performance_principle tests.test_v5_task_resource_compiler tests.test_execution_graph_validator tests.test_execution_graph_properties tests.test_v5_planner_executor -v 2>&1 | tee v5-unit-test.log
       - name: Run deterministic V5 end-to-end dry-run
         run: |
           python open-model-market/v5_pipeline.py \
@@ -85,13 +89,23 @@ jobs:
           assert candidates["candidate_count_after_pareto"] <= candidates["candidate_count_before_pareto"]
           assert optimization["version"] == 5
           assert optimization["optimizer"] == "google-or-tools-cp-sat"
+          assert optimization["selection_method"] == "direct-fractional-cost-performance"
           assert optimization["solver_status"] in {"OPTIMAL", "FEASIBLE"}
           assert optimization["fallback_used"] is False
+          assert optimization["quality_first_phase_used"] is False
+          assert optimization["quality_tolerance_band_used"] is False
+          assert optimization["objective_order"][1] == "maximum_cost_performance"
+          assert optimization["cost_performance"]["ratio"] > 0
+          assert "best_quality_objective_scaled" not in optimization
+          assert "quality_floor_objective_scaled" not in optimization
           assert 1 <= len(graph["nodes"]) <= 16
           assert len(graph["execution_stages"]) <= 8
           assert graph["entry_nodes"]
           assert graph["final_nodes"]
           assert graph["required_work"]
+          assert graph["quality_floor"] == 0.0
+          assert graph["metadata"]["quality_first_phase_used"] is False
+          assert graph["metadata"]["objective_order"][1] == "maximum_cost_performance"
           assert dry["status"] == "planned-not-executed"
           assert dry["production_entrypoint_changed"] is False
           assert benchmark["planning_gate_passed"] is True
