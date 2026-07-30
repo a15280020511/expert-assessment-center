@@ -195,6 +195,8 @@ def production_parity_v5_strategy(
 ) -> tuple[base.StrategyOutcome, Mapping[str, Any]]:
     """Execute only the graph approved by the immediately preceding zero-call gate."""
     del models, endpoint_cache
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
     task_id = str(task["task_id"])
     started = time.monotonic()
     run = market.build_run_config(
@@ -205,7 +207,7 @@ def production_parity_v5_strategy(
             max_cost_usd=strategy_cap,
         )
     )
-    graph, frozen_market, planner = _frozen_plan(task_id, Path(root), strategy_cap)
+    graph, frozen_market, planner = _frozen_plan(task_id, root, strategy_cap)
     base._write_json(root / "v5-model-endpoint-market.json", frozen_market)
     base._write_json(root / "v5-candidate-graph.json", planner["candidate_graph"])
     base._write_json(root / "v5-optimization.json", planner["optimization"])
