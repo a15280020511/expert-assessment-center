@@ -71,7 +71,6 @@ jobs:
           test -s .github/workflows/expert-team-canary.yml
           test -s .github/workflows/expert-team.yml
           test -s .github/workflows/execution-ticket.yml
-          test -s .github/workflows/v5-low-cost-pilot.yml
           test -s open-model-market/v5_low_cost_pilot.py
           test -s open-model-market/v5_low_cost_pilot_entry.py
           test -s docs/v5-low-cost-pilot.md
@@ -120,9 +119,9 @@ jobs:
           assert optimization["solver_status"] in {"OPTIMAL", "FEASIBLE"}
           assert optimization["fallback_used"] is False
           assert optimization["objective_order"] == [
-            "hard_resource_coverage",
-            "maximum_task_quality",
-            "minimum_cost_and_calls_inside_quality_band",
+              "hard_resource_coverage",
+              "maximum_task_quality",
+              "minimum_cost_and_calls_inside_quality_band",
           ]
           assert optimization["expert_count"] == expert_count
           assert len(optimization["selected"]) == expert_count + 1
