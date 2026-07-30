@@ -15,7 +15,8 @@ from resource_matrix import compile_v5_task_resources
 from task_resource_artifacts import write_task_resource_artifacts
 from v5_benchmark import planning_benchmark, write_benchmark
 from v5_executor import build_node_payload, execute_v5_graph
-from v5_planner import compile_and_optimize_v5, fetch_live_endpoint_payloads
+from v5_planner import fetch_live_endpoint_payloads
+from v5_value_planner import compile_and_optimize_v5
 
 
 def _load_json(path: str | Path) -> Mapping[str, Any]:
@@ -42,7 +43,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--endpoint-file", help="Deterministic model endpoint fixture keyed by model ID.")
     parser.add_argument("--maximum-candidates-per-work", type=int, default=12)
-    parser.add_argument("--quality-tolerance-pct", type=float, default=2.0)
     parser.add_argument("--solver-timeout-seconds", type=float, default=20.0)
     return parser
 
@@ -148,7 +148,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         ranking_limit=run.ranking_limit,
         limits=limits,
         maximum_per_group=max(3, min(30, int(args.maximum_candidates_per_work))),
-        quality_tolerance_pct=max(0.0, min(20.0, float(args.quality_tolerance_pct))),
         solver_timeout_seconds=max(1.0, float(args.solver_timeout_seconds)),
     )
     planner["market"]["catalog_source"] = catalog_source
