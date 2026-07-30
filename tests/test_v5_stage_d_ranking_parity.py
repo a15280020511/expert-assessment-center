@@ -1,5 +1,7 @@
 import inspect
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -11,15 +13,58 @@ import v5_stage_d_ranking_parity as parity
 
 
 class V5StageDRankingParityTests(unittest.TestCase):
-    def test_stage_d_strategy_uses_configured_production_breadth(self):
+    def test_paid_strategy_has_no_live_catalog_or_endpoint_replanning(self):
         source = inspect.getsource(parity.production_parity_v5_strategy)
-        self.assertIn("ranking_limit=50", source)
-        self.assertIn("int(run.ranking_limit)", source)
-        self.assertIn("maximum_models=candidate_model_limit", source)
-        self.assertIn("ranking_limit=candidate_model_limit", source)
-        self.assertNotIn("ranked[:24]", source)
-        self.assertNotIn("maximum_models=24", source)
-        self.assertNotIn("ranking_limit=24", source)
+        frozen = inspect.getsource(parity._frozen_plan)
+        combined = source + frozen
+        self.assertIn("zero-call-preflight", inspect.getsource(parity._frozen_plan))
+        self.assertIn("selected_candidate_ids", frozen)
+        self.assertIn("selected_ids != approved_ids", frozen)
+        self.assertIn("live_catalog_refetched", frozen)
+        self.assertNotIn("fetch_catalog(", combined)
+        self.assertNotIn("fetch_live_endpoint_payloads(", combined)
+        self.assertNotIn("compile_and_optimize_v5(", combined)
+        self.assertNotIn("ranked[:24]", combined)
+        self.assertNotIn("maximum_models=24", combined)
+
+    def test_stage_d_root_is_resolved_from_strategy_directory(self):
+        root = Path("/tmp/run/tasks/task-id/v5_joint_graph")
+        self.assertEqual(parity._stage_d_root(root), Path("/tmp/run"))
+        with self.assertRaises(parity.FrozenGraphEvidenceError):
+            parity._stage_d_root(Path("/tmp/run/task-id"))
+
+    def test_gate_requires_zero_call_paid_authorization(self):
+        gate = {
+            "gate": parity.EXPECTED_GATE,
+            "status": "passed",
+            "paid_inference_allowed": True,
+            "model_inference_calls": 0,
+            "tasks": [{
+                "task_id": "task-a",
+                "passed": True,
+                "blockers": [],
+                "exact_runtime_preflight": {"selected_candidate_ids": ["node-a"]},
+            }],
+        }
+        approved = parity._approved_task(gate, "task-a")
+        self.assertTrue(approved["passed"])
+        gate["model_inference_calls"] = 1
+        with self.assertRaises(parity.FrozenGraphEvidenceError):
+            parity._approved_task(gate, "task-a")
+
+    def test_frozen_resource_bundle_reads_only_preflight_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixtures = {
+                "task-interpretations.json": {"interpretations": []},
+                "atomic-work-graph.json": {"graphs": []},
+                "task-resource-matrix.json": {"matrices": []},
+            }
+            for name, value in fixtures.items():
+                (root / name).write_text(json.dumps(value), encoding="utf-8")
+            bundle = parity._resource_bundle(root)
+            self.assertFalse(bundle["model_market_accessed"])
+            self.assertEqual(bundle["task_semantics"], fixtures["task-interpretations.json"])
 
     def test_parity_strategy_is_installed_before_stage_d_annotation(self):
         source = inspect.getsource(stage_d.install_r8_stage_d)
