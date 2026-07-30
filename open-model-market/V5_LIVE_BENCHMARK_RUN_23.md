@@ -1,12 +1,19 @@
-# V5 真实盲评基准 Run 30516841488 复盘
+# V5 真实盲评基准 Issue #23 复盘
 
-## 结论
+## 总结
 
-Issue #23 和 Run `30516841488` 成功验证了工作流、Secret、模型目录、真实 Endpoint 编译、付费调用、费用账本和 Artifact 上传，但没有形成有效的五任务盲评结果。
+Issue #23 已执行两次真实基准：
 
-这次运行不得解释为“V5 质量低于 V3”。主要失败原因是 OpenRouter 在模型生成前执行的额度预授权，而不是答案被盲评否决。
+| Run | 状态 | 模型请求 | 实际费用 | 主要阻断 |
+|---|---|---:|---:|---|
+| `30516841488` | `technical_failure` | 25 | 1.8563575 USD | 未发送输出许可时触发 OpenRouter 最坏情形额度预授权 HTTP 402 |
+| `30517985049` | `budget_or_call_limit_exceeded` | 23 | 0 USD | 10,000 Token 许可使用了 Endpoint 不支持的参数名；随后账户 Credits 仍不足 |
 
-## 实际证据
+两次运行都没有形成完整五任务盲评，因此不得声称 V5 优于或低于 V3。生产入口始终没有切换。
+
+## Run 30516841488
+
+### 证据
 
 - 真实执行任务：1 个任务开始，0 个任务完成盲评；
 - API 请求计数：25；
@@ -22,75 +29,109 @@ Issue #23 和 Run `30516841488` 成功验证了工作流、Secret、模型目录
 - Artifact：`8749404646`；
 - Artifact digest：`d1df0e5dcda716fcde53dea800d786de02afdf66e6a4d90316b13818bdaa7833`。
 
-## 为什么不发送输出上限会触发 402
+### 原因
 
-模型请求未携带 `max_completion_tokens` 时，OpenRouter 会按模型或 Endpoint 允许的最大输出检查最坏情形额度。对于最大输出 65,536 或 128,000 Token 的高价模型，即使模型实际只需要几千 Token，账户或 API Key 剩余额度不足以覆盖最大可能费用时，请求也会在生成前被拒绝。
+模型请求不携带输出许可时，OpenRouter 会按模型或 Endpoint 的最大可能输出检查最坏情形额度。高价模型即使实际只需要几千 Token，也可能因为账户无法覆盖最大输出费用而在生成前被拒绝。
 
-首轮错误中明确出现：
+错误明确出现：
 
 ```text
 This request requires more credits, or fewer max_tokens.
 ```
 
-因此“完全不发送上限”在当前额度条件下无法完成可比基准。
+因此“完全不发送输出许可”不适合在有限余额账户上进行可比基准。
 
-## 修正方案
+## Run 30517985049
 
-### 1. 基准专用 10,000 Token 最大许可
+### 证据
 
-真实基准统一发送：
-
-```json
-{
-  "max_completion_tokens": 10000
-}
-```
-
-这是最大许可，不是强制输出量。模型可以提前自然停止。该设置只作用于真实基准入口，不修改普通 V3 或 V5 生产策略。
-
-### 2. 付费前额度预检
-
-工作流先调用 OpenRouter 当前 API Key 元数据接口，检查：
-
-- API Key 额度上限；
-- API Key 剩余额度；
-- 当前基准要求预留的费用。
-
-若配置了 `OPENROUTER_MANAGEMENT_KEY`，还会读取账户总 Credits 和总 Usage，计算账户级剩余额度。
-
-任一已知额度低于本次基准费用预留时：
+- 工作流前置编译和当前 API Key 元数据读取成功；
+- API Key 的 `limit` 和 `limit_remaining` 均为 `null`，说明该 Key 没有有限 spending limit；
+- API Key 累计 usage：1.966098826 USD；
+- 未配置 `OPENROUTER_MANAGEMENT_KEY`，因此账户级 Credits 未被核验；
+- 10,000 Token 最大许可已启用；
+- 记录了23次请求尝试；
+- OpenRouter 返回的实际费用合计为0 USD；
+- V5、V3低价候选和其他基线大量返回 HTTP 404：
 
 ```text
-模型推理调用 = 0
-工作流失败关闭
-生产入口不变
+No endpoints found that can handle requested parameters.
 ```
 
-### 3. HTTP 402 全局停止
+- Endpoint 市场记录显示多数直接 Endpoint 支持 `max_tokens`，不支持 `max_completion_tokens`；
+- 请求同时使用了 `require_parameters=true`，因此参数名不匹配时 OpenRouter 正确拒绝；
+- 部分高价 V3 模型即使使用10,000 Token许可仍因账户 Credits 不足返回 HTTP 402；
+- 五任务盲评仍为0/5；
+- 生产入口切换：false；
+- Artifact：`8749646151`；
+- Artifact digest：`b8e5aa481acfc4a9f70874ccd210eacaf8cf7eadf17b75f7b426ef4820f17e9b`。
 
-即使预检无法取得账户级余额，任何策略或裁判第一次出现 HTTP 402 时，整个基准立即停止，不再继续消耗调用尝试。
+### 结论
 
-### 4. 盲评失败证据
+第二次运行证明：
 
-所有裁判请求结果都会写入：
+1. 10,000 Token 许可避免了首轮高额预授权实际消费；
+2. 输出许可必须使用真实 Endpoint 声明支持的参数名称；
+3. 当前无限额 API Key 不能作为基准资金充足性的证明；
+4. 未验证账户 Credits 时，不应继续重新运行付费基准。
+
+## 已实施修正
+
+### 1. Endpoint 参数兼容
+
+基准根据 Endpoint 的 `supported_parameters` 选择：
+
+```text
+明确支持 max_completion_tokens → 使用 max_completion_tokens
+否则 → 使用 OpenRouter Endpoint 普遍声明的 max_tokens
+```
+
+V3 基准入口固定使用其候选 Endpoint 实际支持的 `max_tokens`。
+
+10,000 Token 仍只是最大许可，不要求模型输出满额。
+
+### 2. 有限 API Key spending limit
+
+重新运行前，基准专用 API Key 必须设置有限额度：
+
+```text
+limit != null
+limit_remaining != null
+limit_remaining >= max_cost_usd
+```
+
+无限额 Key 将在任何模型推理前被拒绝，避免把“无限额”误判为“账户资金充足”。
+
+### 3. 账户级 Credits
+
+推荐增加只用于读取余额的：
+
+```text
+OPENROUTER_MANAGEMENT_KEY
+```
+
+工作流可用它读取账户总 Credits 和总 Usage。没有该 Secret 时，有限 API Key 只能证明 Key 本身允许支出，不能证明账户实际余额充足。
+
+### 4. HTTP 402 全局停止
+
+任何策略或裁判第一次出现 HTTP 402 时，整个基准立即停止，不继续尝试其他模型。
+
+### 5. 盲评遥测
+
+所有裁判请求成功或失败都会写入：
 
 ```text
 blind-evaluation-attempts.json
 ```
 
-即使不足两名有效裁判，也能看到模型、Provider、延迟、费用、finish reason、响应长度或错误正文。
+## 重新执行的外部条件
 
-### 5. 裁判价格保护
+重新打开或新建 `[v5-benchmark]` Issue 前必须完成：
 
-在满足不同模型、不同 Provider 和能力要求的前提下，盲评裁判优先从合理价格 Endpoint 中选择，避免高价裁判消耗过多基准预算。
+1. 给基准使用的 OpenRouter API Key 设置有限 spending limit；
+2. `limit_remaining` 至少为20 USD；
+3. OpenRouter账户实际可用 Credits 至少覆盖同一预留；
+4. 推荐配置 `OPENROUTER_MANAGEMENT_KEY`，让工作流在调用前核验账户级余额；
+5. 不满足上述条件时，不得再次运行付费基准。
 
-## 重新执行条件
-
-重新打开或新建 `[v5-benchmark]` Issue 前，应确保：
-
-- `OPENROUTER_API_KEY` 的 `limit_remaining` 不低于 Issue 中的 `max_cost_usd`；
-- OpenRouter 账户可用 Credits 足以覆盖同一预留；
-- 推荐至少保留 20 USD 可用额度；
-- 可选增加 `OPENROUTER_MANAGEMENT_KEY` Secret，以便工作流在调用前核验账户级 Credits。
-
-未满足条件时不得重新进行付费基准。
+代码可以修复参数兼容和失败治理，但无法通过 GitHub 工具替用户充值 OpenRouter 或修改其账户级 Credits。
