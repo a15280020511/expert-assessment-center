@@ -57,12 +57,15 @@ class TestV5LowCostPilotV2(unittest.TestCase):
             self.assertIn("Reserved for other strategies: `$0.150000`", summary)
             self.assertIn("Production cutover allowed: `false`", summary)
 
-    def test_entrypoint_uses_tiered_market_dynamic_budget_and_diversity_layers(self):
+    def test_entrypoint_uses_domain_proxy_tiered_market_and_dynamic_budget_layers(self):
         entry = (ROOT / "open-model-market" / "v5_low_cost_pilot_entry.py").read_text(encoding="utf-8")
+        domain_layer = (ROOT / "open-model-market" / "v5_low_cost_pilot_v5.py").read_text(encoding="utf-8")
         tiered = (ROOT / "open-model-market" / "v5_low_cost_pilot_v4.py").read_text(encoding="utf-8")
         dynamic = (ROOT / "open-model-market" / "v5_low_cost_pilot_v2.py").read_text(encoding="utf-8")
-        self.assertIn("import v5_low_cost_pilot_v4 as pilot_v4", entry)
-        self.assertIn("return pilot_v4.run(config, suite, output)", entry)
+        self.assertIn("import v5_low_cost_pilot_v5 as pilot_v5", entry)
+        self.assertIn("return pilot_v5.run(config, suite, output)", entry)
+        self.assertIn("v5_task_domain_proxy.install()", domain_layer)
+        self.assertIn("return v5_low_cost_pilot_v4.run", domain_layer)
         self.assertIn("import v5_candidate_diversity", tiered)
         self.assertIn("import v5_candidate_diagnostics", tiered)
         self.assertIn("import v5_low_cost_pilot_v2 as pilot_v2", tiered)
