@@ -15,7 +15,6 @@ from typing import Any
 from ortools.sat.python import cp_model
 
 RATIO_SCALE = 1_000_000
-FINAL_OBJECTIVE_SCALE = 1_000_000
 MAX_ITERATIONS = 12
 
 
@@ -58,16 +57,12 @@ def solve_cost_performance(
     """
     ratio_scaled = 0
     trace: list[dict[str, int | str]] = []
-    last_status = cp_model.UNKNOWN
-    last_solver: cp_model.CpSolver | None = None
 
     for iteration in range(1, MAX_ITERATIONS + 1):
         residual_expr = numerator_expr * RATIO_SCALE - ratio_scaled * denominator_expr
         model.Maximize(residual_expr)
         solver = _solver(timeout_seconds, workers)
         status = solver.Solve(model)
-        last_status = status
-        last_solver = solver
         if status not in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
             raise RuntimeError(
                 f"Cost-performance solve found no feasible solution: {solver.StatusName(status)}"
@@ -90,10 +85,21 @@ def solve_cost_performance(
             break
         ratio_scaled = next_ratio
 
-    # Preserve the converged fractional objective. Cost, call count and caller-
-    # supplied risk penalties only decide among equal integer residual values.
+    # Lock the converged fractional optimum first. Only after the best residual
+    # is fixed do cost, call count and risk decide among equal-value solutions.
+    # This avoids multiplying already-large objective coefficients and therefore
+    # avoids CP-SAT MODEL_INVALID integer-overflow rejection.
     residual_expr = numerator_expr * RATIO_SCALE - ratio_scaled * denominator_expr
-    model.Maximize(residual_expr * FINAL_OBJECTIVE_SCALE - tie_break_penalty_expr)
+    model.Maximize(residual_expr)
+    ratio_solver = _solver(timeout_seconds, workers)
+    ratio_status = ratio_solver.Solve(model)
+    if ratio_status not in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
+        status_name = ratio_solver.StatusName(ratio_status)
+        raise RuntimeError(f"Cost-performance lock solve failed: {status_name}")
+    best_residual = int(ratio_solver.Value(residual_expr))
+    model.Add(residual_expr == best_residual)
+
+    model.Minimize(tie_break_penalty_expr)
     final_solver = _solver(timeout_seconds, workers)
     final_status = final_solver.Solve(model)
     if final_status not in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
