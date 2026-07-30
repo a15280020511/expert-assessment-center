@@ -18,7 +18,7 @@ jobs:
     if: >-
       github.actor == github.repository_owner &&
       github.event.issue.number == 64 &&
-      github.event.comment.body == 'RUN_V5_R8_STAGE_D_20260731_R8B'
+      github.event.comment.body == 'RUN_V5_R8_STAGE_D_20260731_R8H'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
@@ -50,7 +50,10 @@ jobs:
         run: |
           python -m pip check
           python -m py_compile open-model-market/*.py
-          python -m unittest tests.test_v5_r8_paid_blind_benchmark -v
+          python -m unittest \
+            tests.test_v5_r8_paid_blind_benchmark \
+            tests.test_v5_r8_zero_call_joint_gate \
+            -v
 
       - name: Build fixed Stage-D request
         run: |
@@ -58,7 +61,7 @@ jobs:
           import json
           from pathlib import Path
           config = {
-              "benchmark_id": "v5-r8-stage-d-20260731-r8b",
+              "benchmark_id": "v5-r8-stage-d-20260731-r8h",
               "max_cost_usd": 1.50,
               "max_calls": 45,
               "max_strategy_cost_usd": 0.25,
@@ -104,31 +107,62 @@ jobs:
             --config "$OUTPUT_DIR/benchmark-config.json" \
             --output-dir "$OUTPUT_DIR"
 
+      - name: Exact nine-node zero-inference planning preflight
+        id: planning
+        if: steps.secret.outputs.present == 'true' && steps.credit.outcome == 'success'
+        continue-on-error: true
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_APP_NAME: Expert Assessment Center R8 Joint Zero-Call Gate
+          OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
+        run: |
+          set -o pipefail
+          PREFLIGHT_ROOT="$OUTPUT_DIR/zero-call-preflight"
+          python open-model-market/v5_zero_call_budget_policy.py prepare \
+            --event-path r8-stage-d-event.json \
+            --output-dir "$PREFLIGHT_ROOT"
+          python open-model-market/v5_zero_call_budget_policy.py run \
+            --config "$PREFLIGHT_ROOT/zero-call-diagnostic-config.json" \
+            --suite open-model-market/v5_live_benchmark_suite.json \
+            --output-dir "$PREFLIGHT_ROOT" \
+            2>&1 | tee "$PREFLIGHT_ROOT/zero-call-console.log"
+          python open-model-market/v5_r8_zero_call_joint_gate.py \
+            --root "$PREFLIGHT_ROOT" \
+            --max-nodes 9 \
+            --max-cost-usd 0.25 \
+            --output "$PREFLIGHT_ROOT/r8-joint-gate.json"
+
       - name: Publish pre-execution status
         if: always()
         run: |
           cat > r8-accepted.md <<EOF
           ## V5_R8_STAGE_D_ACCEPTED
 
-          - Attempt: R8B diagnostic-safe retry after zero-call R8A recursion failure
+          - Attempt: R8H after R8G zero-call allowance-versus-usage audit
           - Fixed tasks: 3
           - Strategies: V5 R8 versus preserved V3 only
           - Per-strategy per-task hard cap: 0.25 USD
+          - V5 per-task node hard cap: 9
           - Global actual-cost hard cap: 1.50 USD
           - Global paid-call hard cap: 45
           - OpenRouter key dependency: OPENROUTER_API_KEY only
           - Credit preflight model calls: 0
+          - Joint planning preflight model calls: 0
           - Production entrypoint changed: false
           - V3 deleted: false
           - Secret present: ${{ steps.secret.outputs.present }}
           - Credit preflight: ${{ steps.credit.outcome }}
+          - Nine-node joint planning preflight: ${{ steps.planning.outcome }}
           - Run: ${RUN_URL}
           EOF
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@r8-accepted.md
 
       - name: Run R8 three-task anonymous comparison
         id: execute
-        if: steps.secret.outputs.present == 'true' && steps.credit.outcome == 'success'
+        if: >-
+          steps.secret.outputs.present == 'true' &&
+          steps.credit.outcome == 'success' &&
+          steps.planning.outcome == 'success'
         continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -179,8 +213,10 @@ jobs:
           root = Path("v5-r8-stage-d-artifacts")
           result_path = root / "v5-live-benchmark-results.json"
           credit_path = root / "credit-preflight.json"
+          joint_path = root / "zero-call-preflight" / "r8-joint-gate.json"
           result = json.loads(result_path.read_text()) if result_path.exists() else {}
           credit = json.loads(credit_path.read_text()) if credit_path.exists() else {}
+          joint = json.loads(joint_path.read_text()) if joint_path.exists() else {}
           gate = result.get("cutover_gate") or {}
           ledger = result.get("ledger") or {}
           print("## V5_R8_STAGE_D_RESULT")
@@ -189,14 +225,17 @@ jobs:
           print(f"- Tasks completed: `{result.get('tasks_completed', 0)}` / `{result.get('tasks_requested', 3)}`")
           print(f"- Model calls: `{ledger.get('calls', 0)}`")
           print(f"- Actual cost: `${float(ledger.get('actual_cost_usd', 0.0)):.8f}`")
+          print(f"- Joint zero-call planning gate: `{joint.get('status', 'not-run')}`")
           print(f"- Stage-D paid blind passed: `{str(bool(gate.get('stage_d_paid_blind_passed'))).lower()}`")
           print(f"- 20-task Canary allowed: `{str(bool(gate.get('canary_allowed'))).lower()}`")
           print("- Production default switch allowed: `false`")
           print("- V3 deletion allowed: `false`")
           print(f"- V5 degraded results: `{gate.get('v5_degraded_results', 0)}`")
           print(f"- Single-key preflight: `{credit.get('status', 'not-run')}`")
+          joint_blockers = joint.get("blockers") or []
+          print(f"- Joint planning blockers: `{','.join(joint_blockers) if joint_blockers else 'none'}`")
           blockers = gate.get("blockers") or []
-          print(f"- Blockers: `{','.join(blockers) if blockers else 'none'}`")
+          print(f"- Stage-D blockers: `{','.join(blockers) if blockers else 'none'}`")
           if result.get("error"):
               print(f"- Benchmark error: `{str(result.get('error'))[:1000]}`")
           exception_paths = sorted(root.glob("tasks/*/v5_joint_graph/v5-r8-strategy-exception.json"))
@@ -215,6 +254,8 @@ jobs:
               )
           PY
           cat >> r8-result.md <<EOF
+          - Credit outcome: ${{ steps.credit.outcome }}
+          - Joint planning outcome: ${{ steps.planning.outcome }}
           - Execute outcome: ${{ steps.execute.outcome }}
           - Artifact ID: ${{ steps.upload.outputs.artifact-id }}
           - Artifact URL: ${{ steps.upload.outputs.artifact-url }}
@@ -234,6 +275,10 @@ jobs:
             echo "Single-key funding preflight failed" >&2
             exit 1
           fi
+          if [[ "${{ steps.planning.outcome }}" != "success" ]]; then
+            echo "Exact nine-node zero-call planning preflight failed" >&2
+            exit 1
+          fi
           if [[ "${{ steps.execute.outcome }}" != "success" || "${{ steps.upload.outcome }}" != "success" ]]; then
             echo "Execution or artifact upload failed" >&2
             exit 1
@@ -241,6 +286,11 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
+          joint = json.loads(
+              Path("v5-r8-stage-d-artifacts/zero-call-preflight/r8-joint-gate.json").read_text()
+          )
+          if not joint.get("paid_inference_allowed"):
+              raise SystemExit("Joint zero-call planning gate did not permit paid inference")
           data = json.loads(Path("v5-r8-stage-d-artifacts/v5-live-benchmark-results.json").read_text())
           gate = data.get("cutover_gate") or {}
           if not gate.get("stage_d_paid_blind_passed"):
