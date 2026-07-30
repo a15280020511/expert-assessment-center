@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 from threading import Lock
@@ -129,6 +128,29 @@ def _raise_if_credit_failure(outcome: Any, *, artifact_root: str | Path | None =
                 raise base.BenchmarkLimitExceeded("OpenRouter available credits or API-key spending limit are insufficient.")
 
 
+def _annotate_v5_audit(output_dir: str | Path | None) -> None:
+    if output_dir is None:
+        return
+    audit_path = Path(output_dir) / "v5-request-audit.json"
+    if not audit_path.exists():
+        return
+    try:
+        audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    requests = audit.get("requests") if isinstance(audit.get("requests"), list) else []
+    valid = bool(requests) and all(
+        isinstance(row, Mapping) and int(row.get("max_completion_tokens", -1)) == ALLOWANCE
+        for row in requests
+    )
+    audit["benchmark_output_allowance_tokens"] = ALLOWANCE
+    audit["benchmark_output_allowance_policy"] = "maximum-permitted-not-required"
+    audit["benchmark_output_allowance_consistent"] = valid
+    audit["artificial_token_ceiling_sent"] = False if valid else audit.get("artificial_token_ceiling_sent", False)
+    audit["production_policy_changed"] = False
+    audit_path.write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def _install_output_allowance() -> None:
     original_safe = base._safe_payload
 
@@ -153,26 +175,7 @@ def _install_output_allowance() -> None:
         try:
             return original_execute(*args, **kwargs)
         finally:
-            if output_dir is None:
-                return
-            audit_path = Path(output_dir) / "v5-request-audit.json"
-            if not audit_path.exists():
-                return
-            try:
-                audit = json.loads(audit_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                return
-            requests = audit.get("requests") if isinstance(audit.get("requests"), list) else []
-            valid = bool(requests) and all(
-                isinstance(row, Mapping) and int(row.get("max_completion_tokens", -1)) == ALLOWANCE
-                for row in requests
-            )
-            audit["benchmark_output_allowance_tokens"] = ALLOWANCE
-            audit["benchmark_output_allowance_policy"] = "maximum-permitted-not-required"
-            audit["benchmark_output_allowance_consistent"] = valid
-            audit["artificial_token_ceiling_sent"] = False if valid else audit.get("artificial_token_ceiling_sent", False)
-            audit["production_policy_changed"] = False
-            audit_path.write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
+            _annotate_v5_audit(output_dir)
 
     base.execute_v5_graph = allowed_execute
 
