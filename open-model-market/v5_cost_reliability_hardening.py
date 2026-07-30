@@ -1,4 +1,4 @@
-"""Reasoning-inclusive cost, endpoint-risk and strict-output hardening for V5."""
+"""Reasoning-inclusive cost, endpoint-risk and output hardening for V5."""
 from __future__ import annotations
 
 import json
@@ -16,6 +16,9 @@ MIN_PROVIDER_RELIABILITY = 0.90
 COST_UNCERTAINTY_MULTIPLIER = 1.12
 MAX_UPSTREAM_CHARS_PER_NODE = 8_000
 MAX_UPSTREAM_CHARS_TOTAL = 28_000
+MAX_OUTPUT_ALLOWANCE_TOKENS = 10_000
+MIN_OUTPUT_ALLOWANCE_TOKENS = 1_024
+DELIVERY_FUNCTIONS = frozenset({"synthesis", "delivery", "adjudication"})
 
 _ORIGINAL_ESTIMATED_COST = planner._estimated_cost
 _ORIGINAL_CANDIDATE_FOR = planner._candidate_for
@@ -147,9 +150,9 @@ def hardened_candidate_for(*args: Any, **kwargs: Any) -> Any:
     profile = dict(candidate.parameter_profile)
     profile.update({
         "recommended_output_allowance_tokens": min(
-            endpoint_max or 10_000,
-            max(1_024, recommended),
-            10_000,
+            endpoint_max or MAX_OUTPUT_ALLOWANCE_TOKENS,
+            max(MIN_OUTPUT_ALLOWANCE_TOKENS, recommended),
+            MAX_OUTPUT_ALLOWANCE_TOKENS,
         ),
         "cost_estimation_policy": "reasoning-inclusive-p95-envelope",
         "provider_reliability_floor": MIN_PROVIDER_RELIABILITY,
@@ -162,8 +165,41 @@ def hardened_candidate_for(*args: Any, **kwargs: Any) -> Any:
     )
 
 
+def _is_delivery_node(node: SelectedNode) -> bool:
+    return bool(DELIVERY_FUNCTIONS.intersection(str(value) for value in node.functions))
+
+
+def _effective_output_node(node: SelectedNode) -> SelectedNode:
+    """Defer strict machine-readable delivery to final synthesis nodes.
+
+    R6 showed that forcing every intermediate analysis node to emit a large JSON
+    object sharply increased empty responses, truncation and cost. Intermediate
+    nodes therefore return stable prose; final delivery nodes retain the user-facing
+    structured contract.
+    """
+    if _is_delivery_node(node) or not node.output_contract.get("machine_readable_required"):
+        return node
+    output_contract = dict(node.output_contract)
+    output_contract["machine_readable_required"] = False
+    output_contract["structured_delivery_deferred_to_final"] = True
+    request_config = dict(node.request_config)
+    request_config.pop("response_format", None)
+    request_config.pop("json_schema", None)
+    parameter_profile = dict(node.parameter_profile)
+    parameters = dict(parameter_profile.get("parameters", {}))
+    parameters.pop("response_format", None)
+    parameters.pop("json_schema", None)
+    parameter_profile["parameters"] = parameters
+    return replace(
+        node,
+        output_contract=output_contract,
+        request_config=request_config,
+        parameter_profile=parameter_profile,
+    )
+
+
 def _strict_json_schema(node: SelectedNode) -> Mapping[str, Any] | None:
-    if not node.output_contract.get("machine_readable_required"):
+    if not _is_delivery_node(node) or not node.output_contract.get("machine_readable_required"):
         return None
     supported = {
         str(value).casefold()
@@ -181,7 +217,7 @@ def _strict_json_schema(node: SelectedNode) -> Mapping[str, Any] | None:
     return {
         "type": "json_schema",
         "json_schema": {
-            "name": "v5_node_output",
+            "name": "v5_final_delivery",
             "strict": True,
             "schema": {
                 "type": "object",
@@ -201,14 +237,40 @@ def _strict_json_schema(node: SelectedNode) -> Mapping[str, Any] | None:
     }
 
 
+def _output_allowance(node: SelectedNode) -> int:
+    recommended = _int(
+        node.parameter_profile.get("recommended_output_allowance_tokens"),
+        3_072 if _is_delivery_node(node) else 2_048,
+    )
+    return max(
+        MIN_OUTPUT_ALLOWANCE_TOKENS,
+        min(MAX_OUTPUT_ALLOWANCE_TOKENS, recommended),
+    )
+
+
+def _output_allowance_field(node: SelectedNode) -> str:
+    supported = {
+        str(value).casefold()
+        for value in node.parameter_profile.get("supported_parameters", [])
+    }
+    return "max_completion_tokens" if "max_completion_tokens" in supported else "max_tokens"
+
+
 def hardened_build_node_payload(
     node: SelectedNode,
     original_task: str,
     upstream: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
+    effective_node = _effective_output_node(node)
     compacted: list[dict[str, Any]] = []
     remaining = MAX_UPSTREAM_CHARS_TOTAL
-    for row in upstream:
+    for row in sorted(
+        upstream,
+        key=lambda value: (
+            -_float(value.get("quality_score"), 0.0),
+            str(value.get("node_id") or ""),
+        ),
+    ):
         if remaining <= 0:
             break
         answer = str(row.get("answer") or "")
@@ -217,13 +279,19 @@ def hardened_build_node_payload(
         clipped = answer[: min(MAX_UPSTREAM_CHARS_PER_NODE, remaining)]
         compacted.append({**dict(row), "answer": clipped})
         remaining -= len(clipped)
-    payload = _ORIGINAL_BUILD_NODE_PAYLOAD(node, original_task, compacted)
-    schema = _strict_json_schema(node)
+    payload = _ORIGINAL_BUILD_NODE_PAYLOAD(effective_node, original_task, compacted)
+    schema = _strict_json_schema(effective_node)
     if schema is not None:
         payload["response_format"] = schema
         provider = dict(payload.get("provider") or {})
         provider["require_parameters"] = True
         payload["provider"] = provider
+
+    # 10000 is an absolute permission, not a requested output length. Every node
+    # receives a lower task-derived maximum whenever possible.
+    payload.pop("max_tokens", None)
+    payload.pop("max_completion_tokens", None)
+    payload[_output_allowance_field(effective_node)] = _output_allowance(effective_node)
     return payload
 
 
