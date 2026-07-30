@@ -23,7 +23,7 @@ def main() -> int:
             data = json.loads(path.read_text(encoding="utf-8"))
             allowance = int(data.get("output_allowance_tokens", 2000))
             os.environ["V5_BENCHMARK_OUTPUT_ALLOWANCE_TOKENS"] = str(max(1024, min(2500, allowance)))
-        import v5_low_cost_pilot_v2 as pilot_v2
+        import v5_low_cost_pilot_v3 as pilot_v3
         config = _config_path(arguments)
         try:
             suite = Path(arguments[arguments.index("--suite") + 1])
@@ -34,7 +34,7 @@ def main() -> int:
         if config is None:
             print("ERROR: run requires --config", file=sys.stderr)
             return 2
-        return pilot_v2.run(config, suite, output)
+        return pilot_v3.run(config, suite, output)
     import v5_low_cost_pilot as pilot
     return pilot.main(arguments)
 
