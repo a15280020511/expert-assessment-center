@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import resource_call_budget  # noqa: F401 - installs dynamic call ceiling before entrypoint imports
+
 _INSTALLED = False
 
 
