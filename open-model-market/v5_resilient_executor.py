@@ -11,7 +11,7 @@ import v5_executor as executor
 from execution_graph import ExecutionGraph, GraphLimits
 from execution_graph_validator import validate_execution_graph
 
-MIN_DEGRADED_WORK_COVERAGE = 0.67
+MIN_DEGRADED_WORK_COVERAGE = 2.0 / 3.0
 _INSTALLED = False
 
 
@@ -108,10 +108,11 @@ def resilient_execute_v5_graph(
     graph = graph if isinstance(graph, ExecutionGraph) else ExecutionGraph.from_mapping(graph)
     limits = limits or GraphLimits()
     issues = validate_execution_graph(graph, limits)
-    if issues:
+    structural_issues = [item for item in issues if item.code != "budget_limit"]
+    if structural_issues:
         raise executor.V5ExecutionError(
             "Invalid execution graph: "
-            + "; ".join(f"{item.code}:{item.message}" for item in issues)
+            + "; ".join(f"{item.code}:{item.message}" for item in structural_issues)
         )
 
     planned_cost = round(sum(node.estimated_cost for node in graph.nodes), 8)
