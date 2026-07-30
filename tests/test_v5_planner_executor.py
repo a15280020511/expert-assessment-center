@@ -167,6 +167,8 @@ class TestV5PlannerExecutor(unittest.TestCase):
         self.assertTrue(benchmark["planning_gate_passed"])
         self.assertFalse(benchmark["production_cutover_allowed"])
         self.assertIn("v3_compatibility_baseline", benchmark["strategies"])
+        self.assertFalse(benchmark["strategies"]["strongest_single_model"]["feasible"])
+        self.assertTrue(benchmark["strategies"]["strongest_single_model"]["hard_constraint_violations"])
 
     def test_live_cutover_gate_requires_real_multi_task_advantage(self):
         records = []
