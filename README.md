@@ -2,114 +2,165 @@
 
 本仓库是正式独立的专家研判中心。GPTs 是本中心与其他业务中心之间唯一的控制与证据中继。
 
-## 当前选择架构
-
-专家团选择核心已经统一为：
+## 当前架构：先算需求，再选资源
 
 ```text
 任务正文与显式约束
-→ 任务参数化与需求拆分
-→ 任务—能力—席位计算矩阵
-→ OpenRouter 实时模型目录与 Benchmark
-→ Google OR-Tools CP-SAT 全局优化
-→ 动态专家席位、模型与精确推理参数
-→ GitHub Actions 执行、证据与审计
+→ 原子工作单元
+→ 提示词、能力、上下文、输出和参数需求
+→ 需要从OpenRouter提取的市场字段
+→ 候选工作包合并方式
+→ 模型 × Provider × 提示词模块 × 参数联合矩阵
+→ Google OR-Tools CP-SAT全局求解
+→ 并行动态工作包
+→ 动态综合节点
+→ GitHub Actions执行、证据与审计
 ```
 
-选择器不再使用：
+阶段A不读取具体模型ID。只有任务资源需求确定后，阶段B才读取OpenRouter实时目录、Benchmark和价格。
 
-- “简单／中等／复杂”对应固定人数的模式表；
-- 固定 1+1、2+1、3+1、4+1 模板；
-- 固定参数模板库作为决策输入；
-- 本地历史模型绩效账本；
-- 逐席位贪心选择；
-- OpenRouter Router、在线模型变体或 Agent 路由。
+## 不再使用
 
-## 动态组合原则
+- 简单／中等／复杂对应固定人数；
+- 固定1+1、2+1、3+1、4+1；
+- 固定核心、交叉、证据等席位模板；
+- 固定完整提示词模板；
+- 固定参数模板库；
+- 先最小化专家人数；
+- 历史模型绩效账本；
+- 逐席位贪心选模；
+- OpenRouter Auto Router、Fusion或Agent黑箱路由。
 
-CP-SAT 同时决定：
+## 阶段A：任务资源需求
 
-- 需要激活多少名专家；
-- 每个专家席位承担哪些任务需求；
-- 每个席位使用哪个 OpenRouter 直接模型；
-- 每个模型使用哪些其实际支持的推理参数；
-- Provider 是否重复；
-- 在满足全部硬需求后，如何兼顾质量和预计费用。
+系统先计算：
 
-优化按词典序执行：
+- 领域 × 操作形成的原子工作单元；
+- 各工作单元重要性与独立复核要求；
+- 所需提示词模块；
+- 所需模型能力和模态；
+- 最小上下文与预计输出；
+- reasoning等级、temperature倾向、verbosity和结构化输出要求；
+- 综合节点需要处理的范围。
 
-1. 在覆盖全部任务硬需求的前提下，最小化专家数量；
-2. 在最小充分团队中最大化实时能力与任务匹配；
-3. 在质量容差范围内最小化预计费用。
+输出：
 
-因此，专家数量是计算结果，不是预设模式。
+```text
+task-resource-requirements.json
+task-parameter-matrix.json
+```
+
+## 阶段B：市场联合优化
+
+只提取本任务要求的OpenRouter信息：
+
+- 模型ID和Provider；
+- 官方智能排序和分领域Benchmark；
+- 输入、输出价格；
+- 上下文、最大输出；
+- 支持参数和模态；
+- reasoning能力；
+- 知识截止、到期和版本状态。
+
+CP-SAT联合决定：
+
+- 原子工作如何合并为工作包；
+- 需要多少工作包；
+- 每个工作包选择哪些提示词模块；
+- 每个工作包选择哪个模型和Provider；
+- 每个模型使用哪些实际支持的参数；
+- 综合节点的模型、提示词和参数；
+- 质量容差带内的最低总费用和调用次数。
+
+优化顺序：
+
+```text
+覆盖全部硬资源需求
+→ 最大化本任务实时质量
+→ 在质量容差带内最小化费用和调用数
+```
+
+专家数量由质量—费用联合优化产生，不再作为第一阶段目标。
 
 ## 任务输入
 
-普通任务无需填写参数。系统会从任务正文生成：领域、任务操作、风险、证据要求、定量要求、预测要求、反证要求、实施要求、上下文需求和输出要求。
-
-需要设置硬约束时，可在任务正文加入：
+普通任务无需填写参数。需要人工硬约束时可加入：
 
 ```text
 <expert-team-input>
 {
   "budget_usd": 0.8,
   "min_experts": 1,
-  "max_experts": 4,
+  "max_experts": null,
   "strict_provider_diversity": true,
-  "candidate_pool_per_seat": 12,
-  "solver_timeout_seconds": 8,
-  "quality_tolerance_pct": 3,
+  "candidate_pool_per_work_package": 16,
+  "solver_timeout_seconds": 12,
+  "quality_tolerance_pct": 2,
   "forbidden_models": [],
   "preferred_models": []
 }
 </expert-team-input>
 ```
 
-也可通过 `EXPERT_TEAM_INPUT_JSON` 传入同一结构。`preferred_models` 只能作为软偏好；能力、上下文、参数兼容、预算和任务覆盖等硬约束不能被偏好覆盖。
+`max_experts`默认不设固定人数。执行层仅保留最多16次模型调用的安全上限，不代表固定团队模式。`preferred_models`只能作为软偏好，不能突破能力、上下文、预算、覆盖和独立性硬约束。
 
-## 实时模型输入
+## 动态提示词与参数
 
-选择器只使用本次任务时可取得的 OpenRouter 数据：
+提示词由原子模块组合，例如：任务边界、证据纪律、定量严谨、情景推演、红队反证、工程交付、决策比较、不确定性校准和综合裁决。
 
-- 模型 ID、Provider、版本状态；
-- 官方智能排序；
-- Benchmark；
-- 输入和输出价格；
-- 上下文长度与最大输出；
-- 支持参数；
-- 输入与输出模态；
-- reasoning 能力；
-- 知识截止日期与失效日期。
+参数根据工作包和模型实际支持能力生成：
 
-不读取本地历史成功率，不因旧任务表现永久奖励或惩罚模型。
+```text
+reasoning effort
+temperature
+verbosity
+structured output
+预计输出Token
+```
+
+每个提示词组合和参数组合均使用内容哈希标识，写入审计产物。
+
+## 全球成熟方案参考
+
+详细说明见：
+
+```text
+open-model-market/FULL_DYNAMIC_RESOURCE_PLANNING.md
+```
+
+主要借鉴：HuggingGPT、LLMCompiler、Microsoft Foundry Model Router、Amazon Bedrock Intelligent Prompt Routing、Not Diamond、RouteLLM、Mixture-of-Agents、AutoGen SelectorGroupChat和DSPy。
+
+这些方案只用于吸收任务规划、DAG、质量容差带、Pareto优化、动态协作和提示词程序化思想，不增加外部运行依赖。
 
 ## 审计产物
 
 每次选择至少生成：
 
-- `task-parameter-matrix.json`：任务拆分、需求向量和约束；
-- `team-optimization.json`：CP-SAT 状态、目标边界、候选、选定席位、模型、参数和费用；
-- `model-selection.json`：运行时模型选择证据；
-- `benchmark-market.json`：Benchmark 来源与降级状态；
-- `artifact-manifest.json`：产物 SHA 与完整性清单。
+- `task-resource-requirements.json`：原子工作和完整资源需求；
+- `task-parameter-matrix.json`：兼容名称，内容升级为V3资源矩阵；
+- `team-optimization.json`：候选工作包、提示词、参数、模型、Provider、质量边界和费用；
+- `model-selection.json`：运行时选择证据；
+- `benchmark-market.json`：Benchmark来源与降级状态；
+- `artifact-manifest.json`：产物SHA与完整性清单。
 
-不存在可行解时直接失败并报告冲突约束，不回退到旧选择器。
+无可行解时直接报告冲突约束，不回退旧选择器。
 
 ## 关键实现
 
-- `open-model-market/task_matrix_optimizer.py`
+- `open-model-market/resource_requirements.py`
+- `open-model-market/resource_plan_optimizer.py`
+- `open-model-market/resource_runtime_compat.py`
+- `open-model-market/resource_call_budget.py`
 - `open-model-market/benchmark_selection.py`
-- `open-model-market/dynamic_runtime.py`
-- `open-model-market/TASK_MATRIX_SELECTION.md`
+- `open-model-market/FULL_DYNAMIC_RESOURCE_PLANNING.md`
 - `requirements-runtime.txt`
 
 ## 隔离边界
 
 - 本仓库只运行专家研判中心任务；
-- 禁止中心间直接调用、运行时导入、Artifact 互取和共享业务 Secret；
-- 禁止模型调用外部工具、网页、插件、文件、代码执行、API 或其他模型；
-- OpenRouter 仅提供模型目录、Benchmark 和直接模型调用，不负责路由与选模。
+- 禁止中心间直接调用、运行时导入、Artifact互取和共享业务Secret；
+- 禁止模型调用外部工具、网页、插件、文件、代码执行、API或其他模型；
+- OpenRouter只提供模型目录、Benchmark和直接模型调用，不负责路由与选模。
 
 ## 迁移证据
 
