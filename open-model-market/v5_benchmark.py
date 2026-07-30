@@ -79,13 +79,25 @@ def _single_model(required: set[str], candidates: Sequence[Mapping[str, Any]], s
             if strongest else
             (lambda row, gain: (-gain, float(row.get("estimated_cost", 0.0)), -float(row.get("estimated_quality", 0.0)))),
         )
-        if plan and required <= set().union(*(_coverage(row) for row in plan)):
+        if plan and required <= set().union(*(_coverage(row) for row in plan):
             plans.append(plan)
     if not plans:
         return []
     if strongest:
-        return max(plans, key=lambda rows: (sum(float(row.get("estimated_quality", 0.0)) for row in rows) / len(rows), -sum(float(row.get("estimated_cost", 0.0)) for row in rows)))
-    return min(plans, key=lambda rows: (sum(float(row.get("estimated_cost", 0.0)) for row in rows), -sum(float(row.get("estimated_quality", 0.0)) for row in rows) / len(rows)))
+        return max(
+            plans,
+            key=lambda rows: (
+                sum(float(row.get("estimated_quality", 0.0)) for row in rows) / len(rows),
+                -sum(float(row.get("estimated_cost", 0.0)) for row in rows),
+            ),
+        )
+    return min(
+        plans,
+        key=lambda rows: (
+            sum(float(row.get("estimated_cost", 0.0)) for row in rows),
+            -sum(float(row.get("estimated_quality", 0.0)) for row in rows) / len(rows),
+        ),
+    )
 
 
 def planning_benchmark(planner_bundle: Mapping[str, Any], *, random_seed: int = 20260730) -> dict[str, Any]:
@@ -98,17 +110,31 @@ def planning_benchmark(planner_bundle: Mapping[str, Any], *, random_seed: int = 
         for work_id, copies in meta["copies_by_work"].items()
         for copy_index in range(int(copies))
     }
-    candidates = [row for row in planner_bundle["candidate_graph"]["candidates"] if row["interpretation_id"] == interpretation_id]
+    candidates = [
+        row
+        for row in planner_bundle["candidate_graph"]["candidates"]
+        if row["interpretation_id"] == interpretation_id
+    ]
     selected_ids = set(optimization["selected_candidate_ids"])
     selected = [row for row in candidates if row["candidate_id"] in selected_ids]
     strongest_single = _single_model(required, candidates, strongest=True)
     cheapest_single = _single_model(required, candidates, strongest=False)
-    fixed = _greedy(required, candidates, lambda row, gain: (-gain, -float(row["estimated_quality"]), float(row["estimated_cost"])), maximum_nodes=4)
+    fixed = _greedy(
+        required,
+        candidates,
+        lambda row, gain: (-gain, -float(row["estimated_quality"]), float(row["estimated_cost"])),
+        maximum_nodes=4,
+    )
     rng = random.Random(random_seed)
     randomized = list(candidates)
     rng.shuffle(randomized)
     random_plan = _greedy(required, randomized, lambda row, gain: (-gain, rng.random()), maximum_nodes=16)
-    cheapest_feasible = _greedy(required, candidates, lambda row, gain: (-gain, float(row["estimated_cost"]), -float(row["estimated_quality"])), maximum_nodes=16)
+    cheapest_feasible = _greedy(
+        required,
+        candidates,
+        lambda row, gain: (-gain, float(row["estimated_cost"]), -float(row["estimated_quality"])),
+        maximum_nodes=16,
+    )
     strategies = {
         "v5_joint_graph": _metrics(selected, required, meta["copies_by_work"]),
         "strongest_single_model": _metrics(strongest_single, required, meta["copies_by_work"]),
@@ -146,40 +172,114 @@ def planning_benchmark(planner_bundle: Mapping[str, Any], *, random_seed: int = 
     }
 
 
+def _judge_evidence_valid(row: Mapping[str, Any]) -> bool:
+    models = {str(value) for value in row.get("blind_judge_models", []) if str(value)}
+    providers = {str(value) for value in row.get("blind_judge_providers", []) if str(value)}
+    return bool(
+        int(row.get("blind_judge_count", 0) or 0) >= 2
+        and len(models) >= 2
+        and len(providers) >= 2
+        and float(row.get("blind_judge_disagreement_points", 100.0) or 100.0) <= 35.0
+    )
+
+
 def live_cutover_gate(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Evaluate externally produced live results; never infer outcome quality from planner scores."""
-    required_strategies = {"v5_joint_graph", "v3", "strongest_single_model", "lowest_price_single_model", "fixed_3_plus_1", "random_feasible"}
+    """Evaluate complete live blind evidence; never infer outcome quality from planner scores."""
+    required_strategies = {
+        "v5_joint_graph",
+        "v3",
+        "strongest_single_model",
+        "lowest_price_single_model",
+        "fixed_3_plus_1",
+        "random_feasible",
+    }
     tasks = sorted({str(row.get("task_id") or "") for row in records if row.get("task_id")})
+    expected_tasks = set(tasks)
     by_strategy: dict[str, list[Mapping[str, Any]]] = {}
     for row in records:
         by_strategy.setdefault(str(row.get("strategy") or ""), []).append(row)
     missing = sorted(required_strategies - set(by_strategy))
-    summaries: dict[str, Any] = {}
-    for strategy, rows in by_strategy.items():
-        successes = [row for row in rows if row.get("status") == "success" and not row.get("safety_failure")]
-        summaries[strategy] = {
-            "task_count": len(rows),
-            "success_rate": round(len(successes) / max(1, len(rows)), 6),
-            "mean_blind_quality": round(sum(float(row.get("blind_quality_score", 0.0)) for row in successes) / max(1, len(successes)), 6),
-            "mean_cost_usd": round(sum(float(row.get("actual_cost_usd", 0.0)) for row in successes) / max(1, len(successes)), 8),
-            "mean_latency_seconds": round(sum(float(row.get("latency_seconds", 0.0)) for row in successes) / max(1, len(successes)), 6),
-            "safety_failures": sum(bool(row.get("safety_failure")) for row in rows),
-        }
-    v5 = summaries.get("v5_joint_graph", {})
-    v3 = summaries.get("v3", {})
-    blockers = []
+    blockers: list[str] = []
     if len(tasks) < 5:
         blockers.append("fewer-than-5-independent-tasks")
     if missing:
         blockers.append("missing-strategies:" + ",".join(missing))
+
+    summaries: dict[str, Any] = {}
+    for strategy in sorted(required_strategies | set(by_strategy)):
+        rows = by_strategy.get(strategy, [])
+        row_tasks = [str(row.get("task_id") or "") for row in rows if row.get("task_id")]
+        unique_tasks = set(row_tasks)
+        missing_tasks = sorted(expected_tasks - unique_tasks)
+        duplicate_tasks = sorted({task_id for task_id in row_tasks if row_tasks.count(task_id) > 1})
+        invalid_judging = [
+            str(row.get("task_id") or "")
+            for row in rows
+            if not _judge_evidence_valid(row)
+        ]
+        safety_failures = sum(bool(row.get("safety_failure")) for row in rows)
+        fatal_errors = sum(bool(row.get("blind_fatal_error")) for row in rows)
+        successes = [
+            row
+            for row in rows
+            if row.get("status") == "success"
+            and not row.get("safety_failure")
+            and not row.get("blind_fatal_error")
+            and _judge_evidence_valid(row)
+        ]
+        summaries[strategy] = {
+            "task_count": len(rows),
+            "unique_task_count": len(unique_tasks),
+            "missing_tasks": missing_tasks,
+            "duplicate_tasks": duplicate_tasks,
+            "success_rate": round(len(successes) / max(1, len(expected_tasks)), 6),
+            "mean_blind_quality": round(
+                sum(float(row.get("blind_quality_score", 0.0)) for row in successes) / max(1, len(successes)),
+                6,
+            ),
+            "mean_cost_usd": round(
+                sum(float(row.get("actual_cost_usd", 0.0)) for row in successes) / max(1, len(successes)),
+                8,
+            ),
+            "mean_latency_seconds": round(
+                sum(float(row.get("latency_seconds", 0.0)) for row in successes) / max(1, len(successes)),
+                6,
+            ),
+            "mean_judge_disagreement_points": round(
+                sum(float(row.get("blind_judge_disagreement_points", 100.0)) for row in rows) / max(1, len(rows)),
+                6,
+            ),
+            "invalid_judge_evidence_tasks": sorted(set(invalid_judging)),
+            "safety_failures": safety_failures,
+            "blind_fatal_errors": fatal_errors,
+        }
+        if strategy in required_strategies:
+            if missing_tasks:
+                blockers.append(f"{strategy}:missing-tasks:" + ",".join(missing_tasks))
+            if duplicate_tasks:
+                blockers.append(f"{strategy}:duplicate-task-records:" + ",".join(duplicate_tasks))
+            if invalid_judging:
+                blockers.append(f"{strategy}:invalid-independent-blind-judging")
+
+    v5 = summaries.get("v5_joint_graph", {})
+    v3 = summaries.get("v3", {})
     if v5.get("safety_failures", 1):
         blockers.append("v5-safety-failure")
+    if v5.get("blind_fatal_errors", 1):
+        blockers.append("v5-blind-fatal-error")
+    if float(v5.get("success_rate", 0.0)) < 0.80:
+        blockers.append("v5-success-rate-below-80-percent")
     if float(v5.get("success_rate", 0.0)) < float(v3.get("success_rate", 1.0)):
         blockers.append("v5-success-rate-below-v3")
     if float(v5.get("mean_blind_quality", 0.0)) < float(v3.get("mean_blind_quality", 1.0)) * 1.02:
         blockers.append("v5-quality-improvement-below-2-percent")
-    if float(v5.get("mean_cost_usd", 1e9)) > max(float(v3.get("mean_cost_usd", 0.0)) * 1.25, float(v3.get("mean_cost_usd", 0.0)) + 0.02):
+    v3_cost = float(v3.get("mean_cost_usd", 0.0))
+    if float(v5.get("mean_cost_usd", 1e9)) > max(v3_cost * 1.25, v3_cost + 0.02):
         blockers.append("v5-cost-regression-above-policy")
+    if float(v5.get("mean_judge_disagreement_points", 100.0)) > 20.0:
+        blockers.append("v5-judge-disagreement-above-20-points")
+
+    blockers = sorted(set(blockers))
     return {
         "version": 5,
         "benchmark_type": "live-blind-outcome-comparison",
@@ -190,9 +290,17 @@ def live_cutover_gate(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "blockers": blockers,
         "cutover_policy": {
             "minimum_tasks": 5,
+            "required_task_coverage_per_strategy": "all benchmark tasks",
+            "minimum_independent_judges_per_result": 2,
+            "minimum_distinct_judge_models": 2,
+            "minimum_distinct_judge_providers": 2,
+            "maximum_per_result_judge_disagreement_points": 35,
+            "maximum_mean_v5_judge_disagreement_points": 20,
+            "minimum_v5_success_rate": 0.80,
             "minimum_quality_improvement_over_v3": 0.02,
             "maximum_relative_cost_regression": 0.25,
             "safety_failures_allowed": 0,
+            "blind_fatal_errors_allowed": 0,
         },
     }
 
