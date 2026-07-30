@@ -1,4 +1,3 @@
-import json
 import sys
 import tempfile
 import unittest
@@ -15,7 +14,7 @@ FIXTURE = ROOT / "tests" / "fixtures" / "models.json"
 CONFIG = ROOT / "open-model-market" / "config.json"
 
 
-class ResourceFixtureDiagnostics(unittest.TestCase):
+class ResourceFixtureCompatibilityTests(unittest.TestCase):
     def test_fixture_resource_market_has_auditable_candidates(self):
         tasks = [
             "分析复杂商业架构风险",
@@ -58,7 +57,6 @@ class ResourceFixtureDiagnostics(unittest.TestCase):
                     "pool": [model.id for model in pool],
                     "packages": package_rows,
                 })
-        print("RESOURCE_FIXTURE_DIAGNOSTICS=" + json.dumps(reports, ensure_ascii=False, sort_keys=True))
         self.assertTrue(all(report["pool"] for report in reports))
         self.assertTrue(all(all(row["eligible"] for row in report["packages"]) for report in reports))
 
