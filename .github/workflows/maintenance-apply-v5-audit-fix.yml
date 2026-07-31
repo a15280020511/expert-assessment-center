@@ -19,6 +19,8 @@ jobs:
     env:
       TARGET_BRANCH: fix/v5-production-stability-audit-r1
       EXPECTED_BASE: 95f6d295994e5dd7b2ef0cc54f22e43a1c620aa4
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
     steps:
       - name: Checkout exact target branch
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -27,14 +29,15 @@ jobs:
           fetch-depth: 1
           persist-credentials: true
 
-      - name: Decode and verify immutable patch ticket
+      - name: Reconstruct and verify immutable patch
         shell: bash
         env:
           EVENT_PATH: ${{ github.event_path }}
         run: |
           set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" --paginate > /tmp/comments.json
           python - <<'PY'
-          import base64, hashlib, json, os
+          import base64, hashlib, json, os, re
           from pathlib import Path
           event = json.loads(Path(os.environ['EVENT_PATH']).read_text(encoding='utf-8'))
           ticket = json.loads(event['issue']['body'])
@@ -42,12 +45,28 @@ jobs:
               raise SystemExit('target branch mismatch')
           if ticket.get('base_commit') != os.environ['EXPECTED_BASE']:
               raise SystemExit('base commit mismatch')
-          patch = base64.b64decode(ticket['patch_base64'], validate=True)
+          expected_count = int(ticket.get('part_count') or 0)
+          comments = json.loads(Path('/tmp/comments.json').read_text(encoding='utf-8'))
+          parts = {}
+          pattern = re.compile(r'^PATCH_PART (\d{3})/(\d{3})\n([A-Za-z0-9+/=]+)$')
+          for row in comments:
+              match = pattern.fullmatch(str(row.get('body') or '').strip())
+              if not match:
+                  continue
+              index, total, payload = int(match.group(1)), int(match.group(2)), match.group(3)
+              if total != expected_count or index in parts:
+                  raise SystemExit('patch part metadata is invalid or duplicated')
+              parts[index] = payload
+          if sorted(parts) != list(range(1, expected_count + 1)):
+              raise SystemExit('patch parts are missing')
+          patch = base64.b64decode(''.join(parts[index] for index in sorted(parts)), validate=True)
           digest = hashlib.sha256(patch).hexdigest()
           if digest != ticket.get('patch_sha256'):
               raise SystemExit('patch digest mismatch')
+          if len(patch) != int(ticket.get('patch_bytes') or -1):
+              raise SystemExit('patch byte count mismatch')
           Path('/tmp/v5-audit-fix.patch').write_bytes(patch)
-          print(json.dumps({'patch_sha256': digest, 'patch_bytes': len(patch)}))
+          print(json.dumps({'patch_sha256': digest, 'patch_bytes': len(patch), 'parts': len(parts)}))
           PY
           test "$(git rev-parse HEAD)" = "$EXPECTED_BASE"
           git apply --check /tmp/v5-audit-fix.patch
