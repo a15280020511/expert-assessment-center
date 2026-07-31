@@ -1,4 +1,4 @@
-name: V5 R8I Stage-D Paid Blind Benchmark
+name: V5 R8J Stage-D Paid Blind Benchmark
 
 on:
   issue_comment:
@@ -11,14 +11,14 @@ permissions:
 
 concurrency:
   group: v5-r8-stage-d-paid-blind
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   benchmark:
     if: >-
       github.actor == github.repository_owner &&
       github.event.issue.number == 64 &&
-      github.event.comment.body == 'RUN_V5_R8_STAGE_D_20260731_R8I'
+      github.event.comment.body == 'RUN_V5_R8_STAGE_D_20260731_R8J'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
@@ -26,11 +26,23 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_NUMBER: "64"
       RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      OUTPUT_DIR: v5-r8i-stage-d-artifacts
-      MODEL_HISTORY_PATH: v5-r8i-stage-d-artifacts/runtime-state/model-performance.json
+      OUTPUT_DIR: v5-r8j-stage-d-artifacts
+      MODEL_HISTORY_PATH: v5-r8j-stage-d-artifacts/runtime-state/model-performance.json
       V5_BENCHMARK_OUTPUT_ALLOWANCE_TOKENS: "10000"
 
     steps:
+      - name: Publish R8J trigger receipt
+        run: |
+          cat > r8j-triggered.md <<EOF
+          ## V5_R8J_STAGE_D_TRIGGERED
+
+          - Source SHA: `${GITHUB_SHA}`
+          - Trigger actor: `${GITHUB_ACTOR}`
+          - Model calls at receipt: `0`
+          - Run: ${RUN_URL}
+          EOF
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@r8j-triggered.md
+
       - name: Checkout reviewed main source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -46,7 +58,7 @@ jobs:
       - name: Install pinned runtime dependencies
         run: python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
 
-      - name: Run zero-cost R8I contract tests
+      - name: Run zero-cost R8J contract tests
         run: |
           python -m pip check
           python -m py_compile open-model-market/*.py
@@ -56,13 +68,13 @@ jobs:
             tests.test_v5_r8i_budget_integrity \
             -v
 
-      - name: Build fixed R8I request
+      - name: Build fixed R8J request
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
           config = {
-              "benchmark_id": "v5-r8-stage-d-20260731-r8i",
+              "benchmark_id": "v5-r8-stage-d-20260731-r8j",
               "max_cost_usd": 1.50,
               "max_calls": 57,
               "max_strategy_cost_usd": 0.25,
@@ -73,17 +85,17 @@ jobs:
                   "public-health-rumor-response",
               ],
           }
-          Path("r8i-stage-d-event.json").write_text(
+          Path("r8j-stage-d-event.json").write_text(
               json.dumps({"issue": {"number": 64, "body": json.dumps(config)}}),
               encoding="utf-8",
           )
           PY
 
-      - name: Parse bounded R8I request
+      - name: Parse bounded R8J request
         id: prepare
         run: |
           python open-model-market/v5_live_benchmark_r8i.py prepare \
-            --event-path r8i-stage-d-event.json \
+            --event-path r8j-stage-d-event.json \
             --output-dir "$OUTPUT_DIR"
 
       - name: Check ordinary OpenRouter API key
@@ -114,13 +126,13 @@ jobs:
         continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_APP_NAME: Expert Assessment Center R8I Joint Zero-Call Gate
+          OPENROUTER_APP_NAME: Expert Assessment Center R8J Joint Zero-Call Gate
           OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
         run: |
           set -o pipefail
           PREFLIGHT_ROOT="$OUTPUT_DIR/zero-call-preflight"
           python open-model-market/v5_zero_call_budget_policy.py prepare \
-            --event-path r8i-stage-d-event.json \
+            --event-path r8j-stage-d-event.json \
             --output-dir "$PREFLIGHT_ROOT"
           python open-model-market/v5_zero_call_budget_policy.py run \
             --config "$PREFLIGHT_ROOT/zero-call-diagnostic-config.json" \
@@ -136,10 +148,10 @@ jobs:
       - name: Publish pre-execution status
         if: always()
         run: |
-          cat > r8i-accepted.md <<EOF
-          ## V5_R8I_STAGE_D_ACCEPTED
+          cat > r8j-accepted.md <<EOF
+          ## V5_R8J_STAGE_D_ACCEPTED
 
-          - Attempt: R8I after R8H external-ledger and V3 budget audit
+          - Attempt: R8J after R8H ledger audit and R8I trigger-registration repair
           - Fixed tasks: 3
           - Strategies: V5 R8 versus bounded preserved V3 baseline
           - Per-strategy per-task acceptance cap: 0.25 USD
@@ -156,9 +168,9 @@ jobs:
           - Nine-node joint planning preflight: ${{ steps.planning.outcome }}
           - Run: ${RUN_URL}
           EOF
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@r8i-accepted.md
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@r8j-accepted.md
 
-      - name: Run R8I three-task anonymous comparison
+      - name: Run R8J three-task anonymous comparison
         id: execute
         if: >-
           steps.secret.outputs.present == 'true' &&
@@ -167,7 +179,7 @@ jobs:
         continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_APP_NAME: Expert Assessment Center R8I Stage D
+          OPENROUTER_APP_NAME: Expert Assessment Center R8J Stage D
           OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
         run: |
           set -o pipefail
@@ -188,35 +200,35 @@ jobs:
           from pathlib import Path
           sys.path.insert(0, "open-model-market")
           from artifact_manifest import write_manifest
-          root = Path("v5-r8i-stage-d-artifacts")
+          root = Path("v5-r8j-stage-d-artifacts")
           root.mkdir(parents=True, exist_ok=True)
           write_manifest(root)
           PY
 
-      - name: Upload R8I Stage-D artifacts
+      - name: Upload R8J Stage-D artifacts
         id: upload
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: v5-r8i-stage-d-${{ github.run_id }}
-          path: v5-r8i-stage-d-artifacts/
+          name: v5-r8j-stage-d-${{ github.run_id }}
+          path: v5-r8j-stage-d-artifacts/
           if-no-files-found: error
           retention-days: 90
 
-      - name: Publish R8I result
+      - name: Publish R8J result
         if: always()
         continue-on-error: true
         run: |
-          python - <<'PY' > r8i-result.md
+          python - <<'PY' > r8j-result.md
           import json
           from pathlib import Path
-          root = Path("v5-r8i-stage-d-artifacts")
+          root = Path("v5-r8j-stage-d-artifacts")
           result_path = root / "v5-live-benchmark-results.json"
           result = json.loads(result_path.read_text()) if result_path.exists() else {}
           gate = result.get("cutover_gate") or {}
           ledger = result.get("ledger") or {}
-          print("## V5_R8I_STAGE_D_RESULT")
+          print("## V5_R8J_STAGE_D_RESULT")
           print()
           print(f"- Benchmark status: `{result.get('status', 'not-executed')}`")
           print(f"- Tasks completed: `{result.get('tasks_completed', 0)}` / `{result.get('tasks_requested', 3)}`")
@@ -237,7 +249,7 @@ jobs:
                   f"mean_cost=${float(row.get('mean_cost_usd', 0.0)):.8f}"
               )
           PY
-          cat >> r8i-result.md <<EOF
+          cat >> r8j-result.md <<EOF
           - Credit outcome: ${{ steps.credit.outcome }}
           - Joint planning outcome: ${{ steps.planning.outcome }}
           - Execute outcome: ${{ steps.execute.outcome }}
@@ -246,9 +258,9 @@ jobs:
           - Artifact digest: ${{ steps.upload.outputs.artifact-digest }}
           - Run: ${RUN_URL}
           EOF
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@r8i-result.md
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@r8j-result.md
 
-      - name: Enforce complete R8I Stage-D evidence
+      - name: Enforce complete R8J Stage-D evidence
         if: always()
         run: |
           if [[ "${{ steps.secret.outputs.present }}" != "true" ]]; then
@@ -266,7 +278,7 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
-          data = json.loads(Path("v5-r8i-stage-d-artifacts/v5-live-benchmark-results.json").read_text())
+          data = json.loads(Path("v5-r8j-stage-d-artifacts/v5-live-benchmark-results.json").read_text())
           gate = data.get("cutover_gate") or {}
           ledger = data.get("ledger") or {}
           if int(ledger.get("calls", 0)) > 57:
@@ -274,7 +286,7 @@ jobs:
           if float(ledger.get("actual_cost_usd", 0.0)) > 1.50 + 1e-12:
               raise SystemExit("truthfully accounted cost exceeds 1.50 USD")
           if not gate.get("stage_d_paid_blind_passed"):
-              raise SystemExit("R8I Stage-D evidence gate did not pass")
+              raise SystemExit("R8J Stage-D evidence gate did not pass")
           if gate.get("production_cutover_allowed") or gate.get("v3_deletion_allowed"):
               raise SystemExit("forbidden production or deletion permission was emitted")
           PY
