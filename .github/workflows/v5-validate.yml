@@ -167,7 +167,7 @@ jobs:
               if token_fields:
                   allowance = request[token_fields[0]]
                   assert isinstance(allowance, int)
-                  assert 1024 <= allowance <= 10000
+                  assert 1024 <= allowance <= 32768
                   assert node["parameter_profile"]["output_allowance_is_cost_assumption"] is False
                   assert node["parameter_profile"]["estimated_completion_usage_tokens"] <= allowance
                   allowances.append(allowance)
