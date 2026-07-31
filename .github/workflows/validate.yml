@@ -10,8 +10,10 @@ on:
       - ".github/workflows/expert-integrity-validate.yml"
       - ".github/workflows/v5-validate.yml"
       - ".github/workflows/validate.yml"
+      - ".github/workflows/promote-v5-production.yml"
       - ".github/dependabot.yml"
       - "requirements*.txt"
+      - "ruff.toml"
       - "README.md"
   push:
     branches: [main]
@@ -23,8 +25,10 @@ on:
       - ".github/workflows/expert-integrity-validate.yml"
       - ".github/workflows/v5-validate.yml"
       - ".github/workflows/validate.yml"
+      - ".github/workflows/promote-v5-production.yml"
       - ".github/dependabot.yml"
       - "requirements*.txt"
+      - "ruff.toml"
       - "README.md"
 
 permissions:
@@ -52,13 +56,18 @@ jobs:
         run: |
           python -m pip check
           python -c "from ortools.sat.python import cp_model; print(cp_model.CpModel())"
-      - name: Run Ruff safety checks
+      - name: Run canonical Ruff checks
         shell: bash
         run: |
           set -o pipefail
-          python -m ruff check --select E9,F63,F7,F82 open-model-market tests tools 2>&1 | tee ruff.log
-      - name: Compile current Python tree
-        run: python -m py_compile open-model-market/*.py tests/*.py tools/*.py
+          mkdir -p validation-logs
+          python -m ruff check . 2>&1 | tee validation-logs/ruff.log
+      - name: Compile canonical Python tree
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p validation-logs
+          python -m compileall -q open-model-market tests tools 2>&1 | tee validation-logs/compileall.log
       - name: Verify V5 production files
         run: |
           test -s .github/dependabot.yml
@@ -66,6 +75,8 @@ jobs:
           test -s .github/workflows/v5-validate.yml
           test -s .github/workflows/expert-integrity-validate.yml
           test -s .github/workflows/execution-ticket.yml
+          test -s .github/workflows/promote-v5-production.yml
+          test -s ruff.toml
           test -s open-model-market/v5_pipeline.py
           test -s open-model-market/v5_production_ticket.py
           test -s open-model-market/v5_issue_ticket.py
@@ -90,11 +101,12 @@ jobs:
           test -s tests/test_v5_quality_status_integrity.py
           test -s tests/test_v5_empty_output_recovery.py
           test -s tools/run_v5_p0_regressions.py
-      - name: Run current unit tests
+      - name: Run canonical full unit test suite
         shell: bash
         run: |
           set -o pipefail
-          python -m unittest discover -s tests -v 2>&1 | tee unit-test.log
+          mkdir -p validation-logs
+          python -m unittest discover -s tests -p 'test*.py' -v 2>&1 | tee validation-logs/unit-test.log
       - name: Run mandatory P0 regressions
         shell: bash
         run: |
@@ -127,8 +139,7 @@ jobs:
           name: v5-toolkit-validation-${{ github.run_id }}
           path: |
             validation-artifacts/
-            unit-test.log
+            validation-logs/
             p0-regressions.log
-            ruff.log
           if-no-files-found: warn
           retention-days: 7

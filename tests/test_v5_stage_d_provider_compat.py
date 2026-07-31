@@ -6,7 +6,7 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-import v5_stage_d_provider_compat as compat
+import v5_stage_d_provider_compat as compat  # noqa: E402
 
 
 class V5StageDProviderCompatibilityTests(unittest.TestCase):

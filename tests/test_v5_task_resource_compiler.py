@@ -1,11 +1,11 @@
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
-import sys
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
 from atomic_work_graph import AtomicWorkGraphError, build_atomic_work_graph  # noqa: E402

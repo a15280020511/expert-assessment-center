@@ -27,7 +27,7 @@ import v5_task_delivery_contract as task_delivery_contract
 import v5_quality_status_integrity as quality_integrity
 from execution_graph import ExecutionGraph, GraphLimits, SelectedNode
 from execution_graph_validator import validate_execution_graph
-from openrouter_api import CHAT_URL, OpenRouterRequestError, request_json
+from openrouter_api import CHAT_URL, request_json
 from v5_planning_runtime import PlannerPolicy
 
 RUNTIME_VERSION = "v5-native-runtime-1"
