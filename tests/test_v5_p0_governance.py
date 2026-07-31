@@ -78,8 +78,9 @@ class V5P0GovernanceTests(unittest.TestCase):
         self.assertEqual(snapshot["recovery_calls_reserved"], 2)
 
     def _prepare(self, approved_budget):
+        task_id = "p0-budget-001"
         packet = {
-            "task_id": "p0-budget-001",
+            "task_id": task_id,
             "route": "expert-team",
             "task": {"question": "审计一个自包含的软件治理方案。"},
             "approved_budget": approved_budget,
@@ -94,13 +95,22 @@ class V5P0GovernanceTests(unittest.TestCase):
                 issue_number=101,
                 actor="owner",
                 author_association="OWNER",
-                comment_body="",
+                comment_body=f"/run-expert-team {task_id}",
                 output_dir=folder,
             )
-            with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY_OWNER": "owner"}, clear=False), \
-                 mock.patch.object(ticket.hardened.base, "duplicate_reason", return_value=""):
+            with mock.patch.dict(
+                os.environ,
+                {"GITHUB_REPOSITORY_OWNER": "owner"},
+                clear=False,
+            ), mock.patch.object(
+                ticket.hardened.base,
+                "duplicate_reason",
+                return_value="",
+            ):
                 ticket.prepare(args)
-            return json.loads((Path(folder) / "ticket-status.json").read_text(encoding="utf-8"))
+            return json.loads(
+                (Path(folder) / "ticket-status.json").read_text(encoding="utf-8")
+            )
 
     def test_ticket_budget_is_not_silently_rewritten(self):
         status = self._prepare({
@@ -110,6 +120,8 @@ class V5P0GovernanceTests(unittest.TestCase):
             "cost_anomaly_usd": 1.5,
         })
         self.assertTrue(status["accepted"], status.get("reason"))
+        self.assertEqual(status["trigger_mode"], "run")
+        self.assertEqual(status["execution_id"], "p0-budget-001")
         self.assertEqual(status["calls"], 8)
         self.assertEqual(status["maximum_recovery_calls"], 2)
         self.assertEqual(status["maximum_initial_calls"], 6)
@@ -125,17 +137,22 @@ class V5P0GovernanceTests(unittest.TestCase):
         self.assertIn("leave at least one initial call", status["reason"])
 
     def test_workflow_has_serialized_admission_and_execution(self):
-        text = (ROOT / ".github" / "workflows" / "execution-ticket.yml").read_text(encoding="utf-8")
+        text = (
+            ROOT / ".github" / "workflows" / "execution-ticket.yml"
+        ).read_text(encoding="utf-8")
         self.assertIn("group: expert-production-admission", text)
         self.assertIn("group: expert-production-global", text)
         self.assertIn("v5_admission_lock.py", text)
-        self.assertIn("EXECUTION_BUSY", text)
+        self.assertIn("EXECUTION_REJECTED", text)
         self.assertNotIn('TOTAL_MODEL_CALLS: "16"', text)
         self.assertIn("--maximum-total-calls", text)
         self.assertIn("--maximum-recovery-calls", text)
+        self.assertEqual(text.count("ref: production"), 2)
 
     def test_final_attestation_follows_primary_artifact_and_final_status(self):
-        text = (ROOT / ".github" / "workflows" / "execution-ticket.yml").read_text(encoding="utf-8")
+        text = (
+            ROOT / ".github" / "workflows" / "execution-ticket.yml"
+        ).read_text(encoding="utf-8")
         primary = text.index("name: Upload primary ticket artifacts")
         final = text.index("name: Render authoritative V5 final status")
         attest = text.index("name: Generate post-upload final attestation")
@@ -146,9 +163,12 @@ class V5P0GovernanceTests(unittest.TestCase):
         self.assertLess(attest, proof)
         self.assertLess(proof, publish)
         self.assertIn("v5_final_attestation.py", text)
+        self.assertIn("ticket-artifacts/final-status.json", text)
 
     def test_stale_v3_contract_and_paths_are_removed(self):
-        schema = (MARKET / "execution-ticket.schema.json").read_text(encoding="utf-8")
+        schema = (MARKET / "execution-ticket.schema.json").read_text(
+            encoding="utf-8"
+        )
         config = (MARKET / "config.json").read_text(encoding="utf-8")
         report = (MARKET / "publish_report.py").read_text(encoding="utf-8")
         legacy_repository = "a15280020511/" + "test"
