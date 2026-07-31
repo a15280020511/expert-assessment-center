@@ -4,26 +4,28 @@
     "quality_tier": "value",
     "ranking_limit": 50,
     "minimum_context_length": 16384,
-    "candidate_pool_per_seat": 3,
+    "candidate_pool_per_seat": 12,
+    "candidate_pool_policy": "multi-channel-intelligence-fit-value-price-context",
     "budget_safety_factor": 1.25,
-    "history_weight": 0.0,
     "catalog_sorts": [
       "intelligence-high-to-low",
       "pricing-low-to-high"
     ],
     "value_policy": {
-      "primary_metric": "task_benchmark_score_per_blended_usd_per_million_tokens",
+      "primary_metric": "expected_quality_after_failure_cost_per_blended_usd",
       "benchmark_endpoint": "https://openrouter.ai/api/v1/benchmarks",
       "price_floor_per_million": 0.25,
       "benchmark_fallback": "official_intelligence_rank",
       "speed_used": false,
-      "popularity_used": false
+      "popularity_used": false,
+      "failure_probability_costed": true,
+      "recovery_cost_included": true
     },
     "optimizer": {
       "engine": "google-or-tools-cp-sat",
-      "requirement_compiler": "resource_requirements.py",
-      "joint_resource_optimizer": "resource_plan_optimizer.py",
-      "runtime_prompt_binding": "resource_runtime_compat.py",
+      "requirement_compiler": "resource_matrix.py",
+      "joint_resource_optimizer": "v5_value_optimizer.py",
+      "runtime_prompt_binding": "v5_dynamic_prompt_delivery.py",
       "fallback_to_legacy_greedy_selector": false
     },
     "soft_price_caps_per_million": {
@@ -58,10 +60,12 @@
     "maximum_replacements": 2,
     "parallel_workers": 4,
     "judge_context_budget_chars": 120000,
-    "require_all_experts": true
+    "minimum_required_work_coverage": 0.6666666667,
+    "allow_controlled_degradation": true
   },
   "provider": {
-    "allow_fallbacks": true,
-    "require_parameters": true
+    "allow_fallbacks": false,
+    "require_parameters": true,
+    "explicit_provider_lock_required": true
   }
 }
