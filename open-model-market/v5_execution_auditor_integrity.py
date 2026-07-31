@@ -220,6 +220,13 @@ def audit(root: Path, *, execute_outcome: str, publish_outcome: str) -> dict[str
             "message": "",
             "retryable": False,
         }
+    elif result["status"] == "DEGRADED":
+        result["primary_failure"] = {
+            "code": "DEGRADED_SUCCESS",
+            "stage": "quality-integrity",
+            "message": result["degradations"][0] if result["degradations"] else "bounded degradation",
+            "retryable": False,
+        }
     elif result["failures"]:
         primary = result.get("primary_failure")
         primary = dict(primary) if isinstance(primary, Mapping) else {}

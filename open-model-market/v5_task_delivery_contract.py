@@ -48,7 +48,7 @@ _MARKDOWN_CUE_RE = re.compile(
     re.IGNORECASE,
 )
 _NUMBERED_ITEM_RE = re.compile(
-    r"(?:(?<=^)|(?<=[；;\n]))\s*(\d{1,2})[）).、]\s*([^；;\n]+)",
+    r"(?:(?<=^)|(?<=[：:；;\n]))\s*(\d{1,2})[）).、]\s*([^；;\n]+)",
     re.MULTILINE,
 )
 
@@ -140,6 +140,9 @@ def extract_explicit_markdown_contract(task: str) -> dict[str, Any]:
         if (position := text.casefold().find(marker.casefold())) >= 0
     ]
     segment = text[min(cue_positions):] if cue_positions else text
+    contract_cue = _MARKDOWN_CUE_RE.search(segment)
+    if contract_cue:
+        segment = segment[:contract_cue.start()]
     headings: list[str] = []
     expected_index = 1
     for match in _NUMBERED_ITEM_RE.finditer(segment):
