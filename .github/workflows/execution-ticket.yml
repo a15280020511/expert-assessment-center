@@ -1,8 +1,6 @@
 name: Execution Ticket Expert Team V5
 
 on:
-  issues:
-    types: [opened, reopened]
   issue_comment:
     types: [created]
 
@@ -15,9 +13,9 @@ jobs:
   admit-ticket:
     if: >-
       github.actor == github.repository_owner &&
-      ((github.event_name == 'issues' && startsWith(github.event.issue.title, '[execution]')) ||
-       (github.event_name == 'issue_comment' && startsWith(github.event.issue.title, '[execution]') &&
-        startsWith(github.event.comment.body, '/retry-expert-team ')))
+      startsWith(github.event.issue.title, '[execution]') &&
+      (startsWith(github.event.comment.body, '/run-expert-team ') ||
+       startsWith(github.event.comment.body, '/retry-expert-team '))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     concurrency:
@@ -26,15 +24,25 @@ jobs:
     outputs:
       allowed: ${{ steps.lock.outputs.allowed }}
       reason: ${{ steps.lock.outputs.reason }}
+      accepted: ${{ steps.ticket.outputs.accepted }}
+      calls: ${{ steps.ticket.outputs.calls }}
+      quality_tier: ${{ steps.ticket.outputs.quality_tier }}
+      maximum_recovery_calls: ${{ steps.ticket.outputs.maximum_recovery_calls }}
+      maximum_initial_calls: ${{ steps.ticket.outputs.maximum_initial_calls }}
+      cost_anomaly_usd: ${{ steps.ticket.outputs.cost_anomaly_usd }}
+      task_id: ${{ steps.ticket.outputs.task_id }}
+      trigger_mode: ${{ steps.ticket.outputs.trigger_mode }}
+      execution_id: ${{ steps.ticket.outputs.execution_id }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      - name: Checkout pinned source for admission
+      - name: Checkout production source for admission
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: production
           persist-credentials: false
 
       - name: Acquire serialized zero-call admission
@@ -43,251 +51,275 @@ jobs:
 
       - name: Publish explicit busy rejection
         if: steps.lock.outputs.allowed != 'true'
-        run: |
-          cat > issue-comment.md <<EOF
-          ## EXECUTION_REJECTED
-
-          - Error code: \`EXECUTION_BUSY\`
-          - Reason: ${{ steps.lock.outputs.reason }}
-          - Run: \`${RUN_URL}\`
-          - V5模型调用：\`0\`
-          EOF
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@issue-comment.md
-
-  execute-ticket:
-    needs: admit-ticket
-    if: needs.admit-ticket.outputs.allowed == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 40
-    concurrency:
-      group: expert-production-global
-      cancel-in-progress: false
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      ISSUE_NUMBER: ${{ github.event.issue.number }}
-      RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-    steps:
-      - name: Checkout pinned source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
         with:
-          persist-credentials: false
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## EXECUTION_REJECTED\n\n${{ steps.lock.outputs.reason }}\n\n模型调用：\`0\`。请等待当前生产任务完成后，在本 Issue 评论新的唯一命令。\n- Run: \`${process.env.RUN_URL}\``
+            })
 
-      - name: Set up pinned Python action
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: requirements-runtime.txt
-
-      - name: Install pinned runtime dependencies
-        run: python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
-
-      - name: Compile production modules
-        run: python -m py_compile open-model-market/*.py
-
-      - name: Parse, authorize, and de-duplicate V5 ticket
-        id: prepare
+      - name: Validate explicit V5 ticket command
+        if: steps.lock.outputs.allowed == 'true'
+        id: ticket
         run: |
           python open-model-market/v5_issue_ticket.py prepare \
             --event-path "$GITHUB_EVENT_PATH" \
             --output-dir ticket-artifacts
 
-      - name: Comment V5 ticket accepted
-        if: steps.prepare.outputs.accepted == 'true'
+      - name: Render admission status
+        if: steps.lock.outputs.allowed == 'true'
+        id: receipt
         run: |
-          python open-model-market/v5_issue_ticket.py render \
-            --phase accepted --output-dir ticket-artifacts --run-url "$RUN_URL" > issue-comment.md
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@issue-comment.md
-
-      - name: Comment ticket rejected
-        if: steps.prepare.outputs.accepted != 'true'
-        run: |
-          python open-model-market/v5_issue_ticket.py render \
-            --phase rejected --output-dir ticket-artifacts --run-url "$RUN_URL" > issue-comment.md
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@issue-comment.md
-
-      - name: Check OpenRouter secret
-        if: steps.prepare.outputs.accepted == 'true'
-        id: secret
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: |
-          if [[ -n "$OPENROUTER_API_KEY" ]]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
+          if [[ "${{ steps.ticket.outputs.accepted }}" == "true" ]]; then
+            phase=accepted
           else
-            echo "present=false" >> "$GITHUB_OUTPUT"
+            phase=rejected
           fi
+          python open-model-market/v5_issue_ticket.py render \
+            --phase "$phase" \
+            --output-dir ticket-artifacts \
+            --run-url "$RUN_URL" > admission-status.md
 
-      - name: Comment missing secret
-        if: steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present != 'true'
-        run: |
-          cat > issue-comment.md <<EOF
-          ## EXECUTION_REJECTED
+      - name: Upload admission evidence
+        if: always() && steps.lock.outputs.allowed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ticket-admission-${{ github.run_id }}
+          path: |
+            ticket-artifacts/
+            admission-status.md
+          if-no-files-found: error
+          retention-days: 14
 
-          票据通过，但仓库缺少 Actions Secret：\`OPENROUTER_API_KEY\`。
-
-          - Run: \`${RUN_URL}\`
-          - V5模型调用：\`0\`
-          EOF
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@issue-comment.md
-
-      - name: Execute hardened V5 R8 dynamic graph
-        id: execute
-        if: steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present == 'true'
-        continue-on-error: true
+      - name: Publish admission status
+        if: steps.lock.outputs.allowed == 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
         env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          QUALITY_TIER: ${{ steps.prepare.outputs.quality_tier }}
-          APPROVED_TOTAL_CALLS: ${{ steps.prepare.outputs.calls }}
-          APPROVED_RECOVERY_CALLS: ${{ steps.prepare.outputs.maximum_recovery_calls }}
-          COST_ANOMALY_USD: ${{ steps.prepare.outputs.cost_anomaly_usd }}
+          STATUS_FILE: admission-status.md
+        with:
+          script: |
+            const fs = require('fs');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: fs.readFileSync(process.env.STATUS_FILE, 'utf8')
+            })
+
+  execute-ticket:
+    needs: admit-ticket
+    if: needs.admit-ticket.outputs.allowed == 'true' && needs.admit-ticket.outputs.accepted == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    concurrency:
+      group: expert-production-global
+      cancel-in-progress: false
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      MODEL_MAX_RETRIES: "0"
+      MODEL_TIMEOUT_SECONDS: "240"
+      PARALLEL_WORKERS: "4"
+      OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
+      OPENROUTER_APP_NAME: self-managed-open-model-expert-team-v5
+    steps:
+      - name: Checkout pinned production source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: production
+          persist-credentials: false
+
+      - name: Download admitted ticket
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ticket-admission-${{ github.run_id }}
+          path: admission-download
+
+      - name: Restore immutable admission evidence
         run: |
-          set -euo pipefail
-          EXPERT_TASK="$(cat ticket-artifacts/task.txt)"
+          rm -rf ticket-artifacts
+          cp -R admission-download/ticket-artifacts ticket-artifacts
+
+      - name: Install pinned runtime dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
+          python -m pip check
+
+      - name: Enforce admitted execution contract
+        run: |
+          python open-model-market/v5_ticket_gate.py \
+            --output-dir ticket-artifacts \
+            --expected-calls "${{ needs.admit-ticket.outputs.calls }}" \
+            --expected-recovery-calls "${{ needs.admit-ticket.outputs.maximum_recovery_calls }}" \
+            --expected-quality-tier "${{ needs.admit-ticket.outputs.quality_tier }}" \
+            --expected-cost-anomaly-usd "${{ needs.admit-ticket.outputs.cost_anomaly_usd }}"
+
+      - name: Execute explicit V5 production runtime
+        id: execute
+        continue-on-error: true
+        run: |
+          task="$(cat ticket-artifacts/task.txt)"
           args=(
-            --task "$EXPERT_TASK"
-            --quality-tier "$QUALITY_TIER"
-            --maximum-total-calls "$APPROVED_TOTAL_CALLS"
-            --maximum-recovery-calls "$APPROVED_RECOVERY_CALLS"
-            --require-live-catalog
+            --task "$task"
             --output-dir ticket-artifacts
+            --quality-tier "${{ needs.admit-ticket.outputs.quality_tier }}"
+            --maximum-total-calls "${{ needs.admit-ticket.outputs.calls }}"
+            --maximum-recovery-calls "${{ needs.admit-ticket.outputs.maximum_recovery_calls }}"
+            --require-live-catalog
           )
-          if [[ "$COST_ANOMALY_USD" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-            args+=(--cost-anomaly-usd "$COST_ANOMALY_USD")
+          if [[ -n "${{ needs.admit-ticket.outputs.cost_anomaly_usd }}" ]]; then
+            args+=(--cost-anomaly-usd "${{ needs.admit-ticket.outputs.cost_anomaly_usd }}")
           fi
-          python open-model-market/v5_production_ticket.py "${args[@]}" \
-            2>&1 | tee ticket-artifacts/execution-console.log
+          python open-model-market/v5_production_ticket.py "${args[@]}"
 
-      - name: Publish and verify full V5 report
+      - name: Prepare public report comments
         id: publish
-        if: steps.execute.outcome == 'success'
         continue-on-error: true
         run: |
-          set -euo pipefail
-          rm -rf ticket-artifacts/report-comments
           python open-model-market/publish_report.py \
-            --report ticket-artifacts/expert-team-report.md \
-            --output-dir ticket-artifacts/report-comments \
-            --run-url "$RUN_URL"
+            --output-dir ticket-artifacts \
+            --comments-dir ticket-artifacts/report-comments
 
-          gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments?per_page=100" \
-            --jq '.[] | select(.user.login == "github-actions[bot]") | .body' > /tmp/trusted-issue-comments.txt
-          for report_comment in ticket-artifacts/report-comments/report-comment-*.md; do
-            marker="$(head -n 1 "$report_comment")"
-            if grep -Fqx "$marker" /tmp/trusted-issue-comments.txt; then
-              echo "Skipping trusted already published report part: $marker"
-              continue
-            fi
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@"$report_comment"
-          done
+      - name: Publish report comments
+        if: steps.publish.outcome == 'success'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        env:
+          COMMENT_DIR: ticket-artifacts/report-comments
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const files = fs.readdirSync(process.env.COMMENT_DIR)
+              .filter(name => /^report-comment-\d+\.md$/.test(name))
+              .sort();
+            for (const name of files) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: fs.readFileSync(path.join(process.env.COMMENT_DIR, name), 'utf8')
+              });
+            }
 
-          gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments?per_page=100" \
-            --jq '.[] | select(.user.login == "github-actions[bot]") | .body' > /tmp/trusted-issue-comments-after.txt
-          while IFS= read -r report_comment; do
-            marker="$(head -n 1 "ticket-artifacts/report-comments/$report_comment")"
-            grep -Fqx "$marker" /tmp/trusted-issue-comments-after.txt
-          done < <(jq -r '.files[]' ticket-artifacts/report-comments/report-comments-manifest.json)
-          report_sha="$(jq -r '.report_sha256' ticket-artifacts/report-comments/report-comments-manifest.json)"
-          grep -Fq "Report SHA256: \`${report_sha}\`" /tmp/trusted-issue-comments-after.txt
-
-      - name: Run deterministic V5 execution audit
+      - name: Audit native V5 execution
         id: audit
-        if: always() && steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present == 'true'
         continue-on-error: true
         run: |
-          python open-model-market/v5_execution_auditor_integrity.py \
+          python open-model-market/v5_execution_auditor.py \
             --output-dir ticket-artifacts \
             --execute-outcome "${{ steps.execute.outcome }}" \
             --publish-outcome "${{ steps.publish.outcome }}"
 
       - name: Refresh primary artifact manifest
         id: manifest
-        if: always()
         continue-on-error: true
         run: |
           python - <<'PY'
           import sys
           from pathlib import Path
-
           sys.path.insert(0, "open-model-market")
           from artifact_manifest import write_manifest
-
           write_manifest(Path("ticket-artifacts"))
           PY
 
       - name: Upload primary ticket artifacts
-        id: upload_ticket
+        id: ticket_artifact
         if: always()
-        continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: execution-ticket-v5-${{ github.event.issue.number }}-${{ github.run_id }}
+          name: ticket-result-${{ github.run_id }}
           path: ticket-artifacts/
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 14
 
       - name: Render authoritative V5 final status
         id: final
-        if: always() && steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present == 'true'
-        continue-on-error: true
+        if: always()
+        env:
+          PRIMARY_ARTIFACT_ID: ${{ steps.ticket_artifact.outputs.artifact-id }}
+          PRIMARY_ARTIFACT_URL: ${{ steps.ticket_artifact.outputs.artifact-url }}
+          PRIMARY_ARTIFACT_DIGEST: ${{ steps.ticket_artifact.outputs.artifact-digest }}
         run: |
           python open-model-market/v5_final_status.py \
             --output-dir ticket-artifacts \
             --run-url "$RUN_URL" \
+            --ticket-upload-outcome "${{ steps.ticket_artifact.outcome }}" \
             --audit-outcome "${{ steps.audit.outcome }}" \
             --manifest-outcome "${{ steps.manifest.outcome }}" \
-            --ticket-upload-outcome "${{ steps.upload_ticket.outcome }}" \
-            --artifact-id "${{ steps.upload_ticket.outputs['artifact-id'] }}" \
-            --artifact-url "${{ steps.upload_ticket.outputs['artifact-url'] }}" \
-            --artifact-digest "${{ steps.upload_ticket.outputs['artifact-digest'] }}" \
-            > final-status.md
+            --artifact-id "$PRIMARY_ARTIFACT_ID" \
+            --artifact-url "$PRIMARY_ARTIFACT_URL" \
+            --artifact-digest "$PRIMARY_ARTIFACT_DIGEST" \
+            | tee final-status.md
 
       - name: Generate post-upload final attestation
         id: attest
-        if: always() && steps.final.outcome == 'success'
-        continue-on-error: true
+        if: always()
+        env:
+          PRIMARY_ARTIFACT_ID: ${{ steps.ticket_artifact.outputs.artifact-id }}
+          PRIMARY_ARTIFACT_URL: ${{ steps.ticket_artifact.outputs.artifact-url }}
+          PRIMARY_ARTIFACT_DIGEST: ${{ steps.ticket_artifact.outputs.artifact-digest }}
         run: |
-          audit_status="$(jq -r '.status // "FAIL"' ticket-artifacts/execution-diagnosis.json)"
           python open-model-market/v5_final_attestation.py \
             --output-dir ticket-artifacts \
-            --primary-artifact-id "${{ steps.upload_ticket.outputs['artifact-id'] }}" \
-            --primary-artifact-digest "${{ steps.upload_ticket.outputs['artifact-digest'] }}" \
-            --primary-artifact-url "${{ steps.upload_ticket.outputs['artifact-url'] }}" \
-            --audit-status "$audit_status" \
+            --primary-artifact-id "$PRIMARY_ARTIFACT_ID" \
+            --primary-artifact-digest "$PRIMARY_ARTIFACT_DIGEST" \
+            --primary-artifact-url "$PRIMARY_ARTIFACT_URL" \
+            --audit-status "${{ steps.final.outputs.status }}" \
             --run-id "${{ github.run_id }}" \
             --commit-sha "${{ github.sha }}" \
             --final-status-file final-status.md \
             --output final-attestation.json
 
       - name: Upload final attestation artifact
-        id: upload_attestation
-        if: always() && steps.attest.outcome == 'success'
-        continue-on-error: true
+        id: proof_artifact
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: execution-ticket-v5-final-attestation-${{ github.event.issue.number }}-${{ github.run_id }}
+          name: final-attestation-${{ github.run_id }}
           path: |
             final-attestation.json
             final-status.md
+            ticket-artifacts/final-status.json
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 14
 
       - name: Publish authoritative V5 final status
-        id: publish_final
-        if: always() && steps.final.outcome == 'success'
-        continue-on-error: true
-        run: |
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@final-status.md
+        if: always()
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        env:
+          STATUS_FILE: final-status.md
+          FINAL_ARTIFACT_ID: ${{ steps.proof_artifact.outputs.artifact-id }}
+          FINAL_ARTIFACT_URL: ${{ steps.proof_artifact.outputs.artifact-url }}
+          FINAL_ARTIFACT_DIGEST: ${{ steps.proof_artifact.outputs.artifact-digest }}
+        with:
+          script: |
+            const fs = require('fs');
+            let body = fs.readFileSync(process.env.STATUS_FILE, 'utf8');
+            body += `\n- Final attestation Artifact ID: \`${process.env.FINAL_ARTIFACT_ID || 'unavailable'}\``;
+            body += `\n- Final attestation Artifact digest: \`${process.env.FINAL_ARTIFACT_DIGEST || 'unavailable'}\``;
+            if (process.env.FINAL_ARTIFACT_URL) {
+              body += `\n- Final attestation Artifact: ${process.env.FINAL_ARTIFACT_URL}`;
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            })
 
-      - name: Mark failed execution
-        if: >-
-          always() &&
-          steps.prepare.outputs.accepted == 'true' &&
-          (steps.secret.outputs.present != 'true' ||
-           steps.final.outcome == 'failure' ||
-           steps.final.outputs.status == 'FAIL' ||
-           steps.attest.outcome != 'success' ||
-           steps.upload_attestation.outcome != 'success' ||
-           steps.publish_final.outcome != 'success')
-        run: exit 1
+      - name: Verify authoritative V5 final outcome
+        if: always()
+        run: |
+          test "${{ steps.ticket_artifact.outcome }}" = "success"
+          test "${{ steps.audit.outcome }}" = "success"
+          test "${{ steps.manifest.outcome }}" = "success"
+          test "${{ steps.final.outcome }}" = "success"
+          test "${{ steps.attest.outcome }}" = "success"
+          test "${{ steps.proof_artifact.outcome }}" = "success"
+          test "${{ steps.final.outputs.status }}" = "PASS"
