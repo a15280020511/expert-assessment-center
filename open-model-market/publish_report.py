@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Split a completed V5 report into GitHub-safe Issue comment files."""
+"""Split an audited V5 report into GitHub-safe Issue comment files."""
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
 from pathlib import Path
-from typing import List
+from typing import Any, List, Mapping
 
 DEFAULT_MAX_COMMENT_CHARS = 50_000
 HEADER_RESERVE_CHARS = 1_000
+STRICT_SUCCESS_STATUSES = {"success", "success_retried", "success_recovered"}
 
 
 def split_text(text: str, payload_limit: int) -> List[str]:
@@ -67,6 +68,7 @@ def render_comments(report: str, *, run_url: str, max_chars: int) -> List[str]:
             f"- Run: `{run_url}`\n"
             f"- Source: `expert-team-report.md`\n"
             f"- Report SHA256: `{digest}`\n"
+            "- 交付状态：仅完整通过节点质量门、输出合同和运行完整性检查的报告允许公开。\n"
             "- 交付范围：完整V5最终报告；全部动态节点原始回答和底层调用证据保存在 Artifact。\n"
             "- 公开提示：本评论位于公开仓库 Issue，任何人可见。\n\n"
             "---\n\n"
@@ -78,7 +80,13 @@ def render_comments(report: str, *, run_url: str, max_chars: int) -> List[str]:
     return comments
 
 
-def write_comments(report_path: Path, output_dir: Path, *, run_url: str, max_chars: int) -> dict:
+def write_comments(
+    report_path: Path,
+    output_dir: Path,
+    *,
+    run_url: str,
+    max_chars: int,
+) -> dict[str, Any]:
     report = report_path.read_text(encoding="utf-8")
     comments = render_comments(report, run_url=run_url, max_chars=max_chars)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -91,68 +99,132 @@ def write_comments(report_path: Path, output_dir: Path, *, run_url: str, max_cha
 
     run_id = _validated_run_id(run_url)
     manifest = {
-        "version": 2,
+        "version": 3,
         "source": str(report_path),
         "run_url": run_url,
         "run_id": run_id,
-        "publication_status": "prepared",
+        "publication_status": "prepared_strict_full_success",
         "report_sha256": hashlib.sha256(report.encode("utf-8")).hexdigest(),
         "report_chars": len(report),
         "comment_count": len(comments),
         "max_comment_chars": max_chars,
         "files": files,
+        "publication_gate": "strict-full-success-only",
     }
     (output_dir / "report-comments-manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
     return manifest
 
 
-def _load_mapping(path: Path) -> dict:
+def _load_mapping(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return {}
-    return dict(value) if isinstance(value, dict) else {}
+    return dict(value) if isinstance(value, Mapping) else {}
 
 
-def write_failure_skip_manifest(
+def _node_rows(artifact_root: Path) -> list[Mapping[str, Any]]:
+    try:
+        value = json.loads(
+            (artifact_root / "v5-node-results.json").read_text(encoding="utf-8")
+        )
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return []
+    if not isinstance(value, list):
+        return []
+    return [row for row in value if isinstance(row, Mapping)]
+
+
+def strict_publication_gate(artifact_root: Path) -> tuple[bool, list[str]]:
+    """Fail closed unless the frozen runtime result is strict full success."""
+    summary = _load_mapping(artifact_root / "v5-execution-summary.json")
+    result = _load_mapping(artifact_root / "expert-team-result.json")
+    rows = _node_rows(artifact_root)
+    blockers: list[str] = []
+
+    status = str(summary.get("status") or result.get("status") or "").casefold()
+    completion_mode = str(
+        summary.get("completion_mode") or result.get("completion_mode") or ""
+    ).casefold()
+    quality_status = str(
+        summary.get("quality_status") or result.get("quality_status") or ""
+    ).casefold()
+    integrity = summary.get("quality_integrity")
+    integrity = dict(integrity) if isinstance(integrity, Mapping) else {}
+    integrity_status = str(integrity.get("status") or "").upper()
+
+    if status != "success":
+        blockers.append(f"execution-status:{status or 'missing'}")
+    if completion_mode != "full":
+        blockers.append(f"completion-mode:{completion_mode or 'missing'}")
+    if quality_status != "full_success":
+        blockers.append(f"quality-status:{quality_status or 'missing'}")
+    if integrity_status != "PASS":
+        blockers.append(f"quality-integrity:{integrity_status or 'missing'}")
+    if not rows:
+        blockers.append("node-results:missing")
+
+    for row in rows:
+        node_id = str(row.get("node_id") or "unknown")
+        node_status = str(row.get("status") or "")
+        contract = row.get("contract")
+        contract = dict(contract) if isinstance(contract, Mapping) else {}
+        if node_status not in STRICT_SUCCESS_STATUSES:
+            blockers.append(f"node-status:{node_id}:{node_status or 'missing'}")
+        if contract.get("required_fields_complete") is not True:
+            blockers.append(f"node-contract-incomplete:{node_id}")
+
+    return not blockers, list(dict.fromkeys(blockers))
+
+
+def write_skip_manifest(
     artifact_root: Path,
     report_path: Path,
     output_dir: Path,
     *,
     run_url: str,
     max_chars: int,
-) -> dict:
-    """Record intentional report omission after a failed zero/dry execution.
-
-    A failed execution has no business report to publish. Treating that absence
-    as a publisher crash obscures the primary failure and breaks post-upload
-    attestation. This manifest is evidence that publication was deliberately
-    skipped, not silently lost.
-    """
-    result = _load_mapping(artifact_root / "expert-team-result.json")
-    summary = _load_mapping(artifact_root / "v5-execution-summary.json")
-    status = str(result.get("status") or summary.get("status") or "").casefold()
-    if status not in {"failed", "failure"}:
-        raise FileNotFoundError(report_path)
+    publication_status: str,
+    blockers: list[str],
+) -> dict[str, Any]:
+    """Record deliberate fail-closed omission without publishing report text."""
     run_id = _validated_run_id(run_url)
+    report = (
+        report_path.read_text(encoding="utf-8")
+        if report_path.is_file()
+        else ""
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
+    for stale in output_dir.glob("report-comment-*.md"):
+        stale.unlink()
+    summary = _load_mapping(artifact_root / "v5-execution-summary.json")
+    result = _load_mapping(artifact_root / "expert-team-result.json")
+    status = str(result.get("status") or summary.get("status") or "").casefold()
     manifest = {
-        "version": 2,
+        "version": 3,
         "source": str(report_path),
         "run_url": run_url,
         "run_id": run_id,
-        "publication_status": "skipped_failed_execution",
-        "execution_status": status,
-        "report_sha256": None,
-        "report_chars": 0,
+        "publication_status": publication_status,
+        "execution_status": status or "unknown",
+        "report_sha256": (
+            hashlib.sha256(report.encode("utf-8")).hexdigest()
+            if report
+            else None
+        ),
+        "report_chars": len(report),
         "comment_count": 0,
         "max_comment_chars": max_chars,
         "files": [],
+        "publication_gate": "strict-full-success-only",
+        "publication_blockers": blockers,
     }
     (output_dir / "report-comments-manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
     return manifest
 
@@ -161,30 +233,49 @@ def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser()
     root.add_argument(
         "--report",
-        help="Explicit final report path. Optional with the production --comments-dir form.",
+        help=(
+            "Explicit final report path. Optional with the production "
+            "--comments-dir form."
+        ),
     )
     root.add_argument(
         "--output-dir",
         required=True,
-        help="Legacy comment destination, or production artifact root when --comments-dir is used.",
+        help=(
+            "Legacy comment destination, or production artifact root when "
+            "--comments-dir is used."
+        ),
     )
     root.add_argument(
         "--comments-dir",
-        help="Production comment destination. The report defaults to <output-dir>/v5-final-report.md.",
+        help=(
+            "Production comment destination. The report defaults to "
+            "<output-dir>/v5-final-report.md."
+        ),
     )
     root.add_argument("--run-url", default="")
-    root.add_argument("--max-chars", type=int, default=DEFAULT_MAX_COMMENT_CHARS)
+    root.add_argument(
+        "--max-chars",
+        type=int,
+        default=DEFAULT_MAX_COMMENT_CHARS,
+    )
     return root
 
 
 def resolve_paths(args: argparse.Namespace) -> tuple[Path, Path]:
     artifact_root = Path(args.output_dir)
     if args.comments_dir:
-        report_path = Path(args.report) if args.report else artifact_root / "v5-final-report.md"
+        report_path = (
+            Path(args.report)
+            if args.report
+            else artifact_root / "v5-final-report.md"
+        )
         comments_path = Path(args.comments_dir)
     else:
         if not args.report:
-            raise ValueError("--report is required unless --comments-dir is supplied")
+            raise ValueError(
+                "--report is required unless --comments-dir is supplied"
+            )
         report_path = Path(args.report)
         comments_path = artifact_root
     return report_path, comments_path
@@ -194,7 +285,9 @@ def main() -> int:
     args = parser().parse_args()
     artifact_root = Path(args.output_dir)
     report_path, comments_path = resolve_paths(args)
-    if report_path.is_file():
+
+    publishable, blockers = strict_publication_gate(artifact_root)
+    if report_path.is_file() and publishable:
         manifest = write_comments(
             report_path,
             comments_path,
@@ -202,12 +295,21 @@ def main() -> int:
             max_chars=args.max_chars,
         )
     else:
-        manifest = write_failure_skip_manifest(
+        status = (
+            "skipped_non_strict_execution"
+            if report_path.is_file()
+            else "skipped_failed_execution"
+        )
+        if not report_path.is_file() and not blockers:
+            blockers = ["report:missing"]
+        manifest = write_skip_manifest(
             artifact_root,
             report_path,
             comments_path,
             run_url=args.run_url,
             max_chars=args.max_chars,
+            publication_status=status,
+            blockers=blockers,
         )
     print(json.dumps(manifest, ensure_ascii=False))
     return 0
