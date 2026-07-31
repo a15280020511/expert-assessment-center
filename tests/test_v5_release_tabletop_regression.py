@@ -22,16 +22,17 @@ class V5ReleaseTabletopRegressionTests(unittest.TestCase):
             self.text,
         )
 
-    def test_release_gate_keeps_original_budget_and_semantic_contract(self) -> None:
+    def test_release_gate_requires_four_work_fail_closed_semantics(self) -> None:
         required = (
-            "--maximum-total-calls 4",
+            "--maximum-total-calls 6",
             "--maximum-recovery-calls 1",
             "--cost-anomaly-usd 0.25",
-            "closed_book_tabletop_compaction_applied",
-            "external_evidence_required",
-            "matrix['matrices'][0]['hard_requirements'] == []",
-            "optimization['solver_status'] in {'OPTIMAL', 'FEASIBLE'}",
-            "1 <= len(graph['nodes']) <= 3",
+            "closed_book_tabletop_decomposition_applied",
+            "minimum_distinct_model_companies",
+            "explicit_markdown_contract",
+            "fail_closed_on_quality_gate",
+            "len(graph['nodes']) == 4",
+            "len(selected_companies) == 4",
             "global_monkey_patching",
             "cross_task_history_used",
         )
