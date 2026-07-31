@@ -22,7 +22,7 @@ v5_production_hardening.install()
 import v5_pipeline  # noqa: E402
 
 RUNTIME_VERSION = "v5-r8"
-MAX_MODEL_CALLS = 16
+ABSOLUTE_MAX_MODEL_CALLS = 16
 
 
 def _load(path: Path, default: Any) -> Any:
@@ -40,7 +40,7 @@ def _provider_slug(endpoint: str) -> str:
     return endpoint.rsplit("@", 1)[-1] if "@" in endpoint else endpoint
 
 
-def _normalize(output: Path) -> dict[str, Any]:
+def _normalize(output: Path, *, total_calls: int, recovery_calls: int, anomaly_budget: float | None) -> dict[str, Any]:
     summary = _load(output / "v5-execution-summary.json", {})
     graph = _load(output / "v5-execution-graph.json", {})
     node_results = _load(output / "v5-node-results.json", [])
@@ -68,8 +68,15 @@ def _normalize(output: Path) -> dict[str, Any]:
     actual_cost = float(summary.get("actual_cost_usd") or execution_budget.get("actual_cost_usd") or 0.0)
     if not math.isfinite(actual_cost) or actual_cost < 0:
         raise RuntimeError("V5 actual cost is invalid")
+    if calls_reserved > total_calls or request_count > total_calls:
+        raise RuntimeError(
+            f"V5 exceeded approved total paid-call ceiling: reserved={calls_reserved}, "
+            f"captured={request_count}, approved={total_calls}"
+        )
 
     nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+    if len(nodes) > total_calls - recovery_calls:
+        raise RuntimeError("V5 planned more initial nodes than the approved total leaves after recovery reserve")
     endpoints = sorted({
         str(row.get("provider_endpoint"))
         for row in nodes
@@ -86,6 +93,7 @@ def _normalize(output: Path) -> dict[str, Any]:
         "version": 5,
         "runtime_version": RUNTIME_VERSION,
         "status": str(request_audit.get("status") or "FAIL"),
+        "approved_total_call_ceiling": total_calls,
         "expected_request_count": calls_reserved,
         "captured_request_count": request_count,
         "requests": requests,
@@ -99,9 +107,12 @@ def _normalize(output: Path) -> dict[str, Any]:
         "runtime_version": RUNTIME_VERSION,
         "summary": {
             "call_count": calls_reserved,
+            "approved_total_call_ceiling": total_calls,
+            "approved_recovery_call_ceiling": recovery_calls,
             "provider_actual_cost_usd": round(actual_cost, 8),
             "conservative_cost_usd": round(actual_cost, 8),
             "cost_evidence_status": "provider_actual_or_runtime_reconciled",
+            "cost_anomaly_usd": anomaly_budget,
             "substantive_providers": providers,
             "substantive_provider_count": len(providers),
             "all_providers": providers,
@@ -141,6 +152,12 @@ def _normalize(output: Path) -> dict[str, Any]:
         "work_coverage": summary.get("work_coverage"),
         "degradation": summary.get("degradation"),
         "execution_budget": dict(execution_budget),
+        "approved_budget": {
+            "maximum_total_calls": total_calls,
+            "maximum_recovery_calls": recovery_calls,
+            "maximum_initial_calls": total_calls - recovery_calls,
+            "cost_anomaly_usd": anomaly_budget,
+        },
         "node_count": len(nodes),
         "model_count": len(models),
         "provider_count": len(providers),
@@ -154,7 +171,10 @@ def _normalize(output: Path) -> dict[str, Any]:
         "runtime_version": RUNTIME_VERSION,
         "entrypoint": "v5_production_ticket.py",
         "hardening": "v5_production_hardening.install",
-        "maximum_model_calls": MAX_MODEL_CALLS,
+        "maximum_model_calls": total_calls,
+        "maximum_recovery_calls": recovery_calls,
+        "maximum_initial_calls": total_calls - recovery_calls,
+        "cost_anomaly_usd": anomaly_budget,
         "fallback_policy": "fail-closed-no-alternate-runtime",
         "legacy_runtime_present": False,
     })
@@ -166,6 +186,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--task", required=True)
     parser.add_argument("--output-dir", default="ticket-artifacts")
     parser.add_argument("--quality-tier", choices=["budget", "value", "quality"], default="value")
+    parser.add_argument("--maximum-total-calls", type=int, required=True)
+    parser.add_argument("--maximum-recovery-calls", type=int, required=True)
+    parser.add_argument("--cost-anomaly-usd", type=float)
     parser.add_argument("--require-live-catalog", action="store_true")
     return parser
 
@@ -174,21 +197,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    os.environ.setdefault("TOTAL_MODEL_CALLS", str(MAX_MODEL_CALLS))
+    if not 4 <= args.maximum_total_calls <= ABSOLUTE_MAX_MODEL_CALLS:
+        raise ValueError("maximum-total-calls must be between 4 and 16")
+    if not 0 <= args.maximum_recovery_calls < args.maximum_total_calls:
+        raise ValueError("maximum-recovery-calls must be non-negative and below total calls")
+    os.environ["TOTAL_MODEL_CALLS"] = str(args.maximum_total_calls)
     command = [
         "--task", args.task,
         "--output-dir", str(output),
         "--quality-tier", args.quality_tier,
+        "--maximum-total-calls", str(args.maximum_total_calls),
+        "--maximum-recovery-calls", str(args.maximum_recovery_calls),
         "--maximum-candidates-per-work", "12",
         "--solver-timeout-seconds", "20",
     ]
+    if args.cost_anomaly_usd is not None:
+        command.extend(["--cost-anomaly-usd", str(args.cost_anomaly_usd)])
     if args.require_live_catalog:
         command.append("--require-live-catalog")
     try:
         code = int(v5_pipeline.main(command))
         if code != 0:
             raise RuntimeError(f"V5 pipeline returned {code}")
-        envelope = _normalize(output)
+        envelope = _normalize(
+            output,
+            total_calls=args.maximum_total_calls,
+            recovery_calls=args.maximum_recovery_calls,
+            anomaly_budget=args.cost_anomaly_usd,
+        )
         if envelope.get("status") != "success":
             raise RuntimeError("V5 production result did not pass the delivery gate")
         print(json.dumps({
@@ -197,6 +233,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "completion_mode": envelope["completion_mode"],
             "actual_cost_usd": envelope["actual_cost_usd"],
             "node_count": envelope["node_count"],
+            "approved_total_calls": args.maximum_total_calls,
         }, ensure_ascii=False))
         return 0
     except Exception as exc:
