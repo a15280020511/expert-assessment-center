@@ -12,7 +12,7 @@ import v5_general_task_planning  # noqa: E402
 
 class V5GeneralTaskPlanningTests(unittest.TestCase):
     @staticmethod
-    def run(task: str):
+    def run_config(task: str):
         return SimpleNamespace(
             task=task,
             minimum_context_length=16_384,
@@ -20,7 +20,7 @@ class V5GeneralTaskPlanningTests(unittest.TestCase):
         )
 
     def compile(self, task: str):
-        run = self.run(task)
+        run = self.run_config(task)
         profile = v5_general_task_planning.classify_task(task, run)
         bundle = resource_matrix.compile_v5_task_resources(
             profile,
@@ -78,14 +78,14 @@ class V5GeneralTaskPlanningTests(unittest.TestCase):
 
     def test_generic_report_word_does_not_force_long_context(self):
         task = "比较两个月度套餐的成本并输出简洁报告。"
-        run = self.run(task)
+        run = self.run_config(task)
         profile = v5_general_task_planning.classify_task(task, run)
         self.assertFalse(profile.long_context)
         self.assertLess(profile.requested_context, 65_536)
 
     def test_explicit_full_repository_audit_remains_long_context(self):
         task = "请对整个代码库逐行审计，检查安全漏洞和合规问题。"
-        run = self.run(task)
+        run = self.run_config(task)
         profile = v5_general_task_planning.classify_task(task, run)
         self.assertTrue(profile.long_context)
         self.assertTrue(profile.high_stakes)
