@@ -1,0 +1,38 @@
+name: V5 Remaining Runtime Fixes
+
+on:
+  push:
+    branches:
+      - refactor/v5-explicit-runtime
+    paths:
+      - tools/apply_v5_remaining_runtime_fixes.py
+      - .github/workflows/v5-remaining-runtime-fixes.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v5-remaining-runtime-fixes
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/v5-explicit-runtime
+          fetch-depth: 0
+      - name: Apply deterministic fixes
+        run: python tools/apply_v5_remaining_runtime_fixes.py
+      - name: Remove one-shot files
+        run: |
+          rm tools/apply_v5_remaining_runtime_fixes.py
+          rm .github/workflows/v5-remaining-runtime-fixes.yml
+      - name: Commit fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(v5): finish explicit runtime migration invariants"
+          git push origin HEAD:refactor/v5-explicit-runtime
