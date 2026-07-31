@@ -8,11 +8,10 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-import v5_candidate_diversity  # noqa: E402
 import v5_dynamic_prompt_delivery as dynamic_prompt  # noqa: E402
-import v5_executor  # noqa: E402
 import v5_output_contract_delivery as delivery  # noqa: E402
 from execution_graph import SelectedNode  # noqa: E402
+from v5_runtime import ProductionRuntime, RuntimeConfig  # noqa: E402
 
 
 def _node(*, machine_readable: bool = True) -> SelectedNode:
@@ -40,11 +39,26 @@ def _node(*, machine_readable: bool = True) -> SelectedNode:
         quality_uncertainty=0.10,
         estimated_cost=0.001,
         failure_probability=0.05,
-        request_config={},
+        request_config={
+            "provider": {
+                "only": ["provider-a/default"],
+                "order": ["provider-a/default"],
+                "allow_fallbacks": False,
+                "require_parameters": True,
+            }
+        },
     )
 
 
 class TestV5OutputContractDelivery(unittest.TestCase):
+    def runtime(self):
+        return ProductionRuntime(RuntimeConfig(
+            total_call_limit=4,
+            recovery_call_limit=1,
+            cost_anomaly_usd=None,
+            quality_tier="value",
+        ))
+
     def test_machine_readable_prompt_demands_actual_json_fields(self):
         with patch.dict(os.environ, {delivery.COMPACT_MODE_ENV: ""}, clear=False):
             prompt = delivery.contract_aware_system_prompt(_node())
@@ -59,11 +73,7 @@ class TestV5OutputContractDelivery(unittest.TestCase):
         self.assertNotIn("450个中文字符", prompt)
 
     def test_compact_mode_is_explicit_and_canary_scoped(self):
-        with patch.dict(
-            os.environ,
-            {delivery.COMPACT_MODE_ENV: "1"},
-            clear=False,
-        ):
+        with patch.dict(os.environ, {delivery.COMPACT_MODE_ENV: "1"}, clear=False):
             prompt = delivery.contract_aware_system_prompt(_node())
         self.assertIn("微型Canary精简模式", prompt)
         self.assertIn("每个普通字段最多2条", prompt)
@@ -74,38 +84,30 @@ class TestV5OutputContractDelivery(unittest.TestCase):
 
     def test_compact_mode_tightens_many_field_contracts(self):
         node = _node()
-        node = SelectedNode(
-            **{
-                **node.to_dict(),
-                "assigned_work": tuple(node.assigned_work),
-                "functions": tuple(node.functions),
-                "output_contract": {
-                    **dict(node.output_contract),
-                    "required_fields": [
-                        "assumptions",
-                        "evidence_gaps",
-                        "conclusions",
-                        "recommendations",
-                        "risks",
-                        "acceptance_tests",
-                    ],
-                },
-            }
-        )
-        with patch.dict(
-            os.environ,
-            {delivery.COMPACT_MODE_ENV: "true"},
-            clear=False,
-        ):
+        node = SelectedNode(**{
+            **node.to_dict(),
+            "assigned_work": tuple(node.assigned_work),
+            "functions": tuple(node.functions),
+            "output_contract": {
+                **dict(node.output_contract),
+                "required_fields": [
+                    "assumptions",
+                    "evidence_gaps",
+                    "conclusions",
+                    "recommendations",
+                    "risks",
+                    "acceptance_tests",
+                ],
+            },
+        })
+        with patch.dict(os.environ, {delivery.COMPACT_MODE_ENV: "true"}, clear=False):
             prompt = delivery.contract_aware_system_prompt(node)
         self.assertIn("每个普通字段最多1条", prompt)
         self.assertIn("每条不超过36个中文字符", prompt)
 
     def test_non_machine_readable_prompt_still_forbids_schema_echo(self):
         with patch.dict(os.environ, {delivery.COMPACT_MODE_ENV: ""}, clear=False):
-            prompt = delivery.contract_aware_system_prompt(
-                _node(machine_readable=False)
-            )
+            prompt = delivery.contract_aware_system_prompt(_node(machine_readable=False))
         self.assertIn("最终响应必须直接交付以下内容", prompt)
         self.assertIn("assumptions", prompt)
         self.assertIn("禁止复述输出契约", prompt)
@@ -114,23 +116,12 @@ class TestV5OutputContractDelivery(unittest.TestCase):
 
     def test_valid_direct_json_delivery_passes_quality_gate(self):
         node = _node()
-        answer = json.dumps(
-            {
-                "assumptions": [
-                    "输入代码与配置是完整审计范围，未提供的部署事实不作确定判断。"
-                ],
-                "evidence_gaps": [
-                    "缺少生产环境权限边界、密钥轮换记录和容器隔离策略证据。"
-                ],
-                "conclusions": [
-                    "默认凭据、命令拼接和跨租户结果读取构成可验证的高风险失败路径。"
-                ],
-                "recommendations": [
-                    "删除默认凭据，使用参数化执行，实施租户级目录隔离，并增加拒绝测试和回滚门。"
-                ],
-            },
-            ensure_ascii=False,
-        )
+        answer = json.dumps({
+            "assumptions": ["输入代码与配置是完整审计范围，未提供的部署事实不作确定判断。"],
+            "evidence_gaps": ["缺少生产环境权限边界、密钥轮换记录和容器隔离策略证据。"],
+            "conclusions": ["默认凭据、命令拼接和跨租户结果读取构成可验证的高风险失败路径。"],
+            "recommendations": ["删除默认凭据，使用参数化执行，实施租户级目录隔离，并增加拒绝测试和回滚门。"],
+        }, ensure_ascii=False)
         passed, score, reasons = delivery.contract_aware_quality_gate(
             node,
             {"choices": [{"finish_reason": "stop"}]},
@@ -142,20 +133,14 @@ class TestV5OutputContractDelivery(unittest.TestCase):
 
     def test_contract_metadata_echo_fails_quality_gate(self):
         node = _node()
-        answer = json.dumps(
-            {
-                "machine_readable_required": True,
-                "must_separate_fact_assumption_inference": True,
-                "required_fields": [
-                    "assumptions",
-                    "evidence_gaps",
-                    "conclusions",
-                    "recommendations",
-                ],
-                "description": "这是输出契约定义而不是任务分析结果。" * 8,
-            },
-            ensure_ascii=False,
-        )
+        answer = json.dumps({
+            "machine_readable_required": True,
+            "must_separate_fact_assumption_inference": True,
+            "required_fields": [
+                "assumptions", "evidence_gaps", "conclusions", "recommendations"
+            ],
+            "description": "这是输出契约定义而不是任务分析结果。" * 8,
+        }, ensure_ascii=False)
         passed, score, reasons = delivery.contract_aware_quality_gate(
             node,
             {"choices": [{"finish_reason": "stop"}]},
@@ -164,34 +149,37 @@ class TestV5OutputContractDelivery(unittest.TestCase):
         self.assertFalse(passed)
         self.assertLess(score, 0.6)
         self.assertIn("contract-metadata-echo", reasons)
-        self.assertTrue(
-            any(reason.startswith("missing-required-json-keys:") for reason in reasons)
-        )
+        self.assertTrue(any(reason.startswith("missing-required-json-keys:") for reason in reasons))
 
-    def test_formal_v5_safety_installer_layers_dynamic_role_over_contract_prompt(self):
-        v5_candidate_diversity.install()
-        self.assertIs(
-            v5_executor._system_prompt,
-            dynamic_prompt.dynamic_system_prompt,
-        )
-        self.assertIs(
-            v5_executor.quality_gate,
-            delivery.contract_aware_quality_gate,
-        )
+    def test_formal_runtime_layers_dynamic_role_over_contract_prompt(self):
+        runtime = self.runtime()
+        node = _node()
         with patch.dict(os.environ, {delivery.COMPACT_MODE_ENV: ""}, clear=False):
-            prompt = v5_executor._system_prompt(_node())
+            payload = runtime.build_node_payload(node, "审计任务", [])
+        prompt = payload["messages"][0]["content"]
+        self.assertEqual(prompt, dynamic_prompt.dynamic_system_prompt(node))
         self.assertIn("JSON语法完整闭合", prompt)
         self.assertNotIn("微型Canary精简模式", prompt)
+        passed, _, _ = runtime.quality_policy.evaluate(
+            node,
+            {"choices": [{"finish_reason": "stop"}]},
+            json.dumps({
+                "assumptions": ["A" * 80],
+                "evidence_gaps": ["B" * 80],
+                "conclusions": ["C" * 80],
+                "recommendations": ["D" * 80],
+            }, ensure_ascii=False),
+        )
+        self.assertTrue(passed)
 
-    def test_formal_workflow_does_not_force_compact_mode(self):
-        workflow = (
-            ROOT / ".github" / "workflows" / "execution-ticket.yml"
-        ).read_text(encoding="utf-8")
-        production = (
-            ROOT / "open-model-market" / "v5_production_hardening.py"
-        ).read_text(encoding="utf-8")
+    def test_formal_workflow_does_not_force_compact_mode_or_installers(self):
+        workflow = (ROOT / ".github" / "workflows" / "execution-ticket.yml").read_text(encoding="utf-8")
+        production = (ROOT / "open-model-market" / "v5_production_ticket.py").read_text(encoding="utf-8")
+        runtime = (ROOT / "open-model-market" / "v5_runtime.py").read_text(encoding="utf-8")
         self.assertNotIn("V5_COMPACT_OUTPUT_CONTRACT", workflow)
-        self.assertIn("dynamic_prompt_delivery.install()", production)
+        self.assertNotIn(".install()", production)
+        self.assertIn("PromptPolicy", runtime)
+        self.assertIn("QualityGatePolicy", runtime)
 
 
 if __name__ == "__main__":
