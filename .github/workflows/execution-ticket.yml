@@ -211,7 +211,7 @@ jobs:
         id: audit
         continue-on-error: true
         run: |
-          python open-model-market/v5_execution_auditor.py \
+          python open-model-market/v5_execution_auditor_integrity.py \
             --output-dir ticket-artifacts \
             --execute-outcome "${{ steps.execute.outcome }}" \
             --publish-outcome "${{ steps.publish.outcome }}"
