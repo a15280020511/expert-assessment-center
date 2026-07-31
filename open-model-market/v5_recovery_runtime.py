@@ -12,12 +12,8 @@ from typing import Any, Mapping, Sequence
 from v5_model_company import candidate_company
 from v5_planner import V5PlanningError
 from v5_planning_runtime import PlannerPolicy
-from v5_runtime import (
-    FailureCategory,
-    ProductionRuntime,
-    RetryPolicy,
-    RuntimeConfig,
-)
+from v5_runtime import FailureCategory, RetryPolicy, RuntimeConfig
+from v5_strict_safety_runtime import StrictSafetyProductionRuntime
 
 
 class CrossEndpointPlannerPolicy(PlannerPolicy):
@@ -259,8 +255,10 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
         )
 
 
-def build_production_runtime(config: RuntimeConfig) -> ProductionRuntime:
-    """Construct one explicit runtime with cross-endpoint recovery."""
+def build_production_runtime(
+    config: RuntimeConfig,
+) -> StrictSafetyProductionRuntime:
+    """Construct strict fail-closed execution with company-safe recovery."""
     retry_policy = RetryPolicy(
         retry_same_endpoint_categories=(
             FailureCategory.PROVIDER_RATE_LIMITED,
@@ -268,7 +266,7 @@ def build_production_runtime(config: RuntimeConfig) -> ProductionRuntime:
         ),
         maximum_same_endpoint_retries_per_node=1,
     )
-    return ProductionRuntime(
+    return StrictSafetyProductionRuntime(
         config,
         retry_policy=retry_policy,
         planner_policy=CrossEndpointPlannerPolicy(config),
