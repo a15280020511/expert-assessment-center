@@ -1,14 +1,9 @@
 """Reasoning-aware output allowance and P95 billed-token calibration.
 
-The first post-planning production Canary showed that a 6,675-token allowance
-was fully consumed by a high-reasoning node: 3,624 reasoning tokens plus the
-visible answer. The old envelope treated the semantic compiler's reasoning
-estimate as nearly exact and therefore under-reserved both truncation headroom
-and P95 billed usage.
-
-This policy keeps the absolute 10,000-token ceiling, but derives the allowance
-from output demand, reasoning depth, verification pressure and output-contract
-breadth. The request allowance remains separate from the billed-token estimate.
+Request allowance is derived from visible output demand, hidden reasoning,
+verification pressure, node contract breadth and the task's explicit final
+delivery breadth. Allowance remains separate from expected billed usage and is
+bounded by both the endpoint limit and the global 32,768-token permission cap.
 """
 from __future__ import annotations
 
@@ -53,36 +48,68 @@ def reasoning_pressure(work: Mapping[str, Any]) -> float:
     return max(0.0, min(1.0, max(values, default=0.0)))
 
 
+def _contract(work: Mapping[str, Any]) -> Mapping[str, Any]:
+    value = work.get("output_contract", {})
+    return value if isinstance(value, Mapping) else {}
+
+
 def contract_field_count(work: Mapping[str, Any]) -> int:
-    contract = work.get("output_contract", {})
-    contract = contract if isinstance(contract, Mapping) else {}
-    fields = contract.get("required_fields", [])
+    fields = _contract(work).get("required_fields", [])
     return len(fields) if isinstance(fields, list) else 0
 
 
+def explicit_delivery_section_count(work: Mapping[str, Any]) -> int:
+    return _int(_contract(work).get("task_explicit_delivery_section_count"), 0)
+
+
+def explicit_long_form_required(work: Mapping[str, Any]) -> bool:
+    return bool(_contract(work).get("task_explicit_long_form_required"))
+
+
+def _allowance_field_reserve(work: Mapping[str, Any]) -> int:
+    base = min(1_200, contract_field_count(work) * 64)
+    explicit = explicit_delivery_section_count(work)
+    if not explicit:
+        return base
+    return max(base, min(4_800, explicit * 320))
+
+
+def _usage_field_reserve(work: Mapping[str, Any]) -> int:
+    base = min(600, contract_field_count(work) * 32)
+    explicit = explicit_delivery_section_count(work)
+    if not explicit:
+        return base
+    return max(base, min(2_400, explicit * 160))
+
+
 def completion_envelope(work: Mapping[str, Any], endpoint_max: int) -> int:
-    """Return a bounded allowance with explicit high-reasoning headroom."""
+    """Return endpoint-bounded permission with long-form completion headroom."""
     context = work.get("context_requirements", {})
     context = context if isinstance(context, Mapping) else {}
     output = _int(context.get("expected_output_tokens"), 1_024)
     reasoning = _int(context.get("expected_reasoning_tokens"), 0)
     pressure = reasoning_pressure(work)
-    field_reserve = min(1_200, contract_field_count(work) * 64)
-    machine = bool(
-        isinstance(work.get("output_contract"), Mapping)
-        and work.get("output_contract", {}).get("machine_readable_required")
-    )
+    field_reserve = _allowance_field_reserve(work)
+    contract = _contract(work)
+    machine = bool(contract.get("machine_readable_required"))
+    long_form = explicit_long_form_required(work)
 
     reasoning_reserve = int(math.ceil(reasoning * (1.0 + 1.50 * pressure)))
+    output_factor = 2.10 if long_form else 1.70
+    reasoning_base = 1.35 if long_form else 1.25
+    reasoning_pressure_factor = 1.35 if long_form else 1.25
     narrative_envelope = int(
         math.ceil(
-            output * 1.70
-            + reasoning * (1.25 + 1.25 * pressure)
+            output * output_factor
+            + reasoning * (reasoning_base + reasoning_pressure_factor * pressure)
             + field_reserve
         )
     )
     direct_envelope = output + reasoning_reserve + field_reserve
-    minimum = 4_096 if machine or pressure >= 0.72 else 2_048
+    if long_form and explicit_delivery_section_count(work) >= 8:
+        minimum = 8_192
+    else:
+        minimum = 4_096 if machine or pressure >= 0.72 else 2_048
     maximum = min(
         cost.MAX_OUTPUT_ALLOWANCE_TOKENS,
         endpoint_max or cost.MAX_OUTPUT_ALLOWANCE_TOKENS,
@@ -94,19 +121,18 @@ def completion_envelope(work: Mapping[str, Any], endpoint_max: int) -> int:
 
 
 def estimated_completion_usage(work: Mapping[str, Any], endpoint_max: int) -> int:
-    """Estimate P95 billed completion usage under reasoning pressure."""
+    """Estimate P95 billed usage without equating it to request permission."""
     context = work.get("context_requirements", {})
     context = context if isinstance(context, Mapping) else {}
     output = _int(context.get("expected_output_tokens"), 1_024)
     reasoning = _int(context.get("expected_reasoning_tokens"), 0)
     pressure = reasoning_pressure(work)
-    field_reserve = min(600, contract_field_count(work) * 32)
-    machine = bool(
-        isinstance(work.get("output_contract"), Mapping)
-        and work.get("output_contract", {}).get("machine_readable_required")
-    )
+    field_reserve = _usage_field_reserve(work)
+    contract = _contract(work)
+    machine = bool(contract.get("machine_readable_required"))
+    long_form = explicit_long_form_required(work)
     expected = (
-        output
+        output * (1.10 if long_form else 1.0)
         + reasoning * (1.0 + 1.50 * pressure)
         + field_reserve
     )

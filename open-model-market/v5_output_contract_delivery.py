@@ -1,13 +1,9 @@
 """Turn V5 output contracts into direct, concise delivery instructions.
 
-The previous executor serialized contract metadata into the prompt. Some models
-then repeated that metadata instead of filling the required fields, and bounded
-outputs were truncated before the JSON object closed. This module replaces the
-system prompt with an executable contract and strengthens the quality gate so
-schema echoes cannot masquerade as completed work.
-
-Formal V5 output remains unrestricted. A narrowly scoped environment flag enables
-an extra compact-delivery profile for the sub-cent micro canary only.
+Contract metadata is converted into executable delivery rules. Both exact JSON
+schemas and explicit user-requested Markdown H2 section lists are validated so
+schema echoes, missing sections and truncated outputs cannot masquerade as
+completed work.
 """
 from __future__ import annotations
 
@@ -31,6 +27,8 @@ CONTRACT_METADATA_KEYS = (
     "nested_exact_fields",
     "nested_values_must_be_objects",
     "explicit_user_contract",
+    "exact_markdown_headings",
+    "explicit_markdown_contract",
 )
 
 
@@ -91,6 +89,18 @@ def _delivery_rule(node: SelectedNode) -> str:
             "内容必须精炼，避免重复；在篇幅受限时优先保证所有必填键存在且JSON语法完整闭合。"
             f"{compact_rule}"
         )
+    if node.output_contract.get("explicit_markdown_contract"):
+        separation_rule = (
+            "每个章节内必须明确区分事实、假设、推断和不确定性。"
+            if separate
+            else ""
+        )
+        return (
+            f"{explicit_rule}{separation_rule}"
+            "禁止复述输出契约、章节清单或模式定义。"
+            "内容必须完整、可直接使用；先保证全部二级章节存在并填充，再扩展三级标题和细节。"
+            f"{compact_rule}"
+        )
     field_text = "、".join(fields) if fields else "任务要求的交付内容"
     heading_rule = (
         "必须按以下顺序使用完全一致的Markdown二级标题，并在每个标题下填写非空正文："
@@ -143,8 +153,17 @@ def contract_aware_quality_gate(
     response: Mapping[str, Any],
     answer: str,
 ) -> tuple[bool, float, list[str]]:
-    """Require actual top-level JSON fields, not contract metadata references."""
+    """Enforce exact task contracts after the base semantic quality gate."""
     passed, score, reasons = _ORIGINAL_QUALITY_GATE(node, response, answer)
+    markdown_violations = task_delivery_contract.validate_markdown_contract(
+        answer, node.output_contract
+    )
+    for violation in markdown_violations:
+        _append_reason(reasons, violation)
+    if markdown_violations:
+        passed = False
+        score = min(float(score), 0.35)
+
     if not node.output_contract.get("machine_readable_required"):
         return passed, score, reasons
 
@@ -159,10 +178,7 @@ def contract_aware_quality_gate(
     missing = [field for field in required if field not in parsed]
     metadata = [key for key in CONTRACT_METADATA_KEYS if key in parsed]
     if missing:
-        _append_reason(
-            reasons,
-            "missing-required-json-keys:" + ",".join(missing),
-        )
+        _append_reason(reasons, "missing-required-json-keys:" + ",".join(missing))
     if metadata and len(missing) == len(required):
         _append_reason(reasons, "contract-metadata-echo")
     explicit_violations = task_delivery_contract.validate_parsed_contract(

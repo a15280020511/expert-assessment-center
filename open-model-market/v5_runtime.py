@@ -587,9 +587,9 @@ class ExecutionEngine:
         sections: dict[str, list[str]] = {}
         current: str | None = None
         for line in answer.splitlines():
-            match = re.match(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", line)
-            if match:
-                heading = cls._normalized_contract_field(match.group(1))
+            match = re.match(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$", line)
+            if match and len(match.group(1)) == 2:
+                heading = cls._normalized_contract_field(match.group(2))
                 current = next(
                     (
                         original
@@ -656,9 +656,15 @@ class ExecutionEngine:
         explicit_violations = task_delivery_contract.validate_parsed_contract(
             parsed, node.output_contract
         )
+        markdown_violations = task_delivery_contract.validate_markdown_contract(
+            answer or "", node.output_contract
+        )
+        contract_violations = list(dict.fromkeys(
+            [*explicit_violations, *markdown_violations]
+        ))
         complete = (
             (not required or all(populated(field) for field in required))
-            and not explicit_violations
+            and not contract_violations
         )
         canonical = json.dumps(standard, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
         return {
@@ -667,7 +673,7 @@ class ExecutionEngine:
             "required_fields_complete": bool(complete),
             "content_sha256": sha256(canonical.encode("utf-8")).hexdigest(),
             "compression_used": False,
-            "contract_violations": explicit_violations,
+            "contract_violations": contract_violations,
             **standard,
         }
 
