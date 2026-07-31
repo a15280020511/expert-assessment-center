@@ -26,6 +26,7 @@ import v5_quality_status_integrity as quality_integrity
 from execution_graph import ExecutionGraph, GraphLimits, SelectedNode
 from execution_graph_validator import validate_execution_graph
 from openrouter_api import CHAT_URL, OpenRouterRequestError, request_json
+from v5_planning_runtime import PlannerPolicy
 
 RUNTIME_VERSION = "v5-native-runtime-1"
 MIN_DEGRADED_WORK_COVERAGE = 2.0 / 3.0
@@ -85,8 +86,8 @@ class RuntimeConfig:
     max_provider_failures: int = 2
 
     def __post_init__(self) -> None:
-        if not 4 <= int(self.total_call_limit) <= 16:
-            raise ValueError("total_call_limit must be between 4 and 16")
+        if not 1 <= int(self.total_call_limit) <= 16:
+            raise ValueError("total_call_limit must be between 1 and 16")
         if not 0 <= int(self.recovery_call_limit) < int(self.total_call_limit):
             raise ValueError("recovery_call_limit must be non-negative and below total_call_limit")
         if self.cost_anomaly_usd is not None and (
@@ -791,10 +792,8 @@ class ExecutionEngine:
                     FailureCategory.PROVIDER_RATE_LIMITED,
                     FailureCategory.PROVIDER_TIMEOUT,
                     FailureCategory.PROVIDER_EMPTY_RESPONSE,
-                    FailureCategory.PROVIDER_INVALID_RESPONSE,
                     FailureCategory.UNSUPPORTED_PARAMETER,
                     FailureCategory.CONTEXT_OVERFLOW,
-                    FailureCategory.OUTPUT_TRUNCATED,
                 }:
                     budget.fail_endpoint(node.provider_endpoint, category)
             return attempt
@@ -985,6 +984,9 @@ class ExecutionEngine:
                 "artificial_token_ceiling_sent": False,
                 "global_limits": result["execution_budget"],
                 "quality_integrity_status": result.get("quality_integrity", {}).get("status"),
+                "degraded_synthesis_is_deterministic": bool(
+                    result.get("degradation", {}).get("used")
+                ),
             },
         )
         (root / "v5-final-report.md").write_text(
@@ -1111,29 +1113,56 @@ class ExecutionEngine:
             and outputs[node_id].answer
         ]
         preferred_final = "\n\n".join(row.answer or "" for row in successful_finals).strip()
-        content_work = self._content_work_ids(graph)
-        best_by_work = self._best_outputs_by_work(graph, outputs)
+        optional_work = {
+            str(value)
+            for value in graph.metadata.get("optional_work_ids", [])
+        } if isinstance(graph.metadata, Mapping) else set()
+        non_degradable_work = {
+            str(value)
+            for value in graph.metadata.get("non_degradable_work_ids", [])
+        } if isinstance(graph.metadata, Mapping) else set()
+        content_work = self._content_work_ids(graph) - optional_work
+        best_by_work = {
+            work_id: result
+            for work_id, result in self._best_outputs_by_work(graph, outputs).items()
+            if work_id in content_work
+        }
         covered = set(best_by_work)
         missing = sorted(content_work - covered)
         coverage = len(covered) / max(1, len(content_work))
+        successful_content_nodes = len({
+            result.node_id for result in best_by_work.values()
+        })
         complete_nodes = (
             len(outputs) == len(graph.nodes)
             and all(row.status.startswith("success") for row in outputs.values())
         )
+        minimum_coverage = max(0.0, min(1.0, float(limits.min_required_work_coverage)))
         degradation_used = False
         final_answer = preferred_final
-        if not final_answer and coverage >= MIN_DEGRADED_WORK_COVERAGE:
+        if not final_answer and coverage >= minimum_coverage:
             final_answer = self._degraded_synthesis(best_by_work, missing)
             degradation_used = True
         elif preferred_final and (missing or not complete_nodes):
             degradation_used = True
+
+        delivery_blockers: list[str] = []
+        missing_non_degradable = sorted(non_degradable_work.intersection(missing))
+        if missing_non_degradable:
+            delivery_blockers.append("missing-non-degradable-work")
+        if coverage + 1e-12 < minimum_coverage:
+            delivery_blockers.append("insufficient-required-work-coverage")
+        if successful_content_nodes < int(limits.min_successful_content_nodes):
+            delivery_blockers.append("insufficient-successful-content-nodes")
+        if degradation_used and not limits.allow_degraded_success:
+            delivery_blockers.append("degraded-success-disabled")
 
         if final_answer and not degradation_used and complete_nodes and not missing:
             status = "success"
             completion_mode = "full"
             quality_status = "full_success"
             stop_reason = "all-quality-gates-passed"
-        elif final_answer and coverage >= MIN_DEGRADED_WORK_COVERAGE:
+        elif final_answer and not delivery_blockers:
             status = "success"
             completion_mode = "degraded"
             quality_status = "degraded_success"
@@ -1142,7 +1171,7 @@ class ExecutionEngine:
             status = "failed"
             completion_mode = "none"
             quality_status = "failed"
-            stop_reason = "insufficient-work-coverage-after-recovery"
+            stop_reason = delivery_blockers[0] if delivery_blockers else "insufficient-work-coverage-after-recovery"
 
         result = {
             "version": 5,
@@ -1168,7 +1197,17 @@ class ExecutionEngine:
                 "covered_work_ids": sorted(covered),
                 "missing_work_ids": missing,
                 "coverage_ratio": round(coverage, 6),
-                "minimum_degraded_coverage": MIN_DEGRADED_WORK_COVERAGE,
+                "minimum_degraded_coverage": minimum_coverage,
+                "successful_content_nodes": successful_content_nodes,
+            },
+            "delivery_policy": {
+                "optional_work_ids": sorted(optional_work),
+                "non_degradable_work_ids": sorted(non_degradable_work),
+                "missing_non_degradable_work_ids": missing_non_degradable,
+                "minimum_required_work_coverage": minimum_coverage,
+                "minimum_successful_content_nodes": int(limits.min_successful_content_nodes),
+                "allow_degraded_success": bool(limits.allow_degraded_success),
+                "blockers": delivery_blockers,
             },
             "degradation": {
                 "used": degradation_used,
@@ -1181,6 +1220,10 @@ class ExecutionEngine:
         if root is not None:
             self._write_artifacts(root, result, outputs)
         if status == "failed":
+            if stop_reason == "insufficient-successful-content-nodes":
+                raise RuntimeError("insufficient-successful-content-nodes")
+            if stop_reason in {"missing-non-degradable-work", "degraded-success-disabled"}:
+                raise RuntimeError("V5 execution failed production delivery policy")
             raise RuntimeError("V5 execution could not reach the minimum audited work-coverage gate")
         return result
 
@@ -1200,8 +1243,11 @@ class ProductionRuntime:
     output_policy: OutputPolicy = field(default_factory=OutputPolicy)
     quality_policy: QualityGatePolicy = field(default_factory=QualityGatePolicy)
     audit_policy: AuditPolicy = field(default_factory=AuditPolicy)
+    planner_policy: Any | None = None
 
     def __post_init__(self) -> None:
+        if self.planner_policy is None:
+            self.planner_policy = PlannerPolicy(self.config)
         self.execution_engine = ExecutionEngine(
             self.config,
             prompt_policy=self.prompt_policy,
@@ -1261,6 +1307,10 @@ class ProductionRuntime:
                 "token": asdict(self.token_policy),
                 "output": asdict(self.output_policy),
                 "audit": asdict(self.audit_policy),
+                "planner": {
+                    "implementation": type(self.planner_policy).__name__,
+                    "composition": "explicit-direct-call",
+                },
             },
             "global_monkey_patching": False,
             "cross_task_history_used": False,

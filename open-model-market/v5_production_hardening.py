@@ -47,7 +47,7 @@ def resilient_execute_v5_graph(
         tools_allowed=False,
         live_catalog_required=False,
         provider_lock_required=True,
-        max_provider_failures=max(1, int(limits.max_provider_failures)),
+        max_provider_failures=max(2, int(limits.max_provider_failures)),
     ))
     return runtime.execute_graph(
         graph,

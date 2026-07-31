@@ -250,8 +250,12 @@ def generate_calibrated_candidate_graph(
     market: Mapping[str, Any],
     *,
     maximum_per_group: int = 12,
+    candidate_factory: Any | None = None,
+    pruner: Any | None = None,
 ) -> dict[str, Any]:
-    """Generate candidates using rank-backed hard-capability proxy eligibility."""
+    """Generate candidates with explicitly supplied policy functions."""
+    candidate_factory = candidate_factory or v5_planner._candidate_for
+    pruner = pruner or v5_planner.pareto_prune
     endpoints = [
         endpoint
         for endpoint in market.get("endpoints", [])
@@ -336,7 +340,7 @@ def generate_calibrated_candidate_graph(
                         work_id
                     ]:
                         continue
-                    candidate = v5_planner._candidate_for(
+                    candidate = candidate_factory(
                         interpretation_id,
                         [key],
                         [work],
@@ -372,7 +376,7 @@ def generate_calibrated_candidate_graph(
                         continue
                     if endpoint_id not in eligible_endpoint_ids[right_id]:
                         continue
-                    candidate = v5_planner._candidate_for(
+                    candidate = candidate_factory(
                         interpretation_id,
                         [f"{left_id}#0", f"{right_id}#0"],
                         [works[left_id], works[right_id]],
@@ -405,7 +409,7 @@ def generate_calibrated_candidate_graph(
             ),
         }
 
-    pruned = v5_planner.pareto_prune(
+    pruned = pruner(
         all_candidates, maximum_per_group=maximum_per_group
     )
     if not pruned:

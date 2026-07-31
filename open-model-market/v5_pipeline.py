@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import model_market as market
-import v5_value_optimizer as value_optimizer
 from artifact_manifest import write_manifest
 from execution_graph import ExecutionGraph, GraphLimits
 from resource_matrix import compile_v5_task_resources
@@ -253,7 +252,7 @@ def main(
         max_budget_usd=anomaly_budget,
     )
 
-    compiled_market = value_optimizer.compile_model_endpoint_market(
+    compiled_market = runtime.planner_policy.compile_market(
         ranked,
         resources,
         endpoint_payloads=snapshot.endpoint_payloads,
@@ -270,7 +269,7 @@ def main(
     _write_json(output / "v5-model-endpoint-market.json", compiled_market)
 
     try:
-        candidate_graph = value_optimizer.generate_candidate_graph(
+        candidate_graph = runtime.planner_policy.generate_candidate_graph(
             resources,
             compiled_market,
             maximum_per_group=max(3, min(30, runtime.config.maximum_candidates_per_work)),
@@ -289,7 +288,7 @@ def main(
 
     _write_json(output / "v5-candidate-graph.json", candidate_graph)
     try:
-        optimization = value_optimizer.optimize_execution_graph(
+        optimization = runtime.planner_policy.optimize_execution_graph(
             candidate_graph,
             limits=limits,
             quality_tolerance_pct=max(0.0, min(20.0, float(args.quality_tolerance_pct))),
