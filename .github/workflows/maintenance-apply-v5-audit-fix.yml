@@ -8,6 +8,10 @@ permissions:
   contents: write
   issues: write
 
+concurrency:
+  group: maintenance-apply-v5-audit-fix
+  cancel-in-progress: false
+
 jobs:
   apply-validated-patch:
     if: >-
@@ -22,6 +26,17 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
     steps:
+      - name: Publish start receipt
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## PATCH_VALIDATION_STARTED\n\n- Run: \`${context.runId}\`\n- Branch: \`${process.env.TARGET_BRANCH}\``
+            })
+
       - name: Checkout exact target branch
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
