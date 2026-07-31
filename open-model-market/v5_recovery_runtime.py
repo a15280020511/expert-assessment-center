@@ -122,13 +122,16 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
             raise V5PlanningError(
                 "Selected graph is missing interpretation_id metadata."
             )
-        maximum_rows = max(
-            0,
-            min(
-                4,
-                int(self.config.maximum_candidates_per_work),
-                int(self.config.recovery_call_limit),
-            ),
+        maximum_rows = (
+            0
+            if int(self.config.recovery_call_limit) <= 0
+            else max(
+                2,
+                min(
+                    4,
+                    int(self.config.maximum_candidates_per_work),
+                ),
+            )
         )
         eligible_by_node: dict[str, list[dict[str, Any]]] = {}
 
@@ -230,6 +233,8 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
             "maximum_recovery_calls": int(
                 self.config.recovery_call_limit
             ),
+            "candidate_options_do_not_reserve_paid_calls": True,
+            "actual_recovery_calls_remain_budget_limited": True,
             "cross_task_history_used": False,
         }
         graph["metadata"] = metadata
