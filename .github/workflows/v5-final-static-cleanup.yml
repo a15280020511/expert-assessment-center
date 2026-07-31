@@ -1,12 +1,12 @@
 name: V5 Final Static Cleanup
 
 on:
-  push:
-    branches:
-      - refactor/v5-explicit-runtime
+  pull_request:
+    branches: [main]
+    types: [synchronize]
     paths:
-      - tools/apply_v5_final_static_cleanup.py
-      - .github/workflows/v5-final-static-cleanup.yml
+      - "tools/apply_v5_final_static_cleanup.py"
+      - ".github/workflows/v5-final-static-cleanup.yml"
 
 permissions:
   contents: write
@@ -17,6 +17,9 @@ concurrency:
 
 jobs:
   cleanup:
+    if: >-
+      github.actor == github.repository_owner &&
+      github.head_ref == 'refactor/v5-explicit-runtime'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
