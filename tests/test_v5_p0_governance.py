@@ -1,9 +1,11 @@
 import argparse
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 MARKET = ROOT / "open-model-market"
@@ -54,11 +56,13 @@ class V5P0GovernanceTests(unittest.TestCase):
                 issue_body=json.dumps(packet, ensure_ascii=False),
                 issue_number=101,
                 actor="owner",
-                author_association="",
+                author_association="OWNER",
                 comment_body="",
                 output_dir=folder,
             )
-            ticket.prepare(args)
+            with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY_OWNER": "owner"}, clear=False), \
+                 mock.patch.object(ticket.hardened.base, "duplicate_reason", return_value=""):
+                ticket.prepare(args)
             return json.loads((Path(folder) / "ticket-status.json").read_text(encoding="utf-8"))
 
     def test_ticket_budget_is_not_silently_rewritten(self):
