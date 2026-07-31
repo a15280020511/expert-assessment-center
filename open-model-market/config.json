@@ -64,8 +64,9 @@
     "maximum_replacements": 2,
     "parallel_workers": 4,
     "judge_context_budget_chars": 120000,
-    "minimum_required_work_coverage": 0.6666666667,
-    "allow_controlled_degradation": true
+    "minimum_required_work_coverage": 1.0,
+    "allow_controlled_degradation": false,
+    "public_report_policy": "strict_full_success_only"
   },
   "provider": {
     "allow_fallbacks": false,
