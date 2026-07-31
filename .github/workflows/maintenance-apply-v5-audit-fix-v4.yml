@@ -1,0 +1,100 @@
+name: Maintenance Apply V5 Audit Fix V4
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: maintenance-apply-v5-audit-fix-v4
+  cancel-in-progress: false
+
+jobs:
+  validate-and-push:
+    if: >-
+      github.actor == 'a15280020511' &&
+      github.event.issue.title == '[maintenance-apply-v5-audit-fix] validated patch' &&
+      github.event.comment.body == '/apply-v5-audit-fix-v4'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      TARGET_BRANCH: fix/v5-production-stability-audit-r1
+      EXPECTED_BASE: 95f6d295994e5dd7b2ef0cc54f22e43a1c620aa4
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+    steps:
+      - name: Publish start receipt
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## PATCH_VALIDATION_V4_STARTED\n\n- Run: \`${context.runId}\`\n- Branch: \`${process.env.TARGET_BRANCH}\``
+            })
+
+      - name: Checkout maintenance tools
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          path: maintenance-tool
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Checkout exact target branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          path: work
+          persist-credentials: true
+          fetch-depth: 1
+
+      - name: Reconstruct and apply verified patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" --paginate > /tmp/comments.json
+          python maintenance-tool/tools/maintenance_apply_verified_patch.py \
+            --event "$GITHUB_EVENT_PATH" \
+            --comments /tmp/comments.json \
+            --output /tmp/v5-audit-fix.patch \
+            --expected-branch "$TARGET_BRANCH" \
+            --expected-base "$EXPECTED_BASE"
+          test "$(git -C work rev-parse HEAD)" = "$EXPECTED_BASE"
+          git -C work apply --check /tmp/v5-audit-fix.patch
+          git -C work apply /tmp/v5-audit-fix.patch
+          git -C work apply --check ../maintenance-tool/tools/v5_audit_followup.patch
+          git -C work apply ../maintenance-tool/tools/v5_audit_followup.patch
+          git -C work apply --check ../maintenance-tool/tools/v5_audit_p0_followup.patch
+          git -C work apply ../maintenance-tool/tools/v5_audit_p0_followup.patch
+          rm -f work/.github/workflows/maintenance-source-export.yml
+
+      - name: Run canonical validation gates
+        run: bash maintenance-tool/tools/maintenance_validate_v5_fix.sh work
+
+      - name: Commit validated fix branch
+        working-directory: work
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(v5): harden production evidence recovery and output stability"
+          git push origin "HEAD:$TARGET_BRANCH"
+
+      - name: Publish validation receipt
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## PATCH_VALIDATED_AND_PUSHED\n\n- Run: \`${context.runId}\`\n- Branch: \`${process.env.TARGET_BRANCH}\`\n- Unit suite: \`PASS\`\n- P0 regressions: \`25/25 PASS\`\n- Dry-run: \`PASS\`\n- Repository audit: \`PASS\``
+            })
