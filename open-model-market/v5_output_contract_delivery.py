@@ -16,6 +16,7 @@ import os
 from typing import Any, Mapping
 
 import v5_executor
+import v5_task_delivery_contract as task_delivery_contract
 from execution_graph import SelectedNode
 
 _INSTALLED = False
@@ -26,6 +27,10 @@ CONTRACT_METADATA_KEYS = (
     "machine_readable_required",
     "must_separate_fact_assumption_inference",
     "required_fields",
+    "exact_top_level_fields",
+    "nested_exact_fields",
+    "nested_values_must_be_objects",
+    "explicit_user_contract",
 )
 
 
@@ -68,6 +73,7 @@ def _delivery_rule(node: SelectedNode) -> str:
         node.output_contract.get("must_separate_fact_assumption_inference")
     )
     compact_rule = _compact_delivery_rule(fields) if _compact_mode_enabled() else ""
+    explicit_rule = task_delivery_contract.delivery_rule(node.output_contract)
     if node.output_contract.get("machine_readable_required"):
         separation_rule = (
             "事实、假设、推断和不确定性必须在相应字段内明确区分。"
@@ -81,7 +87,7 @@ def _delivery_rule(node: SelectedNode) -> str:
             "禁止复述输出契约、字段清单或模式定义，禁止输出"
             "machine_readable_required、must_separate_fact_assumption_inference、required_fields"
             "等契约元数据。"
-            f"{separation_rule}"
+            f"{explicit_rule}{separation_rule}"
             "内容必须精炼，避免重复；在篇幅受限时优先保证所有必填键存在且JSON语法完整闭合。"
             f"{compact_rule}"
         )
@@ -159,8 +165,13 @@ def contract_aware_quality_gate(
         )
     if metadata and len(missing) == len(required):
         _append_reason(reasons, "contract-metadata-echo")
+    explicit_violations = task_delivery_contract.validate_parsed_contract(
+        parsed, node.output_contract
+    )
+    for violation in explicit_violations:
+        _append_reason(reasons, violation)
 
-    if missing or "contract-metadata-echo" in reasons:
+    if missing or "contract-metadata-echo" in reasons or explicit_violations:
         passed = False
         score = min(float(score), 0.35)
     return passed, score, reasons
