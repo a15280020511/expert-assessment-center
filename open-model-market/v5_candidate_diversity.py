@@ -33,14 +33,7 @@ def diversity_preserving_pareto_prune(
     candidates: Sequence[CandidateNode],
     maximum_per_group: int = 12,
 ) -> list[CandidateNode]:
-    """Keep Pareto quality while reserving distinct-model alternatives.
-
-    Candidate groups are scoped by interpretation and exact coverage keys. The
-    first pass selects the best representative for each distinct model. The
-    second pass fills unused capacity with the remaining Pareto frontier and then
-    any remaining model representatives. This guarantees that dominance by one
-    model cannot erase all alternatives needed for independent copies or recovery.
-    """
+    """Keep Pareto quality while reserving distinct-model alternatives."""
     limit = max(2, int(maximum_per_group))
     groups: dict[tuple[str, tuple[str, ...]], list[CandidateNode]] = {}
     for candidate in candidates:
@@ -67,9 +60,6 @@ def diversity_preserving_pareto_prune(
 
         selected: list[CandidateNode] = []
         selected_ids: set[str] = set()
-
-        # Explicit independent groups and recovery need different models even
-        # when those alternatives are dominated on the ordinary Pareto axes.
         for row in sorted(best_by_model.values(), key=_order_key):
             selected.append(row)
             selected_ids.add(row.candidate_id)
@@ -118,19 +108,13 @@ def install() -> None:
     v5_planner.pareto_prune = diversity_preserving_pareto_prune
     # Candidate qualification, diversity preservation, output-contract delivery,
     # conservative cost control and resilient partial-success synthesis form one
-    # production safety unit. No V3 runtime or production entry is changed here.
+    # production safety unit. No alternate runtime or production entry is changed.
     v5_capability_calibration.install()
 
-    # ``v5_planner`` retains a legacy optimizer for compatibility, while all
-    # formal V5 entrypoints use ``v5_value_optimizer``. When that module is
-    # loaded, align the planner's runtime global as well so no installed V5 path
-    # can silently reintroduce the old all-copies diversity constraint.
     optimizer = sys.modules.get("v5_value_optimizer")
     if optimizer is not None:
         v5_planner.optimize_execution_graph = optimizer.optimize_execution_graph
 
-    # Planning-surrogate evidence must evaluate the exact same explicit
-    # independence policy as the optimizer and graph validator.
     v5_planning_benchmark_policy.install()
     v5_output_contract_delivery.install()
     v5_production_hardening.install()
