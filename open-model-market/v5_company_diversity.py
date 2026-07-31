@@ -40,14 +40,17 @@ def company_preserving_pareto_prune(
     maximum_per_group: int = MINIMUM_CANDIDATES_PER_WORK,
 ) -> list[planner.CandidateNode]:
     """Reserve distinct-company alternatives before ordinary Pareto rows."""
-    limit = max(MINIMUM_CANDIDATES_PER_WORK, int(maximum_per_group))
+    limit = max(1, int(maximum_per_group))
     groups: dict[
         tuple[str, tuple[str, ...]],
         list[planner.CandidateNode],
     ] = {}
     for candidate in candidates:
         groups.setdefault(
-            (candidate.interpretation_id, candidate.coverage_keys),
+            (
+                candidate.interpretation_id,
+                tuple(candidate.coverage_keys),
+            ),
             [],
         ).append(candidate)
 
@@ -93,7 +96,7 @@ def company_preserving_pareto_prune(
     kept.sort(
         key=lambda row: (
             row.interpretation_id,
-            row.coverage_keys,
+            tuple(row.coverage_keys),
             candidate_company(row),
             -row.estimated_quality,
             row.estimated_cost,
