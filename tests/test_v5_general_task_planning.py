@@ -102,7 +102,7 @@ class V5GeneralTaskPlanningTests(unittest.TestCase):
         )
         self.assertGreaterEqual(len(bundle["task_semantics"]["interpretations"]), 1)
 
-    def test_closed_book_emergency_tabletop_is_one_integrated_safety_work(self):
+    def test_closed_book_emergency_tabletop_is_four_work_fail_closed_plan(self):
         task = (
             "真实复杂闭卷任务：一所小学夜班发生复合事件。已知条件仅限题面，"
             "禁止保安进入受限设备区域，禁止靠近裂纹天窗下方，禁止触碰未知积水附近"
@@ -114,20 +114,28 @@ class V5GeneralTaskPlanningTests(unittest.TestCase):
         profile, bundle = self.compile(task)
         self.assertTrue(profile.high_stakes)
         self.assertFalse(profile.long_context)
+        self.assertEqual(profile.complexity, "complex")
         self.assertEqual("security", profile.primary_domain)
         self.assertNotIn("research", profile.domains)
         semantics = bundle["task_semantics"]
-        self.assertTrue(
-            semantics["task_signals"]["closed_book_tabletop_compaction_applied"]
-        )
-        self.assertEqual(1, len(semantics["interpretations"]))
+        signals = semantics["task_signals"]
+        self.assertFalse(signals["closed_book_tabletop_compaction_applied"])
+        self.assertTrue(signals["closed_book_tabletop_decomposition_applied"])
+        self.assertEqual(signals["minimum_planned_work_units"], 4)
         works = semantics["interpretations"][0]["atomic_work"]
-        self.assertEqual(1, len(works))
-        self.assertNotIn("evidence_validation", works[0]["operation_requirements"])
-        self.assertNotIn("forecasting", works[0]["operation_requirements"])
-        self.assertNotIn("adversarial_reasoning", works[0]["operation_requirements"])
+        self.assertEqual(4, len(works))
+        self.assertEqual(
+            sum("synthesis" in work["operation_requirements"] for work in works),
+            1,
+        )
+        self.assertTrue(
+            all(work["output_contract"]["fail_closed_on_quality_gate"] for work in works)
+        )
+        self.assertTrue(
+            any("adversarial_reasoning" in work["operation_requirements"] for work in works)
+        )
         matrix = bundle["resource_matrices"]["matrices"][0]
-        self.assertEqual([], matrix["hard_requirements"])
+        self.assertGreaterEqual(matrix["shape"]["work_count"], 4)
 
 
 def explicit_suite() -> unittest.TestSuite:
