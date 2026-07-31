@@ -7,17 +7,19 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
 import v5_cost_reliability_hardening as legacy_cost  # noqa: E402
-import v5_dynamic_configuration as dynamic_configuration  # noqa: E402
 import v5_planner  # noqa: E402
 import v5_production_hardening  # noqa: E402
 import v5_token_cost_policy as token_cost  # noqa: E402
 import v5_truncation_budget_policy as truncation  # noqa: E402
+from v5_planning_runtime import PlannerPolicy  # noqa: E402
+from v5_runtime import RuntimeConfig  # noqa: E402
 
 
 def work(work_id="w1", *, machine=False):
     return {
         "work_id": work_id,
         "importance": 0.9,
+        "domain_requirements": {"research": 0.9},
         "context_requirements": {
             "system_prompt_tokens": 830,
             "original_task_tokens": 256,
@@ -50,7 +52,9 @@ def endpoint():
         "max_completion_tokens": 10000,
         "prompt_price_per_million": 1.25,
         "completion_price_per_million": 7.50,
-        "supported_parameters": ["reasoning", "temperature"],
+        "supported_parameters": [
+            "reasoning", "temperature", "max_completion_tokens"
+        ],
         "capability_scores": {"evidence_validation": 0.8},
         "benchmark_score": 0.8,
         "benchmark_confidence": 0.95,
@@ -60,40 +64,49 @@ def endpoint():
 
 
 class TestV5TokenCostPolicy(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.policy = PlannerPolicy(RuntimeConfig(
+            total_call_limit=4,
+            recovery_call_limit=1,
+            cost_anomaly_usd=None,
+            quality_tier="value",
+        ))
+
     def test_p95_usage_is_below_allowance_and_includes_reasoning(self):
-        truncation.install()
         row = work()
-        allowance = legacy_cost.completion_envelope(row, 10000)
-        usage = token_cost.estimated_completion_usage(row, 10000)
+        allowance = truncation.completion_envelope(row, 10000)
+        usage = truncation.estimated_completion_usage(row, 10000)
         self.assertEqual(allowance, 8331)
         self.assertEqual(usage, 7620)
         self.assertLess(usage, allowance)
         self.assertGreater(usage, 2500 + 1700)
 
     def test_structured_output_receives_larger_usage_reserve(self):
-        truncation.install()
-        plain = token_cost.estimated_completion_usage(work(machine=False), 10000)
-        structured = token_cost.estimated_completion_usage(work(machine=True), 10000)
+        plain = truncation.estimated_completion_usage(work(machine=False), 10000)
+        structured = truncation.estimated_completion_usage(work(machine=True), 10000)
         self.assertEqual(structured, 7878)
         self.assertGreater(structured, plain)
         self.assertLessEqual(
             structured,
-            legacy_cost.completion_envelope(work(machine=True), 10000),
+            truncation.completion_envelope(work(machine=True), 10000),
         )
 
-    def test_cost_estimate_uses_p95_usage_not_max_allowance(self):
-        truncation.install()
+    def test_cost_estimate_uses_truncation_aware_p95_usage_not_allowance(self):
         row = work()
-        usage = token_cost.estimated_completion_usage(row, 10000)
+        usage = truncation.estimated_completion_usage(row, 10000)
         expected = round((1086 * 1.25 + usage * 7.50) / 1_000_000, 8)
-        actual = token_cost.p95_usage_estimated_cost(endpoint(), [row])
-        old = legacy_cost.conservative_estimated_cost(endpoint(), [row])
+        actual = self.policy._p95_cost(endpoint(), [row], 1.0)
+        full_allowance = round(
+            (1086 * 1.25 + truncation.completion_envelope(row, 10000) * 7.50)
+            / 1_000_000,
+            8,
+        )
         self.assertEqual(actual, expected)
-        self.assertLess(actual, old)
+        self.assertLess(actual, full_allowance)
 
     def test_candidate_keeps_allowance_and_records_separate_usage(self):
-        v5_production_hardening.install()
-        candidate = v5_planner._candidate_for(
+        candidate = self.policy.candidate_factory(
             "interpretation-a",
             ["w1#0"],
             [work()],
@@ -116,10 +129,13 @@ class TestV5TokenCostPolicy(unittest.TestCase):
             profile["cost_estimation_policy"],
             "reasoning-inclusive-p95-usage-not-max-allowance-r8",
         )
+        self.assertEqual(
+            profile["truncation_pressure_policy"],
+            "reasoning-depth-contract-breadth-aware",
+        )
 
     def test_bundle_discount_is_applied_to_usage_audit(self):
-        v5_production_hardening.install()
-        candidate = v5_planner._candidate_for(
+        candidate = self.policy.candidate_factory(
             "interpretation-a",
             ["w1#0", "w2#0"],
             [work("w1"), work("w2")],
@@ -139,38 +155,27 @@ class TestV5TokenCostPolicy(unittest.TestCase):
             expected,
         )
         self.assertEqual(
-            candidate.parameter_profile[
-                "bundle_discount_applied_to_usage_estimate"
-            ],
+            candidate.parameter_profile["bundle_discount_applied_to_usage_estimate"],
             0.84,
         )
 
-    def test_production_hardening_installs_usage_policy_then_dynamic_layer(self):
+    def test_compatibility_install_does_not_modify_formal_planner(self):
+        original_candidate = v5_planner._candidate_for
+        original_cost = v5_planner._estimated_cost
         v5_production_hardening.install()
-        self.assertIs(
-            v5_planner._estimated_cost,
-            token_cost.p95_usage_estimated_cost,
-        )
-        self.assertIs(
-            token_cost.estimated_completion_usage,
-            truncation.estimated_completion_usage,
-        )
-        self.assertIs(
-            legacy_cost.completion_envelope,
-            truncation.completion_envelope,
-        )
-        self.assertIs(
-            v5_planner._candidate_for,
-            dynamic_configuration.dynamic_candidate_for,
-        )
-        self.assertIs(
-            dynamic_configuration._ORIGINAL_CANDIDATE_FOR,
-            token_cost.usage_audited_candidate_for,
-        )
+        self.assertIs(v5_planner._candidate_for, original_candidate)
+        self.assertIs(v5_planner._estimated_cost, original_cost)
         self.assertIs(
             v5_production_hardening.conservative_estimated_cost,
             token_cost.p95_usage_estimated_cost,
         )
+        source = (ROOT / "open-model-market" / "v5_planning_runtime.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("truncation_policy.completion_envelope", source)
+        self.assertIn("truncation_policy.estimated_completion_usage", source)
+        self.assertNotIn("truncation_policy.install()", source)
+        self.assertIsNot(legacy_cost.completion_envelope, truncation.completion_envelope)
 
 
 if __name__ == "__main__":
