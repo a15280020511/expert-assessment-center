@@ -13,7 +13,7 @@
     "long_context",
     "three_or_more_domains"
   ],
-  "official_intelligence_ranking_limit": 100,
+  "official_intelligence_ranking_limit": 150,
   "candidate_pool_per_seat": 24,
   "solver_timeout_seconds": 8.0,
   "strict_provider_diversity": true,
@@ -22,7 +22,7 @@
   "company_shortage_policy": "expand-pool-then-fail-closed",
   "hard_constraints": [
     "stable direct model only",
-    "official intelligence rank within top 100",
+    "official intelligence rank within top 150",
     "context and output capacity sufficient",
     "one model per seat",
     "no model reuse",
