@@ -171,6 +171,27 @@ def _validated_budget(
     )
 
 
+def _planning_limits(
+    *,
+    total_calls: int,
+    recovery_calls: int,
+    planning_nodes: int,
+    anomaly_budget: float | None,
+    runtime: ProductionRuntime,
+) -> GraphLimits:
+    """Derive every planning limit from the one immutable runtime configuration."""
+    return GraphLimits(
+        max_nodes=planning_nodes,
+        max_edges=64,
+        max_stages=8,
+        max_model_calls=total_calls,
+        max_retries=recovery_calls,
+        max_replacements=recovery_calls,
+        max_budget_usd=anomaly_budget,
+        cost_risk_multiplier=runtime.config.cost_risk_multiplier,
+    )
+
+
 def _annotate_market(
     compiled_market: dict[str, Any],
     *,
@@ -239,14 +260,12 @@ def main(
     )
     _write_json(output / "catalog-snapshot.json", snapshot.to_dict())
 
-    limits = GraphLimits(
-        max_nodes=planning_nodes,
-        max_edges=64,
-        max_stages=8,
-        max_model_calls=total_calls,
-        max_retries=recovery_calls,
-        max_replacements=recovery_calls,
-        max_budget_usd=anomaly_budget,
+    limits = _planning_limits(
+        total_calls=total_calls,
+        recovery_calls=recovery_calls,
+        planning_nodes=planning_nodes,
+        anomaly_budget=anomaly_budget,
+        runtime=runtime,
     )
 
     compiled_market = runtime.planner_policy.compile_market(
