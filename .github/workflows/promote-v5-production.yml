@@ -131,23 +131,71 @@ jobs:
             git merge-base --is-ancestor "$TARGET_SHA" "$current"
           fi
 
+      - name: Set up canonical Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            release-target/requirements-runtime.txt
+            release-target/requirements-dev.txt
+
       - name: Install pinned zero-cost validation dependencies
+        id: dependencies
         working-directory: release-target
         run: |
           python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
           python -m pip check
 
-      - name: Run Ruff
+      - name: Run canonical Ruff checks
+        id: ruff
         working-directory: release-target
-        run: python -m ruff check .
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p release-validation-logs
+          python -m ruff check . 2>&1 | tee release-validation-logs/ruff.log
 
-      - name: Compile Python sources
+      - name: Compile canonical Python tree
+        id: compile
+        if: always() && steps.dependencies.outcome == 'success'
         working-directory: release-target
-        run: python -m compileall -q open-model-market tests
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p release-validation-logs
+          python -m compileall -q open-model-market tests tools 2>&1 | tee release-validation-logs/compileall.log
 
-      - name: Run full unit test suite
+      - name: Run canonical full unit test suite
+        id: unit
+        if: always() && steps.dependencies.outcome == 'success'
         working-directory: release-target
-        run: python -m unittest discover -s tests -p 'test*.py' -v
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p release-validation-logs
+          python -m unittest discover -s tests -p 'test*.py' -v 2>&1 | tee release-validation-logs/unit-test.log
+
+      - name: Upload release validation diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: v5-release-validation-${{ github.run_id }}
+          path: release-target/release-validation-logs/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Enforce canonical validation gate
+        if: always() && steps.dependencies.outcome == 'success'
+        env:
+          RUFF_OUTCOME: ${{ steps.ruff.outcome }}
+          COMPILE_OUTCOME: ${{ steps.compile.outcome }}
+          UNIT_OUTCOME: ${{ steps.unit.outcome }}
+        run: |
+          set -euo pipefail
+          test "$RUFF_OUTCOME" = "success"
+          test "$COMPILE_OUTCOME" = "success"
+          test "$UNIT_OUTCOME" = "success"
 
       - name: Run deterministic no-call V5 regression
         working-directory: release-target
