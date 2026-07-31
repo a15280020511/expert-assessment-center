@@ -83,8 +83,12 @@ class TicketSecurityTests(unittest.TestCase):
         self.assertIn("evidence must be an object or an array", status["reason"])
         self.assertIn("approved_budget", status["reason"])
         self.assertIn("maximum_recovery_calls is required", status["reason"])
-        self.assertIn("cost_policy is required", status["reason"])
         self.assertGreaterEqual(len(status["errors"]), 8)
+
+        raw_messages = "; ".join(
+            error.message for error in issue_ticket.TICKET_VALIDATOR.iter_errors(payload)
+        )
+        self.assertIn("cost_policy", raw_messages)
 
     def test_evidence_array_is_rendered_and_string_is_rejected(self):
         payload = packet()
