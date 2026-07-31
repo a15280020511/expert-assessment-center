@@ -1,0 +1,6 @@
+{
+  "schema_version": "v5-production-release-1",
+  "action": "promote",
+  "target_sha": "5e87b912b70c3bec257fe57670781c265b3bd038",
+  "request_id": "extreme-stability-attestation-fix-20260801"
+}
