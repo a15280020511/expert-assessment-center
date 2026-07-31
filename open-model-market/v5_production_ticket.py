@@ -10,18 +10,15 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import shutil
 import traceback
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-import v5_production_hardening
+import v5_pipeline
+from v5_runtime import ProductionRuntime, RuntimeConfig
 
-v5_production_hardening.install()
-import v5_pipeline  # noqa: E402
-
-RUNTIME_VERSION = "v5-r8"
+RUNTIME_VERSION = "v5-native-runtime-1"
 ABSOLUTE_MAX_MODEL_CALLS = 16
 
 
@@ -112,7 +109,8 @@ def _write_runtime_evidence(
     _write(output / "production-runtime.json", {
         "runtime_version": RUNTIME_VERSION,
         "entrypoint": "v5_production_ticket.py",
-        "hardening": "v5_production_hardening.install",
+        "runtime_constructor": "v5_runtime.ProductionRuntime",
+        "global_monkey_patching": False,
         "maximum_model_calls": total_calls,
         "maximum_recovery_calls": recovery_calls,
         "maximum_initial_calls": total_calls - recovery_calls,
@@ -299,20 +297,17 @@ def _retryable_provider_failure(output: Path) -> bool:
     attempts = _attempt_rows(rows)
     if not attempts:
         return False
+    saw_failure = False
     for attempt in attempts:
-        text = " ".join([
-            str(attempt.get("error") or ""),
-            " ".join(str(value) for value in attempt.get("gate_reasons", []) if value),
-        ]).casefold()
-        usage = attempt.get("usage") if isinstance(attempt.get("usage"), Mapping) else {}
-        answer = str(attempt.get("answer") or "").strip()
-        response_id = str(attempt.get("response_id") or "").strip()
-        if not answer and not response_id and not usage:
+        failure = attempt.get("failure") if isinstance(attempt.get("failure"), Mapping) else None
+        if failure is None:
+            if str(attempt.get("status") or "") == "passed":
+                return False
             continue
-        if any(token in text for token in ("429", "rate limit", "timeout", "502", "503", "504", "upstream")):
-            continue
-        return False
-    return True
+        saw_failure = True
+        if not bool(failure.get("retryable")):
+            return False
+    return saw_failure
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -335,7 +330,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise ValueError("maximum-total-calls must be between 4 and 16")
     if not 0 <= args.maximum_recovery_calls < args.maximum_total_calls:
         raise ValueError("maximum-recovery-calls must be non-negative and below total calls")
-    os.environ["TOTAL_MODEL_CALLS"] = str(args.maximum_total_calls)
+    runtime = ProductionRuntime(RuntimeConfig(
+        total_call_limit=args.maximum_total_calls,
+        recovery_call_limit=args.maximum_recovery_calls,
+        cost_anomaly_usd=args.cost_anomaly_usd,
+        quality_tier=args.quality_tier,
+        tools_allowed=False,
+        live_catalog_required=args.require_live_catalog,
+        provider_lock_required=True,
+    ))
     command = [
         "--task", args.task,
         "--output-dir", str(output),
@@ -350,7 +353,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.require_live_catalog:
         command.append("--require-live-catalog")
     try:
-        code = int(v5_pipeline.main(command))
+        code = int(v5_pipeline.main(command, runtime=runtime))
         if code != 0:
             raise RuntimeError(f"V5 pipeline returned {code}")
         envelope = _normalize(
