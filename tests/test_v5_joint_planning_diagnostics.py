@@ -19,6 +19,7 @@ def candidate(
     *,
     estimated_cost: float,
 ) -> dict:
+    company = f"vendor-{candidate_id}"
     return {
         "candidate_id": candidate_id,
         "interpretation_id": interpretation_id,
@@ -30,8 +31,8 @@ def candidate(
         "prompt_profile": {},
         "reasoning_profile": {"enabled": True},
         "parameter_profile": {},
-        "model": f"vendor/{candidate_id}",
-        "provider_endpoint": f"vendor/{candidate_id}@provider/default",
+        "model": f"{company}/model",
+        "provider_endpoint": f"{company}/model@provider/default",
         "provider_slug": "provider/default",
         "output_contract": {"required_fields": ["conclusions"]},
         "estimated_quality": 0.8,
