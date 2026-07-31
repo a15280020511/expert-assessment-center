@@ -43,10 +43,14 @@ class TestV5R8IBudgetIntegrity(unittest.TestCase):
         self.assertEqual(r8i.MAX_GLOBAL_CALLS, 57)
         self.assertEqual(3 * (9 + r8i.V3_MAX_PAID_CALLS + 3), 57)
 
-    def test_r8i_workflow_is_exact_manual_unlock_and_single_key(self):
+    def test_r8j_workflow_is_exact_manual_unlock_single_key_and_cancels_stale_run(self):
         workflow = (ROOT / ".github/workflows/v5-r8-stage-d-paid-blind-r8i.yml").read_text(encoding="utf-8")
         self.assertIn("github.event.issue.number == 64", workflow)
-        self.assertIn("RUN_V5_R8_STAGE_D_20260731_R8I", workflow)
+        self.assertIn("RUN_V5_R8_STAGE_D_20260731_R8J", workflow)
+        self.assertNotIn("RUN_V5_R8_STAGE_D_20260731_R8I'", workflow)
+        self.assertIn("cancel-in-progress: true", workflow)
+        self.assertIn("V5_R8J_STAGE_D_TRIGGERED", workflow)
+        self.assertIn("Model calls at receipt: `0`", workflow)
         self.assertIn("max_calls\": 57", workflow)
         self.assertIn("v5_live_benchmark_r8i.py", workflow)
         self.assertIn("secrets.OPENROUTER_API_KEY", workflow)
