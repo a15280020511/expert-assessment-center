@@ -8,7 +8,6 @@ sys.path.insert(0, str(ROOT / "open-model-market"))
 
 from execution_graph import GraphLimits  # noqa: E402
 import v5_budget_runtime_parity as parity  # noqa: E402
-import v5_company_diversity as company_policy  # noqa: E402
 from v5_planning_runtime import PlannerPolicy  # noqa: E402
 
 
@@ -18,6 +17,9 @@ class TestV5BudgetRuntimeParity(unittest.TestCase):
 
         def fake_optimize(candidate_bundle, *, limits, **kwargs):
             captured["budget"] = limits.max_budget_usd
+            captured["company"] = kwargs[
+                "require_distinct_model_companies"
+            ]
             return {
                 "execution_graph": {
                     "estimated_total_cost": 0.19,
@@ -26,7 +28,11 @@ class TestV5BudgetRuntimeParity(unittest.TestCase):
                 "selected_candidate_ids": ["n1"],
             }
 
-        with patch.object(parity, "_ORIGINAL_OPTIMIZE", side_effect=fake_optimize):
+        with patch.object(
+            parity,
+            "_ORIGINAL_OPTIMIZE",
+            side_effect=fake_optimize,
+        ):
             result = parity.risk_budgeted_optimize_execution_graph(
                 {"candidates": [{}] * 20},
                 limits=GraphLimits(
@@ -37,11 +43,13 @@ class TestV5BudgetRuntimeParity(unittest.TestCase):
             )
 
         self.assertAlmostEqual(captured["budget"], 0.20)
+        self.assertTrue(captured["company"])
         evidence = result["budget_preflight_parity"]
         self.assertAlmostEqual(
             evidence["selected_risk_adjusted_cost_usd"],
             0.2375,
         )
+        self.assertTrue(evidence["require_distinct_model_companies"])
         self.assertGreaterEqual(evidence["adaptive_ratio_iterations"], 4)
         self.assertLessEqual(evidence["adaptive_ratio_iterations"], 18)
 
@@ -63,8 +71,8 @@ class TestV5BudgetRuntimeParity(unittest.TestCase):
 
         policy = PlannerPolicy(runtime_config=None)
         with patch.object(
-            company_policy,
-            "optimize_execution_graph",
+            parity,
+            "_ORIGINAL_OPTIMIZE",
             side_effect=fake_optimize,
         ):
             result = policy.optimize_execution_graph(
@@ -101,7 +109,11 @@ class TestV5BudgetRuntimeParity(unittest.TestCase):
                 }
             }
 
-        with patch.object(parity, "_ORIGINAL_OPTIMIZE", side_effect=fake_optimize):
+        with patch.object(
+            parity,
+            "_ORIGINAL_OPTIMIZE",
+            side_effect=fake_optimize,
+        ):
             with self.assertRaisesRegex(Exception, "Risk-adjusted"):
                 parity.risk_budgeted_optimize_execution_graph(
                     {"candidates": [{}]},
