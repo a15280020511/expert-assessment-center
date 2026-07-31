@@ -54,13 +54,22 @@ jobs:
           python - <<'PY'
           import base64, hashlib, json, os, re
           from pathlib import Path
+
           event = json.loads(Path(os.environ['EVENT_PATH']).read_text(encoding='utf-8'))
           ticket = json.loads(event['issue']['body'])
           if ticket.get('target_branch') != os.environ['TARGET_BRANCH']:
               raise SystemExit('target branch mismatch')
           if ticket.get('base_commit') != os.environ['EXPECTED_BASE']:
               raise SystemExit('base commit mismatch')
+
           expected_count = int(ticket.get('part_count') or 0)
+          expected_lengths = {int(key): int(value) for key, value in ticket.get('part_lengths', {}).items()}
+          expected_hashes = {int(key): str(value) for key, value in ticket.get('part_sha256', {}).items()}
+          if sorted(expected_lengths) != list(range(1, expected_count + 1)):
+              raise SystemExit('expected part lengths are incomplete')
+          if sorted(expected_hashes) != list(range(1, expected_count + 1)):
+              raise SystemExit('expected part hashes are incomplete')
+
           comments = json.loads(Path('/tmp/comments.json').read_text(encoding='utf-8'))
           parts = {}
           pattern = re.compile(r'^PATCH_PART (\d{3})/(\d{3})\n([A-Za-z0-9+/=]+)$')
@@ -74,14 +83,47 @@ jobs:
               parts[index] = payload
           if sorted(parts) != list(range(1, expected_count + 1)):
               raise SystemExit('patch parts are missing')
-          patch = base64.b64decode(''.join(parts[index] for index in sorted(parts)), validate=True)
+
+          normalized = {}
+          repairs = []
+          for index in range(1, expected_count + 1):
+              payload = parts[index]
+              expected_length = expected_lengths[index]
+              expected_hash = expected_hashes[index]
+              actual_hash = hashlib.sha256(payload.encode('ascii')).hexdigest()
+              if len(payload) == expected_length and actual_hash == expected_hash:
+                  normalized[index] = payload
+                  continue
+
+              delta = len(payload) - expected_length
+              candidates = []
+              if 0 < delta <= 4:
+                  for offset in range(0, len(payload) - delta + 1):
+                      candidate = payload[:offset] + payload[offset + delta:]
+                      if hashlib.sha256(candidate.encode('ascii')).hexdigest() == expected_hash:
+                          candidates.append((offset, candidate))
+              if len(candidates) != 1:
+                  raise SystemExit(
+                      f'part {index} integrity mismatch: length={len(payload)} '
+                      f'hash={actual_hash} repair_candidates={len(candidates)}'
+                  )
+              offset, candidate = candidates[0]
+              normalized[index] = candidate
+              repairs.append({'part': index, 'removed_chars': delta, 'offset': offset})
+
+          patch = base64.b64decode(''.join(normalized[index] for index in range(1, expected_count + 1)), validate=True)
           digest = hashlib.sha256(patch).hexdigest()
           if digest != ticket.get('patch_sha256'):
               raise SystemExit('patch digest mismatch')
           if len(patch) != int(ticket.get('patch_bytes') or -1):
               raise SystemExit('patch byte count mismatch')
           Path('/tmp/v5-audit-fix.patch').write_bytes(patch)
-          print(json.dumps({'patch_sha256': digest, 'patch_bytes': len(patch), 'parts': len(parts)}))
+          print(json.dumps({
+              'patch_sha256': digest,
+              'patch_bytes': len(patch),
+              'parts': len(normalized),
+              'transport_repairs': repairs,
+          }, sort_keys=True))
           PY
           test "$(git rev-parse HEAD)" = "$EXPECTED_BASE"
           git apply --check /tmp/v5-audit-fix.patch
