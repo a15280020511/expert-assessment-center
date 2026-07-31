@@ -22,7 +22,14 @@ def row(candidate_id, copy_index, *, model="a/model", provider="p1"):
 
 
 class TestV5PlanningBenchmarkPolicy(unittest.TestCase):
-    def metrics(self, rows, *, distinct_model=False, distinct_provider=False):
+    def metrics(
+        self,
+        rows,
+        *,
+        distinct_model=False,
+        distinct_provider=False,
+        distinct_company=False,
+    ):
         return _metrics(
             rows,
             {"w1#0", "w1#1"},
@@ -30,13 +37,15 @@ class TestV5PlanningBenchmarkPolicy(unittest.TestCase):
             {
                 "w1": {
                     "different_model_required": distinct_model,
+                    "different_company_required": distinct_company,
                     "different_provider_required": distinct_provider,
                 }
             },
             0.8,
+            require_distinct_model_companies=distinct_company,
         )
 
-    def test_ordinary_redundancy_reusing_model_is_feasible(self):
+    def test_low_level_ordinary_redundancy_can_disable_company_gate(self):
         result = self.metrics([row("c0", 0), row("c1", 1)])
         self.assertTrue(result["feasible"])
         self.assertFalse(result["hard_constraint_violations"])
@@ -52,6 +61,20 @@ class TestV5PlanningBenchmarkPolicy(unittest.TestCase):
             result["hard_constraint_violations"],
         )
 
+    def test_global_company_reuse_is_rejected(self):
+        result = self.metrics(
+            [
+                row("c0", 0, model="a/model-one"),
+                row("c1", 1, model="a/model-two"),
+            ],
+            distinct_company=True,
+        )
+        self.assertFalse(result["feasible"])
+        self.assertIn(
+            "model-company-reused:a:selection-count=2",
+            result["hard_constraint_violations"],
+        )
+
     def test_provider_reuse_is_not_an_undeclared_hard_gate(self):
         result = self.metrics(
             [
@@ -59,6 +82,7 @@ class TestV5PlanningBenchmarkPolicy(unittest.TestCase):
                 row("c1", 1, model="b/model", provider="shared"),
             ],
             distinct_model=True,
+            distinct_company=True,
             distinct_provider=False,
         )
         self.assertTrue(result["feasible"])
