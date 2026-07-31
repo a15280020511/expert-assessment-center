@@ -141,8 +141,6 @@ def _install_sequential_budget_guard() -> None:
         )
         return results
 
-    original_pre_judge = team.enforce_pre_judge_budget
-
     def bounded_pre_judge(run: Any, profile: Any, ranked: Sequence[ModelInfo], judge: Any, results: Sequence[Any]) -> float:
         by_id = {model.id: model for model in ranked}
         judge_model = by_id[judge.model_id]
@@ -154,8 +152,6 @@ def _install_sequential_budget_guard() -> None:
             raise ExpertTeamError(
                 f"Stage-D V3 judge denied before call: projected conservative spend ${projected:.6f} exceeds ${cap:.6f}"
             )
-        # Retain the production guard as a second independent check.
-        original_pre_judge(run, profile, ranked, judge, results)
         return estimate
 
     team.execute_experts = bounded_execute
