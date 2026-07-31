@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from openrouter_api import MODELS_URL, request_json
+from v5_model_company import DEFAULT_INTELLIGENCE_RANKING_LIMIT
 
 DEFAULT_CONFIG = Path(__file__).with_name("config.json")
 POLICY_FILE = Path(__file__).with_name("team_policy.json")
@@ -173,8 +174,11 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
         or os.getenv("REASONING_EFFORT")
         or execution.get("reasoning_effort", "high")
     )
-    if not 5 <= ranking <= 100:
-        raise ExpertTeamError("ranking_limit must be between 5 and 100.")
+    if not 5 <= ranking <= DEFAULT_INTELLIGENCE_RANKING_LIMIT:
+        raise ExpertTeamError(
+            "ranking_limit must be between 5 and "
+            f"{DEFAULT_INTELLIGENCE_RANKING_LIMIT}."
+        )
     if not 256 <= max_tokens <= 32768:
         raise ExpertTeamError("max_completion_tokens must be between 256 and 32768.")
     if reasoning not in {"low", "medium", "high"}:
