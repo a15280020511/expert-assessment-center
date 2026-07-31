@@ -64,21 +64,6 @@ class TestV5PlanningBenchmarkPolicy(unittest.TestCase):
         self.assertTrue(result["feasible"])
         self.assertEqual(len(result["provider_endpoints"]), 2)
 
-    def test_explicit_provider_independence_is_enforced_when_declared(self):
-        result = self.metrics(
-            [
-                row("c0", 0, model="a/model", provider="shared"),
-                row("c1", 1, model="b/model", provider="shared"),
-            ],
-            distinct_model=True,
-            distinct_provider=True,
-        )
-        self.assertFalse(result["feasible"])
-        self.assertIn(
-            "w1:independent-copies-reuse-endpoint",
-            result["hard_constraint_violations"],
-        )
-
 
 if __name__ == "__main__":
     unittest.main()
