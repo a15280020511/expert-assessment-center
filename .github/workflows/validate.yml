@@ -71,11 +71,14 @@ jobs:
           test -s open-model-market/v5_issue_ticket.py
           test -s open-model-market/v5_admission_lock.py
           test -s open-model-market/v5_execution_auditor.py
+          test -s open-model-market/v5_execution_auditor_integrity.py
           test -s open-model-market/v5_final_status.py
           test -s open-model-market/v5_final_attestation.py
           test -s open-model-market/v5_production_hardening.py
           test -s open-model-market/v5_general_task_planning.py
           test -s open-model-market/v5_planning_diagnostics.py
+          test -s open-model-market/v5_quality_status_integrity.py
+          test -s open-model-market/v5_truncation_budget_policy.py
           test -s open-model-market/v5_total_call_cap.py
           test -s open-model-market/v5_executor.py
           test -s open-model-market/v5_planner.py
@@ -83,22 +86,24 @@ jobs:
           test -s tests/test_v5_general_task_planning.py
           test -s tests/test_v5_general_task_full_planning.py
           test -s tests/test_v5_planning_scenario_matrix.py
+          test -s tests/test_v5_quality_status_integrity.py
           test -s tools/run_v5_p0_regressions.py
       - name: Run current unit tests
         shell: bash
         run: |
           set -o pipefail
           python -m unittest discover -s tests -v 2>&1 | tee unit-test.log
-      - name: Run mandatory P0 general-task regressions
+      - name: Run mandatory P0 regressions
         shell: bash
         run: |
           set -o pipefail
-          python tools/run_v5_p0_regressions.py 2>&1 | tee general-task-regressions.log
-          grep -q "REGISTERED V5GeneralTaskPlanningTests: 5" general-task-regressions.log
-          grep -q "REGISTERED V5GeneralTaskFullPlanningTests: 4" general-task-regressions.log
-          grep -q "REGISTERED V5PlanningScenarioMatrixTests: 4" general-task-regressions.log
-          grep -q "REGISTERED TOTAL: 13" general-task-regressions.log
-          grep -q "P0 REGRESSION RESULT: run=13, passed=13, failures=0, errors=0, skipped=0" general-task-regressions.log
+          python tools/run_v5_p0_regressions.py 2>&1 | tee p0-regressions.log
+          grep -q "REGISTERED V5GeneralTaskPlanningTests: 5" p0-regressions.log
+          grep -q "REGISTERED V5GeneralTaskFullPlanningTests: 4" p0-regressions.log
+          grep -q "REGISTERED V5PlanningScenarioMatrixTests: 4" p0-regressions.log
+          grep -q "REGISTERED V5QualityStatusIntegrityTests: 5" p0-regressions.log
+          grep -q "REGISTERED TOTAL: 18" p0-regressions.log
+          grep -q "P0 REGRESSION RESULT: run=18, passed=18, failures=0, errors=0, skipped=0" p0-regressions.log
       - name: Run deterministic V5 end-to-end dry-run
         run: |
           python open-model-market/v5_pipeline.py \
@@ -120,7 +125,7 @@ jobs:
           path: |
             validation-artifacts/
             unit-test.log
-            general-task-regressions.log
+            p0-regressions.log
             ruff.log
           if-no-files-found: warn
           retention-days: 7

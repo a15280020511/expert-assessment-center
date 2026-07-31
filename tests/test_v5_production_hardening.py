@@ -90,7 +90,7 @@ class TestV5ProductionHardening(unittest.TestCase):
         )
 
         self.assertEqual(usage, math.ceil((2500 + 1600) * 1.22))
-        self.assertEqual(allowance, 6170)
+        self.assertEqual(allowance, 6250)
         self.assertLess(usage, allowance)
         self.assertAlmostEqual(conservative, expected, places=8)
         self.assertGreater(conservative, optimistic)

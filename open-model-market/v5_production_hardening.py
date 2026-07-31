@@ -6,6 +6,7 @@ import v5_cost_reliability_hardening as cost_reliability
 import v5_dynamic_configuration as dynamic_configuration
 import v5_dynamic_prompt_delivery as dynamic_prompt_delivery
 import v5_general_task_planning as general_task_planning
+import v5_quality_status_integrity as quality_integrity
 import v5_r8_executor as resilient
 import v5_r8_gate_wiring as gate_wiring
 import v5_r8_policy as runtime_policy
@@ -15,6 +16,7 @@ import v5_rejection_audit_policy as rejection_audit
 import v5_stage_d_provider_compat as provider_compat
 import v5_token_cost_policy as token_cost
 import v5_total_call_cap as total_call_cap
+import v5_truncation_budget_policy as truncation_budget
 
 MIN_PROVIDER_RELIABILITY = cost_reliability.MIN_PROVIDER_RELIABILITY
 COST_UNCERTAINTY_MULTIPLIER = cost_reliability.COST_UNCERTAINTY_MULTIPLIER
@@ -35,6 +37,7 @@ def install() -> None:
     runtime_policy.install()
     cost_reliability.install()
     token_cost.install()
+    truncation_budget.install()
     budget_parity.install()
     dynamic_configuration.install()
     dynamic_prompt_delivery.install()
@@ -45,3 +48,5 @@ def install() -> None:
     resilient.install()
     total_call_cap.install()
     provider_compat.install()
+    # Install last so no later execution patch can bypass run-level integrity.
+    quality_integrity.install()

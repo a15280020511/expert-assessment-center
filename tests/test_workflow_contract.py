@@ -21,9 +21,10 @@ class WorkflowContractTests(unittest.TestCase):
     def test_production_uses_only_v5_entrypoints(self):
         self.assertIn("v5_issue_ticket.py prepare", self.text)
         self.assertIn("v5_production_ticket.py", self.text)
-        self.assertIn("v5_execution_auditor.py", self.text)
+        self.assertIn("v5_execution_auditor_integrity.py", self.text)
         self.assertIn("v5_final_status.py", self.text)
         self.assertIn("v5_final_attestation.py", self.text)
+        self.assertNotIn("python open-model-market/v5_execution_auditor.py", self.text)
         self.assertNotIn("expert_team_hardened.py", self.text)
         self.assertNotIn("python open-model-market/execution_auditor.py", self.text)
         self.assertNotIn("python open-model-market/final_status.py", self.text)

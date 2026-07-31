@@ -19,6 +19,7 @@ SPECS = (
     (TESTS / "test_v5_general_task_planning.py", "V5GeneralTaskPlanningTests", 5),
     (TESTS / "test_v5_planning_scenario_matrix.py", "V5PlanningScenarioMatrixTests", 4),
     (TESTS / "test_v5_general_task_full_planning.py", "V5GeneralTaskFullPlanningTests", 4),
+    (TESTS / "test_v5_quality_status_integrity.py", "V5QualityStatusIntegrityTests", 5),
 )
 
 
