@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any, Mapping, Sequence
 
 from v5_model_company import candidate_company
+from v5_planner import V5PlanningError
 from v5_planning_runtime import PlannerPolicy
 from v5_runtime import (
     FailureCategory,
@@ -90,29 +91,57 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
             for row in candidate_bundle.get("candidates", [])
             if isinstance(row, Mapping)
         ]
-        selected_ids = {str(row.get("node_id") or "") for row in nodes}
-        selected_companies = {candidate_company(row) for row in nodes}
+        candidate_by_id = {
+            str(row.get("candidate_id") or ""): row
+            for row in candidates
+            if str(row.get("candidate_id") or "")
+        }
+        selected_rows: list[dict[str, Any]] = []
+        for node in nodes:
+            node_id = str(node.get("node_id") or "")
+            selected = candidate_by_id.get(node_id)
+            if selected is None:
+                raise V5PlanningError(
+                    "Selected execution node is absent from the frozen "
+                    f"candidate graph: {node_id!r}."
+                )
+            selected_rows.append(selected)
+
+        selected_ids = {
+            str(row.get("candidate_id") or "") for row in selected_rows
+        }
+        selected_companies = {
+            candidate_company(row) for row in selected_rows
+        }
         interpretation = str(
             graph.get("metadata", {}).get("interpretation_id")
             if isinstance(graph.get("metadata"), Mapping)
             else ""
         )
+        if not interpretation:
+            raise V5PlanningError(
+                "Selected graph is missing interpretation_id metadata."
+            )
         maximum_rows = max(
-            2,
-            min(4, int(self.config.maximum_candidates_per_work)),
+            0,
+            min(
+                4,
+                int(self.config.maximum_candidates_per_work),
+                int(self.config.recovery_call_limit),
+            ),
         )
         eligible_by_node: dict[str, list[dict[str, Any]]] = {}
 
-        for selected in nodes:
-            node_id = str(selected.get("node_id") or "")
+        for selected in selected_rows:
+            node_id = str(selected.get("candidate_id") or "")
             selected_model = str(selected.get("model") or "")
             selected_provider = self._provider(selected)
-            coverage = tuple(
-                sorted(
-                    f"{work_id}#0"
-                    for work_id in selected.get("assigned_work", [])
+            coverage = self._coverage(selected)
+            if not coverage:
+                raise V5PlanningError(
+                    "Selected candidate is missing exact coverage keys: "
+                    f"{node_id!r}."
                 )
-            )
             alternatives = [
                 row
                 for row in candidates
@@ -143,15 +172,14 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
                 seen_companies.add(company)
             eligible_by_node[node_id] = unique_by_company
 
-        # Reserve every recovery company for only one selected node. This makes
-        # parallel multi-node replacement incapable of creating same-company
-        # execution, without adding shared mutable runtime state.
         recovery_pool: dict[str, list[dict[str, Any]]] = {
-            str(row.get("node_id") or ""): [] for row in nodes
+            str(row.get("candidate_id") or ""): []
+            for row in selected_rows
         }
         reserved_recovery_companies: set[str] = set()
         ordered_node_ids = [
-            str(row.get("node_id") or "") for row in nodes
+            str(row.get("candidate_id") or "")
+            for row in selected_rows
         ]
         for _ in range(maximum_rows):
             progress = False
@@ -184,6 +212,7 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
             "same_endpoint_empty_response_retry": False,
             "provider_diversity_first": True,
             "different_model_company_required": True,
+            "exact_coverage_keys_required": True,
             "selected_companies_excluded": sorted(selected_companies),
             "recovery_companies_globally_unique": True,
             "reserved_recovery_companies": sorted(
@@ -198,6 +227,9 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
                 "estimated_quality",
             ],
             "maximum_candidates_per_selected_node": maximum_rows,
+            "maximum_recovery_calls": int(
+                self.config.recovery_call_limit
+            ),
             "cross_task_history_used": False,
         }
         graph["metadata"] = metadata
