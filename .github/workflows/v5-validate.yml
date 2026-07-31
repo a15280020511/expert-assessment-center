@@ -46,7 +46,9 @@ jobs:
             open-model-market/atomic_work_graph.py \
             open-model-market/resource_matrix.py \
             open-model-market/v5_planner.py \
+            open-model-market/v5_planning_runtime.py \
             open-model-market/v5_value_optimizer.py \
+            open-model-market/v5_runtime.py \
             open-model-market/v5_executor.py \
             open-model-market/v5_benchmark.py \
             open-model-market/v5_pipeline.py \
@@ -63,6 +65,9 @@ jobs:
             tests.test_execution_graph_validator \
             tests.test_execution_graph_properties \
             tests.test_v5_planner_executor \
+            tests.test_v5_explicit_runtime \
+            tests.test_v5_empty_output_recovery \
+            tests.test_v5_r8_gate_wiring \
             tests.test_v5_production_cutover \
             tests.test_v5_p0_governance \
             tests.test_legacy_runtime_removed \
@@ -91,6 +96,8 @@ jobs:
           graph = json.loads((root / "v5-execution-graph.json").read_text())
           dry = json.loads((root / "v5-dry-run.json").read_text())
           benchmark = json.loads((root / "v5-planning-benchmark.json").read_text())
+          runtime = json.loads((root / "v5-runtime-config.json").read_text())
+          snapshot = json.loads((root / "catalog-snapshot.json").read_text())
           forbidden = {
               "tools", "tool_choice", "plugins", "web_search", "web_search_options",
               "file_search", "browser", "code_interpreter", "models",
@@ -101,6 +108,7 @@ jobs:
           assert market["synthetic_fixture_count"] == 0
           assert market["phase_b_invariants"]["provider_endpoint_is_explicit"] is True
           assert market["candidate_pool_policy"] == "multi-channel-deduplicated-before-optimizer"
+          assert market["cross_task_history_used"] is False
           assert candidates["candidate_count_after_pareto"] > 0
           assert candidates["candidate_count_after_pareto"] <= candidates["candidate_count_before_pareto"]
           assert optimization["version"] == 5
@@ -126,7 +134,13 @@ jobs:
           assert graph["required_work"]
           assert dry["status"] == "planned-not-executed"
           assert dry["production_entrypoint_changed"] is False
+          assert dry["global_monkey_patching"] is False
           assert dry["approved_budget"]["maximum_total_calls"] == 16
+          assert runtime["global_monkey_patching"] is False
+          assert runtime["cross_task_history_used"] is False
+          assert runtime["configuration"]["initial_call_limit"] == 14
+          assert snapshot["cross_task_history_used"] is False
+          assert snapshot["catalog_snapshot_id"] == dry["catalog_snapshot_id"]
           assert benchmark["planning_gate_passed"] is True
           assert benchmark["cost_performance_claim_allowed"] is True
           assert benchmark["feasible_comparator_count"] >= 2
@@ -142,16 +156,28 @@ jobs:
           assert benchmark["strategies"]["lowest_cost_feasible"]["feasible"] is True
           assert benchmark["strategies"]["highest_utility_feasible"]["feasible"] is True
 
+          allowances = []
           for node, request in zip(graph["nodes"], dry["requests"]):
               assert not forbidden.intersection(request)
-              assert "max_tokens" not in request
-              assert "max_completion_tokens" not in request
+              token_fields = [
+                  key for key in ("max_tokens", "max_completion_tokens")
+                  if key in request
+              ]
+              assert len(token_fields) <= 1
+              if token_fields:
+                  allowance = request[token_fields[0]]
+                  assert isinstance(allowance, int)
+                  assert 1024 <= allowance <= 10000
+                  assert node["parameter_profile"]["output_allowance_is_cost_assumption"] is False
+                  assert node["parameter_profile"]["estimated_completion_usage_tokens"] <= allowance
+                  allowances.append(allowance)
               assert not request["model"].startswith("openrouter/")
               assert ":online" not in request["model"]
               assert ":batch" not in request["model"]
               assert request["provider"]["allow_fallbacks"] is False
               assert request["provider"]["only"]
               assert request["provider"]["order"] == request["provider"]["only"]
+          assert allowances
 
           assert (root / "task-interpretations.json").exists()
           assert (root / "atomic-work-graph.json").exists()
