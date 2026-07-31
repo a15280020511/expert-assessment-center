@@ -22,13 +22,21 @@ def selected(node_id, work_id, model, provider):
     }
 
 
-def alternative(candidate_id, work_id, model, provider, cost):
+def alternative(
+    candidate_id,
+    work_id,
+    model,
+    provider,
+    cost,
+    *,
+    copy_index=0,
+):
     return {
         "candidate_id": candidate_id,
         "interpretation_id": "i1",
-        "coverage_keys": [f"{work_id}#0"],
+        "coverage_keys": [f"{work_id}#{copy_index}"],
         "assigned_work": [work_id],
-        "copy_indices": [0],
+        "copy_indices": [copy_index],
         "professional_capabilities": {"analysis": 0.8},
         "functions": ["analysis"],
         "prompt_profile": {},
@@ -115,6 +123,107 @@ class V5RecoveryCompanyDiversityTests(unittest.TestCase):
             metadata["recovery_pool_policy"][
                 "reserved_recovery_companies"
             ],
+        )
+
+    def test_recovery_preserves_independent_copy_coverage_key(self):
+        policy = CrossEndpointPlannerPolicy(
+            RuntimeConfig(
+                total_call_limit=4,
+                recovery_call_limit=1,
+                cost_anomaly_usd=None,
+                quality_tier="value",
+                maximum_candidates_per_work=4,
+            )
+        )
+        selected_node = selected(
+            "selected-copy-1",
+            "work-independent",
+            "openai/gpt-a",
+            "p1",
+        )
+        optimization = {
+            "execution_graph": {
+                "nodes": [selected_node],
+                "metadata": {"interpretation_id": "i1"},
+            }
+        }
+        candidate_bundle = {
+            "candidates": [
+                {
+                    **selected_node,
+                    "coverage_keys": ["work-independent#1"],
+                },
+                alternative(
+                    "wrong-copy",
+                    "work-independent",
+                    "google/gemini-wrong",
+                    "p2",
+                    0.001,
+                    copy_index=0,
+                ),
+                alternative(
+                    "right-copy",
+                    "work-independent",
+                    "anthropic/claude-right",
+                    "p3",
+                    0.002,
+                    copy_index=1,
+                ),
+            ]
+        }
+        result = policy.rebalance_recovery_pool(
+            optimization,
+            candidate_bundle,
+        )
+        pool = result["execution_graph"]["metadata"][
+            "recovery_pool"
+        ]["selected-copy-1"]
+        self.assertEqual([row["candidate_id"] for row in pool], ["right-copy"])
+        self.assertEqual(pool[0]["coverage_keys"], ["work-independent#1"])
+        self.assertTrue(
+            result["recovery_pool_policy"][
+                "exact_coverage_keys_required"
+            ]
+        )
+
+    def test_zero_recovery_budget_produces_empty_pool(self):
+        policy = CrossEndpointPlannerPolicy(
+            RuntimeConfig(
+                total_call_limit=4,
+                recovery_call_limit=0,
+                cost_anomaly_usd=None,
+                quality_tier="value",
+                maximum_candidates_per_work=4,
+            )
+        )
+        selected_node = selected("n1", "w1", "openai/gpt-a", "p1")
+        result = policy.rebalance_recovery_pool(
+            {
+                "execution_graph": {
+                    "nodes": [selected_node],
+                    "metadata": {"interpretation_id": "i1"},
+                }
+            },
+            {
+                "candidates": [
+                    {**selected_node, "coverage_keys": ["w1#0"]},
+                    alternative(
+                        "backup",
+                        "w1",
+                        "google/gemini-a",
+                        "p2",
+                        0.001,
+                    ),
+                ]
+            },
+        )
+        metadata = result["execution_graph"]["metadata"]
+        self.assertEqual(metadata["recovery_pool"]["n1"], [])
+        self.assertEqual(
+            metadata["recovery_pool_policy"][
+                "maximum_candidates_per_selected_node"
+            ],
+            0,
         )
 
 
