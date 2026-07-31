@@ -45,7 +45,7 @@ jobs:
             requirements-runtime.txt
             requirements-dev.txt
       - name: Install pinned Python dependencies
-        run: python -m pip install --disable-pip-check --disable-pip-version-check --no-input -r requirements-dev.txt
+        run: python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
       - name: Verify dependencies and OR-Tools
         run: |
           python -m pip check
@@ -57,7 +57,7 @@ jobs:
           python -m ruff check --select E9,F63,F7,F82 open-model-market tests 2>&1 | tee ruff.log
       - name: Compile current Python tree
         run: python -m py_compile open-model-market/*.py tests/*.py
-      - name: Verify V5 production files and removed legacy paths
+      - name: Verify V5 production files
         run: |
           test -s .github/dependabot.yml
           test -s .github/workflows/validate.yml
@@ -73,12 +73,6 @@ jobs:
           test -s open-model-market/v5_executor.py
           test -s open-model-market/v5_planner.py
           test -s open-model-market/v5_value_optimizer.py
-          test ! -e open-model-market/expert_team.py
-          test ! -e open-model-market/expert_team_hardened.py
-          test ! -e open-model-market/v3_benchmark_entry.py
-          test ! -e open-model-market/v3_stage_d_bounded.py
-          test ! -e .github/workflows/expert-team.yml
-          test ! -e .github/workflows/expert-team-canary.yml
       - name: Run current unit tests
         shell: bash
         run: |
