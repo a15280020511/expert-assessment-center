@@ -56,11 +56,30 @@ class PublishReportTests(unittest.TestCase):
             stored = json.loads((output_dir / "report-comments-manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(stored, manifest)
             self.assertEqual(len(manifest["files"]), manifest["comment_count"])
+            self.assertEqual(manifest["run_id"], "789")
+            self.assertEqual(
+                manifest["run_url"],
+                "https://github.com/owner/repo/actions/runs/789",
+            )
             self.assertTrue(all((output_dir / name).exists() for name in manifest["files"]))
 
     def test_empty_report_is_rejected(self):
         with self.assertRaises(ValueError):
-            publish_report.render_comments("", run_url="", max_chars=5000)
+            publish_report.render_comments(
+                "",
+                run_url="https://github.com/owner/repo/actions/runs/123",
+                max_chars=5000,
+            )
+
+    def test_missing_or_unknown_run_identity_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "GitHub Actions run"):
+            publish_report.render_comments("report", run_url="", max_chars=5000)
+        with self.assertRaisesRegex(ValueError, "numeric"):
+            publish_report.render_comments(
+                "report",
+                run_url="https://github.com/owner/repo/actions/runs/unknown",
+                max_chars=5000,
+            )
 
 
 if __name__ == "__main__":

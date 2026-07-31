@@ -154,6 +154,7 @@ class V5QualityStatusIntegrityTests(unittest.TestCase):
                 "status": "success_recovered",
                 "quality_score": 0.82,
                 "attempts": [],
+                "contract": {"required_fields_complete": True},
             }],
         }
         fixed = quality_integrity.enforce_result_integrity(raw)
@@ -161,6 +162,25 @@ class V5QualityStatusIntegrityTests(unittest.TestCase):
         self.assertEqual(fixed["quality_status"], "full_success")
         self.assertEqual(fixed["quality_integrity"]["status"], "PASS")
         self.assertTrue(fixed["quality_integrity"]["full_success_allowed"])
+
+    def test_contract_incomplete_strict_status_is_degraded(self):
+        raw = {
+            "status": "success",
+            "completion_mode": "full",
+            "quality_status": "full_success",
+            "node_results": [{
+                "node_id": "node-contract",
+                "status": "success",
+                "quality_score": 0.82,
+                "attempts": [],
+                "contract": {"required_fields_complete": False},
+            }],
+        }
+        fixed = quality_integrity.enforce_result_integrity(raw)
+        self.assertEqual("degraded", fixed["completion_mode"])
+        self.assertEqual("degraded_success", fixed["quality_status"])
+        self.assertTrue(fixed["quality_integrity"]["degraded_nodes"][0]["contract_incomplete"])
+        self.assertFalse(fixed["quality_integrity"]["full_success_allowed"])
 
     def test_native_runtime_marks_truncated_usable_answer_degraded(self):
         graph = single_node_graph()

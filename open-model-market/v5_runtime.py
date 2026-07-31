@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
@@ -564,6 +565,49 @@ class ExecutionEngine:
             message=str(exc),
         )
 
+    @staticmethod
+    def _normalized_contract_field(value: str) -> str:
+        value = re.sub(r"[`*_~]", "", str(value)).strip().casefold()
+        value = re.sub(r"^\d+(?:\.\d+)*[\s.)、:：-]+", "", value)
+        value = re.sub(r"[^0-9a-z_\u4e00-\u9fff]+", "_", value)
+        return value.strip("_")
+
+    @classmethod
+    def _markdown_contract_fields(
+        cls,
+        answer: str,
+        required: Sequence[str],
+    ) -> dict[str, str]:
+        required_by_name = {
+            cls._normalized_contract_field(field): str(field)
+            for field in required
+            if cls._normalized_contract_field(field)
+        }
+        sections: dict[str, list[str]] = {}
+        current: str | None = None
+        for line in answer.splitlines():
+            match = re.match(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", line)
+            if match:
+                heading = cls._normalized_contract_field(match.group(1))
+                current = next(
+                    (
+                        original
+                        for normalized, original in required_by_name.items()
+                        if heading == normalized or heading.startswith(normalized + "_")
+                    ),
+                    None,
+                )
+                if current is not None:
+                    sections.setdefault(current, [])
+                continue
+            if current is not None:
+                sections[current].append(line)
+        return {
+            field: "\n".join(lines).strip()
+            for field, lines in sections.items()
+            if "\n".join(lines).strip()
+        }
+
     def _contract(self, node: SelectedNode, answer: str | None) -> dict[str, Any]:
         parsed: Any = None
         if answer:
@@ -571,6 +615,17 @@ class ExecutionEngine:
                 parsed = json.loads(answer)
             except json.JSONDecodeError:
                 parsed = None
+        required = [
+            str(value).strip()
+            for value in node.output_contract.get("required_fields", [])
+            if str(value).strip()
+        ]
+        extracted: dict[str, Any] = {}
+        if isinstance(parsed, Mapping):
+            extracted = dict(parsed)
+        elif answer:
+            extracted = self._markdown_contract_fields(answer, required)
+
         standard = {
             "conclusions": [],
             "calculations": [],
@@ -581,20 +636,23 @@ class ExecutionEngine:
             "counterarguments": [],
             "unresolved_items": [],
         }
-        if isinstance(parsed, Mapping):
-            for key in standard:
-                value = parsed.get(key)
-                if isinstance(value, list):
-                    standard[key] = [str(item) for item in value]
-                elif value not in {None, ""}:
-                    standard[key] = [str(value)]
-            standard["raw_fields"] = dict(parsed)
-        elif answer:
+        for key in standard:
+            value = extracted.get(key)
+            if isinstance(value, list):
+                standard[key] = [str(item) for item in value if str(item).strip()]
+            elif value is not None and value != "":
+                standard[key] = [str(value)]
+        if answer and not standard["conclusions"]:
             standard["conclusions"] = [answer]
-        required = [str(value) for value in node.output_contract.get("required_fields", [])]
-        complete = True
-        if required:
-            complete = isinstance(parsed, Mapping) and all(key in parsed for key in required)
+        standard["raw_fields"] = extracted
+
+        def populated(field: str) -> bool:
+            value = extracted.get(field)
+            if isinstance(value, (list, tuple, set, Mapping)):
+                return bool(value)
+            return value is not None and bool(str(value).strip())
+
+        complete = not required or all(populated(field) for field in required)
         canonical = json.dumps(standard, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
         return {
             "schema_version": self.output_policy.schema_version,
@@ -823,15 +881,10 @@ class ExecutionEngine:
                 best = (retried, selected)
             category = self._category(retried)
 
+        # Recovery rows are already frozen and ranked by the run-local
+        # CrossEndpointPlannerPolicy. Re-sorting here would silently replace the
+        # audited effective-cost-per-quality policy with a different objective.
         alternatives = [self._candidate(row, selected) for row in recovery_rows]
-        alternatives.sort(
-            key=lambda node: (
-                self._provider(node) == self._provider(selected),
-                node.failure_probability,
-                node.estimated_cost,
-                -node.estimated_quality,
-            )
-        )
         last_attempted_node = selected
         if category in self.recovery_policy.replace_categories:
             for replacement in alternatives:

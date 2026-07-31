@@ -64,6 +64,17 @@ class RepositoryAuditTests(unittest.TestCase):
         self.assertIn("worker", report["workflow_entrypoints"])
         self.assertNotIn("open-model-market/worker.py", report["orphan_candidates"])
 
+    def test_fail_on_none_never_fails_for_findings(self):
+        report = {
+            "findings": [
+                {"severity": "critical"},
+                {"severity": "high"},
+            ]
+        }
+        self.assertFalse(repository_audit.should_fail(report, "none"))
+        self.assertTrue(repository_audit.should_fail(report, "critical"))
+        self.assertTrue(repository_audit.should_fail(report, "high"))
+
     def test_unreferenced_module_remains_an_orphan_candidate(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

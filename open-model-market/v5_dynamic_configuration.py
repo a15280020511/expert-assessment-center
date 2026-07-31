@@ -182,7 +182,7 @@ def parameter_audit_catalog() -> list[dict[str, str]]:
         ("presence_penalty", "dynamic_supported", "creative tasks only"),
         ("frequency_penalty", "dynamic_supported", "verification tasks only"),
         ("output_contract", "dynamic", "work operations and delivery boundary"),
-        ("output_allowance", "dynamic_bounded", "completion envelope under 10000 hard permission"),
+        ("output_allowance", "dynamic_bounded", "completion envelope under endpoint and 32768 hard permission"),
         ("estimated_token_usage", "dynamic", "reasoning-inclusive P95 estimate"),
         ("context_allocation", "dynamic_bounded", "task plus declared upstream graph"),
         ("optimizer_iterations", "dynamic_bounded", "candidate count and solver time"),

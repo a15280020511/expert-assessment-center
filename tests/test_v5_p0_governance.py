@@ -148,6 +148,7 @@ class V5P0GovernanceTests(unittest.TestCase):
         self.assertIn("--maximum-total-calls", text)
         self.assertIn("--maximum-recovery-calls", text)
         self.assertEqual(text.count("ref: production"), 2)
+        self.assertIn('--run-url "$RUN_URL"', text)
 
     def test_final_attestation_follows_primary_artifact_and_final_status(self):
         text = (

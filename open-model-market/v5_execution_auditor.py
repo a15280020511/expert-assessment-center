@@ -188,9 +188,28 @@ def audit(root: Path, *, execute_outcome: str, publish_outcome: str) -> dict[str
         checks["report_sha256"] = digest
         if digest != report_manifest.get("report_sha256"):
             failures.append("published report SHA256 does not match V5 report")
-        for filename in files:
-            if not (root / "report-comments" / str(filename)).is_file():
+        run_url = str(report_manifest.get("run_url") or "").strip().rstrip("/")
+        run_id = str(report_manifest.get("run_id") or "").strip()
+        expected_suffix = f"/actions/runs/{run_id}" if run_id else ""
+        run_evidence_valid = (
+            bool(run_url)
+            and run_id.isdigit()
+            and run_url.endswith(expected_suffix)
+        )
+        checks["report_run_url"] = run_url
+        checks["report_run_id"] = run_id
+        checks["report_run_evidence_valid"] = run_evidence_valid
+        if not run_evidence_valid:
+            failures.append("published report run identity is missing or invalid")
+        for index, filename in enumerate(files, 1):
+            comment_path = root / "report-comments" / str(filename)
+            if not comment_path.is_file():
                 failures.append(f"report comment file is missing: {filename}")
+                continue
+            comment = comment_path.read_text(encoding="utf-8")
+            marker = f"expert-team-report-run:{run_id}:part:{index:03d}"
+            if run_evidence_valid and (marker not in comment or f"- Run: `{run_url}`" not in comment):
+                failures.append(f"report comment run identity is inconsistent: {filename}")
 
     primary = {
         "code": str(error.get("error_code") or ("NONE" if not failures else "V5_PRODUCTION_AUDIT_FAILED")) if isinstance(error, Mapping) else "V5_PRODUCTION_AUDIT_FAILED",

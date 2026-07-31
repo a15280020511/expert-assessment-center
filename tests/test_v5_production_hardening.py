@@ -101,6 +101,22 @@ class TestV5ProductionHardening(unittest.TestCase):
         self.assertLess(conservative, full_allowance_cost)
         self.assertGreater(conservative, 0.05)
 
+    def test_dynamic_output_allowance_may_exceed_ten_thousand(self):
+        node = _node("long", "work-long", functions=("synthesis",))
+        node = SelectedNode(**{
+            **node.to_dict(),
+            "assigned_work": tuple(node.assigned_work),
+            "functions": tuple(node.functions),
+            "parameter_profile": {
+                "supported_parameters": ["max_tokens"],
+                "recommended_output_allowance_tokens": 15992,
+            },
+        })
+        payload = hardening.hardened_build_node_payload(node, "复杂任务", [])
+        self.assertEqual(payload["max_tokens"], 15992)
+        self.assertGreater(payload["max_tokens"], 10000)
+        self.assertLessEqual(payload["max_tokens"], 32768)
+
     def test_strict_json_schema_requires_every_declared_field(self):
         node = _node("schema", "work-schema")
         node = SelectedNode(**{

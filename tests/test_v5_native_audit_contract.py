@@ -98,9 +98,9 @@ class V5NativeAuditContractTests(unittest.TestCase):
             root,
             "v5-node-results.json",
             [
-                {"node_id": "node-a", "status": "success"},
-                {"node_id": "node-b", "status": "success_recovered"},
-                {"node_id": "node-final", "status": "success"},
+                {"node_id": "node-a", "status": "success", "contract": {"required_fields_complete": True}},
+                {"node_id": "node-b", "status": "success_recovered", "contract": {"required_fields_complete": True}},
+                {"node_id": "node-final", "status": "success", "contract": {"required_fields_complete": True}},
             ],
         )
         self._write(
@@ -129,12 +129,21 @@ class V5NativeAuditContractTests(unittest.TestCase):
             },
         )
         self._write(root, "expert-team-report.md", answer)
-        self._write(root, "report-comments/report-comment-001.md", "published")
+        run_url = "https://github.com/a15280020511/expert-assessment-center/actions/runs/30619634773"
+        self._write(
+            root,
+            "report-comments/report-comment-001.md",
+            "<!-- expert-team-report-run:30619634773:part:001 -->\n"
+            f"- Run: `{run_url}`\n\npublished",
+        )
         self._write(
             root,
             "report-comments/report-comments-manifest.json",
             {
+                "version": 2,
                 "report_sha256": hashlib.sha256(answer.encode("utf-8")).hexdigest(),
+                "run_url": run_url,
+                "run_id": "30619634773",
                 "files": ["report-comment-001.md"],
             },
         )
@@ -161,6 +170,42 @@ class V5NativeAuditContractTests(unittest.TestCase):
                 0.09615135,
                 result["checks"]["actual_cost_usd"],
             )
+
+    def test_missing_report_run_identity_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._fixture(root)
+            manifest_path = root / "report-comments/report-comments-manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["run_url"] = ""
+            manifest["run_id"] = "unknown"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            result = auditor.audit(
+                root,
+                execute_outcome="success",
+                publish_outcome="success",
+            )
+            self.assertEqual("FAIL", result["status"])
+            self.assertIn(
+                "published report run identity is missing or invalid",
+                result["failures"],
+            )
+
+    def test_incomplete_node_contract_cannot_pass_as_full_success(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._fixture(root)
+            rows_path = root / "v5-node-results.json"
+            rows = json.loads(rows_path.read_text(encoding="utf-8"))
+            rows[0]["contract"]["required_fields_complete"] = False
+            rows_path.write_text(json.dumps(rows), encoding="utf-8")
+            result = auditor.audit(
+                root,
+                execute_outcome="success",
+                publish_outcome="success",
+            )
+            self.assertNotEqual("PASS", result["status"])
+            self.assertEqual(1, result["checks"]["contract_incomplete_node_count"])
 
     def test_obsolete_r8_runtime_identifier_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
