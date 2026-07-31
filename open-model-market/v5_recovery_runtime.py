@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from v5_model_company import candidate_company
 from v5_planning_runtime import PlannerPolicy
 from v5_runtime import (
     FailureCategory,
@@ -19,7 +20,7 @@ from v5_runtime import (
 
 
 class CrossEndpointPlannerPolicy(PlannerPolicy):
-    """Add cost-performance and provider-aware recovery rows to a solved graph."""
+    """Add company-safe, provider-aware recovery rows to a solved graph."""
 
     @staticmethod
     def _provider(row: Mapping[str, Any]) -> str:
@@ -32,7 +33,10 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
     @staticmethod
     def _coverage(row: Mapping[str, Any]) -> tuple[str, ...]:
         values = row.get("coverage_keys")
-        if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
+        if not isinstance(values, Sequence) or isinstance(
+            values,
+            (str, bytes),
+        ):
             return ()
         return tuple(sorted(str(value) for value in values))
 
@@ -43,9 +47,21 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
         selected_provider: str,
     ) -> tuple[Any, ...]:
         provider = cls._provider(row)
-        cost = max(0.0, float(row.get("estimated_cost", 0.0) or 0.0))
-        failure = max(0.0, min(1.0, float(row.get("failure_probability", 1.0) or 1.0)))
-        quality = max(0.01, float(row.get("estimated_quality", 0.0) or 0.0))
+        cost = max(
+            0.0,
+            float(row.get("estimated_cost", 0.0) or 0.0),
+        )
+        failure = max(
+            0.0,
+            min(
+                1.0,
+                float(row.get("failure_probability", 1.0) or 1.0),
+            ),
+        )
+        quality = max(
+            0.01,
+            float(row.get("estimated_quality", 0.0) or 0.0),
+        )
         effective_cost_per_quality = cost * (1.0 + failure) / quality
         return (
             provider == selected_provider,
@@ -53,6 +69,7 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
             failure,
             cost,
             -quality,
+            candidate_company(row),
             str(row.get("candidate_id") or ""),
         )
 
@@ -74,13 +91,17 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
             if isinstance(row, Mapping)
         ]
         selected_ids = {str(row.get("node_id") or "") for row in nodes}
+        selected_companies = {candidate_company(row) for row in nodes}
         interpretation = str(
             graph.get("metadata", {}).get("interpretation_id")
             if isinstance(graph.get("metadata"), Mapping)
             else ""
         )
-        maximum_rows = max(2, min(4, int(self.config.maximum_candidates_per_work)))
-        recovery_pool: dict[str, list[dict[str, Any]]] = {}
+        maximum_rows = max(
+            2,
+            min(4, int(self.config.maximum_candidates_per_work)),
+        )
+        eligible_by_node: dict[str, list[dict[str, Any]]] = {}
 
         for selected in nodes:
             node_id = str(selected.get("node_id") or "")
@@ -96,16 +117,65 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
                 row
                 for row in candidates
                 if str(row.get("candidate_id") or "") not in selected_ids
-                and str(row.get("interpretation_id") or "") == interpretation
+                and str(row.get("interpretation_id") or "")
+                == interpretation
                 and self._coverage(row) == coverage
                 and str(row.get("model") or "") != selected_model
                 and str(row.get("provider_endpoint") or "")
                 != str(selected.get("provider_endpoint") or "")
+                and candidate_company(row) not in selected_companies
             ]
             alternatives.sort(
-                key=lambda row: self._recovery_sort_key(row, selected_provider)
+                key=lambda row: self._recovery_sort_key(
+                    row,
+                    selected_provider,
+                )
             )
-            recovery_pool[node_id] = alternatives[:maximum_rows]
+            unique_by_company: list[dict[str, Any]] = []
+            seen_companies: set[str] = set()
+            for row in alternatives:
+                company = candidate_company(row)
+                if company in seen_companies:
+                    continue
+                payload = dict(row)
+                payload["model_company"] = company
+                unique_by_company.append(payload)
+                seen_companies.add(company)
+            eligible_by_node[node_id] = unique_by_company
+
+        # Reserve every recovery company for only one selected node. This makes
+        # parallel multi-node replacement incapable of creating same-company
+        # execution, without adding shared mutable runtime state.
+        recovery_pool: dict[str, list[dict[str, Any]]] = {
+            str(row.get("node_id") or ""): [] for row in nodes
+        }
+        reserved_recovery_companies: set[str] = set()
+        ordered_node_ids = [
+            str(row.get("node_id") or "") for row in nodes
+        ]
+        for _ in range(maximum_rows):
+            progress = False
+            for node_id in ordered_node_ids:
+                rows = eligible_by_node.get(node_id, [])
+                chosen = next(
+                    (
+                        row
+                        for row in rows
+                        if candidate_company(row)
+                        not in reserved_recovery_companies
+                    ),
+                    None,
+                )
+                if chosen is None:
+                    continue
+                recovery_pool[node_id].append(chosen)
+                reserved_recovery_companies.add(
+                    candidate_company(chosen)
+                )
+                rows.remove(chosen)
+                progress = True
+            if not progress:
+                break
 
         metadata = dict(graph.get("metadata") or {})
         metadata["recovery_pool"] = recovery_pool
@@ -113,7 +183,14 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
             "source": "current-run-frozen-candidate-graph",
             "same_endpoint_empty_response_retry": False,
             "provider_diversity_first": True,
+            "different_model_company_required": True,
+            "selected_companies_excluded": sorted(selected_companies),
+            "recovery_companies_globally_unique": True,
+            "reserved_recovery_companies": sorted(
+                reserved_recovery_companies
+            ),
             "ranking": [
+                "different_model_company",
                 "different_provider",
                 "effective_expected_cost_per_quality",
                 "failure_probability",
@@ -125,7 +202,9 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
         }
         graph["metadata"] = metadata
         result["execution_graph"] = graph
-        result["recovery_pool_policy"] = metadata["recovery_pool_policy"]
+        result["recovery_pool_policy"] = metadata[
+            "recovery_pool_policy"
+        ]
         return result
 
     def optimize_execution_graph(
@@ -137,11 +216,14 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
             candidate_bundle,
             **kwargs,
         )
-        return self.rebalance_recovery_pool(optimization, candidate_bundle)
+        return self.rebalance_recovery_pool(
+            optimization,
+            candidate_bundle,
+        )
 
 
 def build_production_runtime(config: RuntimeConfig) -> ProductionRuntime:
-    """Construct one explicit runtime with cross-endpoint empty-response recovery."""
+    """Construct one explicit runtime with cross-endpoint recovery."""
     retry_policy = RetryPolicy(
         retry_same_endpoint_categories=(
             FailureCategory.PROVIDER_RATE_LIMITED,
