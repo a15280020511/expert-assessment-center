@@ -1,0 +1,6 @@
+{
+  "action": "promote",
+  "request_id": "tabletop-semantics-20260801-01",
+  "schema_version": "v5-production-release-1",
+  "target_sha": "c18593e45eb874ed1eaafd568d2a1e7417772213"
+}
