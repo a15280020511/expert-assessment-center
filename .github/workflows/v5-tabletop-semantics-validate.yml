@@ -95,28 +95,42 @@ jobs:
           selected_companies = {
               canonical_model_company(node["model"]) for node in graph["nodes"]
           }
+          diagnostics = {
+              "solver_status": optimization.get("solver_status"),
+              "work_count": len(works),
+              "node_count": len(graph["nodes"]),
+              "request_count": len(dry["requests"]),
+              "selected_companies": sorted(selected_companies),
+              "selected_models": [node["model"] for node in graph["nodes"]],
+              "assigned_work": [node["assigned_work"] for node in graph["nodes"]],
+              "execution_stages": graph.get("execution_stages"),
+              "estimated_total_cost": graph.get("estimated_total_cost"),
+              "approved_budget": dry.get("approved_budget"),
+              "active_operations": signals.get("active_operations"),
+          }
+          print(json.dumps(diagnostics, ensure_ascii=False, indent=2))
 
-          assert signals["closed_book_tabletop_compaction_applied"] is False
-          assert signals["closed_book_tabletop_decomposition_applied"] is True
-          assert signals["minimum_planned_work_units"] == 4
-          assert signals["minimum_distinct_model_companies"] == 4
-          assert signals["high_stakes_degraded_delivery_allowed"] is False
-          assert signals["external_evidence_required"] is False
+          assert signals["closed_book_tabletop_compaction_applied"] is False, diagnostics
+          assert signals["closed_book_tabletop_decomposition_applied"] is True, diagnostics
+          assert signals["minimum_planned_work_units"] == 4, diagnostics
+          assert signals["minimum_distinct_model_companies"] == 4, diagnostics
+          assert signals["high_stakes_degraded_delivery_allowed"] is False, diagnostics
+          assert signals["external_evidence_required"] is False, diagnostics
           assert signals["active_operations"] == [
               "analysis", "decision_comparison", "adversarial_reasoning", "synthesis"
-          ]
-          assert len(semantics["interpretations"]) == 1
-          assert len(works) == 4
-          assert synthesis["output_contract"]["explicit_markdown_contract"] is True
-          assert synthesis["output_contract"]["fail_closed_on_quality_gate"] is True
-          assert optimization["solver_status"] in {"OPTIMAL", "FEASIBLE"}
-          assert len(graph["nodes"]) == 4
-          assert len(selected_companies) == 4
-          assert len(dry["requests"]) == 4
-          assert float(graph["estimated_total_cost"]) <= 0.25
-          assert dry["approved_budget"]["maximum_total_calls"] == 6
-          assert dry["approved_budget"]["maximum_initial_calls"] == 5
-          assert dry["approved_budget"]["maximum_recovery_calls"] == 1
-          assert dry["global_monkey_patching"] is False
-          assert not (root / "v5-planning-infeasibility.json").exists()
+          ], diagnostics
+          assert len(semantics["interpretations"]) == 1, diagnostics
+          assert len(works) == 4, diagnostics
+          assert synthesis["output_contract"]["explicit_markdown_contract"] is True, diagnostics
+          assert synthesis["output_contract"]["fail_closed_on_quality_gate"] is True, diagnostics
+          assert optimization["solver_status"] in {"OPTIMAL", "FEASIBLE"}, diagnostics
+          assert len(graph["nodes"]) == 4, diagnostics
+          assert len(selected_companies) == 4, diagnostics
+          assert len(dry["requests"]) == 4, diagnostics
+          assert float(graph["estimated_total_cost"]) <= 0.25, diagnostics
+          assert dry["approved_budget"]["maximum_total_calls"] == 6, diagnostics
+          assert dry["approved_budget"]["maximum_initial_calls"] == 5, diagnostics
+          assert dry["approved_budget"]["maximum_recovery_calls"] == 1, diagnostics
+          assert dry["global_monkey_patching"] is False, diagnostics
+          assert not (root / "v5-planning-infeasibility.json").exists(), diagnostics
           PY
