@@ -10,6 +10,8 @@ from typing import Any, Mapping
 
 from model_market import RunConfig, TaskProfile
 
+import v5_task_delivery_contract as task_delivery_contract
+
 _INPUT_RE = re.compile(r"<expert-team-input>\s*(\{.*?\})\s*</expert-team-input>", re.I | re.S)
 DOMAINS = {
     "business": ("商业", "金融", "投资", "市场", "财务", "business", "finance"),
@@ -155,7 +157,7 @@ def _reasoning_vector(operations: Mapping[str, float], high_stakes: bool, comple
     }
 
 
-def _output_contract(operations: Mapping[str, float], structured: bool) -> dict[str, Any]:
+def _output_contract(task: str, operations: Mapping[str, float], structured: bool) -> dict[str, Any]:
     fields = {"conclusions", "assumptions", "uncertainties", "evidence_gaps"}
     extras = {
         "quantitative_modeling": {"variables", "formulas", "calculations", "sensitivity"},
@@ -168,8 +170,9 @@ def _output_contract(operations: Mapping[str, float], structured: bool) -> dict[
     }
     for operation in operations:
         fields |= extras.get(operation, set())
-    return {"required_fields": sorted(fields), "machine_readable_required": structured,
+    base = {"required_fields": sorted(fields), "machine_readable_required": structured,
             "must_separate_fact_assumption_inference": True}
+    return task_delivery_contract.apply_explicit_contract(task, operations, base)
 
 
 def _context(task: str, importance: float, operations: Mapping[str, float], dependency_count: int) -> dict[str, int]:
@@ -201,7 +204,7 @@ def _make_work(task: str, operation: str, domains: Mapping[str, float], operatio
         domain_requirements={k: round(_clamp(v), 6) for k, v in sorted(domains.items())},
         operation_requirements={k: round(_clamp(v), 6) for k, v in sorted(operations.items())},
         prompt_requirements=_prompt_vector(operations), reasoning_requirements=_reasoning_vector(operations, profile.high_stakes, profile.complexity),
-        context_requirements=_context(task, importance, operations, len(dependencies)), output_contract=_output_contract(operations, structured),
+        context_requirements=_context(task, importance, operations, len(dependencies)), output_contract=_output_contract(task, operations, structured),
         independence_requirements={"independent_execution_preferred": independent,
             "minimum_independent_copies": 2 if profile.high_stakes and ("analysis" in operations or "evidence_validation" in operations) else 1,
             "different_model_required": bool(profile.high_stakes and independent),

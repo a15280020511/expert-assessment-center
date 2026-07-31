@@ -23,6 +23,7 @@ import v5_cost_reliability_hardening as cost_hardening
 import v5_dynamic_prompt_delivery as dynamic_prompt
 import v5_executor as legacy_executor
 import v5_output_contract_delivery as output_contract
+import v5_task_delivery_contract as task_delivery_contract
 import v5_quality_status_integrity as quality_integrity
 from execution_graph import ExecutionGraph, GraphLimits, SelectedNode
 from execution_graph_validator import validate_execution_graph
@@ -652,7 +653,13 @@ class ExecutionEngine:
                 return bool(value)
             return value is not None and bool(str(value).strip())
 
-        complete = not required or all(populated(field) for field in required)
+        explicit_violations = task_delivery_contract.validate_parsed_contract(
+            parsed, node.output_contract
+        )
+        complete = (
+            (not required or all(populated(field) for field in required))
+            and not explicit_violations
+        )
         canonical = json.dumps(standard, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
         return {
             "schema_version": self.output_policy.schema_version,
@@ -660,6 +667,7 @@ class ExecutionEngine:
             "required_fields_complete": bool(complete),
             "content_sha256": sha256(canonical.encode("utf-8")).hexdigest(),
             "compression_used": False,
+            "contract_violations": explicit_violations,
             **standard,
         }
 
