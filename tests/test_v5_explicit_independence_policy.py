@@ -153,10 +153,16 @@ class TestV5ExplicitIndependencePolicy(unittest.TestCase):
             ]
         )
 
-    def test_formal_runtime_uses_company_optimizer_with_budget_parity(self):
+    def test_formal_runtime_uses_one_company_aware_optimizer(self):
         original = v5_planner.optimize_execution_graph
         planning_source = (
             ROOT / "open-model-market" / "v5_planning_runtime.py"
+        ).read_text(encoding="utf-8")
+        value_source = (
+            ROOT / "open-model-market" / "v5_value_optimizer.py"
+        ).read_text(encoding="utf-8")
+        identity_source = (
+            ROOT / "open-model-market" / "v5_model_company.py"
         ).read_text(encoding="utf-8")
         company_source = (
             ROOT / "open-model-market" / "v5_company_diversity.py"
@@ -168,12 +174,17 @@ class TestV5ExplicitIndependencePolicy(unittest.TestCase):
         )
         self.assertIn(
             "REQUIRE_DISTINCT_MODEL_COMPANIES = True",
-            company_source,
+            identity_source,
         )
         self.assertIn(
             "model.Add(sum(x[index] for index in indices) <= 1)",
+            value_source,
+        )
+        self.assertIn(
+            "The canonical CP-SAT implementation lives",
             company_source,
         )
+        self.assertNotIn("cp_model.CpModel()", company_source)
         self.assertIs(v5_planner.optimize_execution_graph, original)
         self.assertIsNot(
             v5_planner.optimize_execution_graph,
