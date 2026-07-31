@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/a15280020511/test/open-model-market/execution-ticket.schema.json",
-  "title": "GitHub Expert Team Execution Ticket",
-  "description": "Execution contract for the GitHub-owned fixed 3+1 expert team. GPTs submits and retrieves; GitHub owns routing, model selection, analysis, judgment, and deterministic execution acceptance.",
+  "$id": "https://github.com/a15280020511/expert-assessment-center/open-model-market/execution-ticket.schema.json",
+  "title": "V5 Dynamic Expert DAG Execution Ticket",
+  "description": "Execution contract for the GitHub-owned V5 dynamic expert DAG. The approved budget is a hard total paid-call ceiling that includes initial, retry, and replacement calls. GPTs submits and retrieves; GitHub owns planning, model and Provider selection, execution, synthesis, and deterministic acceptance.",
   "type": "object",
   "additionalProperties": false,
   "required": ["task_id", "route", "task", "approved_budget"],
@@ -65,7 +65,7 @@
           "maxLength": 20000
         },
         "requirements": {
-          "description": "Substantive requirements sent to the experts and judge. GitHub run/Job/Artifact acceptance checks do not belong here.",
+          "description": "Substantive requirements sent to the dynamic nodes. GitHub run, Job, Artifact, and acceptance checks do not belong here.",
           "type": "array",
           "maxItems": 20,
           "items": {"type": "string", "maxLength": 2000}
@@ -118,16 +118,26 @@
     "approved_budget": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["calls"],
+      "required": ["calls", "maximum_recovery_calls", "cost_policy"],
       "properties": {
         "calls": {
-          "description": "Total paid model-call ceiling. Four calls are reserved for 3 experts plus 1 judge. Calls 5 and 6 form a shared pool for bounded expert or judge replacement calls. Semantic routing is disabled by default.",
+          "description": "Hard ceiling for all paid model calls combined: initial calls + retries + replacements. The runtime must not silently increase this value.",
           "type": "integer",
           "minimum": 4,
-          "maximum": 6
+          "maximum": 16
         },
-        "max_cost_usd": {
-          "description": "Deprecated compatibility field. It is accepted for old tickets but ignored; production execution has no hard monetary ceiling and records actual provider cost instead.",
+        "maximum_recovery_calls": {
+          "description": "Recovery calls reserved inside, not in addition to, approved_budget.calls. Production currently uses replacements and no same-endpoint retries.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4
+        },
+        "cost_policy": {
+          "description": "No fixed dollar ceiling, but anomalous costs are stopped by task, estimate-deviation, and account-period guards.",
+          "const": "unbounded_with_anomaly_guard"
+        },
+        "cost_anomaly_usd": {
+          "description": "Optional task-level anomaly stop. It is not a spending target and must be enforced before any call that could cross it.",
           "type": "number",
           "exclusiveMinimum": 0,
           "maximum": 100
@@ -135,7 +145,7 @@
       }
     },
     "quality_tier": {
-      "description": "User cost/quality preference. Value remains the default and keeps price-performance first without imposing a hard monetary ceiling.",
+      "description": "User cost/quality preference. Value remains the default and keeps price-performance first.",
       "type": "string",
       "enum": ["budget", "value", "quality"],
       "default": "value"

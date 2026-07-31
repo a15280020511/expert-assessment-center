@@ -12,12 +12,19 @@ sys.path.insert(0, str(ROOT / "open-model-market"))
 import issue_ticket  # noqa: E402
 
 
-def packet(task_id="unique-task-0001", question="分析一个独特问题", calls=4, cost=1.0):
+def packet(task_id="unique-task-0001", question="分析一个独特问题", calls=6, recovery=2, anomaly=1.0):
+    budget = {
+        "calls": calls,
+        "maximum_recovery_calls": recovery,
+        "cost_policy": "unbounded_with_anomaly_guard",
+    }
+    if anomaly is not None:
+        budget["cost_anomaly_usd"] = anomaly
     return {
         "task_id": task_id,
         "route": "expert-team",
         "task": {"question": question, "requirements": ["中文"]},
-        "approved_budget": {"calls": calls, "max_cost_usd": cost},
+        "approved_budget": budget,
     }
 
 
@@ -74,9 +81,14 @@ class TicketSecurityTests(unittest.TestCase):
         self.assertIn("task.question is required", status["reason"])
         self.assertIn("task.requirements must be an array", status["reason"])
         self.assertIn("evidence must be an object or an array", status["reason"])
-        self.assertIn("approved_budget must contain only calls and max_cost_usd", status["reason"])
-        self.assertIn("approved_budget.calls must be between 4 and 6", status["reason"])
-        self.assertGreaterEqual(len(status["errors"]), 7)
+        self.assertIn("approved_budget", status["reason"])
+        self.assertIn("maximum_recovery_calls is required", status["reason"])
+        self.assertGreaterEqual(len(status["errors"]), 8)
+
+        raw_messages = "; ".join(
+            error.message for error in issue_ticket.TICKET_VALIDATOR.iter_errors(payload)
+        )
+        self.assertIn("cost_policy", raw_messages)
 
     def test_evidence_array_is_rendered_and_string_is_rejected(self):
         payload = packet()
@@ -119,7 +131,9 @@ class TicketSecurityTests(unittest.TestCase):
         self.assertIn("duplicate task", status["reason"])
 
     def test_nan_and_excessive_calls_rejected(self):
-        body = json.dumps(packet(), allow_nan=True).replace("1.0", "NaN")
+        payload = packet()
+        payload["approved_budget"]["cost_anomaly_usd"] = float("nan")
+        body = json.dumps(payload, allow_nan=True)
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         args = argparse.Namespace(
@@ -137,7 +151,7 @@ class TicketSecurityTests(unittest.TestCase):
         status = json.loads((Path(temp.name) / "ticket-status.json").read_text())
         self.assertFalse(status["accepted"])
         self.assertIn("Non-finite", status["reason"])
-        status, _ = self.prepare(packet(calls=7))
+        status, _ = self.prepare(packet(calls=17, recovery=2))
         self.assertFalse(status["accepted"])
 
     def test_same_semantic_task_has_same_fingerprint(self):

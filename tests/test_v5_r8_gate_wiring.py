@@ -93,7 +93,7 @@ class TestV5R8GateWiring(unittest.TestCase):
             "测试503有限重试",
             call_fn=fake_call,
             limits=GraphLimits(
-                max_model_calls=1,
+                max_model_calls=2,
                 max_retries=1,
                 max_replacements=0,
                 max_provider_share=1.0,

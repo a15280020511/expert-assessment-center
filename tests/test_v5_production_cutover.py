@@ -22,10 +22,21 @@ class V5ProductionCutoverTests(unittest.TestCase):
 
     def _fixture(self, root: Path):
         report = "# V5生产报告\n\n" + ("完整结论、约束、风险、实施方案和否决条件。" * 20)
-        self._write(root, "ticket-status.json", {"accepted": True, "task_id": "task-v5-production"})
+        self._write(root, "ticket-status.json", {
+            "accepted": True,
+            "task_id": "task-v5-production",
+            "calls": 7,
+            "maximum_recovery_calls": 2,
+            "maximum_initial_calls": 5,
+            "cost_policy": "unbounded_with_anomaly_guard",
+            "cost_anomaly_usd": 1.0,
+        })
         self._write(root, "production-runtime.json", {
             "fallback_policy": "fail-closed-no-alternate-runtime",
             "legacy_runtime_present": False,
+            "maximum_model_calls": 7,
+            "maximum_recovery_calls": 2,
+            "maximum_initial_calls": 5,
         })
         self._write(root, "expert-team-result.json", {
             "runtime_version": "v5-r8",
@@ -42,7 +53,12 @@ class V5ProductionCutoverTests(unittest.TestCase):
             "executor": "v5-r8-fault-aware",
             "final_answer": report,
             "actual_cost_usd": 0.12,
-            "execution_budget": {"calls_reserved": 5, "actual_cost_usd": 0.12},
+            "execution_budget": {
+                "calls_reserved": 5,
+                "maximum_total_calls": 7,
+                "maximum_initial_calls": 5,
+                "actual_cost_usd": 0.12,
+            },
         })
         self._write(root, "v5-execution-graph.json", {
             "nodes": [
@@ -57,6 +73,7 @@ class V5ProductionCutoverTests(unittest.TestCase):
         })
         self._write(root, "request-audit.json", {
             "status": "PASS",
+            "approved_total_call_ceiling": 7,
             "expected_request_count": 5,
             "captured_request_count": 5,
             "external_tools_allowed": False,
@@ -64,6 +81,8 @@ class V5ProductionCutoverTests(unittest.TestCase):
         self._write(root, "call-ledger.json", {
             "summary": {
                 "call_count": 5,
+                "approved_total_call_ceiling": 7,
+                "approved_recovery_call_ceiling": 2,
                 "provider_actual_cost_usd": 0.12,
                 "substantive_provider_count": 5,
                 "substantive_providers": [f"provider-{index}" for index in range(5)],
@@ -81,9 +100,10 @@ class V5ProductionCutoverTests(unittest.TestCase):
             root = Path(directory)
             self._fixture(root)
             result = auditor.audit(root, execute_outcome="success", publish_outcome="success")
-            self.assertEqual(result["status"], "PASS")
+            self.assertEqual(result["status"], "PASS", result["failures"])
             self.assertEqual(result["checks"]["model_calls"], 5)
             self.assertEqual(result["checks"]["node_count"], 5)
+            self.assertEqual(result["checks"]["approved_total_calls"], 7)
 
     def test_alternate_runtime_fallback_evidence_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -115,11 +135,23 @@ class V5ProductionCutoverTests(unittest.TestCase):
             self._fixture(root)
             summary_path = root / "v5-execution-summary.json"
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
-            summary["execution_budget"]["calls_reserved"] = 17
+            summary["execution_budget"]["calls_reserved"] = 8
             summary_path.write_text(json.dumps(summary), encoding="utf-8")
             audited = auditor.audit(root, execute_outcome="success", publish_outcome="success")
             self.assertEqual(audited["status"], "FAIL")
-            self.assertTrue(any("outside the production bound" in reason for reason in audited["failures"]))
+            self.assertTrue(any("approved ticket bound" in reason for reason in audited["failures"]))
+
+    def test_ticket_and_runtime_ceiling_mismatch_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._fixture(root)
+            summary_path = root / "v5-execution-summary.json"
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["execution_budget"]["maximum_total_calls"] = 9
+            summary_path.write_text(json.dumps(summary), encoding="utf-8")
+            audited = auditor.audit(root, execute_outcome="success", publish_outcome="success")
+            self.assertEqual(audited["status"], "FAIL")
+            self.assertTrue(any("differs from approved ticket" in reason for reason in audited["failures"]))
 
 
 if __name__ == "__main__":

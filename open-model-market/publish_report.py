@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Split a completed judge report into GitHub-safe Issue comment files."""
+"""Split a completed V5 report into GitHub-safe Issue comment files."""
 from __future__ import annotations
 
 import argparse
@@ -56,7 +56,7 @@ def render_comments(report: str, *, run_url: str, max_chars: int) -> List[str]:
             f"- Run: `{run_url or 'unknown'}`\n"
             f"- Source: `expert-team-report.md`\n"
             f"- Report SHA256: `{digest}`\n"
-            "- 交付范围：完整裁判报告；三名专家原始回答和底层调用证据仍保存在 Artifact。\n"
+            "- 交付范围：完整V5最终报告；全部动态节点原始回答和底层调用证据保存在 Artifact。\n"
             "- 公开提示：本评论位于公开仓库 Issue，任何人可见。\n\n"
             "---\n\n"
         )

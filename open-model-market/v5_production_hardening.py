@@ -13,6 +13,7 @@ import v5_r8_retry_policy as retry_policy
 import v5_rejection_audit_policy as rejection_audit
 import v5_stage_d_provider_compat as provider_compat
 import v5_token_cost_policy as token_cost
+import v5_total_call_cap as total_call_cap
 
 MIN_PROVIDER_RELIABILITY = cost_reliability.MIN_PROVIDER_RELIABILITY
 COST_UNCERTAINTY_MULTIPLIER = cost_reliability.COST_UNCERTAINTY_MULTIPLIER
@@ -38,4 +39,5 @@ def install() -> None:
     retry_policy.install()
     rejection_audit.install()
     resilient.install()
+    total_call_cap.install()
     provider_compat.install()

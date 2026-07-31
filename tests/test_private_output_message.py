@@ -19,7 +19,11 @@ class PrivateOutputMessageTests(unittest.TestCase):
             "task_id": "private-message-0001",
             "route": "expert-team",
             "task": {"question": "test"},
-            "approved_budget": {"calls": 4, "max_cost_usd": 1.0},
+            "approved_budget": {
+                "calls": 4,
+                "maximum_recovery_calls": 0,
+                "cost_policy": "unbounded_with_anomaly_guard",
+            },
             "private_output": True,
         }
         with tempfile.TemporaryDirectory() as temp:

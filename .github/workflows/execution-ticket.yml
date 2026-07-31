@@ -12,20 +12,61 @@ permissions:
   actions: read
 
 jobs:
-  execute-ticket:
+  admit-ticket:
     if: >-
       github.actor == github.repository_owner &&
       ((github.event_name == 'issues' && startsWith(github.event.issue.title, '[execution]')) ||
        (github.event_name == 'issue_comment' && startsWith(github.event.issue.title, '[execution]') &&
         startsWith(github.event.comment.body, '/retry-expert-team ')))
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 5
+    concurrency:
+      group: expert-production-admission
+      cancel-in-progress: false
+    outputs:
+      allowed: ${{ steps.lock.outputs.allowed }}
+      reason: ${{ steps.lock.outputs.reason }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      TOTAL_MODEL_CALLS: "16"
+    steps:
+      - name: Checkout pinned source for admission
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Acquire serialized zero-call admission
+        id: lock
+        run: python open-model-market/v5_admission_lock.py
+
+      - name: Publish explicit busy rejection
+        if: steps.lock.outputs.allowed != 'true'
+        run: |
+          cat > issue-comment.md <<EOF
+          ## EXECUTION_REJECTED
+
+          - Error code: \`EXECUTION_BUSY\`
+          - Reason: ${{ steps.lock.outputs.reason }}
+          - Run: \`${RUN_URL}\`
+          - V5模型调用：\`0\`
+          EOF
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@issue-comment.md
+
+  execute-ticket:
+    needs: admit-ticket
+    if: needs.admit-ticket.outputs.allowed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    concurrency:
+      group: expert-production-global
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout pinned source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -98,14 +139,24 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           QUALITY_TIER: ${{ steps.prepare.outputs.quality_tier }}
+          APPROVED_TOTAL_CALLS: ${{ steps.prepare.outputs.calls }}
+          APPROVED_RECOVERY_CALLS: ${{ steps.prepare.outputs.maximum_recovery_calls }}
+          COST_ANOMALY_USD: ${{ steps.prepare.outputs.cost_anomaly_usd }}
         run: |
-          set -o pipefail
+          set -euo pipefail
           EXPERT_TASK="$(cat ticket-artifacts/task.txt)"
-          python open-model-market/v5_production_ticket.py \
-            --task "$EXPERT_TASK" \
-            --quality-tier "$QUALITY_TIER" \
-            --require-live-catalog \
-            --output-dir ticket-artifacts \
+          args=(
+            --task "$EXPERT_TASK"
+            --quality-tier "$QUALITY_TIER"
+            --maximum-total-calls "$APPROVED_TOTAL_CALLS"
+            --maximum-recovery-calls "$APPROVED_RECOVERY_CALLS"
+            --require-live-catalog
+            --output-dir ticket-artifacts
+          )
+          if [[ "$COST_ANOMALY_USD" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+            args+=(--cost-anomaly-usd "$COST_ANOMALY_USD")
+          fi
+          python open-model-market/v5_production_ticket.py "${args[@]}" \
             2>&1 | tee ticket-artifacts/execution-console.log
 
       - name: Publish and verify full V5 report
@@ -150,7 +201,7 @@ jobs:
             --execute-outcome "${{ steps.execute.outcome }}" \
             --publish-outcome "${{ steps.publish.outcome }}"
 
-      - name: Refresh final artifact manifest
+      - name: Refresh primary artifact manifest
         id: manifest
         if: always()
         continue-on-error: true
@@ -165,7 +216,7 @@ jobs:
           write_manifest(Path("ticket-artifacts"))
           PY
 
-      - name: Upload ticket artifacts
+      - name: Upload primary ticket artifacts
         id: upload_ticket
         if: always()
         continue-on-error: true
@@ -176,7 +227,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish authoritative V5 final status
+      - name: Render authoritative V5 final status
         id: final
         if: always() && steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present == 'true'
         continue-on-error: true
@@ -191,12 +242,52 @@ jobs:
             --artifact-url "${{ steps.upload_ticket.outputs['artifact-url'] }}" \
             --artifact-digest "${{ steps.upload_ticket.outputs['artifact-digest'] }}" \
             > final-status.md
+
+      - name: Generate post-upload final attestation
+        id: attest
+        if: always() && steps.final.outcome == 'success'
+        continue-on-error: true
+        run: |
+          audit_status="$(jq -r '.status // "FAIL"' ticket-artifacts/execution-diagnosis.json)"
+          python open-model-market/v5_final_attestation.py \
+            --output-dir ticket-artifacts \
+            --primary-artifact-id "${{ steps.upload_ticket.outputs['artifact-id'] }}" \
+            --primary-artifact-digest "${{ steps.upload_ticket.outputs['artifact-digest'] }}" \
+            --primary-artifact-url "${{ steps.upload_ticket.outputs['artifact-url'] }}" \
+            --audit-status "$audit_status" \
+            --run-id "${{ github.run_id }}" \
+            --commit-sha "${{ github.sha }}" \
+            --final-status-file final-status.md \
+            --output final-attestation.json
+
+      - name: Upload final attestation artifact
+        id: upload_attestation
+        if: always() && steps.attest.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: execution-ticket-v5-final-attestation-${{ github.event.issue.number }}-${{ github.run_id }}
+          path: |
+            final-attestation.json
+            final-status.md
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish authoritative V5 final status
+        id: publish_final
+        if: always() && steps.final.outcome == 'success'
+        continue-on-error: true
+        run: |
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@final-status.md
 
       - name: Mark failed execution
         if: >-
           always() &&
-          ((steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present != 'true') ||
+          steps.prepare.outputs.accepted == 'true' &&
+          (steps.secret.outputs.present != 'true' ||
            steps.final.outcome == 'failure' ||
-           steps.final.outputs.status == 'FAIL')
+           steps.final.outputs.status == 'FAIL' ||
+           steps.attest.outcome != 'success' ||
+           steps.upload_attestation.outcome != 'success' ||
+           steps.publish_final.outcome != 'success')
         run: exit 1

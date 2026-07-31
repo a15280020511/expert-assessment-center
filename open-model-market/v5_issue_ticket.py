@@ -3,68 +3,178 @@
 from __future__ import annotations
 
 import argparse
-import io
 import json
-from contextlib import redirect_stdout
 from pathlib import Path
+from typing import Any, Mapping
 
 import issue_ticket_hardened as hardened
 
 V5_MAXIMUM_MODEL_CALLS = 16
-V5_MAXIMUM_REPLACEMENTS = 2
+V5_MAXIMUM_RECOVERY_CALLS = 4
+
+
+def _path_text(path: Any) -> str:
+    result = ""
+    for item in path:
+        if isinstance(item, int):
+            result += f"[{item}]"
+        else:
+            result += ("." if result else "") + str(item)
+    return result
+
+
+def _v5_schema_error(error: Any) -> str:
+    """Correct obsolete fixed-team wording in the shared parser's error surface."""
+    path = _path_text(error.absolute_path)
+    validator = error.validator
+    if path == "approved_budget" and validator == "additionalProperties":
+        return (
+            "approved_budget may contain only calls, maximum_recovery_calls, "
+            "cost_policy, and optional cost_anomaly_usd."
+        )
+    if path == "approved_budget" and validator == "type":
+        return "approved_budget must be a V5 budget object."
+    if validator == "required" and isinstance(error.instance, Mapping):
+        missing = [name for name in error.validator_value if name not in error.instance]
+        if missing:
+            return "; ".join(f"{path + '.' if path else ''}{name} is required." for name in missing)
+    if path == "approved_budget.calls":
+        if validator == "type":
+            return "approved_budget.calls must be an integer."
+        return "approved_budget.calls must be between 4 and 16."
+    if path == "approved_budget.maximum_recovery_calls":
+        if validator == "type":
+            return "approved_budget.maximum_recovery_calls must be an integer."
+        return "approved_budget.maximum_recovery_calls must be between 0 and 4."
+    if path == "approved_budget.cost_policy":
+        return "approved_budget.cost_policy must be unbounded_with_anomaly_guard."
+    if path == "approved_budget.cost_anomaly_usd":
+        return "approved_budget.cost_anomaly_usd must be a finite positive number at most 100."
+    return hardened.base._V5_ORIGINAL_FORMAT_SCHEMA_ERROR(error)
+
+
+def _install_schema_messages() -> None:
+    if not hasattr(hardened.base, "_V5_ORIGINAL_FORMAT_SCHEMA_ERROR"):
+        hardened.base._V5_ORIGINAL_FORMAT_SCHEMA_ERROR = hardened.base._format_schema_error
+    hardened.base._format_schema_error = _v5_schema_error
+
+
+def _reject(status: dict[str, Any], reason: str) -> None:
+    errors = list(status.get("errors") or [])
+    if reason not in errors:
+        errors.append(reason)
+    status["errors"] = errors
+    status["reason"] = "; ".join(errors)
+    status["accepted"] = False
 
 
 def prepare(args: argparse.Namespace) -> int:
+    _install_schema_messages()
     result = hardened.prepare(args)
     root = Path(args.output_dir)
     status_path = root / "ticket-status.json"
-    if not status_path.is_file():
+    ticket_path = root / "ticket.json"
+    if not status_path.is_file() or not ticket_path.is_file():
         return result
+
     status = json.loads(status_path.read_text(encoding="utf-8"))
+    packet = json.loads(ticket_path.read_text(encoding="utf-8"))
+    budget = packet.get("approved_budget") if isinstance(packet, Mapping) else None
+    budget = budget if isinstance(budget, Mapping) else {}
+
+    total_calls = int(status.get("calls") or 0)
+    recovery_calls = budget.get("maximum_recovery_calls")
+    recovery_calls = (
+        int(recovery_calls)
+        if isinstance(recovery_calls, int) and not isinstance(recovery_calls, bool)
+        else -1
+    )
+    cost_policy = str(budget.get("cost_policy") or "")
+    anomaly = budget.get("cost_anomaly_usd")
+    anomaly = (
+        float(anomaly)
+        if isinstance(anomaly, (int, float)) and not isinstance(anomaly, bool)
+        else None
+    )
+
+    if status.get("accepted") is True:
+        if not 4 <= total_calls <= V5_MAXIMUM_MODEL_CALLS:
+            _reject(status, "approved_budget.calls must be between 4 and 16")
+        if not 0 <= recovery_calls <= V5_MAXIMUM_RECOVERY_CALLS:
+            _reject(status, "approved_budget.maximum_recovery_calls must be between 0 and 4")
+        elif recovery_calls >= total_calls:
+            _reject(status, "approved recovery calls must leave at least one initial call")
+        if cost_policy != "unbounded_with_anomaly_guard":
+            _reject(status, "approved_budget.cost_policy must be unbounded_with_anomaly_guard")
+
     status["runtime_version"] = "v5-r8"
-    status["legacy_requested_calls"] = status.get("calls")
-    status["calls"] = V5_MAXIMUM_MODEL_CALLS
-    status["maximum_replacements"] = V5_MAXIMUM_REPLACEMENTS
-    status["call_policy"] = "dynamic-graph-actual-use-with-16-call-hard-ceiling"
-    status["cost_policy"] = "finite-by-call-and-token-bounds-no-fixed-dollar-ceiling"
+    status["calls"] = total_calls
+    status["maximum_recovery_calls"] = max(0, recovery_calls)
+    status["maximum_replacements"] = max(0, recovery_calls)
+    status["maximum_initial_calls"] = max(0, total_calls - max(0, recovery_calls))
+    status["max_cost_usd"] = anomaly
+    status["cost_anomaly_usd"] = anomaly
+    status["call_policy"] = "approved-total-includes-initial-and-recovery-calls"
+    status["cost_policy"] = cost_policy or "invalid"
     status["analysis_owner"] = "github-v5-dynamic-expert-graph"
     status["fallback_policy"] = "disabled-fail-closed"
     status["legacy_runtime_present"] = False
     if status.get("accepted") is True:
         status["reason"] = (
-            "ticket, authorization, uniqueness, V5 dynamic graph call ceiling, "
-            "and fail-closed no-fallback policy accepted"
+            "ticket, authorization, uniqueness, approved total-call ceiling, "
+            "reserved recovery pool, anomaly guard, and fail-closed policy accepted"
         )
+
     status_path.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
     hardened._rewrite_outputs(status)
+    for key in ("maximum_recovery_calls", "maximum_initial_calls", "cost_anomaly_usd"):
+        hardened.base._write_output(key, status.get(key, ""))
     return result
 
 
 def render(args: argparse.Namespace) -> int:
-    buffer = io.StringIO()
-    with redirect_stdout(buffer):
-        result = hardened.render(args)
-    text = buffer.getvalue()
-    replacements = {
-        "- 分析责任：`GitHub 专家团 + 裁判`": "- 分析责任：`GitHub V5动态专家DAG + 动态综合节点`",
-        "- 固定组合：`3名专家 + 1名裁判`": "- 组合方式：`根据任务资源矩阵动态计算节点、职业、模型、Provider、提示词和参数`",
-        "- 批准调用数：`16`": "- 动态调用安全上限：`16`（实际调用由任务规划决定）",
-        "- 额外调用额度（专家或裁判故障替换共享）：`2`": "- 全局故障恢复：`最多2次有限替换；失败后关闭，不调用其他运行时`",
-        "- 选模方式：`稳定和能力硬门槛；通过后value档性价比优先；厂商独立`": "- 选模方式：`实时目录 + 任务资源矩阵 + CP-SAT整体性价比优化`",
-        "- 推理参数：`受控动态字段；生产统一low reasoning与low verbosity；不发送人为Token上限`": "- 推理参数：`按节点价值动态计算reasoning、采样、上下文和输出许可`",
-        "- 语义路由：`默认关闭`": "- 隐式路由：`禁止；模型与Provider显式锁定`",
-        "- 公开回退：`完整裁判报告将分段发布到本Issue；Artifact下载失败时可直接读取评论`": "- 公开交付：`V5最终报告分段发布；完整动态图与请求证据保存在Artifact`",
-    }
-    for old, new in replacements.items():
-        text = text.replace(old, new)
+    status = json.loads(
+        (Path(args.output_dir) / "ticket-status.json").read_text(encoding="utf-8")
+    )
+    run_line = f"- Run: `{args.run_url}`\n" if args.run_url else ""
     if args.phase == "accepted":
-        text += (
-            "\n- 生产运行时：`V5 R8`"
-            "\n- 失败策略：`失败关闭；不调用其他运行时`"
-            "\n- 旧运行时状态：`已从当前代码树删除`\n"
+        heading = "EXECUTION_RETRY_ACCEPTED" if status.get("is_retry") else "EXECUTION_ACCEPTED"
+        retry_line = f"- RETRY_ID: `{status.get('retry_id')}`\n" if status.get("is_retry") else ""
+        anomaly = status.get("cost_anomaly_usd")
+        anomaly_text = f"`${anomaly}`" if anomaly is not None else "`账户级与估算偏差守卫；无固定美元目标`"
+        text = (
+            f"## {heading}\n\n"
+            "GitHub Issue Runner 已接收唯一 V5 动态专家图任务。\n\n"
+            f"- Task ID：`{status.get('task_id')}`\n"
+            f"- TASK_FINGERPRINT: `{status.get('task_fingerprint')}`\n"
+            + retry_line
+            + "- 分析责任：`GitHub V5动态专家DAG + 动态综合节点`\n"
+            + "- 网页 GPT 职责：`仅提交、监控、取回和忠实转述；不得自行替代分析`\n"
+            + "- 组合方式：`根据任务资源矩阵动态计算节点、职业、模型、Provider、提示词和参数`\n"
+            + f"- 付费调用总硬上限：`{status.get('calls')}`（初始、重试、替换合计）\n"
+            + f"- 初始调用规划上限：`{status.get('maximum_initial_calls')}`\n"
+            + f"- 总额内恢复调用保留：`{status.get('maximum_recovery_calls')}`\n"
+            + f"- 费用异常停止阈值：{anomaly_text}\n"
+            + "- 专家外部工具：`禁止`\n"
+            + "- 选模方式：`实时目录 + 多通道候选池 + 任务资源矩阵 + CP-SAT整体性价比优化`\n"
+            + "- 隐式路由：`禁止；模型与Provider显式锁定`\n"
+            + "- 失败策略：`失败关闭；不调用其他运行时`\n"
+            + "- 旧运行时状态：`已从当前代码树删除`\n"
+            + "- 公开交付：`最终报告分段发布；完整动态图、请求、费用和证明保存在Artifact`\n"
+            + run_line
         )
-    print(text.rstrip())
-    return result
+    elif args.phase == "rejected":
+        text = (
+            "## EXECUTION_REJECTED\n\n"
+            f"票据未进入模型调用阶段：{status.get('reason', 'unknown')}。\n\n"
+            "模型调用：`0`。请直接修正本 Issue 正文，然后评论："
+            "`/retry-expert-team <唯一retry_id>`；不要为同一任务新建 Issue。\n"
+            + run_line
+        )
+    else:
+        return hardened.render(args)
+    print(text)
+    return 0
 
 
 def parser() -> argparse.ArgumentParser:
