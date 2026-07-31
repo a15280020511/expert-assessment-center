@@ -191,7 +191,9 @@ class TestV5LongMarkdownContractIntegrity(unittest.TestCase):
                 "all_nodes_strict": False,
             }
             with patch.object(auditor.base, "audit", return_value=base_result), patch.object(
-                auditor, "_apply_native_contract", side_effect=lambda _root, value: value
+                auditor,
+                "_apply_native_contract",
+                side_effect=lambda _root, value, _planning: value,
             ), patch.object(auditor, "_node_quality", return_value=evidence):
                 result = auditor.audit(root, execute_outcome="success", publish_outcome="success")
             self.assertEqual(result["status"], "DEGRADED")
