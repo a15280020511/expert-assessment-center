@@ -17,6 +17,12 @@ NATIVE_RUNTIME_VERSION = "v5-native-runtime-1"
 NATIVE_EXECUTOR = "v5-native-execution-engine"
 LEGACY_RUNTIME_FAILURE = "V5 production result envelope is missing"
 LEGACY_EXECUTOR_FAILURE = "R8 fault-aware executor evidence is missing"
+PLANNING_FAILURE_PREFIXES = (
+    "BUDGET_INSUFFICIENT_",
+    "CAPABILITY_",
+    "CANDIDATE_GENERATION_",
+    "PLANNING_",
+)
 
 
 def _load(path: Path, default: Any) -> Any:
@@ -24,6 +30,26 @@ def _load(path: Path, default: Any) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return default
+
+
+def _planning_failure(root: Path) -> dict[str, Any] | None:
+    error = _load(root / "expert-team-error.json", {})
+    error = error if isinstance(error, Mapping) else {}
+    report = _load(root / "v5-planning-infeasibility.json", {})
+    report = report if isinstance(report, Mapping) else {}
+    code = str(error.get("error_code") or report.get("code") or "")
+    message = str(error.get("message") or report.get("message") or "")
+    if not code.startswith(PLANNING_FAILURE_PREFIXES):
+        return None
+    return {
+        "code": code,
+        "stage": str(error.get("stage") or "planning"),
+        "message": message,
+        "retryable": bool(error.get("retryable")),
+        "infeasibility_report_present": bool(report),
+        "model_calls_performed": int(report.get("model_calls_performed") or 0),
+        "fallback_used": bool(report.get("fallback_used")),
+    }
 
 
 def _node_quality(root: Path) -> dict[str, Any]:
@@ -85,14 +111,12 @@ def _node_quality(root: Path) -> dict[str, Any]:
     }
 
 
-def _apply_native_contract(root: Path, result: dict[str, Any]) -> dict[str, Any]:
-    """Replace only obsolete R8-name checks with the formal native contract.
-
-    The legacy base auditor still performs the substantive budget, request,
-    graph, report, Provider and fail-closed checks. This adapter removes its two
-    obsolete identifier failures only when the native evidence is present, and
-    fails closed for every other identifier value.
-    """
+def _apply_native_contract(
+    root: Path,
+    result: dict[str, Any],
+    planning_failure: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Replace obsolete R8-name checks with the formal native contract."""
     envelope = _load(root / "expert-team-result.json", {})
     envelope = envelope if isinstance(envelope, Mapping) else {}
     summary = _load(root / "v5-execution-summary.json", {})
@@ -108,7 +132,8 @@ def _apply_native_contract(root: Path, result: dict[str, Any]) -> dict[str, Any]
     executor = str(summary.get("executor") or envelope.get("executor") or "")
     failures = list(result.get("failures") or [])
 
-    if runtime_versions == {NATIVE_RUNTIME_VERSION}:
+    runtime_valid = runtime_versions == {NATIVE_RUNTIME_VERSION}
+    if runtime_valid:
         failures = [reason for reason in failures if reason != LEGACY_RUNTIME_FAILURE]
     else:
         failures.append(
@@ -116,12 +141,21 @@ def _apply_native_contract(root: Path, result: dict[str, Any]) -> dict[str, Any]
             + (", ".join(sorted(runtime_versions)) if runtime_versions else "missing")
         )
 
-    if executor == NATIVE_EXECUTOR:
+    executor_required = planning_failure is None
+    executor_valid = executor == NATIVE_EXECUTOR
+    if executor_valid:
         failures = [reason for reason in failures if reason != LEGACY_EXECUTOR_FAILURE]
-    else:
+    elif executor_required:
         failures.append(
             f"native executor evidence is missing or inconsistent: {executor or 'missing'}"
         )
+    else:
+        failures = [reason for reason in failures if reason != LEGACY_EXECUTOR_FAILURE]
+        failures = [
+            reason
+            for reason in failures
+            if not reason.startswith("native executor evidence is missing or inconsistent:")
+        ]
 
     checks = dict(result.get("checks") or {})
     checks.update(
@@ -130,9 +164,12 @@ def _apply_native_contract(root: Path, result: dict[str, Any]) -> dict[str, Any]
             "observed_runtime_versions": sorted(runtime_versions),
             "native_executor": NATIVE_EXECUTOR,
             "observed_executor": executor,
+            "native_executor_required": executor_required,
             "native_contract_status": (
                 "PASS"
-                if runtime_versions == {NATIVE_RUNTIME_VERSION} and executor == NATIVE_EXECUTOR
+                if runtime_valid and executor_valid
+                else "PASS_PRE_EXECUTION"
+                if runtime_valid and not executor_required
                 else "FAIL"
             ),
         }
@@ -143,13 +180,81 @@ def _apply_native_contract(root: Path, result: dict[str, Any]) -> dict[str, Any]
     return result
 
 
+def _normalize_planning_failure(
+    root: Path,
+    result: dict[str, Any],
+    planning: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Collapse expected downstream absences into one truthful root failure."""
+    manifest = _load(
+        root / "report-comments" / "report-comments-manifest.json", {}
+    )
+    manifest = manifest if isinstance(manifest, Mapping) else {}
+    publication_status = str(manifest.get("publication_status") or "missing")
+    planning_report_present = bool(planning.get("infeasibility_report_present"))
+    calls = int(planning.get("model_calls_performed") or 0)
+    fallback_used = bool(planning.get("fallback_used"))
+    evidence_valid = (
+        planning_report_present
+        and calls == 0
+        and not fallback_used
+        and publication_status == "skipped_failed_execution"
+    )
+    code = str(planning.get("code") or "PLANNING_FAILED")
+    message = str(planning.get("message") or "planning failed")
+    root_failure = f"planning failed before model calls: {code}: {message}"
+
+    checks = dict(result.get("checks") or {})
+    checks.update(
+        {
+            "planning_failure": dict(planning),
+            "planning_failure_evidence_valid": evidence_valid,
+            "downstream_execution_stages_applicable": False,
+            "report_publication_status": publication_status,
+            "model_calls": calls,
+        }
+    )
+    stage_status = dict(result.get("stage_status") or {})
+    stage_status.update(
+        {
+            "runtime": "FAIL_CLOSED_PRE_EXECUTION",
+            "requests": "NOT_APPLICABLE",
+            "graph": "INFEASIBLE",
+            "report": (
+                "SKIPPED_FAILED_EXECUTION"
+                if publication_status == "skipped_failed_execution"
+                else "FAIL"
+            ),
+        }
+    )
+    failures = [root_failure]
+    if not evidence_valid:
+        failures.append("planning failure evidence chain is incomplete or inconsistent")
+    result["checks"] = checks
+    result["stage_status"] = stage_status
+    result["failures"] = failures
+    result["degradations"] = []
+    result["status"] = "FAIL"
+    result["primary_failure"] = {
+        "code": code,
+        "stage": str(planning.get("stage") or "planning"),
+        "message": message,
+        "retryable": bool(planning.get("retryable")),
+    }
+    return result
+
+
 def audit(root: Path, *, execute_outcome: str, publish_outcome: str) -> dict[str, Any]:
+    planning = _planning_failure(root)
     result = base.audit(
         root,
         execute_outcome=execute_outcome,
         publish_outcome=publish_outcome,
     )
-    result = _apply_native_contract(root, result)
+    result = _apply_native_contract(root, result, planning)
+    if planning is not None:
+        return _normalize_planning_failure(root, result, planning)
+
     summary = _load(root / "v5-execution-summary.json", {})
     summary = summary if isinstance(summary, Mapping) else {}
     evidence = _node_quality(root)
