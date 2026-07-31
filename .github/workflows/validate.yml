@@ -90,9 +90,9 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python -m unittest discover -s tests -p "test_v5_general_task_planning.py" -v 2>&1 | tee general-task-classification.log
-          python -m unittest discover -s tests -p "test_v5_general_task_full_planning.py" -v 2>&1 | tee general-task-full-planning.log
-          python -m unittest discover -s tests -p "test_v5_planning_scenario_matrix.py" -v 2>&1 | tee general-task-scenario-matrix.log
+          python tests/test_v5_general_task_planning.py -v 2>&1 | tee general-task-classification.log
+          python tests/test_v5_general_task_full_planning.py -v 2>&1 | tee general-task-full-planning.log
+          python tests/test_v5_planning_scenario_matrix.py -v 2>&1 | tee general-task-scenario-matrix.log
           grep -q "V5GeneralTaskPlanningTests" general-task-classification.log
           grep -q "V5GeneralTaskFullPlanningTests" general-task-full-planning.log
           grep -q "V5PlanningScenarioMatrixTests" general-task-scenario-matrix.log
