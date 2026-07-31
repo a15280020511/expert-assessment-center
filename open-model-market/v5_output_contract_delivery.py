@@ -1,9 +1,8 @@
 """Turn V5 output contracts into direct, concise delivery instructions.
 
-Contract metadata is converted into executable delivery rules. Both exact JSON
-schemas and explicit user-requested Markdown H2 section lists are validated so
-schema echoes, missing sections and truncated outputs cannot masquerade as
-completed work.
+Contract metadata is converted into executable delivery rules. Exact JSON and
+Markdown contracts are validated, and strict closed-book safety nodes reject
+invented endurance, unsafe solo investigation and unsupported safety claims.
 """
 from __future__ import annotations
 
@@ -11,6 +10,7 @@ import json
 import os
 from typing import Any, Mapping
 
+import v5_closed_book_safety as closed_book_safety
 import v5_executor
 import v5_task_delivery_contract as task_delivery_contract
 from execution_graph import SelectedNode
@@ -50,7 +50,6 @@ def _compact_mode_enabled() -> bool:
 
 
 def _compact_delivery_rule(fields: list[str]) -> str:
-    """Return canary-only brevity limits sized to the number of required fields."""
     field_count = max(1, len(fields))
     maximum_items = 1 if field_count >= 6 else 2
     maximum_chars = 36 if field_count >= 6 else 48
@@ -64,6 +63,22 @@ def _compact_delivery_rule(fields: list[str]) -> str:
     )
 
 
+def _strict_safety_rule(node: SelectedNode) -> str:
+    if not node.output_contract.get("closed_book_safety_strict"):
+        return ""
+    allowed = list(node.output_contract.get("allowed_resource_endurance_claims", []))
+    return (
+        "这是高风险闭卷安全任务。题面中的禁止动作是不可覆盖的硬约束。"
+        "不得建议保安、值班人员或任何单人进入、靠近、查看、检查或搜查未知危险区、设备区、"
+        "地下区域、带电积水区域或不明声响来源；只能远距离观察、隔离、记录和条件式升级。"
+        "不得声称所有人员已经安全、风险已经解除或外部人员已经到达，除非题面明确给出。"
+        "不得新增题面未给出的手机、手电筒、荧光棒、照明、电池或电源续航时间。"
+        f"题面允许原样复述的资源-时长事实仅为：{json.dumps(allowed, ensure_ascii=False)}。"
+        "不得用未说明的‘其他物资’替代灭火器、急救包、警戒带、照明或通信设备。"
+        "所有资源分配只能使用百分比、优先级、触发条件和记录字段，不得虚构耗电速率。"
+    )
+
+
 def _delivery_rule(node: SelectedNode) -> str:
     fields = _required_fields(node)
     quoted_fields = json.dumps(fields, ensure_ascii=False)
@@ -72,6 +87,7 @@ def _delivery_rule(node: SelectedNode) -> str:
     )
     compact_rule = _compact_delivery_rule(fields) if _compact_mode_enabled() else ""
     explicit_rule = task_delivery_contract.delivery_rule(node.output_contract)
+    safety_rule = _strict_safety_rule(node)
     if node.output_contract.get("machine_readable_required"):
         separation_rule = (
             "事实、假设、推断和不确定性必须在相应字段内明确区分。"
@@ -85,7 +101,7 @@ def _delivery_rule(node: SelectedNode) -> str:
             "禁止复述输出契约、字段清单或模式定义，禁止输出"
             "machine_readable_required、must_separate_fact_assumption_inference、required_fields"
             "等契约元数据。"
-            f"{explicit_rule}{separation_rule}"
+            f"{explicit_rule}{separation_rule}{safety_rule}"
             "内容必须精炼，避免重复；在篇幅受限时优先保证所有必填键存在且JSON语法完整闭合。"
             f"{compact_rule}"
         )
@@ -96,7 +112,7 @@ def _delivery_rule(node: SelectedNode) -> str:
             else ""
         )
         return (
-            f"{explicit_rule}{separation_rule}"
+            f"{explicit_rule}{separation_rule}{safety_rule}"
             "禁止复述输出契约、章节清单或模式定义。"
             "内容必须完整、可直接使用；先保证全部二级章节存在并填充，再扩展三级标题和细节。"
             f"{compact_rule}"
@@ -118,7 +134,7 @@ def _delivery_rule(node: SelectedNode) -> str:
         f"最终响应必须直接交付以下内容：{field_text}。"
         f"{heading_rule}"
         "禁止复述输出契约、字段清单或模式定义。"
-        f"{separation_rule}"
+        f"{separation_rule}{safety_rule}"
         "内容应精炼、完整、可直接使用。"
         f"{compact_rule}"
     )
@@ -153,7 +169,7 @@ def contract_aware_quality_gate(
     response: Mapping[str, Any],
     answer: str,
 ) -> tuple[bool, float, list[str]]:
-    """Enforce exact task contracts after the base semantic quality gate."""
+    """Enforce exact task and strict safety contracts after the base gate."""
     passed, score, reasons = _ORIGINAL_QUALITY_GATE(node, response, answer)
     integrity_violations = task_delivery_contract.validate_contract_integrity(
         node.output_contract, node.parameter_profile
@@ -163,6 +179,7 @@ def contract_aware_quality_gate(
     if integrity_violations:
         passed = False
         score = min(float(score), 0.0)
+
     markdown_violations = task_delivery_contract.validate_markdown_contract(
         answer, node.output_contract
     )
@@ -171,6 +188,15 @@ def contract_aware_quality_gate(
     if markdown_violations:
         passed = False
         score = min(float(score), 0.35)
+
+    safety_violations = closed_book_safety.validate_answer(
+        answer, node.output_contract
+    )
+    for violation in safety_violations:
+        _append_reason(reasons, violation)
+    if safety_violations:
+        passed = False
+        score = min(float(score), 0.0)
 
     if not node.output_contract.get("machine_readable_required"):
         return passed, score, reasons
