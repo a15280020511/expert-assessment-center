@@ -2,10 +2,10 @@
   "selection": {
     "team_pattern": "resource-demand-first-dynamic-work-packages-plus-synthesis",
     "quality_tier": "value",
-    "ranking_limit": 50,
+    "ranking_limit": 100,
     "minimum_context_length": 16384,
     "candidate_pool_per_seat": 24,
-    "candidate_pool_policy": "multi-channel-intelligence-fit-value-price-context-company-diversity",
+    "candidate_pool_policy": "top-100-multi-channel-intelligence-fit-value-price-context-company-diversity",
     "require_distinct_model_companies": true,
     "model_company_identity": "canonicalized-direct-model-author-prefix",
     "company_shortage_policy": "expand-pool-then-fail-closed",
