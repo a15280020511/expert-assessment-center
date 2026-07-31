@@ -12,11 +12,15 @@ import v5_planner as planner
 import v5_value_optimizer as value_optimizer
 from execution_graph import GraphLimits
 from v5_model_company import (
-    MINIMUM_CANDIDATES_PER_WORK,
-    MODEL_COMPANY_ALIASES,
-    REQUIRE_DISTINCT_MODEL_COMPANIES,
-    candidate_company,
-    canonical_model_company,
+    MINIMUM_CANDIDATES_PER_WORK as MINIMUM_CANDIDATES_PER_WORK,
+)
+from v5_model_company import MODEL_COMPANY_ALIASES as MODEL_COMPANY_ALIASES
+from v5_model_company import (
+    REQUIRE_DISTINCT_MODEL_COMPANIES as REQUIRE_DISTINCT_MODEL_COMPANIES,
+)
+from v5_model_company import candidate_company as candidate_company
+from v5_model_company import (
+    canonical_model_company as canonical_model_company,
 )
 
 
