@@ -6,16 +6,11 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-import model_market  # noqa: E402
 import resource_matrix  # noqa: E402
 import v5_general_task_planning  # noqa: E402
 
 
 class V5GeneralTaskPlanningTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        v5_general_task_planning.install()
-
     @staticmethod
     def run(task: str):
         return SimpleNamespace(
@@ -26,8 +21,12 @@ class V5GeneralTaskPlanningTests(unittest.TestCase):
 
     def compile(self, task: str):
         run = self.run(task)
-        profile = model_market.classify_task(task, run)
-        bundle = resource_matrix.compile_v5_task_resources(profile, run)
+        profile = v5_general_task_planning.classify_task(task, run)
+        bundle = resource_matrix.compile_v5_task_resources(
+            profile,
+            run,
+            semantic_compiler=v5_general_task_planning.compile_task_semantics,
+        )
         return profile, bundle
 
     def test_wifi_cost_comparison_is_compact_and_not_high_stakes(self):
@@ -57,6 +56,9 @@ class V5GeneralTaskPlanningTests(unittest.TestCase):
         )
         self.assertNotIn("evidence_validation", works[0]["operation_requirements"])
         self.assertNotIn("adversarial_reasoning", works[0]["operation_requirements"])
+        self.assertTrue(
+            bundle["semantic_input_policy"]["semantic_compiler_injected_explicitly"]
+        )
 
     def test_job_choice_with_cashflow_risk_is_not_regulated_high_stakes(self):
         task = (
@@ -77,14 +79,14 @@ class V5GeneralTaskPlanningTests(unittest.TestCase):
     def test_generic_report_word_does_not_force_long_context(self):
         task = "比较两个月度套餐的成本并输出简洁报告。"
         run = self.run(task)
-        profile = model_market.classify_task(task, run)
+        profile = v5_general_task_planning.classify_task(task, run)
         self.assertFalse(profile.long_context)
         self.assertLess(profile.requested_context, 65_536)
 
     def test_explicit_full_repository_audit_remains_long_context(self):
         task = "请对整个代码库逐行审计，检查安全漏洞和合规问题。"
         run = self.run(task)
-        profile = model_market.classify_task(task, run)
+        profile = v5_general_task_planning.classify_task(task, run)
         self.assertTrue(profile.long_context)
         self.assertTrue(profile.high_stakes)
         self.assertGreaterEqual(profile.requested_context, 65_536)
@@ -100,12 +102,39 @@ class V5GeneralTaskPlanningTests(unittest.TestCase):
         )
         self.assertGreaterEqual(len(bundle["task_semantics"]["interpretations"]), 1)
 
+    def test_closed_book_emergency_tabletop_is_one_integrated_safety_work(self):
+        task = (
+            "真实复杂闭卷任务：一所小学夜班发生复合事件。已知条件仅限题面，"
+            "禁止保安进入受限设备区域，禁止靠近裂纹天窗下方，禁止触碰未知积水附近"
+            "电气设施。请在不联网、不调用工具、不编造电话号码、外部制度、设备状态、"
+            "人员位置或专业检测结论的前提下，完成90分钟应急桌面推演，给出行动时间线、"
+            "风险链、生命安全决策树、撤离封控升级条件、至少12种失败模式、移交判定、"
+            "红队反证和仍未解决的不确定性。"
+        )
+        profile, bundle = self.compile(task)
+        self.assertTrue(profile.high_stakes)
+        self.assertFalse(profile.long_context)
+        self.assertEqual("security", profile.primary_domain)
+        self.assertNotIn("research", profile.domains)
+        semantics = bundle["task_semantics"]
+        self.assertTrue(
+            semantics["task_signals"]["closed_book_tabletop_compaction_applied"]
+        )
+        self.assertEqual(1, len(semantics["interpretations"]))
+        works = semantics["interpretations"][0]["atomic_work"]
+        self.assertEqual(1, len(works))
+        self.assertNotIn("evidence_validation", works[0]["operation_requirements"])
+        self.assertNotIn("forecasting", works[0]["operation_requirements"])
+        self.assertNotIn("adversarial_reasoning", works[0]["operation_requirements"])
+        matrix = bundle["resource_matrices"]["matrices"][0]
+        self.assertEqual([], matrix["hard_requirements"])
+
 
 def explicit_suite() -> unittest.TestSuite:
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(
         V5GeneralTaskPlanningTests
     )
-    if suite.countTestCases() != 5:
+    if suite.countTestCases() != 6:
         raise RuntimeError(
             f"classification regression suite count mismatch: {suite.countTestCases()}"
         )
