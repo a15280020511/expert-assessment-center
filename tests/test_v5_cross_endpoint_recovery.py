@@ -198,6 +198,91 @@ class V5CrossEndpointRecoveryTests(unittest.TestCase):
         self.assertFalse(policy_evidence["same_endpoint_empty_response_retry"])
         self.assertFalse(policy_evidence["cross_task_history_used"])
 
+    def test_execution_preserves_frozen_effective_value_recovery_order(self) -> None:
+        runtime = build_production_runtime(RuntimeConfig(
+            total_call_limit=3,
+            recovery_call_limit=2,
+            cost_anomaly_usd=0.25,
+            quality_tier="value",
+            tools_allowed=False,
+            provider_lock_required=True,
+        ))
+        selected = selected_node()
+        low_value_cost = candidate(
+            "node-value",
+            "z-ai/glm-5.2",
+            "decart/fp4",
+            0.02,
+            0.68,
+            0.05,
+        )
+        expensive_low_failure = candidate(
+            "node-expensive",
+            "anthropic/claude-opus-5",
+            "anthropic",
+            0.15,
+            0.90,
+            0.01,
+        )
+        graph = ExecutionGraph(
+            nodes=(selected,),
+            edges=(),
+            execution_stages=((selected.node_id,),),
+            entry_nodes=(selected.node_id,),
+            final_nodes=(selected.node_id,),
+            required_work=("work-decision",),
+            estimated_quality=0.7,
+            quality_floor=0.6,
+            estimated_total_cost=0.003,
+            metadata={
+                "interpretation_id": "interpretation-real",
+                "recovery_pool": {
+                    selected.node_id: [low_value_cost, expensive_low_failure]
+                },
+            },
+        )
+        observed_models: list[str] = []
+
+        def call_fn(_run, payload):
+            model = str(payload["model"])
+            observed_models.append(model)
+            if model == selected.model:
+                return {
+                    "id": "initial-empty",
+                    "model": model,
+                    "choices": [{"message": {"content": ""}, "finish_reason": "stop"}],
+                    "usage": {},
+                }, 0.01
+            return {
+                "id": "replacement-success",
+                "model": model,
+                "provider": payload["provider"]["only"][0],
+                "choices": [{"message": {"content": VALID_ANSWER}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 500, "completion_tokens": 700, "cost": 0.01},
+            }, 0.01
+
+        with tempfile.TemporaryDirectory() as directory:
+            result = runtime.execute_graph(
+                graph,
+                SimpleNamespace(api_key="fixture", model_timeout_seconds=30, parallel_workers=1),
+                "比较方案。",
+                call_fn=call_fn,
+                output_dir=directory,
+                limits=GraphLimits(
+                    max_nodes=1,
+                    max_model_calls=3,
+                    max_retries=0,
+                    max_replacements=2,
+                    max_budget_usd=0.25,
+                    cost_risk_multiplier=1.18,
+                ),
+            )
+        self.assertEqual(
+            [selected.model, "z-ai/glm-5.2"],
+            observed_models,
+        )
+        self.assertEqual("z-ai/glm-5.2", result["node_results"][0]["resolved_model"])
+
     def test_real_empty_response_fixture_recovers_once_across_endpoints(self) -> None:
         runtime = build_production_runtime(self.config())
         selected = selected_node()

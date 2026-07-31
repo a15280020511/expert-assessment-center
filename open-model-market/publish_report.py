@@ -39,21 +39,32 @@ def split_text(text: str, payload_limit: int) -> List[str]:
     return chunks
 
 
+def _validated_run_id(run_url: str) -> str:
+    normalized = str(run_url or "").strip().rstrip("/")
+    marker = "/actions/runs/"
+    if marker not in normalized:
+        raise ValueError("run_url must identify a GitHub Actions run")
+    run_id = normalized.rsplit(marker, 1)[-1]
+    if not run_id.isdigit():
+        raise ValueError("run_url must end with a numeric GitHub Actions run id")
+    return run_id
+
+
 def render_comments(report: str, *, run_url: str, max_chars: int) -> List[str]:
     if max_chars <= HEADER_RESERVE_CHARS + 256:
         raise ValueError("max_chars is too small for a safe report comment")
+    run_id = _validated_run_id(run_url)
     digest = hashlib.sha256(report.encode("utf-8")).hexdigest()
     payloads = split_text(report, max_chars - HEADER_RESERVE_CHARS)
     total = len(payloads)
     comments: List[str] = []
-    run_id = run_url.rstrip("/").split("/")[-1] if run_url else "unknown"
 
     for index, payload in enumerate(payloads, 1):
         marker = f"<!-- expert-team-report-run:{run_id}:part:{index:03d} -->"
         header = (
             f"{marker}\n"
             f"## EXPERT_TEAM_REPORT {index}/{total}\n\n"
-            f"- Run: `{run_url or 'unknown'}`\n"
+            f"- Run: `{run_url}`\n"
             f"- Source: `expert-team-report.md`\n"
             f"- Report SHA256: `{digest}`\n"
             "- 交付范围：完整V5最终报告；全部动态节点原始回答和底层调用证据保存在 Artifact。\n"
@@ -78,9 +89,12 @@ def write_comments(report_path: Path, output_dir: Path, *, run_url: str, max_cha
         path.write_text(comment, encoding="utf-8")
         files.append(path.name)
 
+    run_id = _validated_run_id(run_url)
     manifest = {
-        "version": 1,
+        "version": 2,
         "source": str(report_path),
+        "run_url": run_url,
+        "run_id": run_id,
         "report_sha256": hashlib.sha256(report.encode("utf-8")).hexdigest(),
         "report_chars": len(report),
         "comment_count": len(comments),

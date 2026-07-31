@@ -37,7 +37,12 @@ def _node_quality(root: Path) -> dict[str, Any]:
             continue
         node_id = str(row.get("node_id") or "")
         status = str(row.get("status") or "")
-        if status in STRICT_SUCCESS_STATUSES:
+        contract = row.get("contract", {})
+        contract_complete = (
+            isinstance(contract, Mapping)
+            and contract.get("required_fields_complete") is True
+        )
+        if status in STRICT_SUCCESS_STATUSES and contract_complete:
             strict.append(node_id)
         elif status in DEGRADED_SUCCESS_STATUSES or status.startswith("success"):
             attempts = row.get("attempts", [])
@@ -63,6 +68,7 @@ def _node_quality(root: Path) -> dict[str, Any]:
                     "status": status,
                     "quality_score": float(row.get("quality_score") or 0.0),
                     "gate_failures": gate_failures,
+                    "contract_incomplete": not contract_complete,
                 }
             )
         else:
@@ -72,6 +78,9 @@ def _node_quality(root: Path) -> dict[str, Any]:
         "strict_node_ids": strict,
         "degraded_nodes": degraded,
         "failed_node_ids": failed,
+        "contract_incomplete_node_ids": [
+            row["node_id"] for row in degraded if row.get("contract_incomplete")
+        ],
         "all_nodes_strict": bool(rows) and len(strict) == len(rows),
     }
 
@@ -151,6 +160,11 @@ def audit(root: Path, *, execute_outcome: str, publish_outcome: str) -> dict[str
     integrity = summary.get("quality_integrity", {})
     integrity = integrity if isinstance(integrity, Mapping) else {}
 
+    if evidence["contract_incomplete_node_ids"]:
+        degradations.append(
+            "one or more usable nodes did not satisfy the deterministic output contract"
+        )
+
     if evidence["failed_node_ids"]:
         failures.append(
             "node-level execution failures are present: "
@@ -185,6 +199,7 @@ def audit(root: Path, *, execute_outcome: str, publish_outcome: str) -> dict[str
             "strict_node_count": len(evidence["strict_node_ids"]),
             "degraded_node_count": len(evidence["degraded_nodes"]),
             "failed_node_count": len(evidence["failed_node_ids"]),
+            "contract_incomplete_node_count": len(evidence["contract_incomplete_node_ids"]),
             "node_quality_evidence": evidence,
         }
     )

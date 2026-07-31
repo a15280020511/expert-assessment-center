@@ -156,8 +156,8 @@ class GraphLimits:
     max_provider_failures: int = 1
     tight_budget_headroom_ratio: float = 1.25
 
-    # Context/output controls. 10,000 is a maximum permission, not a target.
-    max_output_allowance_tokens: int = 10_000
+    # Context/output controls. 32,768 is a maximum permission, not a target.
+    max_output_allowance_tokens: int = 32_768
     max_upstream_chars_per_node: int = 6_000
     max_total_upstream_chars: int = 24_000
 

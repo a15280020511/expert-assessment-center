@@ -111,6 +111,10 @@ class TestV5OutputContractDelivery(unittest.TestCase):
         self.assertIn("最终响应必须直接交付以下内容", prompt)
         self.assertIn("assumptions", prompt)
         self.assertIn("禁止复述输出契约", prompt)
+        self.assertIn("完全一致的Markdown二级标题", prompt)
+        for field in ["assumptions", "evidence_gaps", "conclusions", "recommendations"]:
+            self.assertIn(f"## {field}", prompt)
+        self.assertIn("不得把多个必填字段合并到同一标题", prompt)
         self.assertNotIn("最终响应必须只包含一个合法JSON对象", prompt)
         self.assertNotIn("微型Canary精简模式", prompt)
 

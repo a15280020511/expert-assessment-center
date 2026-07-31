@@ -182,6 +182,16 @@ def render(report: dict[str, Any]) -> str:
     return "\n".join(rows) + "\n"
 
 
+
+def should_fail(report: dict[str, Any], fail_on: str) -> bool:
+    if fail_on == "none":
+        return False
+    threshold = SEVERITY[fail_on]
+    return any(
+        SEVERITY[item["severity"]] <= threshold
+        for item in report.get("findings", [])
+    )
+
 def main() -> int:
     parser = argparse.ArgumentParser(); parser.add_argument("--root", default="."); parser.add_argument("--output-dir", default="audit-artifacts"); parser.add_argument("--fail-on", choices=("none", "critical", "high"), default="high"); args = parser.parse_args()
     output = Path(args.output_dir); output.mkdir(parents=True, exist_ok=True)
@@ -189,8 +199,7 @@ def main() -> int:
     (output / "repository-audit.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (output / "repository-audit.md").write_text(render(report), encoding="utf-8")
     print(json.dumps({"finding_counts": report["finding_counts"], "file_count": report["file_count"], "total_lines": report["total_lines"]}, ensure_ascii=False))
-    threshold = SEVERITY.get(args.fail_on, 99)
-    return 1 if any(SEVERITY[item["severity"]] <= threshold for item in report["findings"]) else 0
+    return 1 if should_fail(report, args.fail_on) else 0
 
 
 if __name__ == "__main__":

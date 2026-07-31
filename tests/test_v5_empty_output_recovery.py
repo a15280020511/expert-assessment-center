@@ -71,10 +71,15 @@ def graph(recovery_rows=None):
 
 def good_answer(label="A"):
     return (
-        f"conclusions {label}；assumptions 已列明；uncertainties 已标记；"
-        "calculations 公式和复核完整。事实、假设、推断和未知事项明确分开。"
-        "最终建议包含条件、风险边界和可执行验收标准。"
-    ) * 8
+        f"## conclusions\n方案{label}在当前约束下可执行，结论包含条件、风险边界和验收标准。"
+        "需要在验证完成后再进入长期执行，并保留明确退出条件。\n\n"
+        "## assumptions\n已知输入完整覆盖本测试范围；未提供的外部事实不作确定判断。"
+        "所有参数均视为可验证假设，不以宣传值替代实测值。\n\n"
+        "## uncertainties\n关键不确定性包括真实成本、失败概率和执行环境差异。"
+        "这些不确定性必须通过记录、复核和对照试验降低。\n\n"
+        "## calculations\n计算采用统一口径、显式公式和边界检查，并对结果进行复核。"
+        "任何缺失输入均标记为空缺，不使用乐观默认值。"
+    )
 
 
 def empty_response(payload):

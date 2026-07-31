@@ -61,7 +61,12 @@ def enforce_result_integrity(result: Mapping[str, Any]) -> dict[str, Any]:
         node_id = str(row.get("node_id") or "")
         status = str(row.get("status") or "")
         attempt_failures = _attempt_quality_failures(row)
-        if status in STRICT_SUCCESS_STATUSES:
+        contract = row.get("contract", {})
+        contract_complete = (
+            isinstance(contract, Mapping)
+            and contract.get("required_fields_complete") is True
+        )
+        if status in STRICT_SUCCESS_STATUSES and contract_complete:
             strict_nodes.append(node_id)
         elif status in DEGRADED_SUCCESS_STATUSES or status.startswith("success"):
             degraded_nodes.append(
@@ -70,6 +75,7 @@ def enforce_result_integrity(result: Mapping[str, Any]) -> dict[str, Any]:
                     "status": status,
                     "quality_score": float(row.get("quality_score") or 0.0),
                     "attempt_quality_failures": attempt_failures,
+                    "contract_incomplete": not contract_complete,
                 }
             )
         else:
@@ -79,12 +85,12 @@ def enforce_result_integrity(result: Mapping[str, Any]) -> dict[str, Any]:
     if degraded_nodes:
         normalized["completion_mode"] = "degraded"
         normalized["quality_status"] = "degraded_success"
-        normalized["stop_reason"] = "usable-output-with-node-quality-gate-failure"
+        normalized["stop_reason"] = "usable-output-with-node-quality-or-contract-degradation"
         degradation = dict(normalized.get("degradation") or {})
         degradation.update(
             {
                 "used": True,
-                "mode": "usable-node-output-after-quality-gate-failure",
+                "mode": "usable-node-output-after-quality-or-contract-degradation",
                 "extra_model_calls": int(degradation.get("extra_model_calls") or 0),
                 "degraded_node_ids": [row["node_id"] for row in degraded_nodes],
             }

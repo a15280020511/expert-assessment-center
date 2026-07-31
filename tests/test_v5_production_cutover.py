@@ -89,9 +89,21 @@ class V5ProductionCutoverTests(unittest.TestCase):
             }
         })
         self._write(root, "expert-team-report.md", report)
-        self._write(root, "report-comments/report-comment-001.md", "published")
+        run_id = "30626072318"
+        run_url = (
+            "https://github.com/a15280020511/expert-assessment-center/actions/runs/"
+            + run_id
+        )
+        self._write(
+            root,
+            "report-comments/report-comment-001.md",
+            f"<!-- expert-team-report-run:{run_id}:part:001 -->\n- Run: `{run_url}`\n\npublished",
+        )
         self._write(root, "report-comments/report-comments-manifest.json", {
+            "version": 2,
             "report_sha256": hashlib.sha256(report.encode("utf-8")).hexdigest(),
+            "run_url": run_url,
+            "run_id": run_id,
             "files": ["report-comment-001.md"],
         })
 

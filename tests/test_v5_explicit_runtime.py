@@ -162,6 +162,39 @@ class V5ExplicitRuntimeTests(unittest.TestCase):
         self.assertFalse(contract["compression_used"])
         self.assertEqual(contract["conclusions"], ["A"])
 
+    def test_markdown_contract_is_extracted_and_verified(self):
+        runtime = ProductionRuntime(RuntimeConfig(
+            total_call_limit=4,
+            recovery_call_limit=1,
+            cost_anomaly_usd=None,
+            quality_tier="value",
+        ))
+        narrative = node()
+        narrative = SelectedNode(**{
+            **narrative.to_dict(),
+            "assigned_work": tuple(narrative.assigned_work),
+            "functions": tuple(narrative.functions),
+            "output_contract": {
+                "required_fields": ["assumptions", "conclusions", "risks"],
+                "machine_readable_required": False,
+                "must_separate_fact_assumption_inference": True,
+            },
+        })
+        contract = runtime.execution_engine._contract(
+            narrative,
+            "## assumptions\n已知输入有限。\n\n## conclusions\n采用可撤销验证。\n\n## risks\n避免不可逆投入。",
+        )
+        self.assertTrue(contract["required_fields_complete"])
+        self.assertEqual(
+            set(contract["raw_fields"]),
+            {"assumptions", "conclusions", "risks"},
+        )
+        incomplete = runtime.execution_engine._contract(
+            narrative,
+            "## conclusions\n只有结论，没有其他必填章节。",
+        )
+        self.assertFalse(incomplete["required_fields_complete"])
+
     def test_catalog_snapshot_is_deterministic_and_run_local(self):
         class Model:
             id = "vendor/model"

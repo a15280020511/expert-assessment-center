@@ -86,6 +86,13 @@ def _delivery_rule(node: SelectedNode) -> str:
             f"{compact_rule}"
         )
     field_text = "、".join(fields) if fields else "任务要求的交付内容"
+    heading_rule = (
+        "必须按以下顺序使用完全一致的Markdown二级标题，并在每个标题下填写非空正文："
+        + "、".join(f"## {field}" for field in fields)
+        + "。不得把多个必填字段合并到同一标题，也不得只在段落中提到字段名。"
+        if fields
+        else ""
+    )
     separation_rule = (
         "正文中必须明确区分事实、假设、推断和不确定性。"
         if separate
@@ -93,6 +100,7 @@ def _delivery_rule(node: SelectedNode) -> str:
     )
     return (
         f"最终响应必须直接交付以下内容：{field_text}。"
+        f"{heading_rule}"
         "禁止复述输出契约、字段清单或模式定义。"
         f"{separation_rule}"
         "内容应精炼、完整、可直接使用。"
