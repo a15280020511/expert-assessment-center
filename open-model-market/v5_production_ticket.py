@@ -16,6 +16,7 @@ from typing import Any, Mapping, Sequence
 
 import v5_pipeline
 from v5_evidence_bundle import ApprovedRun, EvidenceBundleBuilder, EvidenceInputs
+from v5_recovery_runtime import build_production_runtime
 from v5_runtime import ProductionRuntime, RuntimeConfig
 
 RUNTIME_VERSION = "v5-native-runtime-1"
@@ -89,6 +90,7 @@ def _write_runtime_evidence(
         "runtime_version": RUNTIME_VERSION,
         "entrypoint": "v5_production_ticket.py",
         "runtime_constructor": "v5_runtime.ProductionRuntime",
+        "recovery_policy": "v5_recovery_runtime.cross-endpoint-cost-performance",
         "global_monkey_patching": False,
         "maximum_model_calls": total_calls,
         "maximum_total_calls": total_calls,
@@ -180,7 +182,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _runtime(args: argparse.Namespace) -> ProductionRuntime:
-    return ProductionRuntime(RuntimeConfig(
+    config = RuntimeConfig(
         total_call_limit=args.maximum_total_calls,
         recovery_call_limit=args.maximum_recovery_calls,
         cost_anomaly_usd=args.cost_anomaly_usd,
@@ -188,7 +190,8 @@ def _runtime(args: argparse.Namespace) -> ProductionRuntime:
         tools_allowed=False,
         live_catalog_required=args.require_live_catalog,
         provider_lock_required=True,
-    ))
+    )
+    return build_production_runtime(config)
 
 
 def _pipeline_command(args: argparse.Namespace, output: Path, task: str) -> list[str]:
@@ -229,6 +232,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "characters": len(canonical_task),
         "delegation_notice_included": False,
         "execution_constraints_supplied_by_runtime": True,
+        "cross_endpoint_empty_response_recovery": True,
     })
     try:
         code = int(v5_pipeline.main(
