@@ -95,18 +95,43 @@ def write_comments(report_path: Path, output_dir: Path, *, run_url: str, max_cha
 
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser()
-    root.add_argument("--report", required=True)
-    root.add_argument("--output-dir", required=True)
+    root.add_argument(
+        "--report",
+        help="Explicit final report path. Optional with the production --comments-dir form.",
+    )
+    root.add_argument(
+        "--output-dir",
+        required=True,
+        help="Legacy comment destination, or production artifact root when --comments-dir is used.",
+    )
+    root.add_argument(
+        "--comments-dir",
+        help="Production comment destination. The report defaults to <output-dir>/v5-final-report.md.",
+    )
     root.add_argument("--run-url", default="")
     root.add_argument("--max-chars", type=int, default=DEFAULT_MAX_COMMENT_CHARS)
     return root
 
 
+def resolve_paths(args: argparse.Namespace) -> tuple[Path, Path]:
+    artifact_root = Path(args.output_dir)
+    if args.comments_dir:
+        report_path = Path(args.report) if args.report else artifact_root / "v5-final-report.md"
+        comments_path = Path(args.comments_dir)
+    else:
+        if not args.report:
+            raise ValueError("--report is required unless --comments-dir is supplied")
+        report_path = Path(args.report)
+        comments_path = artifact_root
+    return report_path, comments_path
+
+
 def main() -> int:
     args = parser().parse_args()
+    report_path, comments_path = resolve_paths(args)
     manifest = write_comments(
-        Path(args.report),
-        Path(args.output_dir),
+        report_path,
+        comments_path,
         run_url=args.run_url,
         max_chars=args.max_chars,
     )

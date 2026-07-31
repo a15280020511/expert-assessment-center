@@ -263,13 +263,18 @@ class TestV5CapabilityCalibration(unittest.TestCase):
     def test_formal_production_entries_use_explicit_policy(self):
         pipeline = (ROOT / "open-model-market" / "v5_pipeline.py").read_text(encoding="utf-8")
         production = (ROOT / "open-model-market" / "v5_production_ticket.py").read_text(encoding="utf-8")
+        recovery = (ROOT / "open-model-market" / "v5_recovery_runtime.py").read_text(encoding="utf-8")
         planner_source = (ROOT / "open-model-market" / "v5_planning_runtime.py").read_text(encoding="utf-8")
         self.assertIn("runtime.planner_policy.generate_candidate_graph", pipeline)
-        self.assertIn("ProductionRuntime(RuntimeConfig", production)
+        self.assertIn("config = RuntimeConfig(", production)
+        self.assertIn("build_production_runtime(config)", production)
+        self.assertIn("return ProductionRuntime(", recovery)
+        self.assertIn("planner_policy=CrossEndpointPlannerPolicy(config)", recovery)
         self.assertIn("generate_calibrated_candidate_graph", planner_source)
         self.assertIn("diversity_preserving_pareto_prune", planner_source)
         self.assertNotIn(".install()", pipeline)
         self.assertNotIn("v5_production_hardening.install()", production)
+        self.assertNotIn(".install()", recovery)
 
 
 if __name__ == "__main__":
