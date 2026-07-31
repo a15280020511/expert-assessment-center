@@ -9,7 +9,7 @@ from typing import Any, Mapping
 import numpy as np
 
 from atomic_work_graph import compile_atomic_work_graphs
-from task_semantic_compiler import compile_task_semantics
+from task_semantic_compiler import compile_task_semantics as _default_compile_task_semantics
 
 BASE_CAPABILITIES = (
     "general_analysis",
@@ -216,21 +216,39 @@ def compile_resource_matrices(compilation: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def compile_v5_task_resources(profile: Any, run: Any, max_interpretations: int = 3) -> dict[str, Any]:
+def compile_v5_task_resources(
+    profile: Any,
+    run: Any,
+    max_interpretations: int = 3,
+    *,
+    semantic_compiler: Any | None = None,
+) -> dict[str, Any]:
+    """Compile resources through an explicitly selected semantic compiler.
+
+    The default preserves the base compiler for isolated callers. Production
+    passes the corrected compiler explicitly, eliminating import-order behavior
+    and global monkey patching.
+    """
     semantic_run, trial_validation_disambiguated = _semantic_run(run)
-    semantics = compile_task_semantics(profile, semantic_run, max_interpretations=max_interpretations)
-    graphs = compile_atomic_work_graphs(semantics)
-    matrices = compile_resource_matrices(semantics)
+    compiler = semantic_compiler or _default_compile_task_semantics
+    task_semantics = compiler(
+        profile,
+        semantic_run,
+        max_interpretations=max_interpretations,
+    )
+    graphs = compile_atomic_work_graphs(task_semantics)
+    matrices = compile_resource_matrices(task_semantics)
     return {
         "version": 5,
         "architecture": "task-interpretations-to-atomic-work-graphs-to-resource-matrices",
-        "task_semantics": semantics,
+        "task_semantics": task_semantics,
         "atomic_work_graphs": graphs,
         "resource_matrices": matrices,
         "semantic_input_policy": {
             "trial_validation_disambiguated": trial_validation_disambiguated,
             "delegation_notice_must_be_excluded_upstream": True,
             "domain_fit_hard_only_for_high_assurance_specialist_work": True,
+            "semantic_compiler_injected_explicitly": semantic_compiler is not None,
         },
         "phase_a_complete": True,
         "model_market_accessed": False,
