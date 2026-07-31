@@ -1,0 +1,42 @@
+name: Apply V5 Failure Attestation Patch
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/v5-failure-evidence-chain-r129'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repair branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: fix/v5-failure-evidence-chain-r129
+          persist-credentials: true
+
+      - name: Apply deterministic patch
+        run: |
+          if grep -q '"report_required": report_required' open-model-market/v5_evidence_bundle.py; then
+            echo 'Failure attestation patch already applied.'
+            exit 0
+          fi
+          python scripts/apply_v5_failure_attestation_patch.py
+
+      - name: Commit patch when changed
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add open-model-market/v5_evidence_bundle.py
+          git diff --cached --check
+          git commit -m 'fix(v5): attest deterministic failed executions'
+          git push origin HEAD:fix/v5-failure-evidence-chain-r129
