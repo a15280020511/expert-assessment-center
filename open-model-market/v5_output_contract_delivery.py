@@ -155,6 +155,14 @@ def contract_aware_quality_gate(
 ) -> tuple[bool, float, list[str]]:
     """Enforce exact task contracts after the base semantic quality gate."""
     passed, score, reasons = _ORIGINAL_QUALITY_GATE(node, response, answer)
+    integrity_violations = task_delivery_contract.validate_contract_integrity(
+        node.output_contract, node.parameter_profile
+    )
+    for violation in integrity_violations:
+        _append_reason(reasons, violation)
+    if integrity_violations:
+        passed = False
+        score = min(float(score), 0.0)
     markdown_violations = task_delivery_contract.validate_markdown_contract(
         answer, node.output_contract
     )

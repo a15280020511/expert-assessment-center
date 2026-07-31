@@ -14,6 +14,7 @@ from ortools.sat.python import cp_model
 from execution_graph import ExecutionGraph, GraphLimits, SelectedEdge, SelectedNode
 from execution_graph_validator import validate_execution_graph
 from openrouter_api import OpenRouterRequestError, request_json
+import v5_task_delivery_contract as task_delivery_contract
 
 ENDPOINTS_URL = "https://openrouter.ai/api/v1/models/{author}/{slug}/endpoints"
 FORBIDDEN_MODEL_TERMS = ("openrouter/", ":online", ":batch", ":free", "preview")
@@ -402,11 +403,54 @@ def _parameter_profile(endpoint: Mapping[str, Any], works: Sequence[Mapping[str,
 
 
 def _merge_output_contract(works: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    fields = sorted({field for work in works for field in work.get("output_contract", {}).get("required_fields", [])})
+    contracts = [
+        dict(work.get("output_contract", {}))
+        for work in works
+        if isinstance(work.get("output_contract", {}), Mapping)
+    ]
+    explicit = [
+        contract
+        for contract in contracts
+        if task_delivery_contract.explicit_contract_kind(contract) != "generic"
+    ]
+    if explicit:
+        reference = explicit[0]
+        reference_digest = task_delivery_contract.contract_digest(reference)
+        for contract in explicit[1:]:
+            if task_delivery_contract.contract_digest(contract) != reference_digest:
+                raise V5PlanningError(
+                    "Conflicting explicit user output contracts cannot be bundled."
+                )
+        merged = json.loads(json.dumps(reference, ensure_ascii=False))
+        kind = task_delivery_contract.explicit_contract_kind(merged)
+        if kind == "exact-json":
+            merged["required_fields"] = list(merged.get("exact_top_level_fields", []))
+            merged["machine_readable_required"] = True
+        elif kind == "exact-markdown":
+            merged["required_fields"] = list(merged.get("exact_markdown_headings", []))
+            merged["machine_readable_required"] = False
+        merged["must_separate_fact_assumption_inference"] = any(
+            bool(contract.get("must_separate_fact_assumption_inference"))
+            for contract in contracts
+        )
+        return merged
+
+    fields: list[str] = []
+    for contract in contracts:
+        for field in contract.get("required_fields", []):
+            value = str(field)
+            if value not in fields:
+                fields.append(value)
     return {
         "required_fields": fields,
-        "machine_readable_required": any(bool(work.get("output_contract", {}).get("machine_readable_required")) for work in works),
-        "must_separate_fact_assumption_inference": True,
+        "machine_readable_required": any(
+            bool(contract.get("machine_readable_required"))
+            for contract in contracts
+        ),
+        "must_separate_fact_assumption_inference": any(
+            bool(contract.get("must_separate_fact_assumption_inference"))
+            for contract in contracts
+        ),
     }
 
 
@@ -444,6 +488,14 @@ def _candidate_for(
     prompt = _prompt_profile(works)
     reasoning = _reasoning_profile(works)
     parameters = _parameter_profile(endpoint, works, reasoning)
+    output_contract = _merge_output_contract(works)
+    parameters = {
+        **parameters,
+        **task_delivery_contract.contract_integrity_profile(
+            output_contract,
+            [str(work["work_id"]) for work in works],
+        ),
+    }
     assigned = tuple(sorted(str(work["work_id"]) for work in works))
     functions = tuple(sorted({str(name) for work in works for name in work.get("operation_requirements", {})}))
     professional = {label: round(float(value), 6) for label, value in capabilities.items() if any(label in demand_by_work[str(work["work_id"])] for work in works)}
@@ -474,7 +526,7 @@ def _candidate_for(
         model=str(endpoint["model_id"]),
         provider_endpoint=str(endpoint["provider_endpoint"]),
         provider_slug=str(endpoint["provider_slug"]),
-        output_contract=_merge_output_contract(works),
+        output_contract=output_contract,
         estimated_quality=round(quality, 6),
         quality_uncertainty=round(1.0 - confidence, 6),
         estimated_cost=round(_estimated_cost(endpoint, works, bundle_discount), 8),
