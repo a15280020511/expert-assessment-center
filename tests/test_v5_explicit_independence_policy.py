@@ -5,10 +5,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-import v5_candidate_diversity  # noqa: E402
 import v5_planner  # noqa: E402
 import v5_value_optimizer as optimizer  # noqa: E402
 from execution_graph import GraphLimits  # noqa: E402
+from v5_planning_runtime import PlannerPolicy  # noqa: E402
+from v5_runtime import RuntimeConfig  # noqa: E402
 
 
 def candidate(
@@ -60,6 +61,15 @@ def bundle(rows):
 
 
 class TestV5ExplicitIndependencePolicy(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.policy = PlannerPolicy(RuntimeConfig(
+            total_call_limit=4,
+            recovery_call_limit=1,
+            cost_anomaly_usd=None,
+            quality_tier="value",
+        ))
+
     def limits(self):
         return GraphLimits(
             max_nodes=4,
@@ -71,15 +81,19 @@ class TestV5ExplicitIndependencePolicy(unittest.TestCase):
             max_budget_usd=0.10,
         )
 
-    def test_ordinary_redundant_copies_can_use_same_model_and_provider(self):
-        result = optimizer.optimize_execution_graph(
-            bundle([
-                candidate("c0", "w1#0"),
-                candidate("c1", "w1#1"),
-            ]),
+    def optimize(self, rows):
+        return self.policy.optimize_execution_graph(
+            bundle(rows),
             limits=self.limits(),
+            quality_tolerance_pct=2.0,
             solver_timeout_seconds=2,
         )
+
+    def test_ordinary_redundant_copies_can_use_same_model_and_provider(self):
+        result = self.optimize([
+            candidate("c0", "w1#0"),
+            candidate("c1", "w1#1"),
+        ])
         graph = result["execution_graph"]
         self.assertEqual(len(graph["nodes"]), 2)
         self.assertEqual({row["model"] for row in graph["nodes"]}, {"a/model"})
@@ -96,33 +110,30 @@ class TestV5ExplicitIndependencePolicy(unittest.TestCase):
             v5_planner.V5PlanningError,
             "No feasible V5 execution graph",
         ):
-            optimizer.optimize_execution_graph(
-                bundle([
-                    candidate("c0", "w1#0", independence=True),
-                    candidate("c1", "w1#1", independence=True),
-                ]),
-                limits=self.limits(),
-                solver_timeout_seconds=2,
-            )
+            self.optimize([
+                candidate("c0", "w1#0", independence=True),
+                candidate("c1", "w1#1", independence=True),
+            ])
 
     def test_explicit_independence_allows_two_models_on_same_provider(self):
-        result = optimizer.optimize_execution_graph(
-            bundle([
-                candidate("c0", "w1#0", model="a/model", independence=True),
-                candidate("c1", "w1#1", model="b/model", independence=True),
-            ]),
-            limits=self.limits(),
-            solver_timeout_seconds=2,
-        )
+        result = self.optimize([
+            candidate("c0", "w1#0", model="a/model", independence=True),
+            candidate("c1", "w1#1", model="b/model", independence=True),
+        ])
         graph = result["execution_graph"]
         self.assertEqual({row["model"] for row in graph["nodes"]}, {"a/model", "b/model"})
         policy = result["hard_independence_constraints"][0]
         self.assertTrue(policy["different_model_required"])
         self.assertFalse(policy["different_provider_required"])
 
-    def test_installed_legacy_planner_uses_active_value_optimizer(self):
-        v5_candidate_diversity.install()
-        self.assertIs(v5_planner.optimize_execution_graph, optimizer.optimize_execution_graph)
+    def test_formal_runtime_uses_explicit_value_optimizer(self):
+        original = v5_planner.optimize_execution_graph
+        source = (ROOT / "open-model-market" / "v5_planning_runtime.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("value_optimizer.optimize_execution_graph", source)
+        self.assertIs(v5_planner.optimize_execution_graph, original)
+        self.assertIsNot(v5_planner.optimize_execution_graph, optimizer.optimize_execution_graph)
 
 
 if __name__ == "__main__":
