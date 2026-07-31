@@ -211,7 +211,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         max_edges=64,
         max_stages=8,
         max_model_calls=total_calls,
-        max_retries=0,
+        max_retries=recovery_calls,
         max_replacements=recovery_calls,
         max_budget_usd=anomaly_budget,
     )

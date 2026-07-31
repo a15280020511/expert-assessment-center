@@ -1,4 +1,4 @@
-"""Enforce one production paid-call ceiling that includes recovery calls."""
+"""Enforce one approved total-call ceiling with one shared recovery pool."""
 from __future__ import annotations
 
 from typing import Any
@@ -10,14 +10,21 @@ _INSTALLED = False
 
 
 def _maximum_total_calls(self: Any) -> int:
-    """The approved total is not expanded by retry or replacement allowances."""
+    """The approved total is never expanded by recovery allowances."""
     return max(0, int(self.max_planned_calls))
 
 
+def _maximum_recovery_calls(self: Any) -> int:
+    """Retry and replacement are alternate uses of the same approved reserve."""
+    return max(0, int(self.max_retries), int(self.max_replacements))
+
+
+def _recovery_calls_reserved(self: Any) -> int:
+    return max(0, int(self.retries_reserved)) + max(0, int(self.replacements_reserved))
+
+
 def _maximum_initial_calls(self: Any) -> int:
-    """Reserve recovery capacity inside the approved total before planning."""
-    recovery = max(0, int(self.max_retries)) + max(0, int(self.max_replacements))
-    return max(0, _maximum_total_calls(self) - recovery)
+    return max(0, _maximum_total_calls(self) - _maximum_recovery_calls(self))
 
 
 def _reserve(self: Any, kind: str, estimated_cost_usd: float, node_id: str) -> tuple[bool, str]:
@@ -26,10 +33,8 @@ def _reserve(self: Any, kind: str, estimated_cost_usd: float, node_id: str) -> t
         reason = ""
         if kind == "initial" and self.initial_calls_reserved >= _maximum_initial_calls(self):
             reason = "initial-call-cap-reserved-for-recovery"
-        elif kind == "retry" and self.retries_reserved >= self.max_retries:
-            reason = "global-retry-limit-exhausted"
-        elif kind == "replacement" and self.replacements_reserved >= self.max_replacements:
-            reason = "global-replacement-limit-exhausted"
+        elif kind in {"retry", "replacement"} and _recovery_calls_reserved(self) >= _maximum_recovery_calls(self):
+            reason = "global-recovery-limit-exhausted"
         elif self.calls_reserved >= _maximum_total_calls(self):
             reason = "global-total-call-limit-exhausted"
         else:
@@ -60,9 +65,11 @@ def _reserve(self: Any, kind: str, estimated_cost_usd: float, node_id: str) -> t
 
 def _snapshot(self: Any) -> dict[str, Any]:
     with self._lock:
+        recovery_reserved = _recovery_calls_reserved(self)
         return {
             "max_planned_calls": self.max_planned_calls,
             "maximum_initial_calls": _maximum_initial_calls(self),
+            "maximum_recovery_calls": _maximum_recovery_calls(self),
             "max_retries": self.max_retries,
             "max_replacements": self.max_replacements,
             "maximum_total_calls": _maximum_total_calls(self),
@@ -70,6 +77,7 @@ def _snapshot(self: Any) -> dict[str, Any]:
             "risk_multiplier": self.risk_multiplier,
             "calls_reserved": self.calls_reserved,
             "initial_calls_reserved": self.initial_calls_reserved,
+            "recovery_calls_reserved": recovery_reserved,
             "retries_reserved": self.retries_reserved,
             "replacements_reserved": self.replacements_reserved,
             "estimated_cost_reserved_usd": round(sum(self.pending), 8),
@@ -93,6 +101,8 @@ def install() -> None:
         return
     cls = r8.R8ExecutionBudget
     cls.maximum_total_calls = property(_maximum_total_calls)
+    cls.maximum_recovery_calls = property(_maximum_recovery_calls)
+    cls.recovery_calls_reserved = property(_recovery_calls_reserved)
     cls.maximum_initial_calls = property(_maximum_initial_calls)
     cls.reserve = _reserve
     cls.snapshot = _snapshot

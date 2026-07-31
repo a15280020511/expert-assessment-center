@@ -1,9 +1,8 @@
 """Enforce consistency between node quality gates and run-level status.
 
-A usable truncated answer may be delivered as bounded degradation, but it must
-never be represented as ``full_success``. This wrapper runs after the R8
-fault-aware executor, inspects every node result, corrects the run-level quality
-state, and rewrites the execution summary and request-audit semantics.
+Usable degraded output may be delivered, but it must never be represented as
+``full_success``. Request-audit semantics are normalized on both success and
+failure so a failed run still preserves the exact attempted requests.
 """
 from __future__ import annotations
 
@@ -49,7 +48,6 @@ def _attempt_quality_failures(row: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 
 def enforce_result_integrity(result: Mapping[str, Any]) -> dict[str, Any]:
-    """Return a corrected mutable copy of a V5 execution result."""
     normalized = dict(result)
     rows = normalized.get("node_results", [])
     rows = rows if isinstance(rows, list) else []
@@ -122,51 +120,85 @@ def _write_json(path: Path, value: Any) -> None:
     )
 
 
+def _load(path: Path, default: Any) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return default
+
+
+def _rewrite_request_audit(root: Path, integrity_status: str) -> None:
+    audit_path = root / "v5-request-audit.json"
+    audit = _load(audit_path, {})
+    if not isinstance(audit, Mapping):
+        return
+    audit = dict(audit)
+    requests = audit.get("requests", [])
+    requests = requests if isinstance(requests, list) else []
+    dynamic_allowance = any(
+        isinstance(request, Mapping)
+        and ("max_tokens" in request or "max_completion_tokens" in request)
+        for request in requests
+    )
+    audit["bounded_output_allowance_sent"] = dynamic_allowance
+    audit["dynamic_output_allowance_sent"] = dynamic_allowance
+    audit["artificial_token_ceiling_sent"] = False
+    audit["output_allowance_policy"] = (
+        "dynamic-reasoning-aware-truncation-protection-not-billed-assumption"
+        if dynamic_allowance
+        else "provider-default-no-explicit-allowance"
+    )
+    audit["quality_integrity_status"] = integrity_status
+    audit["request_count"] = int(audit.get("request_count") or len(requests))
+    _write_json(audit_path, audit)
+
+
 def _rewrite_artifacts(root: Path, result: Mapping[str, Any]) -> None:
     root.mkdir(parents=True, exist_ok=True)
     _write_json(
         root / "v5-execution-summary.json",
         {key: value for key, value in result.items() if key != "node_results"},
     )
+    integrity = result.get("quality_integrity", {})
+    status = integrity.get("status") if isinstance(integrity, Mapping) else "UNKNOWN"
+    _rewrite_request_audit(root, str(status or "UNKNOWN"))
 
-    audit_path = root / "v5-request-audit.json"
-    try:
-        audit = json.loads(audit_path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        audit = {}
-    if isinstance(audit, Mapping):
-        audit = dict(audit)
-        requests = audit.get("requests", [])
-        requests = requests if isinstance(requests, list) else []
-        dynamic_allowance = any(
-            isinstance(request, Mapping)
-            and (
-                "max_tokens" in request
-                or "max_completion_tokens" in request
-            )
-            for request in requests
-        )
-        audit["bounded_output_allowance_sent"] = dynamic_allowance
-        audit["dynamic_output_allowance_sent"] = dynamic_allowance
-        audit["artificial_token_ceiling_sent"] = False
-        audit["output_allowance_policy"] = (
-            "dynamic-reasoning-aware-truncation-protection-not-billed-assumption"
-            if dynamic_allowance
-            else "provider-default-no-explicit-allowance"
-        )
-        integrity = result.get("quality_integrity", {})
-        audit["quality_integrity_status"] = (
-            integrity.get("status") if isinstance(integrity, Mapping) else "UNKNOWN"
-        )
-        _write_json(audit_path, audit)
+
+def _rewrite_failure_artifacts(root: Path) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    summary = _load(root / "v5-execution-summary.json", {})
+    rows = _load(root / "v5-node-results.json", [])
+    if isinstance(summary, Mapping):
+        summary = dict(summary)
+        summary.setdefault("quality_status", "failed")
+        summary["quality_integrity"] = {
+            "status": "FAIL",
+            "strict_success_statuses": sorted(STRICT_SUCCESS_STATUSES),
+            "strict_node_ids": [],
+            "degraded_nodes": [],
+            "failed_node_ids": [
+                str(row.get("node_id") or "")
+                for row in rows
+                if isinstance(row, Mapping)
+                and str(row.get("status") or "") not in STRICT_SUCCESS_STATUSES
+            ],
+            "full_success_allowed": False,
+        }
+        _write_json(root / "v5-execution-summary.json", summary)
+    _rewrite_request_audit(root, "FAIL")
 
 
 def integrity_execute_v5_graph(*args: Any, **kwargs: Any) -> dict[str, Any]:
     if _ORIGINAL_EXECUTE is None:
         raise RuntimeError("v5_quality_status_integrity.install() has not been called")
-    result = _ORIGINAL_EXECUTE(*args, **kwargs)
-    normalized = enforce_result_integrity(result)
     output_dir = kwargs.get("output_dir")
+    try:
+        result = _ORIGINAL_EXECUTE(*args, **kwargs)
+    except Exception:
+        if output_dir is not None:
+            _rewrite_failure_artifacts(Path(output_dir))
+        raise
+    normalized = enforce_result_integrity(result)
     if output_dir is not None:
         _rewrite_artifacts(Path(output_dir), normalized)
     return normalized

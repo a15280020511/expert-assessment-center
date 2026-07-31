@@ -5,6 +5,7 @@ import v5_budget_runtime_parity as budget_parity
 import v5_cost_reliability_hardening as cost_reliability
 import v5_dynamic_configuration as dynamic_configuration
 import v5_dynamic_prompt_delivery as dynamic_prompt_delivery
+import v5_empty_output_recovery as empty_output_recovery
 import v5_general_task_planning as general_task_planning
 import v5_quality_status_integrity as quality_integrity
 import v5_r8_executor as resilient
@@ -47,6 +48,8 @@ def install() -> None:
     rejection_audit.install()
     resilient.install()
     total_call_cap.install()
+    # The recovery function consumes the shared pool installed above.
+    empty_output_recovery.install()
     provider_compat.install()
     # Install last so no later execution patch can bypass run-level integrity.
     quality_integrity.install()
