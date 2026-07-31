@@ -212,7 +212,7 @@ jobs:
             --catalog-file tests/fixtures/models.json \
             --endpoint-file tests/fixtures/endpoints.json \
             --dry-run \
-            --maximum-total-calls 4 \
+            --maximum-total-calls 6 \
             --maximum-recovery-calls 1 \
             --cost-anomaly-usd 0.25 \
             --quality-tier value \
@@ -220,35 +220,52 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
+          import sys
+
+          sys.path.insert(0, 'open-model-market')
+          from v5_model_company import canonical_model_company
 
           root = Path('production-validation-artifacts')
           dry = json.loads((root / 'v5-dry-run.json').read_text())
           runtime = json.loads((root / 'v5-runtime-config.json').read_text())
           snapshot = json.loads((root / 'catalog-snapshot.json').read_text())
           semantics = json.loads((root / 'task-interpretations.json').read_text())
-          matrix = json.loads((root / 'task-resource-matrix.json').read_text())
           optimization = json.loads((root / 'v5-optimization.json').read_text())
           graph = json.loads((root / 'v5-execution-graph.json').read_text())
 
           signals = semantics['task_signals']
+          works = semantics['interpretations'][0]['atomic_work']
+          synthesis = next(
+              work for work in works if 'synthesis' in work['operation_requirements']
+          )
+          selected_companies = {
+              canonical_model_company(node['model']) for node in graph['nodes']
+          }
+
           assert dry['status'] == 'planned-not-executed'
-          assert dry['approved_budget']['maximum_total_calls'] == 4
-          assert dry['approved_budget']['maximum_initial_calls'] == 3
+          assert dry['approved_budget']['maximum_total_calls'] == 6
+          assert dry['approved_budget']['maximum_initial_calls'] == 5
           assert dry['approved_budget']['maximum_recovery_calls'] == 1
           assert dry['approved_budget']['cost_anomaly_usd'] == 0.25
           assert runtime['global_monkey_patching'] is False
           assert runtime['cross_task_history_used'] is False
           assert snapshot['cross_task_history_used'] is False
           assert snapshot['catalog_snapshot_id'] == dry['catalog_snapshot_id']
-          assert signals['closed_book_tabletop_compaction_applied'] is True
+          assert signals['closed_book_tabletop_compaction_applied'] is False
+          assert signals['closed_book_tabletop_decomposition_applied'] is True
+          assert signals['minimum_planned_work_units'] == 4
+          assert signals['minimum_distinct_model_companies'] == 4
           assert signals['external_evidence_required'] is False
-          assert signals['active_domains'] == ['security']
-          assert signals['active_operations'] == ['analysis', 'decision_comparison']
+          assert signals['active_operations'] == [
+              'analysis', 'decision_comparison', 'adversarial_reasoning', 'synthesis'
+          ]
           assert len(semantics['interpretations']) == 1
-          assert len(semantics['interpretations'][0]['atomic_work']) == 1
-          assert matrix['matrices'][0]['hard_requirements'] == []
+          assert len(works) == 4
+          assert synthesis['output_contract']['explicit_markdown_contract'] is True
+          assert synthesis['output_contract']['fail_closed_on_quality_gate'] is True
           assert optimization['solver_status'] in {'OPTIMAL', 'FEASIBLE'}
-          assert 1 <= len(graph['nodes']) <= 3
+          assert len(graph['nodes']) == 4
+          assert len(selected_companies) == 4
           assert len(dry['requests']) == len(graph['nodes'])
           assert float(graph['estimated_total_cost']) <= 0.25
           assert not (root / 'v5-planning-infeasibility.json').exists()
