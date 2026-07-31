@@ -183,19 +183,15 @@ class TestV5OutputContractDelivery(unittest.TestCase):
         self.assertIn("JSON语法完整闭合", prompt)
         self.assertNotIn("微型Canary精简模式", prompt)
 
-    def test_micro_canary_workflow_enables_compact_mode_only_for_run_step(self):
+    def test_formal_workflow_does_not_force_compact_mode(self):
         workflow = (
-            ROOT / ".github" / "workflows" / "v5-micro-canary.yml"
-        ).read_text(encoding="utf-8")
-        self.assertIn('V5_COMPACT_OUTPUT_CONTRACT: "1"', workflow)
-        self.assertIn(
-            "Compact JSON delivery: enabled for this Canary only; formal V5 default unchanged",
-            workflow,
-        )
-        formal_workflow = (
             ROOT / ".github" / "workflows" / "execution-ticket.yml"
         ).read_text(encoding="utf-8")
-        self.assertNotIn("V5_COMPACT_OUTPUT_CONTRACT", formal_workflow)
+        production = (
+            ROOT / "open-model-market" / "v5_production_hardening.py"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("V5_COMPACT_OUTPUT_CONTRACT", workflow)
+        self.assertIn("v5_output_contract_delivery.install()", production)
 
 
 if __name__ == "__main__":
