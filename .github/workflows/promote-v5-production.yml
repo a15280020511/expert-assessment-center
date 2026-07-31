@@ -199,31 +199,59 @@ jobs:
 
       - name: Run deterministic no-call V5 regression
         working-directory: release-target
+        shell: bash
         run: |
+          set -euo pipefail
           rm -rf production-validation-artifacts
+          python - <<'PY' > release-tabletop-task.txt
+          from tests.test_v5_tabletop_production_semantics import FAILED_PRODUCTION_TASK
+          print(FAILED_PRODUCTION_TASK)
+          PY
           python open-model-market/v5_pipeline.py \
-            --task "生产发布零费用回归：比较三个公共投资方案，完成财务、合规、证据、预测、红队和最终决策。" \
+            --task "$(cat release-tabletop-task.txt)" \
             --catalog-file tests/fixtures/models.json \
             --endpoint-file tests/fixtures/endpoints.json \
             --dry-run \
             --maximum-total-calls 4 \
             --maximum-recovery-calls 1 \
+            --cost-anomaly-usd 0.25 \
             --quality-tier value \
             --output-dir production-validation-artifacts
           python - <<'PY'
           import json
           from pathlib import Path
+
           root = Path('production-validation-artifacts')
           dry = json.loads((root / 'v5-dry-run.json').read_text())
           runtime = json.loads((root / 'v5-runtime-config.json').read_text())
           snapshot = json.loads((root / 'catalog-snapshot.json').read_text())
+          semantics = json.loads((root / 'task-interpretations.json').read_text())
+          matrix = json.loads((root / 'task-resource-matrix.json').read_text())
+          optimization = json.loads((root / 'v5-optimization.json').read_text())
+          graph = json.loads((root / 'v5-execution-graph.json').read_text())
+
+          signals = semantics['task_signals']
           assert dry['status'] == 'planned-not-executed'
           assert dry['approved_budget']['maximum_total_calls'] == 4
+          assert dry['approved_budget']['maximum_initial_calls'] == 3
           assert dry['approved_budget']['maximum_recovery_calls'] == 1
+          assert dry['approved_budget']['cost_anomaly_usd'] == 0.25
           assert runtime['global_monkey_patching'] is False
           assert runtime['cross_task_history_used'] is False
           assert snapshot['cross_task_history_used'] is False
           assert snapshot['catalog_snapshot_id'] == dry['catalog_snapshot_id']
+          assert signals['closed_book_tabletop_compaction_applied'] is True
+          assert signals['external_evidence_required'] is False
+          assert signals['active_domains'] == ['security']
+          assert signals['active_operations'] == ['analysis', 'decision_comparison']
+          assert len(semantics['interpretations']) == 1
+          assert len(semantics['interpretations'][0]['atomic_work']) == 1
+          assert matrix['matrices'][0]['hard_requirements'] == []
+          assert optimization['solver_status'] in {'OPTIMAL', 'FEASIBLE'}
+          assert 1 <= len(graph['nodes']) <= 3
+          assert len(dry['requests']) == len(graph['nodes'])
+          assert float(graph['estimated_total_cost']) <= 0.25
+          assert not (root / 'v5-planning-infeasibility.json').exists()
           PY
 
       - name: Move production ref
