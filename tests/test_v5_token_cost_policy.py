@@ -11,6 +11,7 @@ import v5_dynamic_configuration as dynamic_configuration  # noqa: E402
 import v5_planner  # noqa: E402
 import v5_production_hardening  # noqa: E402
 import v5_token_cost_policy as token_cost  # noqa: E402
+import v5_truncation_budget_policy as truncation  # noqa: E402
 
 
 def work(work_id="w1", *, machine=False):
@@ -60,18 +61,20 @@ def endpoint():
 
 class TestV5TokenCostPolicy(unittest.TestCase):
     def test_p95_usage_is_below_allowance_and_includes_reasoning(self):
+        truncation.install()
         row = work()
         allowance = legacy_cost.completion_envelope(row, 10000)
         usage = token_cost.estimated_completion_usage(row, 10000)
-        self.assertEqual(allowance, 6290)
-        self.assertEqual(usage, math.ceil((2500 + 1700) * 1.18))
+        self.assertEqual(allowance, 8331)
+        self.assertEqual(usage, 7620)
         self.assertLess(usage, allowance)
         self.assertGreater(usage, 2500 + 1700)
 
     def test_structured_output_receives_larger_usage_reserve(self):
+        truncation.install()
         plain = token_cost.estimated_completion_usage(work(machine=False), 10000)
         structured = token_cost.estimated_completion_usage(work(machine=True), 10000)
-        self.assertEqual(structured, math.ceil((2500 + 1700) * 1.22))
+        self.assertEqual(structured, 7878)
         self.assertGreater(structured, plain)
         self.assertLessEqual(
             structured,
@@ -79,6 +82,7 @@ class TestV5TokenCostPolicy(unittest.TestCase):
         )
 
     def test_cost_estimate_uses_p95_usage_not_max_allowance(self):
+        truncation.install()
         row = work()
         usage = token_cost.estimated_completion_usage(row, 10000)
         expected = round((1086 * 1.25 + usage * 7.50) / 1_000_000, 8)
@@ -88,7 +92,7 @@ class TestV5TokenCostPolicy(unittest.TestCase):
         self.assertLess(actual, old)
 
     def test_candidate_keeps_allowance_and_records_separate_usage(self):
-        token_cost.install()
+        v5_production_hardening.install()
         candidate = v5_planner._candidate_for(
             "interpretation-a",
             ["w1#0"],
@@ -101,11 +105,8 @@ class TestV5TokenCostPolicy(unittest.TestCase):
         )
         self.assertIsNotNone(candidate)
         profile = candidate.parameter_profile
-        self.assertEqual(profile["recommended_output_allowance_tokens"], 6290)
-        self.assertEqual(
-            profile["estimated_completion_usage_tokens"],
-            math.ceil((2500 + 1700) * 1.18),
-        )
+        self.assertEqual(profile["recommended_output_allowance_tokens"], 8331)
+        self.assertEqual(profile["estimated_completion_usage_tokens"], 7620)
         self.assertGreater(
             profile["recommended_output_allowance_tokens"],
             profile["estimated_completion_usage_tokens"],
@@ -117,7 +118,7 @@ class TestV5TokenCostPolicy(unittest.TestCase):
         )
 
     def test_bundle_discount_is_applied_to_usage_audit(self):
-        token_cost.install()
+        v5_production_hardening.install()
         candidate = v5_planner._candidate_for(
             "interpretation-a",
             ["w1#0", "w2#0"],
@@ -132,9 +133,7 @@ class TestV5TokenCostPolicy(unittest.TestCase):
             [],
             bundle_discount=0.84,
         )
-        expected = math.ceil(
-            2 * math.ceil((2500 + 1700) * 1.18) * 0.84
-        )
+        expected = math.ceil(2 * 7620 * 0.84)
         self.assertEqual(
             candidate.parameter_profile["estimated_completion_usage_tokens"],
             expected,
@@ -151,6 +150,14 @@ class TestV5TokenCostPolicy(unittest.TestCase):
         self.assertIs(
             v5_planner._estimated_cost,
             token_cost.p95_usage_estimated_cost,
+        )
+        self.assertIs(
+            token_cost.estimated_completion_usage,
+            truncation.estimated_completion_usage,
+        )
+        self.assertIs(
+            legacy_cost.completion_envelope,
+            truncation.completion_envelope,
         )
         self.assertIs(
             v5_planner._candidate_for,
