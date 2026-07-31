@@ -9,13 +9,13 @@
     "international_relations": ["外交", "国际关系", "地缘政治", "国务卿", "外长", "制裁", "乌克兰", "俄罗斯", "北约", "geopolit", "foreign policy", "foreign minister", "secretary of state", "sanction"],
     "legal": ["法律", "法规", "诉讼", "合同", "判例", "合规", "监管", "legal", "law", "regulation", "contract", "compliance"],
     "medical": ["医疗", "健康", "疾病", "诊断", "治疗", "药物", "临床", "medical", "health", "clinical", "diagnosis", "treatment"],
-    "security": ["安全", "网络安全", "威胁", "攻击", "漏洞", "红队", "security", "cyber", "threat", "attack", "vulnerability", "red team"],
+    "security": ["网络安全", "信息安全", "威胁建模", "攻击面", "安全漏洞", "红队测试", "cybersecurity", "cyber threat", "attack surface", "security vulnerability", "red team"],
     "supply_chain": ["供应链", "物流", "库存", "采购", "交付", "产能", "supply chain", "logistics", "inventory", "procurement"],
     "public_policy": ["公共政策", "政策评估", "政府", "财政政策", "社会治理", "public policy", "government", "policy evaluation"],
-    "coding": ["code", "coding", "software", "api", "bug", "debug", "python", "javascript", "sql", "代码", "编程", "接口", "仓库", "故障", "调试", "软件"],
+    "coding": ["code", "coding", "software", "api", "bug", "debug", "python", "javascript", "sql", "代码", "编程", "接口", "仓库", "调试", "软件"],
     "math": ["math", "proof", "equation", "optimization", "statistics", "probability", "monte carlo", "simulation", "modeling", "数学", "证明", "优化", "统计", "概率", "蒙特卡罗", "仿真", "建模"],
-    "research": ["research", "evidence", "source", "latest", "current", "compare", "market", "policy", "benchmark", "news", "研究", "证据", "来源", "最新", "比较", "市场", "政策", "基准", "新闻", "调查"],
-    "business": ["business", "investment", "revenue", "profit", "strategy", "finance", "economics", "pricing", "商业", "投资", "营收", "利润", "战略", "金融", "财务", "经济", "定价", "经营", "回报", "企业", "餐饮", "项目"],
+    "research": ["research", "evidence", "source", "latest", "current data", "benchmark", "literature", "news", "研究", "证据", "来源", "最新数据", "基准", "文献", "新闻", "调查研究"],
+    "business": ["business", "investment", "revenue", "profit", "strategy", "finance", "economics", "pricing", "cost", "price", "budget", "purchase", "device", "subscription", "commercial decision", "商业", "投资", "营收", "利润", "战略", "金融", "财务", "经济", "定价", "经营", "回报", "企业", "餐饮", "项目", "成本", "价格", "预算", "套餐", "设备", "购买", "月费", "消费决策"],
     "creative": ["creative", "story", "poem", "script", "copywriting", "design", "创意", "故事", "诗", "剧本", "文案", "设计"]
   },
   "description_terms": {
@@ -28,7 +28,7 @@
     "coding": ["code", "coding", "software", "programming", "developer", "debug", "security"],
     "math": ["math", "mathematical", "reasoning", "science", "proof", "statistics", "simulation"],
     "research": ["research", "knowledge", "evidence", "long context", "document", "analysis"],
-    "business": ["analysis", "business", "finance", "economic", "enterprise", "strategy", "investment"],
+    "business": ["analysis", "business", "finance", "economic", "enterprise", "strategy", "investment", "consumer", "cost", "pricing"],
     "creative": ["creative", "writing", "story", "style", "design"],
     "general": ["general", "reasoning", "analysis"]
   },
@@ -46,7 +46,7 @@
     "creative": {"core": "创意策略与内容设计专家", "cross": "受众体验与传播效果专家", "red": "品牌风险与可执行性审查专家", "judge": "创意方案与传播决策评审官"},
     "general": {"core": "问题领域主分析专家", "cross": "交叉验证与方法补充专家", "red": "反证、风险与边界条件审计专家", "judge": "综合决策与质量评审官"}
   },
-  "high_stakes": ["medical", "health", "legal", "law", "security", "military", "war", "compliance", "safety", "risk", "医疗", "健康", "法律", "安全", "军事", "战争", "合规", "风险", "监管", "外交", "制裁"],
+  "high_stakes": ["medical", "clinical", "diagnosis", "treatment", "legal advice", "lawsuit", "criminal", "cybersecurity", "military", "war", "regulatory compliance", "public safety", "医疗", "临床", "诊断", "治疗", "法律意见", "诉讼", "刑事", "网络安全", "军事", "战争", "监管合规", "公共安全", "制裁", "外交危机"],
   "long_context": ["document", "report", "contract", "repository", "codebase", "full text", "文档", "报告", "合同", "全文", "代码库", "整个仓库"],
   "chinese_authors": []
 }
