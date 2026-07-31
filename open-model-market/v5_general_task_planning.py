@@ -1,14 +1,9 @@
 """Explicit semantic correction for self-contained V5 planning tasks.
 
-The base classifier intentionally favors conservative decomposition. That is
-appropriate for open-ended regulated work, but it can over-read generic words
-such as ``risk``, ``evidence`` and ``report`` in short closed-book tasks. The
-result is unnecessary research/forecast/red-team hard gates and an execution
-graph that cannot fit the admitted call and anomaly budgets.
-
-This module is an explicit production dependency. It does not patch global
-functions. Callers select these functions directly and may inject the semantic
-compiler into ``resource_matrix.compile_v5_task_resources``.
+Short, low-risk decisions may be compacted. High-stakes closed-book tabletop
+exercises are never collapsed into one model call: safety analysis, operational
+coordination, independent red-team review and final synthesis remain separate
+work units so the task-global company-diversity constraint has real effect.
 """
 from __future__ import annotations
 
@@ -18,6 +13,8 @@ from typing import Any
 
 import model_market
 import task_semantic_compiler as semantics
+import v5_closed_book_safety as closed_book_safety
+import v5_task_delivery_contract as task_delivery_contract
 
 _ORIGINAL_CLASSIFY_TASK = model_market.classify_task
 _ORIGINAL_COMPILE_TASK_SEMANTICS = semantics.compile_task_semantics
@@ -27,9 +24,10 @@ _STRONG_HIGH_STAKES = (
     "法律", "诉讼", "判例", "刑事", "合规", "监管处罚", "合同争议",
     "网络安全", "漏洞利用", "攻击路径", "恶意软件", "数据泄露",
     "军事", "战争", "制裁", "外交危机", "生命安全", "人身安全",
+    "应急", "撤离", "封控", "配电", "火灾", "报警", "失联",
     "medical", "clinical", "diagnosis", "treatment", "medication",
     "legal", "lawsuit", "criminal", "compliance", "cybersecurity",
-    "exploit", "malware", "military", "war", "sanction",
+    "exploit", "malware", "military", "war", "sanction", "emergency",
 )
 _LONG_CONTEXT_PATTERNS = (
     r"整个(?:代码库|仓库|文档)", r"完整(?:代码库|仓库|文档|合同)全文",
@@ -59,8 +57,8 @@ _FORECAST_PATTERNS = (
     r"sensitivity", r"forecast", r"future", r"horizon",
 )
 _CLOSED_BOOK_PATTERNS = (
-    r"仅限题面", r"仅依据题面", r"不联网", r"不调用工具",
-    r"不编造(?:电话号码|外部制度|设备状态|人员位置|专业检测结论)",
+    r"仅限题面", r"仅依据题面", r"只依据题面", r"不联网", r"不调用工具",
+    r"不编造(?:电话号码|外部制度|设备状态|人员位置|专业检测结论|耗电|续航)",
     r"closed[- ]book", r"self[- ]contained", r"no\s+external\s+tools?",
 )
 _TABLETOP_PATTERNS = (
@@ -89,10 +87,19 @@ def _external_evidence_requested(text: str) -> bool:
 
 def _closed_book_tabletop_task(task: str) -> bool:
     return bool(
-        len(task) <= 8_000
+        len(task) <= 12_000
         and _matches_any(task, _CLOSED_BOOK_PATTERNS)
         and _matches_any(task, _TABLETOP_PATTERNS)
         and not _external_evidence_requested(task)
+    )
+
+
+def _explicit_delivery_breadth(task: str) -> int:
+    markdown = task_delivery_contract.extract_explicit_markdown_contract(task)
+    exact_json = task_delivery_contract.extract_explicit_contract(task)
+    return max(
+        len(markdown.get("exact_markdown_headings", [])),
+        len(exact_json.get("exact_top_level_fields", [])),
     )
 
 
@@ -112,6 +119,7 @@ def classify_task(task: str, run: Any) -> model_market.TaskProfile:
     tabletop = _closed_book_tabletop_task(task)
     high_stakes = _strong_high_stakes(task)
     long_context = _explicit_long_context(task)
+    delivery_breadth = _explicit_delivery_breadth(task)
 
     domains = list(base.domains)
     if tabletop:
@@ -133,7 +141,10 @@ def classify_task(task: str, run: Any) -> model_market.TaskProfile:
         and _matches_any(task, _DECISION_PATTERNS)
         and _matches_any(task, _QUANTITATIVE_PATTERNS)
     )
-    if tabletop:
+    if tabletop and (high_stakes or delivery_breadth >= 8):
+        complexity = "complex"
+        complexity_score = max(5, int(base.complexity_score))
+    elif tabletop:
         complexity = "medium"
         complexity_score = 3
     elif compact:
@@ -227,7 +238,7 @@ def _compact_interpretation(profile: Any, run: Any, baseline: dict[str, Any]) ->
     interpretation = semantics.TaskInterpretation(
         semantics._digest("interpretation", [strategy, signature]),
         strategy,
-        "短文本、自包含、非高风险的定量决策采用单一整合节点，避免重复拆解和无收益的独立副本。",
+        "短文本、自包含、非高风险的定量决策采用单一整合节点。",
         (work,),
         semantics._metrics([work], operation_names, domain_names),
     )
@@ -260,119 +271,198 @@ def _compact_interpretation(profile: Any, run: Any, baseline: dict[str, Any]) ->
     return result
 
 
-def _tabletop_interpretation(profile: Any, run: Any, baseline: dict[str, Any]) -> dict[str, Any]:
-    """Compile one integrated safety node for a closed-book tabletop exercise.
-
-    Safety discipline, red-team challenge and scenario reasoning remain explicit
-    prompt/output requirements. They are not promoted to independent hard-gated
-    work units because the task forbids external evidence and asks one integrated
-    operational response under a strict admitted call budget.
-    """
-    task = " ".join(semantics._INPUT_RE.sub(" ", run.task).split())
-    structured = any(
-        token in task.casefold()
-        for token in ("json", "schema", "机器可读", "严格字段", "response_format")
-    )
-    domains: dict[str, float] = {"security": 0.88}
-    for domain in profile.domains:
-        if domain in {"legal", "medical", "public_policy"}:
-            domains[domain] = max(domains.get(domain, 0.0), 0.62)
-    operations: dict[str, float] = {
-        "analysis": 0.90,
-        "decision_comparison": 0.86,
+def _strict_work(work: semantics.AtomicWork, task: str) -> semantics.AtomicWork:
+    data = work.to_dict()
+    data["importance"] = max(0.95, float(data["importance"]))
+    data["error_cost"] = max(0.95, float(data["error_cost"]))
+    data["prompt_requirements"] = {
+        **dict(data["prompt_requirements"]),
+        "scope_control": 0.99,
+        "uncertainty_calibration": 0.99,
+        "evidence_discipline": 0.98,
+        "structured_delivery": 0.98,
     }
+    data["reasoning_requirements"] = {
+        **dict(data["reasoning_requirements"]),
+        "reasoning_enabled": True,
+        "depth": 0.97,
+        "verification": 0.96,
+        "counterfactual": max(0.72, float(data["reasoning_requirements"].get("counterfactual", 0.0))),
+    }
+    data["output_contract"] = {
+        **dict(data["output_contract"]),
+        **closed_book_safety.strict_contract_metadata(task),
+        "must_separate_fact_assumption_inference": True,
+    }
+    return semantics.AtomicWork(**data)
+
+
+def _compact_tabletop_interpretation(
+    profile: Any,
+    run: Any,
+    baseline: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep a single node only for genuinely low-risk, short tabletops."""
+    task = " ".join(semantics._INPUT_RE.sub(" ", run.task).split())
+    domains = {"security": 0.82}
+    operations = {"analysis": 0.82, "decision_comparison": 0.78}
     work = semantics._make_work(
         task,
         "analysis",
         domains,
         operations,
         profile,
-        structured,
-        "在一个整合工作单元中完成闭卷应急时间线、风险链、决策树、通信、升级、失败模式、移交和红队反证",
+        False,
+        "整合低风险闭卷时间线、行动边界和结束条件",
     )
-    work_data = work.to_dict()
-    work_data["importance"] = 1.0
-    work_data["error_cost"] = max(float(work_data["error_cost"]), 0.92)
-    work_data["prompt_requirements"] = {
-        **dict(work_data["prompt_requirements"]),
-        "scope_control": 0.99,
-        "uncertainty_calibration": 0.97,
-        "structured_delivery": 0.96,
-        "scenario_analysis": 0.92,
-        "adversarial_challenge": 0.92,
-        "evidence_discipline": 0.90,
-    }
-    work_data["reasoning_requirements"] = {
-        **dict(work_data["reasoning_requirements"]),
-        "reasoning_enabled": True,
-        "depth": 0.95,
-        "exploration": 0.72,
-        "verification": 0.88,
-        "counterfactual": 0.68,
-        "causal_reasoning": 0.72,
-    }
-    contract = dict(work_data["output_contract"])
-    contract["required_fields"] = sorted(
-        set(contract.get("required_fields", []))
-        | {
-            "known_facts_assumptions_inferences_unknowns",
-            "action_timeline",
-            "risk_chains",
-            "decision_tree",
-            "communication_sequence",
-            "access_isolation_lighting_power_records",
-            "veto_evacuation_lockdown_escalation_conditions",
-            "failure_modes",
-            "resource_exhaustion_alternatives",
-            "handoff_or_termination_conditions",
-            "corrective_actions_24h_7d",
-            "red_team_challenges",
-            "unresolved_uncertainties",
+    strategy = "closed_book_tabletop_compact_low_risk"
+    interpretation = semantics.TaskInterpretation(
+        semantics._digest("interpretation", [strategy, work.work_id]),
+        strategy,
+        "仅低风险、短交付闭卷推演允许单节点整合。",
+        (work,),
+        semantics._metrics([work], list(operations), list(domains)),
+    )
+    result = dict(baseline)
+    signals = dict(result.get("task_signals", {}))
+    signals.update(
+        {
+            "complexity": profile.complexity,
+            "high_stakes": False,
+            "long_context": False,
+            "active_domains": list(domains),
+            "active_operations": list(operations),
+            "closed_book_tabletop_compaction_applied": True,
+            "closed_book_tabletop_decomposition_applied": False,
+            "external_evidence_required": False,
+            "minimum_planned_work_units": 1,
         }
     )
-    contract["machine_readable_required"] = structured
-    contract["must_separate_fact_assumption_inference"] = True
-    work_data["output_contract"] = contract
-    work_data["independence_requirements"] = {
-        "independent_execution_preferred": False,
+    result["architecture"] = "closed-book-tabletop-low-risk-compaction"
+    result["task_signals"] = signals
+    result["interpretations"] = [interpretation.to_dict()]
+    return result
+
+
+def _high_stakes_tabletop_interpretation(
+    profile: Any,
+    run: Any,
+    baseline: dict[str, Any],
+) -> dict[str, Any]:
+    """Compile four company-diverse work units for high-stakes tabletops."""
+    task = " ".join(semantics._INPUT_RE.sub(" ", run.task).split())
+    domains = {"security": 0.96}
+    if "legal" in profile.domains:
+        domains["legal"] = 0.64
+
+    hazard = _strict_work(
+        semantics._make_work(
+            task,
+            "analysis",
+            domains,
+            {"analysis": 0.96, "causal_reasoning": 0.78},
+            profile,
+            False,
+            "独立识别生命安全风险链、危险区、禁止动作、触发条件和未知项；不得提出单人进入或检查未知危险区",
+        ),
+        task,
+    )
+    coordination = _strict_work(
+        semantics._make_work(
+            task,
+            "decision_comparison",
+            domains,
+            {"analysis": 0.86, "decision_comparison": 0.95},
+            profile,
+            False,
+            "独立制定时间线、通信降级、门禁核验、人员清点、照明资源、记录和移交规则；不得虚构续航或人员状态",
+        ),
+        task,
+    )
+    red_team = _strict_work(
+        semantics._make_work(
+            task,
+            "adversarial_reasoning",
+            {"security": 0.98},
+            {"adversarial_reasoning": 0.99},
+            profile,
+            False,
+            "独立寻找危险建议、题面外数字、未经证实的安全结论、失败模式重复和交付契约遗漏",
+        ),
+        task,
+    )
+    red_data = red_team.to_dict()
+    red_data["independence_requirements"] = {
+        "independent_execution_preferred": True,
         "minimum_independent_copies": 1,
-        "different_model_required": False,
-        "different_model_family_preferred": False,
-        "different_provider_preferred": False,
+        "different_model_required": True,
+        "different_model_family_preferred": True,
+        "different_provider_preferred": True,
     }
-    work = semantics.AtomicWork(**work_data)
-    operation_names = list(operations)
+    red_team = semantics.AtomicWork(**red_data)
+
+    synthesis = _strict_work(
+        semantics._make_work(
+            task,
+            "synthesis",
+            domains,
+            {"synthesis": 1.0},
+            profile,
+            False,
+            "只依据题面与三个上游工作单元，按用户显式交付契约形成最终报告；删除任何题面外数字、危险动作或未经证实的状态",
+            (hazard.work_id, coordination.work_id, red_team.work_id),
+        ),
+        task,
+    )
+    works = [hazard, coordination, red_team, synthesis]
+    operation_names = [
+        "analysis",
+        "decision_comparison",
+        "adversarial_reasoning",
+        "synthesis",
+    ]
     domain_names = list(domains)
-    strategy = "closed_book_tabletop_integrated"
+    strategy = "closed_book_tabletop_high_stakes_decomposed"
     signature = semantics._digest(
         "signature",
-        [(sorted(work.domain_requirements), sorted(work.operation_requirements), work.dependencies)],
+        [
+            (
+                sorted(work.domain_requirements),
+                sorted(work.operation_requirements),
+                work.dependencies,
+            )
+            for work in works
+        ],
     )
     interpretation = semantics.TaskInterpretation(
         semantics._digest("interpretation", [strategy, signature]),
         strategy,
-        "闭卷应急题面只允许使用给定事实，因此用单一高纪律整合节点完成全部章节；安全约束和红队要求保留在提示与交付契约中，不制造外部证据或独立预测硬门。",
-        (work,),
-        semantics._metrics([work], operation_names, domain_names),
+        "高风险闭卷任务必须由安全分析、运营协调、独立红队和最终综合四个不同公司节点完成；禁止单节点压缩。",
+        tuple(works),
+        semantics._metrics(works, operation_names, domain_names),
     )
 
     result = dict(baseline)
     signals = dict(result.get("task_signals", {}))
     signals.update(
         {
-            "complexity": profile.complexity,
-            "high_stakes": bool(profile.high_stakes),
+            "complexity": "complex",
+            "high_stakes": True,
             "long_context": False,
             "requested_context": int(profile.requested_context),
             "active_domains": domain_names,
             "active_operations": operation_names,
-            "closed_book_tabletop_compaction_applied": True,
-            "cost_performance_compaction_applied": True,
+            "closed_book_tabletop_compaction_applied": False,
+            "cost_performance_compaction_applied": False,
+            "closed_book_tabletop_decomposition_applied": True,
             "external_evidence_required": False,
-            "minimum_planned_work_units": 1,
+            "minimum_planned_work_units": 4,
+            "minimum_distinct_model_companies": 4,
+            "high_stakes_degraded_delivery_allowed": False,
+            "explicit_delivery_section_count": _explicit_delivery_breadth(task),
         }
     )
-    result["architecture"] = "task-semantic-compilation-with-explicit-closed-book-tabletop-compaction"
+    result["architecture"] = "closed-book-tabletop-high-stakes-four-work-decomposition"
     result["task_signals"] = signals
     result["interpretations"] = [interpretation.to_dict()]
     result["domain_scores"] = {
@@ -384,7 +474,7 @@ def _tabletop_interpretation(profile: Any, run: Any, baseline: dict[str, Any]) -
         **dict(result.get("operation_scores", {})),
         "evidence_validation": 0.0,
         "forecasting": 0.0,
-        **{operation: round(weight, 6) for operation, weight in operations.items()},
+        **{operation: 1.0 for operation in operation_names},
     }
     return result
 
@@ -397,7 +487,9 @@ def compile_task_semantics(profile: Any, run: Any, max_interpretations: int = 3)
     )
     task = " ".join(semantics._INPUT_RE.sub(" ", run.task).split())
     if _closed_book_tabletop_task(task):
-        return _tabletop_interpretation(profile, run, baseline)
+        if bool(profile.high_stakes) or _explicit_delivery_breadth(task) >= 8:
+            return _high_stakes_tabletop_interpretation(profile, run, baseline)
+        return _compact_tabletop_interpretation(profile, run, baseline)
     if not _compact_decision_task(profile, task):
         return baseline
     return _compact_interpretation(profile, run, baseline)
