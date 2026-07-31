@@ -274,6 +274,7 @@ jobs:
           retention-days: 30
 
       - name: Publish authoritative V5 final status
+        id: publish_final
         if: always() && steps.final.outcome == 'success'
         continue-on-error: true
         run: |
@@ -282,9 +283,11 @@ jobs:
       - name: Mark failed execution
         if: >-
           always() &&
-          ((steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present != 'true') ||
+          steps.prepare.outputs.accepted == 'true' &&
+          (steps.secret.outputs.present != 'true' ||
            steps.final.outcome == 'failure' ||
            steps.final.outputs.status == 'FAIL' ||
            steps.attest.outcome != 'success' ||
-           steps.upload_attestation.outcome != 'success')
+           steps.upload_attestation.outcome != 'success' ||
+           steps.publish_final.outcome != 'success')
         run: exit 1
