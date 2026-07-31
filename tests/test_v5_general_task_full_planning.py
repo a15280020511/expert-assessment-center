@@ -125,5 +125,17 @@ class V5GeneralTaskFullPlanningTests(unittest.TestCase):
         self.assertIn("planning_raw_budget_usd", report["ticket_limits"])
 
 
+def explicit_suite() -> unittest.TestSuite:
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(
+        V5GeneralTaskFullPlanningTests
+    )
+    if suite.countTestCases() != 4:
+        raise RuntimeError(
+            f"full-planning regression suite count mismatch: {suite.countTestCases()}"
+        )
+    return suite
+
+
 if __name__ == "__main__":
-    unittest.main()
+    result = unittest.TextTestRunner(verbosity=2).run(explicit_suite())
+    raise SystemExit(0 if result.wasSuccessful() else 1)
