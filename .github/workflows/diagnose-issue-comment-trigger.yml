@@ -1,0 +1,28 @@
+name: Diagnose Issue Comment Trigger
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  diagnose:
+    if: >-
+      github.event.issue.number == 126 &&
+      github.event.comment.body == '/diagnose-issue-comment-trigger'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Publish trigger evidence
+        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## ISSUE_COMMENT_TRIGGER_OK\n\n- Run: \`${context.runId}\`\n- Actor: \`${context.actor}\`\n- Repository owner: \`${context.repo.owner}\``
+            })
