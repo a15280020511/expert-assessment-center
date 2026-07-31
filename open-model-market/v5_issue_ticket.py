@@ -13,6 +13,52 @@ V5_MAXIMUM_MODEL_CALLS = 16
 V5_MAXIMUM_RECOVERY_CALLS = 4
 
 
+def _path_text(path: Any) -> str:
+    result = ""
+    for item in path:
+        if isinstance(item, int):
+            result += f"[{item}]"
+        else:
+            result += ("." if result else "") + str(item)
+    return result
+
+
+def _v5_schema_error(error: Any) -> str:
+    """Correct obsolete fixed-team wording in the shared parser's error surface."""
+    path = _path_text(error.absolute_path)
+    validator = error.validator
+    if path == "approved_budget" and validator == "additionalProperties":
+        return (
+            "approved_budget may contain only calls, maximum_recovery_calls, "
+            "cost_policy, and optional cost_anomaly_usd."
+        )
+    if path == "approved_budget" and validator == "type":
+        return "approved_budget must be a V5 budget object."
+    if validator == "required" and isinstance(error.instance, Mapping):
+        missing = [name for name in error.validator_value if name not in error.instance]
+        if missing:
+            return "; ".join(f"{path + '.' if path else ''}{name} is required." for name in missing)
+    if path == "approved_budget.calls":
+        if validator == "type":
+            return "approved_budget.calls must be an integer."
+        return "approved_budget.calls must be between 4 and 16."
+    if path == "approved_budget.maximum_recovery_calls":
+        if validator == "type":
+            return "approved_budget.maximum_recovery_calls must be an integer."
+        return "approved_budget.maximum_recovery_calls must be between 0 and 4."
+    if path == "approved_budget.cost_policy":
+        return "approved_budget.cost_policy must be unbounded_with_anomaly_guard."
+    if path == "approved_budget.cost_anomaly_usd":
+        return "approved_budget.cost_anomaly_usd must be a finite positive number at most 100."
+    return hardened.base._V5_ORIGINAL_FORMAT_SCHEMA_ERROR(error)
+
+
+def _install_schema_messages() -> None:
+    if not hasattr(hardened.base, "_V5_ORIGINAL_FORMAT_SCHEMA_ERROR"):
+        hardened.base._V5_ORIGINAL_FORMAT_SCHEMA_ERROR = hardened.base._format_schema_error
+    hardened.base._format_schema_error = _v5_schema_error
+
+
 def _reject(status: dict[str, Any], reason: str) -> None:
     errors = list(status.get("errors") or [])
     if reason not in errors:
@@ -23,6 +69,7 @@ def _reject(status: dict[str, Any], reason: str) -> None:
 
 
 def prepare(args: argparse.Namespace) -> int:
+    _install_schema_messages()
     result = hardened.prepare(args)
     root = Path(args.output_dir)
     status_path = root / "ticket-status.json"
