@@ -24,8 +24,8 @@ class V5ProductionCutoverTests(unittest.TestCase):
         report = "# V5生产报告\n\n" + ("完整结论、约束、风险、实施方案和否决条件。" * 20)
         self._write(root, "ticket-status.json", {"accepted": True, "task_id": "task-v5-production"})
         self._write(root, "production-runtime.json", {
-            "fallback_policy": "fail-closed-no-v3-fallback",
-            "v3_preserved_for_manual_rollback": True,
+            "fallback_policy": "fail-closed-no-alternate-runtime",
+            "legacy_runtime_present": False,
         })
         self._write(root, "expert-team-result.json", {
             "runtime_version": "v5-r8",
@@ -33,7 +33,8 @@ class V5ProductionCutoverTests(unittest.TestCase):
             "completion_mode": "complete",
             "final_answer": report,
             "executor": "v5-r8-fault-aware",
-            "v3_fallback_used": False,
+            "fallback_used": False,
+            "legacy_runtime_present": False,
         })
         self._write(root, "v5-execution-summary.json", {
             "status": "success",
@@ -45,7 +46,11 @@ class V5ProductionCutoverTests(unittest.TestCase):
         })
         self._write(root, "v5-execution-graph.json", {
             "nodes": [
-                {"node_id": f"node-{index}", "model": f"model-{index}", "provider_endpoint": f"model-{index}@provider-{index}"}
+                {
+                    "node_id": f"node-{index}",
+                    "model": f"model-{index}",
+                    "provider_endpoint": f"model-{index}@provider-{index}",
+                }
                 for index in range(5)
             ],
             "final_nodes": ["node-4"],
@@ -80,17 +85,29 @@ class V5ProductionCutoverTests(unittest.TestCase):
             self.assertEqual(result["checks"]["model_calls"], 5)
             self.assertEqual(result["checks"]["node_count"], 5)
 
-    def test_v3_fallback_evidence_fails_closed(self):
+    def test_alternate_runtime_fallback_evidence_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._fixture(root)
             result_path = root / "expert-team-result.json"
             result = json.loads(result_path.read_text(encoding="utf-8"))
-            result["v3_fallback_used"] = True
+            result["fallback_used"] = True
             result_path.write_text(json.dumps(result), encoding="utf-8")
             audited = auditor.audit(root, execute_outcome="success", publish_outcome="success")
             self.assertEqual(audited["status"], "FAIL")
             self.assertTrue(any("fallback" in reason.casefold() for reason in audited["failures"]))
+
+    def test_legacy_runtime_presence_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._fixture(root)
+            runtime_path = root / "production-runtime.json"
+            runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+            runtime["legacy_runtime_present"] = True
+            runtime_path.write_text(json.dumps(runtime), encoding="utf-8")
+            audited = auditor.audit(root, execute_outcome="success", publish_outcome="success")
+            self.assertEqual(audited["status"], "FAIL")
+            self.assertTrue(any("legacy runtime" in reason.casefold() for reason in audited["failures"]))
 
     def test_call_ceiling_is_enforced(self):
         with tempfile.TemporaryDirectory() as directory:
