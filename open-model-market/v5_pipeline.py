@@ -15,6 +15,10 @@ from execution_graph import ExecutionGraph, GraphLimits
 from resource_matrix import compile_v5_task_resources
 from task_resource_artifacts import write_task_resource_artifacts
 from v5_benchmark import planning_benchmark, write_benchmark
+from v5_general_task_planning import (
+    classify_task as classify_production_task,
+    compile_task_semantics as compile_production_task_semantics,
+)
 from v5_planner import fetch_live_endpoint_payloads
 from v5_planning_diagnostics import (
     build_candidate_generation_failure_report,
@@ -233,10 +237,14 @@ def main(
     total_calls, recovery_calls, planning_nodes, anomaly_budget = _validated_budget(args, run, runtime)
     _write_json(output / "v5-runtime-config.json", runtime.describe())
 
-    profile = market.classify_task(run.task, run)
+    profile = classify_production_task(run.task, run)
     models, catalog_source = market.fetch_catalog(run)
     ranked = _rank_v5_models(models, profile, run)
-    resources = compile_v5_task_resources(profile, run)
+    resources = compile_v5_task_resources(
+        profile,
+        run,
+        semantic_compiler=compile_production_task_semantics,
+    )
     write_task_resource_artifacts(resources, output)
 
     if args.endpoint_file:

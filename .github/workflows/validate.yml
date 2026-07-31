@@ -112,13 +112,13 @@ jobs:
         run: |
           set -o pipefail
           python tools/run_v5_p0_regressions.py 2>&1 | tee p0-regressions.log
-          grep -q "REGISTERED V5GeneralTaskPlanningTests: 5" p0-regressions.log
+          grep -q "REGISTERED V5GeneralTaskPlanningTests: 6" p0-regressions.log
           grep -q "REGISTERED V5GeneralTaskFullPlanningTests: 4" p0-regressions.log
           grep -q "REGISTERED V5PlanningScenarioMatrixTests: 4" p0-regressions.log
           grep -q "REGISTERED V5QualityStatusIntegrityTests: 6" p0-regressions.log
           grep -q "REGISTERED V5EmptyOutputRecoveryTests: 6" p0-regressions.log
-          grep -q "REGISTERED TOTAL: 25" p0-regressions.log
-          grep -q "P0 REGRESSION RESULT: run=25, passed=25, failures=0, errors=0, skipped=0" p0-regressions.log
+          grep -q "REGISTERED TOTAL: 26" p0-regressions.log
+          grep -q "P0 REGRESSION RESULT: run=26, passed=26, failures=0, errors=0, skipped=0" p0-regressions.log
       - name: Run deterministic V5 end-to-end dry-run
         run: |
           python open-model-market/v5_pipeline.py \

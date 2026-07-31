@@ -8,9 +8,11 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-import model_market  # noqa: E402
-from task_semantic_compiler import compile_task_semantics  # noqa: E402
 from v5_budget_runtime_parity import planning_raw_budget_usd  # noqa: E402
+from v5_general_task_planning import (  # noqa: E402
+    classify_task,
+    compile_task_semantics,
+)
 from v5_pipeline import _planning_limits  # noqa: E402
 from v5_runtime import ProductionRuntime, RuntimeConfig  # noqa: E402
 
@@ -40,7 +42,7 @@ class V5ConsumerDecisionBudgetTests(unittest.TestCase):
 
     def test_consumer_failure_risk_does_not_become_coding_research_or_high_stakes(self) -> None:
         run = self.run_config()
-        profile = model_market.classify_task(REAL_TASK, run)
+        profile = classify_task(REAL_TASK, run)
         self.assertEqual("business", profile.primary_domain)
         self.assertIn("business", profile.domains)
         self.assertNotIn("coding", profile.domains)
@@ -49,7 +51,7 @@ class V5ConsumerDecisionBudgetTests(unittest.TestCase):
 
     def test_real_task_has_a_three_initial_call_interpretation(self) -> None:
         run = self.run_config()
-        profile = model_market.classify_task(REAL_TASK, run)
+        profile = classify_task(REAL_TASK, run)
         compilation = compile_task_semantics(profile, run)
         signals = compilation["task_signals"]
         self.assertEqual(["business"], signals["active_domains"])
@@ -61,13 +63,9 @@ class V5ConsumerDecisionBudgetTests(unittest.TestCase):
             for interpretation in compilation["interpretations"]
         )
         self.assertLessEqual(minimum_calls, 3)
-        self.assertTrue(
-            any(
-                interpretation["strategy"] == "domain_decomposition"
-                and len(interpretation["atomic_work"]) <= 3
-                for interpretation in compilation["interpretations"]
-            )
-        )
+        self.assertEqual(1, len(compilation["interpretations"]))
+        self.assertEqual(1, len(compilation["interpretations"][0]["atomic_work"]))
+        self.assertTrue(signals["cost_performance_compaction_applied"])
 
     def test_planner_uses_runtime_risk_multiplier(self) -> None:
         runtime = ProductionRuntime(

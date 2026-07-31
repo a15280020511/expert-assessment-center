@@ -6,10 +6,8 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-import model_market  # noqa: E402
 import resource_matrix  # noqa: E402
-import v5_candidate_diversity  # noqa: E402
-import v5_production_hardening  # noqa: E402
+import v5_general_task_planning  # noqa: E402
 import v5_value_optimizer  # noqa: E402
 from execution_graph import ExecutionGraph, GraphLimits  # noqa: E402
 from tests.test_v5_planner_executor import TestV5PlannerExecutor  # noqa: E402
@@ -19,12 +17,10 @@ from v5_planning_diagnostics import build_infeasibility_report  # noqa: E402
 class V5GeneralTaskFullPlanningTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        v5_production_hardening.install()
-        v5_candidate_diversity.install()
         cls.fixture = TestV5PlannerExecutor()
 
     @staticmethod
-    def run(task: str):
+    def run_config(task: str):
         return SimpleNamespace(
             task=task,
             minimum_context_length=16_384,
@@ -32,9 +28,13 @@ class V5GeneralTaskFullPlanningTests(unittest.TestCase):
         )
 
     def candidate_bundle(self, task: str):
-        run = self.run(task)
-        profile = model_market.classify_task(task, run)
-        resources = resource_matrix.compile_v5_task_resources(profile, run)
+        run = self.run_config(task)
+        profile = v5_general_task_planning.classify_task(task, run)
+        resources = resource_matrix.compile_v5_task_resources(
+            profile,
+            run,
+            semantic_compiler=v5_general_task_planning.compile_task_semantics,
+        )
         compiled_market = v5_value_optimizer.compile_model_endpoint_market(
             self.fixture.models(),
             resources,
@@ -82,6 +82,9 @@ class V5GeneralTaskFullPlanningTests(unittest.TestCase):
         self.assertLessEqual(len(graph.nodes), 2)
         self.assertGreaterEqual(len(graph.nodes), 1)
         self.assertLessEqual(optimization["selected_effective_cost_usd"], 0.25 / 1.35)
+        self.assertTrue(
+            resources["semantic_input_policy"]["semantic_compiler_injected_explicitly"]
+        )
 
     def test_job_choice_task_has_a_feasible_low_cost_graph(self):
         task = (
@@ -89,11 +92,14 @@ class V5GeneralTaskFullPlanningTests(unittest.TestCase):
             "计算净收入、单位工时收入、三年收入，做悲观基准乐观情景、现金流风险分析，"
             "并给出转岗门槛和90天行动方案。"
         )
-        profile, _, _, optimization = self.plan(task)
+        profile, resources, _, optimization = self.plan(task)
         graph = ExecutionGraph.from_mapping(optimization["execution_graph"])
         self.assertFalse(profile.high_stakes)
         self.assertLessEqual(len(graph.nodes), 2)
         self.assertFalse(optimization["fallback_used"])
+        self.assertTrue(
+            resources["semantic_input_policy"]["semantic_compiler_injected_explicitly"]
+        )
 
     def test_diagnostic_reports_node_budget_shortage(self):
         task = "比较两个套餐，计算12个月成本、盈亏平衡时间和敏感性。"
