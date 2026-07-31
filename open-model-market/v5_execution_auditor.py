@@ -133,8 +133,10 @@ def audit(root: Path, *, execute_outcome: str, publish_outcome: str) -> dict[str
         "absolute_maximum_model_calls": ABSOLUTE_MAX_MODEL_CALLS,
         "actual_cost_usd": actual_cost,
     })
-    if calls <= 0 or calls > approved_total:
-        failures.append(f"V5 model calls exceed or violate the approved ticket bound: {calls}/{approved_total}")
+    if calls <= 0:
+        failures.append("V5 execution performed no model calls")
+    elif calls > approved_total:
+        failures.append(f"V5 model calls exceed the approved ticket bound: {calls}/{approved_total}")
     if ledger_total != approved_total:
         failures.append(f"runtime total-call ceiling differs from approved ticket: {ledger_total}/{approved_total}")
     if ledger_initial != approved_initial:
