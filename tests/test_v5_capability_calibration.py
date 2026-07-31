@@ -109,7 +109,6 @@ def _endpoint(
 class TestV5CapabilityCalibration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # Formal V5 always installs calibration and diversity as one safety unit.
         v5_candidate_diversity.install()
 
     def test_rank_backed_adaptive_proxy_restores_required_models(self):
@@ -283,15 +282,19 @@ class TestV5CapabilityCalibration(unittest.TestCase):
             v5_candidate_diversity.diversity_preserving_pareto_prune,
         )
 
-    def test_formal_and_live_entries_install_same_policy(self):
+    def test_formal_production_entries_install_same_policy(self):
         pipeline = (ROOT / "open-model-market" / "v5_pipeline.py").read_text(
             encoding="utf-8"
         )
-        final = (
-            ROOT / "open-model-market" / "v5_live_benchmark_final.py"
+        production = (
+            ROOT / "open-model-market" / "v5_production_ticket.py"
+        ).read_text(encoding="utf-8")
+        diversity_source = (
+            ROOT / "open-model-market" / "v5_candidate_diversity.py"
         ).read_text(encoding="utf-8")
         self.assertIn("v5_candidate_diversity.install()", pipeline)
-        self.assertIn("v5_candidate_diversity.install()", final)
+        self.assertIn("v5_production_hardening.install()", production)
+        self.assertIn("v5_capability_calibration.install()", diversity_source)
 
 
 if __name__ == "__main__":
