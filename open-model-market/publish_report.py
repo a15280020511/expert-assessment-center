@@ -229,6 +229,29 @@ def write_skip_manifest(
     return manifest
 
 
+def write_failure_skip_manifest(
+    artifact_root: Path,
+    report_path: Path,
+    output_dir: Path,
+    *,
+    run_url: str,
+    max_chars: int,
+) -> dict[str, Any]:
+    """Preserve the previous failed-execution evidence API, fail closed."""
+    _, blockers = strict_publication_gate(artifact_root)
+    if not blockers:
+        blockers = ["execution-status:failed"]
+    return write_skip_manifest(
+        artifact_root,
+        report_path,
+        output_dir,
+        run_url=run_url,
+        max_chars=max_chars,
+        publication_status="skipped_failed_execution",
+        blockers=blockers,
+    )
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser()
     root.add_argument(
