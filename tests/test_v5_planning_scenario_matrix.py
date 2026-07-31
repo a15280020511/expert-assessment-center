@@ -6,16 +6,11 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-import model_market  # noqa: E402
 import resource_matrix  # noqa: E402
 import v5_general_task_planning  # noqa: E402
 
 
 class V5PlanningScenarioMatrixTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        v5_general_task_planning.install()
-
     @staticmethod
     def run(task: str):
         return SimpleNamespace(
@@ -26,10 +21,17 @@ class V5PlanningScenarioMatrixTests(unittest.TestCase):
 
     def classify_and_compile(self, task: str):
         run = self.run(task)
-        profile = model_market.classify_task(task, run)
-        bundle = resource_matrix.compile_v5_task_resources(profile, run)
+        profile = v5_general_task_planning.classify_task(task, run)
+        bundle = resource_matrix.compile_v5_task_resources(
+            profile,
+            run,
+            semantic_compiler=v5_general_task_planning.compile_task_semantics,
+        )
         self.assertTrue(bundle["atomic_work_graphs"]["all_graphs_are_dag"])
         self.assertTrue(bundle["task_semantics"]["interpretations"])
+        self.assertTrue(
+            bundle["semantic_input_policy"]["semantic_compiler_injected_explicitly"]
+        )
         return profile, bundle
 
     def test_non_regulated_numeric_decisions_compact(self):
