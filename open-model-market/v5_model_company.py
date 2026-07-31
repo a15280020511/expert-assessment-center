@@ -57,7 +57,19 @@ def canonical_model_company(model_id: str) -> str:
 
 
 def candidate_company(candidate: Any) -> str:
-    """Return the canonical company for a CandidateNode or mapping."""
+    """Return the canonical company for candidates, market rows, or models."""
     if isinstance(candidate, Mapping):
-        return canonical_model_company(str(candidate.get("model") or ""))
-    return canonical_model_company(str(getattr(candidate, "model", "")))
+        model_id = (
+            candidate.get("model")
+            or candidate.get("model_id")
+            or candidate.get("id")
+            or ""
+        )
+    else:
+        model_id = (
+            getattr(candidate, "model", None)
+            or getattr(candidate, "model_id", None)
+            or getattr(candidate, "id", None)
+            or ""
+        )
+    return canonical_model_company(str(model_id))
