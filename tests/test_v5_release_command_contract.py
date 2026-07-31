@@ -15,38 +15,40 @@ class TestV5ReleaseCommandContract(unittest.TestCase):
         self.assertIn("target_sha:", self.text)
         self.assertIn("- promote\n          - rollback", self.text)
 
-    def test_release_pr_is_owner_only_same_repo_and_production_scoped(self):
-        self.assertIn("pull_request_target:", self.text)
-        self.assertIn("branches: [production]", self.text)
+    def test_release_push_is_owner_only_and_fixed_branch_scoped(self):
+        self.assertIn("push:", self.text)
+        self.assertIn("branches: [v5-production-release]", self.text)
         self.assertIn("github.actor == github.repository_owner", self.text)
         self.assertIn(
-            "startsWith(github.event.pull_request.title, '[release]')",
+            "github.ref == 'refs/heads/v5-production-release'",
             self.text,
         )
-        self.assertIn(
-            "github.event.pull_request.base.ref == 'production'",
-            self.text,
-        )
-        self.assertIn(
-            "github.event.pull_request.head.repo.full_name == github.repository",
-            self.text,
-        )
+        self.assertIn("github.event.deleted == false", self.text)
         self.assertNotIn("issue_comment:", self.text)
+        self.assertNotIn("pull_request_target:", self.text)
 
-    def test_pr_parser_requires_exact_action_and_full_sha(self):
+    def test_request_parser_requires_exact_schema_action_and_full_sha(self):
+        self.assertIn('Path(".release-request.json")', self.text)
         self.assertIn(
-            'r"(?m)^Action: `(promote|rollback)`\\s*$"',
+            'expected = {"schema_version", "action", "target_sha", "request_id"}',
             self.text,
         )
-        self.assertIn(
-            'r"(?m)^Target: `([0-9a-f]{40})`\\s*$"',
-            self.text,
-        )
-        self.assertIn("len(actions) != 1 or len(targets) != 1", self.text)
+        self.assertIn('"v5-production-release-1"', self.text)
+        self.assertIn("set(request) != expected", self.text)
         self.assertIn(
             "target SHA must be exactly 40 lowercase hex characters",
             self.text,
         )
+
+    def test_request_commit_is_one_file_on_exact_target_parent(self):
+        self.assertIn('["git", "rev-parse", "HEAD^"]', self.text)
+        self.assertIn("parent != target", self.text)
+        self.assertIn(
+            '["git", "diff", "--name-only", "HEAD^", "HEAD"]',
+            self.text,
+        )
+        self.assertIn('changed != [".release-request.json"]', self.text)
+        self.assertIn("persist-credentials: false", self.text)
 
     def test_release_still_runs_zero_cost_validation_before_ref_move(self):
         unit = self.text.index("name: Run static and full unit validation")
@@ -65,7 +67,7 @@ class TestV5ReleaseCommandContract(unittest.TestCase):
         self.assertIn("group: v5-production-release", self.text)
         self.assertIn("cancel-in-progress: false", self.text)
 
-    def test_pr_head_is_never_checked_out_with_write_token(self):
+    def test_only_declared_target_is_checked_out_for_validation(self):
         self.assertIn(
             "ref: ${{ steps.release.outputs.target_sha }}",
             self.text,
