@@ -294,6 +294,13 @@ def _strict_work(work: semantics.AtomicWork, task: str) -> semantics.AtomicWork:
         **closed_book_safety.strict_contract_metadata(task),
         "must_separate_fact_assumption_inference": True,
     }
+    data["independence_requirements"] = {
+        "independent_execution_preferred": False,
+        "minimum_independent_copies": 1,
+        "different_model_required": False,
+        "different_model_family_preferred": False,
+        "different_provider_preferred": False,
+    }
     return semantics.AtomicWork(**data)
 
 
