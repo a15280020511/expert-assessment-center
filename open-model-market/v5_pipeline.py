@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end standalone V5 planning and execution entrypoint."""
+"""End-to-end V5 planning and execution through one explicit runtime."""
 from __future__ import annotations
 
 import argparse
@@ -9,19 +9,18 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import model_market as market
-import v5_candidate_diversity
 import v5_value_optimizer as value_optimizer
 from artifact_manifest import write_manifest
 from execution_graph import ExecutionGraph, GraphLimits
 from resource_matrix import compile_v5_task_resources
 from task_resource_artifacts import write_task_resource_artifacts
 from v5_benchmark import planning_benchmark, write_benchmark
-from v5_executor import build_node_payload, execute_v5_graph
 from v5_planner import fetch_live_endpoint_payloads
 from v5_planning_diagnostics import (
     build_candidate_generation_failure_report,
     build_infeasibility_report,
 )
+from v5_runtime import ProductionRuntime, RuntimeConfig
 
 
 def _load_json(path: str | Path) -> Mapping[str, Any]:
@@ -134,24 +133,45 @@ def _write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
 
-def _validated_budget(args: argparse.Namespace, run: Any) -> tuple[int, int, int, float | None]:
-    total = int(args.maximum_total_calls)
-    recovery = int(args.maximum_recovery_calls)
-    if not 4 <= total <= 16:
-        raise ValueError("maximum-total-calls must be between 4 and 16")
-    if not 0 <= recovery <= 4:
-        raise ValueError("maximum-recovery-calls must be between 0 and 4")
-    if recovery >= total:
-        raise ValueError("maximum-recovery-calls must leave at least one initial call")
+def _runtime_from_args(args: argparse.Namespace, run: Any) -> ProductionRuntime:
+    config = RuntimeConfig(
+        total_call_limit=int(args.maximum_total_calls),
+        recovery_call_limit=int(args.maximum_recovery_calls),
+        cost_anomaly_usd=args.cost_anomaly_usd,
+        quality_tier=str(run.quality_tier or "value"),
+        tools_allowed=False,
+        live_catalog_required=bool(args.require_live_catalog),
+        provider_lock_required=True,
+        maximum_candidates_per_work=max(2, int(args.maximum_candidates_per_work)),
+        solver_timeout_seconds=max(1.0, float(args.solver_timeout_seconds)),
+    )
+    return ProductionRuntime(config)
 
-    approved_initial = total - recovery
-    tier = str(run.quality_tier or "value")
-    tier_cap = {"budget": 4, "value": 6, "quality": approved_initial}.get(tier, 6)
+
+def _validated_budget(
+    args: argparse.Namespace,
+    run: Any,
+    runtime: ProductionRuntime,
+) -> tuple[int, int, int, float | None]:
+    config = runtime.config
+    if int(args.maximum_total_calls) != config.total_call_limit:
+        raise ValueError("CLI total-call value differs from RuntimeConfig")
+    if int(args.maximum_recovery_calls) != config.recovery_call_limit:
+        raise ValueError("CLI recovery-call value differs from RuntimeConfig")
+    if args.cost_anomaly_usd != config.cost_anomaly_usd:
+        raise ValueError("CLI cost anomaly value differs from RuntimeConfig")
+    if str(run.quality_tier or "value") != config.quality_tier:
+        raise ValueError("RunConfig quality tier differs from RuntimeConfig")
+
+    approved_initial = config.initial_call_limit
+    tier_cap = {"budget": 4, "value": 6, "quality": approved_initial}.get(config.quality_tier, 6)
     planning_nodes = max(1, min(approved_initial, tier_cap))
-    anomaly = args.cost_anomaly_usd
-    if anomaly is not None and (not math.isfinite(anomaly) or anomaly <= 0):
-        raise ValueError("cost-anomaly-usd must be a finite positive number")
-    return total, recovery, planning_nodes, anomaly
+    return (
+        config.total_call_limit,
+        config.recovery_call_limit,
+        planning_nodes,
+        config.cost_anomaly_usd,
+    )
 
 
 def _annotate_market(
@@ -160,10 +180,13 @@ def _annotate_market(
     ranked: Sequence[Any],
     catalog_source: str,
     endpoint_source: str,
+    catalog_snapshot_id: str,
 ) -> None:
     compiled_market["catalog_source"] = catalog_source
     compiled_market["endpoint_source"] = endpoint_source
+    compiled_market["catalog_snapshot_id"] = catalog_snapshot_id
     compiled_market["candidate_pool_policy"] = "multi-channel-deduplicated-before-optimizer"
+    compiled_market["cross_task_history_used"] = False
     compiled_market["ranked_models"] = [
         {
             "rank": index,
@@ -179,17 +202,22 @@ def _annotate_market(
     ]
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    runtime: ProductionRuntime | None = None,
+) -> int:
     args = build_parser().parse_args(argv)
     run = market.build_run_config(args)
+    runtime = runtime or _runtime_from_args(args, run)
     output = Path(run.output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    total_calls, recovery_calls, planning_nodes, anomaly_budget = _validated_budget(args, run)
+    total_calls, recovery_calls, planning_nodes, anomaly_budget = _validated_budget(args, run, runtime)
+    _write_json(output / "v5-runtime-config.json", runtime.describe())
+
     profile = market.classify_task(run.task, run)
     models, catalog_source = market.fetch_catalog(run)
     ranked = _rank_v5_models(models, profile, run)
-
-    v5_candidate_diversity.install()
     resources = compile_v5_task_resources(profile, run)
     write_task_resource_artifacts(resources, output)
 
@@ -206,6 +234,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         endpoint_source = "openrouter-live-model-endpoints"
         allow_synthetic = False
 
+    snapshot = runtime.build_catalog_snapshot(
+        ranked,
+        endpoint_payloads,
+        catalog_source=catalog_source,
+        endpoint_source=endpoint_source,
+    )
+    _write_json(output / "catalog-snapshot.json", snapshot.to_dict())
+
     limits = GraphLimits(
         max_nodes=planning_nodes,
         max_edges=64,
@@ -219,7 +255,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     compiled_market = value_optimizer.compile_model_endpoint_market(
         ranked,
         resources,
-        endpoint_payloads=endpoint_payloads,
+        endpoint_payloads=snapshot.endpoint_payloads,
         ranking_limit=run.ranking_limit,
         allow_synthetic_fixture=allow_synthetic,
     )
@@ -228,6 +264,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ranked=ranked,
         catalog_source=catalog_source,
         endpoint_source=endpoint_source,
+        catalog_snapshot_id=snapshot.snapshot_id,
     )
     _write_json(output / "v5-model-endpoint-market.json", compiled_market)
 
@@ -235,7 +272,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         candidate_graph = value_optimizer.generate_candidate_graph(
             resources,
             compiled_market,
-            maximum_per_group=max(3, min(30, int(args.maximum_candidates_per_work))),
+            maximum_per_group=max(3, min(30, runtime.config.maximum_candidates_per_work)),
         )
     except Exception as exc:
         report = build_candidate_generation_failure_report(
@@ -255,7 +292,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             candidate_graph,
             limits=limits,
             quality_tolerance_pct=max(0.0, min(20.0, float(args.quality_tolerance_pct))),
-            solver_timeout_seconds=max(1.0, float(args.solver_timeout_seconds)),
+            solver_timeout_seconds=runtime.config.solver_timeout_seconds,
         )
     except Exception as exc:
         report = build_infeasibility_report(
@@ -278,11 +315,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     planner["optimization"]["approved_budget"] = {
         "maximum_total_calls": total_calls,
         "maximum_recovery_calls": recovery_calls,
-        "maximum_initial_calls": total_calls - recovery_calls,
+        "maximum_initial_calls": runtime.config.initial_call_limit,
         "planning_node_cap": planning_nodes,
         "cost_anomaly_usd": anomaly_budget,
         "quality_tier": run.quality_tier,
+        "runtime_config_sha256": sha256(
+            json.dumps(runtime.config.to_dict(), sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest(),
     }
+    planner["optimization"]["catalog_snapshot_id"] = snapshot.snapshot_id
     _write_json(output / "v5-optimization.json", planner["optimization"])
     _write_json(output / "v5-execution-graph.json", planner["optimization"]["execution_graph"])
 
@@ -291,7 +332,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     graph = ExecutionGraph.from_mapping(planner["optimization"]["execution_graph"])
 
     if run.dry_run:
-        requests = [build_node_payload(node, run.task, []) for node in graph.nodes]
+        requests = [runtime.build_node_payload(node, run.task, []) for node in graph.nodes]
         _write_json(output / "v5-dry-run.json", {
             "version": 5,
             "status": "planned-not-executed",
@@ -302,12 +343,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             "legacy_runtime_present": False,
             "fallback_policy": "fail-closed-no-alternate-runtime",
             "approved_budget": planner["optimization"]["approved_budget"],
+            "catalog_snapshot_id": snapshot.snapshot_id,
+            "runtime_version": runtime.describe()["runtime_version"],
+            "global_monkey_patching": False,
         })
         write_manifest(output)
         print(f"V5 dry-run artifacts written to {output}")
         return 0
 
-    result = execute_v5_graph(graph, run, run.task, output_dir=output, limits=limits)
+    result = runtime.execute_graph(
+        graph,
+        run,
+        run.task,
+        output_dir=output,
+        limits=limits,
+    )
     _write_json(output / "v5-result.json", result)
     write_manifest(output)
     print(f"V5 execution completed: {output / 'v5-final-report.md'}")
