@@ -16,7 +16,6 @@ from typing import Any, Mapping, Sequence
 
 import v5_pipeline
 from v5_evidence_bundle import ApprovedRun, EvidenceBundleBuilder, EvidenceInputs
-from v5_failure_report import ensure_failure_report
 from v5_recovery_runtime import build_production_runtime
 from v5_runtime import ProductionRuntime, RuntimeConfig
 
@@ -261,7 +260,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         }, ensure_ascii=False))
         return 0
     except Exception as exc:
-        ensure_failure_report(output, exc)
         normalization_error = None
         try:
             _normalize_evidence(
