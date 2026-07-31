@@ -19,15 +19,35 @@ def main() -> None:
     text = once(text, "import shutil\n", "", "unused shutil import")
     builder.write_text(text, encoding="utf-8")
 
-    workflow = ROOT / ".github" / "workflows" / "v5-validate.yml"
-    text = workflow.read_text(encoding="utf-8")
+    validation = ROOT / ".github" / "workflows" / "v5-validate.yml"
+    text = validation.read_text(encoding="utf-8")
     text = once(
         text,
         "            open-model-market/v5_runtime.py \\\n            open-model-market/v5_executor.py \\\n",
         "            open-model-market/v5_runtime.py \\\n            open-model-market/v5_evidence_bundle.py \\\n            open-model-market/v5_executor.py \\\n",
         "evidence builder compile entry",
     )
-    workflow.write_text(text, encoding="utf-8")
+    validation.write_text(text, encoding="utf-8")
+
+    production = ROOT / ".github" / "workflows" / "execution-ticket.yml"
+    text = production.read_text(encoding="utf-8")
+    text = once(
+        text,
+        "          python open-model-market/v5_execution_auditor.py \\\n",
+        "          python open-model-market/v5_execution_auditor_integrity.py \\\n",
+        "strengthened execution auditor",
+    )
+    production.write_text(text, encoding="utf-8")
+
+    contract = ROOT / "tests" / "test_workflow_contract.py"
+    text = contract.read_text(encoding="utf-8")
+    text = once(
+        text,
+        '        self.assertIn("v5_execution_auditor.py", self.text)\n',
+        '        self.assertIn("v5_execution_auditor_integrity.py", self.text)\n',
+        "workflow auditor assertion",
+    )
+    contract.write_text(text, encoding="utf-8")
     print("final static cleanup applied")
 
 
