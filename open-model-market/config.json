@@ -27,7 +27,8 @@
     "optimizer": {
       "engine": "google-or-tools-cp-sat",
       "requirement_compiler": "resource_matrix.py",
-      "joint_resource_optimizer": "v5_company_diversity.py",
+      "joint_resource_optimizer": "v5_value_optimizer.py",
+      "company_identity_policy": "v5_model_company.py",
       "runtime_prompt_binding": "v5_dynamic_prompt_delivery.py",
       "fallback_to_legacy_greedy_selector": false
     },
