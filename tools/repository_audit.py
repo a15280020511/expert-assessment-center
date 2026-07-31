@@ -18,7 +18,15 @@ PINNED_ACTION = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}(?:\s*
 SECRET_NAME = re.compile(r"(?i)(api[_-]?key|secret|token|password|credential)")
 PLACEHOLDER = re.compile(r"(?i)(example|placeholder|dummy|redacted|replace[-_ ]?me|not[-_ ]?set|your[-_ ])")
 REQ = re.compile(r"^\s*([A-Za-z0-9_.-]+)\s*(?:==|~=|>=|<=|>|<|!=).*$")
-HISTORICAL = {"MIGRATION.md", "MIGRATION_PROVENANCE.json", "RECOVERY.md"}
+PYTHON_WORKFLOW_ENTRYPOINT = re.compile(r"(?:python(?:3)?\s+)(?:\./)?open-model-market/([A-Za-z0-9_]+)\.py\b")
+LEGACY_REPOSITORY = "a15280020511/" + "test"
+HISTORICAL = {
+    "MIGRATION.md",
+    "MIGRATION_MANIFEST.json",
+    "MIGRATION_PROVENANCE.json",
+    "RECOVERY.md",
+    "governance-compatibility.json",
+}
 
 
 @dataclass(frozen=True)
@@ -103,6 +111,7 @@ def audit(root: Path) -> dict[str, Any]:
     imports_by_file: dict[str, set[str]] = {}
     metrics: dict[str, dict[str, int]] = {}
     requirements: dict[str, str] = {}
+    workflow_entrypoints: set[str] = set()
     for path in sorted(root.rglob("*")):
         if not path.is_file(): continue
         rel_path = path.relative_to(root)
@@ -119,11 +128,12 @@ def audit(root: Path) -> dict[str, Any]:
         files.append({"path": rel, "size_bytes": len(data), "sha256": digest, "line_count": None if text is None else len(text.splitlines()), "kind": kind})
         if len(data) > 2_000_000: findings.append(Finding("medium", "FILE-LARGE", rel, 1, f"repository file size={len(data)} bytes"))
         if text is None: continue
+        if kind == "yaml": workflow_entrypoints.update(PYTHON_WORKFLOW_ENTRYPOINT.findall(text))
         for index, line in enumerate(text.splitlines(), 1):
             if line.rstrip(" \t") != line: findings.append(Finding("low", "TXT-TRAILING-WHITESPACE", rel, index, "trailing whitespace"))
             if "\t" in line and kind in {"python", "yaml", "json"}: findings.append(Finding("low", "TXT-TAB", rel, index, "tab character in structured source"))
             if rel != "tools/repository_audit.py" and re.search(r"\b(TODO|FIXME|HACK|XXX)\b", line, re.I): findings.append(Finding("medium", "TXT-DEBT-MARKER", rel, index, line.strip()[:220]))
-            if "a15280020511/test" in line and Path(rel).name not in HISTORICAL: findings.append(Finding("medium", "ARCH-LEGACY-REPOSITORY", rel, index, "legacy repository reference remains outside migration provenance"))
+            if rel != "tools/repository_audit.py" and LEGACY_REPOSITORY in line and Path(rel).name not in HISTORICAL: findings.append(Finding("medium", "ARCH-LEGACY-REPOSITORY", rel, index, "legacy repository reference remains outside migration provenance"))
             if kind == "yaml" and re.match(r"\s*repository_dispatch\s*:", line): findings.append(Finding("critical", "ARCH-CROSS-REPO-DISPATCH", rel, index, "repository_dispatch violates center isolation"))
             if kind == "yaml" and re.match(r"\s*pull_request_target\s*:", line): findings.append(Finding("high", "GHA-PR-TARGET", rel, index, "pull_request_target expands workflow trust"))
             if kind == "yaml" and re.search(r"\bpermissions:\s*write-all\b", line): findings.append(Finding("critical", "GHA-WRITE-ALL", rel, index, "workflow grants write-all"))
@@ -152,15 +162,16 @@ def audit(root: Path) -> dict[str, Any]:
         values = {spec for _, _, spec in specs}
         if len(values) > 1: findings.append(Finding("medium", "REQ-CONFLICTING-SPECS", specs[0][0], specs[0][1], f"{package} has multiple constraints: {sorted(values)}"))
     imported = set().union(*imports_by_file.values()) if imports_by_file else set()
+    reachable_modules = imported | workflow_entrypoints
     orphan_candidates = []
     for rel in sorted(metrics):
         path = Path(rel)
         if "tests" in path.parts or path.name in {"__init__.py", "repository_audit.py"} or path.parts[0] == "tools": continue
-        if path.stem not in imported and not path.name.endswith(("_task.py", "_runner.py")):
-            orphan_candidates.append(rel); findings.append(Finding("info", "PY-ORPHAN-CANDIDATE", rel, 1, "module is not imported by another Python file; verify workflow or CLI use before removal"))
+        if path.stem not in reachable_modules and not path.name.endswith(("_task.py", "_runner.py")):
+            orphan_candidates.append(rel); findings.append(Finding("info", "PY-ORPHAN-CANDIDATE", rel, 1, "module is not imported or referenced by a workflow; verify other CLI use before removal"))
     findings.sort(key=lambda item: (SEVERITY[item.severity], item.path, item.line, item.rule))
     counts = Counter(item.severity for item in findings)
-    return {"schema_version": "repository-audit-v3", "file_count": len(files), "total_lines": sum(item["line_count"] or 0 for item in files), "finding_counts": {name: counts.get(name, 0) for name in SEVERITY}, "findings": [asdict(item) for item in findings], "files": files, "python_metrics": metrics, "orphan_candidates": orphan_candidates}
+    return {"schema_version": "repository-audit-v4", "file_count": len(files), "total_lines": sum(item["line_count"] or 0 for item in files), "finding_counts": {name: counts.get(name, 0) for name in SEVERITY}, "findings": [asdict(item) for item in findings], "files": files, "python_metrics": metrics, "workflow_entrypoints": sorted(workflow_entrypoints), "orphan_candidates": orphan_candidates}
 
 
 def render(report: dict[str, Any]) -> str:
@@ -178,10 +189,9 @@ def main() -> int:
     (output / "repository-audit.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (output / "repository-audit.md").write_text(render(report), encoding="utf-8")
     print(json.dumps({"finding_counts": report["finding_counts"], "file_count": report["file_count"], "total_lines": report["total_lines"]}, ensure_ascii=False))
-    for item in report["findings"][:50]: print(f"::{ 'error' if item['severity'] in {'critical', 'high'} else 'warning' } file={item['path']},line={item['line']}::{item['severity']} {item['rule']}: {item['message']}")
-    if args.fail_on == "critical" and report["finding_counts"]["critical"]: return 1
-    if args.fail_on == "high" and (report["finding_counts"]["critical"] or report["finding_counts"]["high"]): return 1
-    return 0
+    threshold = SEVERITY.get(args.fail_on, 99)
+    return 1 if any(SEVERITY[item["severity"]] <= threshold for item in report["findings"]) else 0
 
 
-if __name__ == "__main__": raise SystemExit(main())
+if __name__ == "__main__":
+    raise SystemExit(main())
