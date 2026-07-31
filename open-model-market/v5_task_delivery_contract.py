@@ -44,8 +44,16 @@ _RANGE_PATTERNS = (
         re.IGNORECASE,
     ),
 )
-_MARKDOWN_CUE_RE = re.compile(
-    r"(?:每一项|each\s+item)[^。\n]{0,80}(?:Markdown\s*)?(?:二级标题|level[- ]2\s+heading|h2)",
+_MARKDOWN_SUFFIX_CUE_RE = re.compile(
+    r"(?:每一项|each\s+item)[^。\n]{0,100}(?:Markdown\s*)?"
+    r"(?:二级标题|level[- ]2\s+heading|h2)",
+    re.IGNORECASE,
+)
+_MARKDOWN_PREFIX_CUE_RE = re.compile(
+    r"(?:输出|响应|报告)?[^。\n]{0,50}?"
+    r"(?:必须|应当|需要)[^。\n]{0,40}?"
+    r"(?:以下|下列)?\s*(?P<count>\d{1,2})\s*个\s*"
+    r"(?:Markdown\s*)?(?:二级标题|level[- ]2\s+headings?|h2)",
     re.IGNORECASE,
 )
 _NUMBERED_ITEM_RE = re.compile(
@@ -203,20 +211,7 @@ def extract_explicit_contract(task: str) -> dict[str, Any]:
     }
 
 
-def extract_explicit_markdown_contract(task: str) -> dict[str, Any]:
-    """Extract an explicitly numbered H2 delivery list without topic inference."""
-    text = str(task or "")
-    if not _MARKDOWN_CUE_RE.search(text):
-        return {}
-    cue_positions = [
-        position
-        for marker in ("必须分别给出", "must separately provide", "must provide")
-        if (position := text.casefold().find(marker.casefold())) >= 0
-    ]
-    segment = text[min(cue_positions):] if cue_positions else text
-    contract_cue = _MARKDOWN_CUE_RE.search(segment)
-    if contract_cue:
-        segment = segment[:contract_cue.start()]
+def _numbered_headings(segment: str) -> list[str]:
     headings: list[str] = []
     expected_index = 1
     for match in _NUMBERED_ITEM_RE.finditer(segment):
@@ -225,14 +220,46 @@ def extract_explicit_markdown_contract(task: str) -> dict[str, Any]:
             if headings:
                 break
             continue
-        heading = re.sub(r"[。；;]+$", "", match.group(2).strip())
-        heading = re.sub(r"\s+", " ", heading)
+        heading = re.split(r"[。；;]", match.group(2).strip(), maxsplit=1)[0]
+        heading = re.sub(r"\s+", " ", heading).strip(" ：:。；;")
         if not heading or len(heading) > 160:
-            return {}
+            return []
         headings.append(heading)
         expected_index += 1
         if len(headings) > 64:
-            return {}
+            return []
+    return headings
+
+
+def extract_explicit_markdown_contract(task: str) -> dict[str, Any]:
+    """Extract exact H2 lists whether the Markdown cue is before or after them."""
+    text = str(task or "")
+    prefix = _MARKDOWN_PREFIX_CUE_RE.search(text)
+    suffix = _MARKDOWN_SUFFIX_CUE_RE.search(text)
+    if prefix is None and suffix is None:
+        return {}
+
+    candidates: list[tuple[str, int | None]] = []
+    if prefix is not None:
+        expected = int(prefix.group("count"))
+        candidates.append((text[prefix.end():], expected))
+    if suffix is not None:
+        cue_positions = [
+            position
+            for marker in ("必须分别给出", "must separately provide", "must provide")
+            if (position := text.casefold().find(marker.casefold())) >= 0
+            and position < suffix.start()
+        ]
+        start = min(cue_positions) if cue_positions else 0
+        candidates.append((text[start:suffix.start()], None))
+
+    headings: list[str] = []
+    for segment, expected in candidates:
+        extracted = _numbered_headings(segment)
+        if expected is not None and len(extracted) != expected:
+            continue
+        if len(extracted) > len(headings):
+            headings = extracted
     if len(headings) < 2:
         return {}
     normalized = [_normalized_heading(value) for value in headings]
