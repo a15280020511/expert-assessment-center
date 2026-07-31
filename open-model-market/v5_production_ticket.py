@@ -8,6 +8,7 @@ RuntimeConfig. Failures close the run without invoking an alternate runtime.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import traceback
 from pathlib import Path
@@ -34,6 +35,33 @@ def _write(path: Path, value: Any) -> None:
         json.dumps(value, ensure_ascii=False, indent=2, default=str),
         encoding="utf-8",
     )
+
+
+def _canonical_user_task(output: Path, fallback: str) -> tuple[str, str]:
+    """Return only user-authored task fields from the immutable ticket.
+
+    ``task.txt`` intentionally contains execution/delegation boundaries. Those
+    boundaries must not participate in domain, complexity, long-context or
+    operation classification because words such as “evidence” and “report” are
+    runtime governance, not user task semantics.
+    """
+    packet = _load(output / "ticket.json", {})
+    task = packet.get("task") if isinstance(packet, Mapping) else None
+    if not isinstance(task, Mapping):
+        return str(fallback or "").strip(), "fallback-cli-task"
+    question = str(task.get("question") or "").strip()
+    if not question:
+        return str(fallback or "").strip(), "fallback-cli-task"
+    sections = [question]
+    requirements = task.get("requirements")
+    if isinstance(requirements, list):
+        cleaned = [str(item).strip() for item in requirements if str(item).strip()]
+        if cleaned:
+            sections.append("执行要求：\n" + "\n".join(f"- {item}" for item in cleaned))
+    language = str(task.get("language") or "").strip()
+    if language:
+        sections.append(f"输出语言：{language}")
+    return "\n\n".join(sections), "ticket.task"
 
 
 def _attempt_rows(node_results: Any) -> list[Mapping[str, Any]]:
@@ -163,9 +191,9 @@ def _runtime(args: argparse.Namespace) -> ProductionRuntime:
     ))
 
 
-def _pipeline_command(args: argparse.Namespace, output: Path) -> list[str]:
+def _pipeline_command(args: argparse.Namespace, output: Path, task: str) -> list[str]:
     command = [
-        "--task", args.task,
+        "--task", task,
         "--output-dir", str(output),
         "--quality-tier", args.quality_tier,
         "--maximum-total-calls", str(args.maximum_total_calls),
@@ -191,8 +219,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             "maximum-recovery-calls must be non-negative and below total calls"
         )
     runtime = _runtime(args)
+    canonical_task, task_source = _canonical_user_task(output, args.task)
+    if not canonical_task:
+        raise ValueError("canonical user task is empty")
+    _write(output / "planning-task.json", {
+        "schema_version": "v5-planning-task-1",
+        "source": task_source,
+        "sha256": hashlib.sha256(canonical_task.encode("utf-8")).hexdigest(),
+        "characters": len(canonical_task),
+        "delegation_notice_included": False,
+        "execution_constraints_supplied_by_runtime": True,
+    })
     try:
-        code = int(v5_pipeline.main(_pipeline_command(args, output), runtime=runtime))
+        code = int(v5_pipeline.main(
+            _pipeline_command(args, output, canonical_task),
+            runtime=runtime,
+        ))
         if code != 0:
             raise RuntimeError(f"V5 pipeline returned {code}")
         envelope = _normalize(
