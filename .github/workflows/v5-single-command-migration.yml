@@ -1,0 +1,38 @@
+name: V5 Single Command Migration
+
+on:
+  push:
+    branches:
+      - refactor/v5-explicit-runtime
+    paths:
+      - tools/apply_v5_single_command_workflow.py
+      - .github/workflows/v5-single-command-migration.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v5-single-command-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/v5-explicit-runtime
+          fetch-depth: 0
+      - name: Apply deterministic workflow migration
+        run: python tools/apply_v5_single_command_workflow.py
+      - name: Remove one-shot files
+        run: |
+          rm tools/apply_v5_single_command_workflow.py
+          rm .github/workflows/v5-single-command-migration.yml
+      - name: Commit migration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "refactor(v5): use one production-pinned command trigger"
+          git push origin HEAD:refactor/v5-explicit-runtime
