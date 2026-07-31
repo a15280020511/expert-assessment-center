@@ -49,12 +49,21 @@ jobs:
             open-model-market/v5_value_optimizer.py \
             open-model-market/v5_executor.py \
             open-model-market/v5_benchmark.py \
-            open-model-market/v5_pipeline.py
+            open-model-market/v5_pipeline.py \
+            open-model-market/v5_production_ticket.py \
+            open-model-market/v5_execution_auditor.py
       - name: Run V5 unit and recovery tests
         shell: bash
         run: |
           set -o pipefail
-          python -m unittest tests.test_v5_task_resource_compiler tests.test_execution_graph_validator tests.test_execution_graph_properties tests.test_v5_planner_executor -v 2>&1 | tee v5-unit-test.log
+          python -m unittest \
+            tests.test_v5_task_resource_compiler \
+            tests.test_execution_graph_validator \
+            tests.test_execution_graph_properties \
+            tests.test_v5_planner_executor \
+            tests.test_v5_production_cutover \
+            tests.test_legacy_runtime_removed \
+            -v 2>&1 | tee v5-unit-test.log
       - name: Run deterministic V5 end-to-end dry-run
         run: |
           python open-model-market/v5_pipeline.py \
@@ -76,7 +85,10 @@ jobs:
           graph = json.loads((root / "v5-execution-graph.json").read_text())
           dry = json.loads((root / "v5-dry-run.json").read_text())
           benchmark = json.loads((root / "v5-planning-benchmark.json").read_text())
-          forbidden = {"tools", "tool_choice", "plugins", "web_search", "web_search_options", "file_search", "browser", "code_interpreter", "models"}
+          forbidden = {
+              "tools", "tool_choice", "plugins", "web_search", "web_search_options",
+              "file_search", "browser", "code_interpreter", "models",
+          }
 
           assert market["version"] == 5
           assert market["real_endpoint_count"] > 0
@@ -100,11 +112,15 @@ jobs:
           assert dry["status"] == "planned-not-executed"
           assert dry["production_entrypoint_changed"] is False
           assert benchmark["planning_gate_passed"] is True
-          assert benchmark["production_cutover_allowed"] is False
-          assert benchmark["reported_v3_baseline_is_structural_proxy"] is True
+          assert benchmark["runtime_policy"] == "v5-only-no-alternate-runtime"
+          assert set(benchmark["strategies"]) == {
+              "v5_joint_graph",
+              "strongest_single_model",
+              "lowest_price_single_model",
+              "random_feasible",
+              "lowest_cost_feasible",
+          }
 
-          models = set()
-          endpoints = set()
           for node, request in zip(graph["nodes"], dry["requests"]):
               assert not forbidden.intersection(request)
               assert "max_tokens" not in request
@@ -115,8 +131,6 @@ jobs:
               assert request["provider"]["allow_fallbacks"] is False
               assert request["provider"]["only"]
               assert request["provider"]["order"] == request["provider"]["only"]
-              models.add(node["model"])
-              endpoints.add(node["provider_endpoint"])
 
           assert (root / "task-interpretations.json").exists()
           assert (root / "atomic-work-graph.json").exists()
