@@ -173,8 +173,8 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
         or os.getenv("REASONING_EFFORT")
         or execution.get("reasoning_effort", "high")
     )
-    if not 5 <= ranking <= 100:
-        raise ExpertTeamError("ranking_limit must be between 5 and 100.")
+    if not 5 <= ranking <= 150:
+        raise ExpertTeamError("ranking_limit must be between 5 and 150.")
     if not 256 <= max_tokens <= 32768:
         raise ExpertTeamError("max_completion_tokens must be between 256 and 32768.")
     if reasoning not in {"low", "medium", "high"}:
