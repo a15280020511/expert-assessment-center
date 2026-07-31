@@ -101,5 +101,17 @@ class V5GeneralTaskPlanningTests(unittest.TestCase):
         self.assertGreaterEqual(len(bundle["task_semantics"]["interpretations"]), 1)
 
 
+def explicit_suite() -> unittest.TestSuite:
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(
+        V5GeneralTaskPlanningTests
+    )
+    if suite.countTestCases() != 5:
+        raise RuntimeError(
+            f"classification regression suite count mismatch: {suite.countTestCases()}"
+        )
+    return suite
+
+
 if __name__ == "__main__":
-    unittest.main()
+    result = unittest.TextTestRunner(verbosity=2).run(explicit_suite())
+    raise SystemExit(0 if result.wasSuccessful() else 1)
