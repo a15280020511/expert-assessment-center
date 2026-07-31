@@ -15,11 +15,15 @@ on:
         options:
           - promote
           - rollback
-  push:
-    branches: [v5-production-release]
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches: [main]
+    paths: [.release-request.json]
 
 permissions:
   contents: write
+  issues: write
+  pull-requests: read
 
 concurrency:
   group: v5-production-release
@@ -32,99 +36,81 @@ jobs:
       (
         github.event_name == 'workflow_dispatch' ||
         (
-          github.event_name == 'push' &&
-          github.ref == 'refs/heads/v5-production-release' &&
-          github.event.deleted == false
+          github.event_name == 'pull_request' &&
+          startsWith(github.event.pull_request.title, '[release]') &&
+          github.event.pull_request.base.ref == 'main' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.event.pull_request.head.ref == 'v5-production-release'
         )
       )
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - name: Checkout immutable release request
-        if: github.event_name == 'push'
+      - name: Checkout isolated release request
+        if: github.event_name == 'pull_request'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 2
           persist-credentials: false
+          path: request-source
 
       - name: Resolve immutable release request
         id: release
         env:
           EVENT_NAME: ${{ github.event_name }}
-          REF_NAME: ${{ github.ref_name }}
           DISPATCH_TARGET_SHA: ${{ inputs.target_sha }}
           DISPATCH_ACTION: ${{ inputs.action }}
         run: |
-          python - <<'PY'
-          import json
-          import os
-          import re
-          import subprocess
-          from pathlib import Path
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            target="$DISPATCH_TARGET_SHA"
+            action="$DISPATCH_ACTION"
+            request_id="manual-dispatch"
+          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
+            request="request-source/.release-request.json"
+            test -f "$request"
+            jq -e '
+              type == "object" and
+              (keys | sort) == ["action", "request_id", "schema_version", "target_sha"] and
+              .schema_version == "v5-production-release-1" and
+              (.action == "promote" or .action == "rollback") and
+              (.target_sha | type == "string") and
+              (.request_id | type == "string")
+            ' "$request" >/dev/null
+            target="$(jq -er '.target_sha' "$request")"
+            action="$(jq -er '.action' "$request")"
+            request_id="$(jq -er '.request_id' "$request")"
+            [[ "$request_id" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]]
 
-          event_name = os.environ.get("EVENT_NAME", "")
-          if event_name == "workflow_dispatch":
-              target = os.environ.get("DISPATCH_TARGET_SHA", "").strip()
-              action = os.environ.get("DISPATCH_ACTION", "").strip()
-              request_id = "manual-dispatch"
-          elif event_name == "push":
-              if os.environ.get("REF_NAME") != "v5-production-release":
-                  raise SystemExit("release request must use the fixed release branch")
-              request_path = Path(".release-request.json")
-              try:
-                  request = json.loads(request_path.read_text(encoding="utf-8"))
-              except (FileNotFoundError, json.JSONDecodeError, OSError) as exc:
-                  raise SystemExit(f"invalid release request file: {exc}") from exc
-              if not isinstance(request, dict):
-                  raise SystemExit("release request must be one JSON object")
-              expected = {"schema_version", "action", "target_sha", "request_id"}
-              if set(request) != expected:
-                  raise SystemExit("release request fields are not exact")
-              if request.get("schema_version") != "v5-production-release-1":
-                  raise SystemExit("unsupported release request schema")
-              action = str(request.get("action") or "").strip()
-              target = str(request.get("target_sha") or "").strip()
-              request_id = str(request.get("request_id") or "").strip()
-              if re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", request_id) is None:
-                  raise SystemExit("invalid release request id")
+            parent="$(git -C request-source rev-parse HEAD^)"
+            test "$parent" = "$target"
+            changed="$(git -C request-source diff --name-only HEAD^ HEAD)"
+            test "$changed" = ".release-request.json"
+          else
+            echo "unsupported release event" >&2
+            exit 1
+          fi
 
-              parent = subprocess.check_output(
-                  ["git", "rev-parse", "HEAD^"],
-                  text=True,
-              ).strip()
-              if parent != target:
-                  raise SystemExit("release request commit parent differs from target")
-              changed = subprocess.check_output(
-                  ["git", "diff", "--name-only", "HEAD^", "HEAD"],
-                  text=True,
-              ).splitlines()
-              if changed != [".release-request.json"]:
-                  raise SystemExit("release request commit must change only .release-request.json")
-          else:
-              raise SystemExit("unsupported release event")
+          [[ "$action" == "promote" || "$action" == "rollback" ]]
+          [[ "$target" =~ ^[0-9a-f]{40}$ ]]
+          {
+            echo "target_sha=$target"
+            echo "action=$action"
+            echo "request_id=$request_id"
+          } >> "$GITHUB_OUTPUT"
 
-          if action not in {"promote", "rollback"}:
-              raise SystemExit("invalid release action")
-          if re.fullmatch(r"[0-9a-f]{40}", target) is None:
-              raise SystemExit("target SHA must be exactly 40 lowercase hex characters")
-
-          output = os.environ["GITHUB_OUTPUT"]
-          with open(output, "a", encoding="utf-8") as handle:
-              handle.write(f"target_sha={target}\n")
-              handle.write(f"action={action}\n")
-              handle.write(f"request_id={request_id}\n")
-          PY
-
-      - name: Checkout target commit
+      - name: Checkout declared target commit
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ steps.release.outputs.target_sha }}
           fetch-depth: 0
           persist-credentials: true
+          path: release-target
 
       - name: Validate release direction
         id: direction
+        working-directory: release-target
         env:
           TARGET_SHA: ${{ steps.release.outputs.target_sha }}
           RELEASE_ACTION: ${{ steps.release.outputs.action }}
@@ -146,17 +132,20 @@ jobs:
           fi
 
       - name: Install pinned zero-cost validation dependencies
+        working-directory: release-target
         run: |
           python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
           python -m pip check
 
       - name: Run static and full unit validation
+        working-directory: release-target
         run: |
           python -m ruff check .
           python -m compileall -q open-model-market tests
           python -m unittest discover -s tests -p 'test*.py' -v
 
       - name: Run deterministic no-call V5 regression
+        working-directory: release-target
         run: |
           rm -rf production-validation-artifacts
           python open-model-market/v5_pipeline.py \
@@ -185,6 +174,7 @@ jobs:
           PY
 
       - name: Move production ref
+        working-directory: release-target
         env:
           TARGET_SHA: ${{ steps.release.outputs.target_sha }}
           RELEASE_ACTION: ${{ steps.release.outputs.action }}
@@ -215,3 +205,21 @@ jobs:
             echo "- Paid model calls: \`0\`"
             echo "- Cross-task model history: \`disabled\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish release receipt
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
+        env:
+          TARGET_SHA: ${{ steps.release.outputs.target_sha }}
+          RELEASE_ACTION: ${{ steps.release.outputs.action }}
+          REQUEST_ID: ${{ steps.release.outputs.request_id }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const verb = process.env.RELEASE_ACTION === 'promote' ? 'PROMOTED' : 'ROLLED_BACK';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## V5_PRODUCTION_${verb}\n\n- Target: \`${process.env.TARGET_SHA}\`\n- Request: \`${process.env.REQUEST_ID}\`\n- Paid model calls: \`0\`\n- Run: \`${process.env.RUN_URL}\``
+            });
