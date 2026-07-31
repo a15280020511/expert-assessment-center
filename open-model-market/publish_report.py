@@ -95,11 +95,61 @@ def write_comments(report_path: Path, output_dir: Path, *, run_url: str, max_cha
         "source": str(report_path),
         "run_url": run_url,
         "run_id": run_id,
+        "publication_status": "prepared",
         "report_sha256": hashlib.sha256(report.encode("utf-8")).hexdigest(),
         "report_chars": len(report),
         "comment_count": len(comments),
         "max_comment_chars": max_chars,
         "files": files,
+    }
+    (output_dir / "report-comments-manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return manifest
+
+
+def _load_mapping(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def write_failure_skip_manifest(
+    artifact_root: Path,
+    report_path: Path,
+    output_dir: Path,
+    *,
+    run_url: str,
+    max_chars: int,
+) -> dict:
+    """Record intentional report omission after a failed zero/dry execution.
+
+    A failed execution has no business report to publish. Treating that absence
+    as a publisher crash obscures the primary failure and breaks post-upload
+    attestation. This manifest is evidence that publication was deliberately
+    skipped, not silently lost.
+    """
+    result = _load_mapping(artifact_root / "expert-team-result.json")
+    summary = _load_mapping(artifact_root / "v5-execution-summary.json")
+    status = str(result.get("status") or summary.get("status") or "").casefold()
+    if status not in {"failed", "failure"}:
+        raise FileNotFoundError(report_path)
+    run_id = _validated_run_id(run_url)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "version": 2,
+        "source": str(report_path),
+        "run_url": run_url,
+        "run_id": run_id,
+        "publication_status": "skipped_failed_execution",
+        "execution_status": status,
+        "report_sha256": None,
+        "report_chars": 0,
+        "comment_count": 0,
+        "max_comment_chars": max_chars,
+        "files": [],
     }
     (output_dir / "report-comments-manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -142,13 +192,23 @@ def resolve_paths(args: argparse.Namespace) -> tuple[Path, Path]:
 
 def main() -> int:
     args = parser().parse_args()
+    artifact_root = Path(args.output_dir)
     report_path, comments_path = resolve_paths(args)
-    manifest = write_comments(
-        report_path,
-        comments_path,
-        run_url=args.run_url,
-        max_chars=args.max_chars,
-    )
+    if report_path.is_file():
+        manifest = write_comments(
+            report_path,
+            comments_path,
+            run_url=args.run_url,
+            max_chars=args.max_chars,
+        )
+    else:
+        manifest = write_failure_skip_manifest(
+            artifact_root,
+            report_path,
+            comments_path,
+            run_url=args.run_url,
+            max_chars=args.max_chars,
+        )
     print(json.dumps(manifest, ensure_ascii=False))
     return 0
 
