@@ -5,6 +5,7 @@ on:
     paths:
       - "open-model-market/**"
       - "tests/**"
+      - "tools/**"
       - ".github/workflows/execution-ticket.yml"
       - ".github/workflows/expert-integrity-validate.yml"
       - ".github/workflows/v5-validate.yml"
@@ -17,6 +18,7 @@ on:
     paths:
       - "open-model-market/**"
       - "tests/**"
+      - "tools/**"
       - ".github/workflows/execution-ticket.yml"
       - ".github/workflows/expert-integrity-validate.yml"
       - ".github/workflows/v5-validate.yml"
@@ -54,9 +56,9 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python -m ruff check --select E9,F63,F7,F82 open-model-market tests 2>&1 | tee ruff.log
+          python -m ruff check --select E9,F63,F7,F82 open-model-market tests tools 2>&1 | tee ruff.log
       - name: Compile current Python tree
-        run: python -m py_compile open-model-market/*.py tests/*.py
+        run: python -m py_compile open-model-market/*.py tests/*.py tools/*.py
       - name: Verify V5 production files
         run: |
           test -s .github/dependabot.yml
@@ -81,6 +83,7 @@ jobs:
           test -s tests/test_v5_general_task_planning.py
           test -s tests/test_v5_general_task_full_planning.py
           test -s tests/test_v5_planning_scenario_matrix.py
+          test -s tools/run_v5_p0_regressions.py
       - name: Run current unit tests
         shell: bash
         run: |
@@ -90,15 +93,12 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python tests/test_v5_general_task_planning.py -v 2>&1 | tee general-task-classification.log
-          python tests/test_v5_general_task_full_planning.py -v 2>&1 | tee general-task-full-planning.log
-          python tests/test_v5_planning_scenario_matrix.py -v 2>&1 | tee general-task-scenario-matrix.log
-          grep -q "V5GeneralTaskPlanningTests" general-task-classification.log
-          grep -q "V5GeneralTaskFullPlanningTests" general-task-full-planning.log
-          grep -q "V5PlanningScenarioMatrixTests" general-task-scenario-matrix.log
-          grep -q "OK" general-task-classification.log
-          grep -q "OK" general-task-full-planning.log
-          grep -q "OK" general-task-scenario-matrix.log
+          python tools/run_v5_p0_regressions.py 2>&1 | tee general-task-regressions.log
+          grep -q "REGISTERED V5GeneralTaskPlanningTests: 5" general-task-regressions.log
+          grep -q "REGISTERED V5GeneralTaskFullPlanningTests: 4" general-task-regressions.log
+          grep -q "REGISTERED V5PlanningScenarioMatrixTests: 4" general-task-regressions.log
+          grep -q "REGISTERED TOTAL: 13" general-task-regressions.log
+          grep -q "P0 REGRESSION RESULT: run=13, failures=0, errors=0" general-task-regressions.log
       - name: Run deterministic V5 end-to-end dry-run
         run: |
           python open-model-market/v5_pipeline.py \
@@ -120,9 +120,7 @@ jobs:
           path: |
             validation-artifacts/
             unit-test.log
-            general-task-classification.log
-            general-task-full-planning.log
-            general-task-scenario-matrix.log
+            general-task-regressions.log
             ruff.log
           if-no-files-found: warn
           retention-days: 7
