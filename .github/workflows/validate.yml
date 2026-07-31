@@ -98,7 +98,7 @@ jobs:
           grep -q "REGISTERED V5GeneralTaskFullPlanningTests: 4" general-task-regressions.log
           grep -q "REGISTERED V5PlanningScenarioMatrixTests: 4" general-task-regressions.log
           grep -q "REGISTERED TOTAL: 13" general-task-regressions.log
-          grep -q "P0 REGRESSION RESULT: run=13, failures=0, errors=0" general-task-regressions.log
+          grep -q "P0 REGRESSION RESULT: run=13, passed=13, failures=0, errors=0, skipped=0" general-task-regressions.log
       - name: Run deterministic V5 end-to-end dry-run
         run: |
           python open-model-market/v5_pipeline.py \
