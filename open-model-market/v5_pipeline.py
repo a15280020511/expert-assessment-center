@@ -216,7 +216,12 @@ def _annotate_market(
     compiled_market["catalog_source"] = catalog_source
     compiled_market["endpoint_source"] = endpoint_source
     compiled_market["catalog_snapshot_id"] = catalog_snapshot_id
-    compiled_market["candidate_pool_policy"] = "top-150-multi-channel-company-diverse-before-optimizer"
+    compiled_market["candidate_pool_policy"] = (
+        "multi-channel-deduplicated-before-optimizer"
+    )
+    compiled_market["candidate_pool_expansion_policy"] = (
+        "top-150-company-diverse"
+    )
     compiled_market["model_company_policy"] = "task-global-all-different"
     compiled_market["ranked_model_count"] = len(ranked)
     compiled_market["ranked_company_count"] = len(set(companies))
