@@ -11,22 +11,58 @@ ROOT = Path(__file__).resolve().parents[1]
 MARKET = ROOT / "open-model-market"
 sys.path.insert(0, str(MARKET))
 
-import v5_executor as executor  # noqa: E402
 import v5_issue_ticket as ticket  # noqa: E402
-import v5_production_hardening  # noqa: E402
+from execution_graph import ExecutionGraph, SelectedNode  # noqa: E402
+from v5_runtime import BudgetController, RuntimeConfig  # noqa: E402
 
 
 class V5P0GovernanceTests(unittest.TestCase):
-    def test_global_total_call_cap_includes_recovery(self):
-        v5_production_hardening.install()
-        budget = executor.ExecutionBudget(
-            max_planned_calls=16,
-            max_retries=0,
-            max_replacements=2,
-            max_budget_usd=None,
+    def _budget_graph(self):
+        node = SelectedNode(
+            node_id="n0",
+            assigned_work=("work",),
+            professional_capabilities={},
+            functions=("analysis",),
+            prompt_profile={},
+            reasoning_profile={},
+            parameter_profile={},
+            model="vendor/model",
+            provider_endpoint="vendor/model@provider",
+            output_contract={},
+            estimated_quality=0.8,
+            quality_uncertainty=0.1,
+            estimated_cost=0.0,
+            failure_probability=0.0,
+            request_config={
+                "provider": {
+                    "only": ["provider"],
+                    "order": ["provider"],
+                    "allow_fallbacks": False,
+                }
+            },
         )
-        self.assertEqual(budget.maximum_total_calls, 16)
-        self.assertEqual(budget.maximum_initial_calls, 14)
+        return ExecutionGraph(
+            nodes=(node,),
+            edges=(),
+            execution_stages=((node.node_id,),),
+            entry_nodes=(node.node_id,),
+            final_nodes=(node.node_id,),
+            required_work=("work",),
+            estimated_quality=0.8,
+            quality_floor=0.6,
+            estimated_total_cost=0.0,
+            metadata={},
+        )
+
+    def test_global_total_call_cap_includes_shared_recovery(self):
+        config = RuntimeConfig(
+            total_call_limit=16,
+            recovery_call_limit=2,
+            cost_anomaly_usd=None,
+            quality_tier="value",
+        )
+        budget = BudgetController(config, self._budget_graph())
+        self.assertEqual(config.initial_call_limit, 14)
         for index in range(14):
             allowed, reason = budget.reserve("initial", 0.0, f"n{index}")
             self.assertTrue(allowed, reason)
@@ -34,11 +70,12 @@ class V5P0GovernanceTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertEqual(reason, "initial-call-cap-reserved-for-recovery")
         self.assertTrue(budget.reserve("replacement", 0.0, "r1")[0])
-        self.assertTrue(budget.reserve("replacement", 0.0, "r2")[0])
+        self.assertTrue(budget.reserve("retry", 0.0, "r2")[0])
         self.assertFalse(budget.reserve("replacement", 0.0, "r3")[0])
         snapshot = budget.snapshot()
         self.assertEqual(snapshot["calls_reserved"], 16)
         self.assertEqual(snapshot["maximum_total_calls"], 16)
+        self.assertEqual(snapshot["recovery_calls_reserved"], 2)
 
     def _prepare(self, approved_budget):
         packet = {
