@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministically audit a hardened V5 R8 production ticket execution."""
+"""Deterministically audit a V5 R8 production ticket execution."""
 from __future__ import annotations
 
 import argparse
@@ -44,9 +44,11 @@ def audit(root: Path, *, execute_outcome: str, publish_outcome: str) -> dict[str
     report_manifest = _load(root / "report-comments" / "report-comments-manifest.json", {})
     error = _load(root / "expert-team-error.json", {})
 
-    checks["runtime_version"] = result.get("runtime_version") if isinstance(result, Mapping) else None
-    checks["execute_outcome"] = execute_outcome
-    checks["publish_outcome"] = publish_outcome
+    checks.update({
+        "runtime_version": result.get("runtime_version") if isinstance(result, Mapping) else None,
+        "execute_outcome": execute_outcome,
+        "publish_outcome": publish_outcome,
+    })
     if execute_outcome != "success":
         failures.append(f"V5 execution outcome is {execute_outcome}")
     if publish_outcome != "success":
@@ -55,10 +57,14 @@ def audit(root: Path, *, execute_outcome: str, publish_outcome: str) -> dict[str
         failures.append("production ticket was not accepted")
     if not isinstance(result, Mapping) or result.get("runtime_version") != RUNTIME_VERSION:
         failures.append("V5 production result envelope is missing")
-    if not isinstance(runtime, Mapping) or runtime.get("fallback_policy") != "fail-closed-no-v3-fallback":
+    if not isinstance(runtime, Mapping) or runtime.get("fallback_policy") != "fail-closed-no-alternate-runtime":
         failures.append("fail-closed V5 runtime evidence is missing")
-    if isinstance(result, Mapping) and result.get("v3_fallback_used") is not False:
-        failures.append("V3 fallback was used or not explicitly disabled")
+    if isinstance(result, Mapping) and result.get("fallback_used") is not False:
+        failures.append("an alternate runtime fallback was used or not explicitly disabled")
+    if not isinstance(runtime, Mapping) or runtime.get("legacy_runtime_present") is not False:
+        failures.append("legacy runtime absence was not proven")
+    if isinstance(result, Mapping) and result.get("legacy_runtime_present") is not False:
+        failures.append("result envelope does not prove legacy runtime absence")
 
     status = str(summary.get("status") or result.get("status") or "") if isinstance(summary, Mapping) else ""
     completion_mode = str(summary.get("completion_mode") or result.get("completion_mode") or "") if isinstance(summary, Mapping) else ""
@@ -91,9 +97,7 @@ def audit(root: Path, *, execute_outcome: str, publish_outcome: str) -> dict[str
     budget = summary.get("execution_budget") if isinstance(summary, Mapping) and isinstance(summary.get("execution_budget"), Mapping) else {}
     calls = int(budget.get("calls_reserved") or 0)
     actual_cost = float(summary.get("actual_cost_usd") or budget.get("actual_cost_usd") or 0.0) if isinstance(summary, Mapping) else 0.0
-    checks["model_calls"] = calls
-    checks["maximum_model_calls"] = MAX_MODEL_CALLS
-    checks["actual_cost_usd"] = actual_cost
+    checks.update({"model_calls": calls, "maximum_model_calls": MAX_MODEL_CALLS, "actual_cost_usd": actual_cost})
     if calls <= 0 or calls > MAX_MODEL_CALLS:
         failures.append(f"V5 model calls are outside the production bound: {calls}")
     if not math.isfinite(actual_cost) or actual_cost < 0:
