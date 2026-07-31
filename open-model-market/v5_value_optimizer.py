@@ -303,6 +303,9 @@ def optimize_execution_graph(
     metadata["cost_performance_definition"] = (
         "risk_adjusted_task_utility_divided_by_initial_cost_plus_expected_recovery_cost_plus_call_overhead"
     )
+    metadata["cost_performance_ratio_unit"] = (
+        "risk_adjusted_utility_per_effective_expected_usd"
+    )
     metadata["marginal_utility_stop"] = {
         "scope": "optional graph expansion across feasible task interpretations and candidate bundles",
         "criterion": "accept expansion only when it improves the global risk-adjusted utility/effective-expected-cost ratio",
@@ -328,6 +331,11 @@ def optimize_execution_graph(
         _clamp(candidates[index].failure_probability)
         for index in selected_indices
     )
+    scaled_objective_ratio = selected_quality / selected_effective_cost
+    public_cost_performance_ratio = (
+        (selected_quality / QUALITY_SCALE)
+        / (selected_effective_cost / COST_SCALE)
+    )
     return {
         "version": 5,
         "optimizer": "google-or-tools-cp-sat",
@@ -340,6 +348,9 @@ def optimize_execution_graph(
         "cost_performance_definition": (
             "risk_adjusted_task_utility_divided_by_initial_cost_plus_expected_recovery_cost_plus_call_overhead"
         ),
+        "cost_performance_ratio_unit": (
+            "risk_adjusted_utility_per_effective_expected_usd"
+        ),
         "selected_quality_objective_scaled": selected_quality,
         "selected_initial_cost_scaled": selected_initial_cost,
         "selected_expected_recovery_cost_scaled": selected_recovery_cost,
@@ -348,12 +359,11 @@ def optimize_execution_graph(
         "selected_expected_recovery_cost_usd": round(selected_recovery_cost / COST_SCALE, 8),
         "selected_effective_cost_usd": round(selected_effective_cost / COST_SCALE, 8),
         "selected_expected_recovery_calls": round(selected_expected_recovery_calls, 6),
+        "quality_scale": QUALITY_SCALE,
         "cost_scale": COST_SCALE,
         "call_overhead_usd": CALL_OVERHEAD_USD,
-        "cost_performance_ratio": round(
-            selected_quality / selected_effective_cost,
-            9,
-        ),
+        "scaled_objective_ratio": round(scaled_objective_ratio, 9),
+        "cost_performance_ratio": round(public_cost_performance_ratio, 9),
         "marginal_utility_stop": metadata["marginal_utility_stop"],
         "deprecated_quality_tolerance_pct_ignored": float(quality_tolerance_pct),
         "selected_candidate_ids": [
