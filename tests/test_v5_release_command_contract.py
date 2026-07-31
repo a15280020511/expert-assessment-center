@@ -74,12 +74,22 @@ class TestV5ReleaseCommandContract(unittest.TestCase):
         enforce = self.text.index("name: Enforce canonical validation gate")
         dry = self.text.index("name: Run deterministic no-call V5 regression")
         move = self.text.index("name: Move production ref")
+        verify = self.text.index(
+            "name: Verify production ref and create authoritative receipt"
+        )
+        receipt_artifact = self.text.index(
+            "name: Upload authoritative release receipt"
+        )
+        notify = self.text.index("name: Publish optional PR notification")
 
         self.assertLess(ruff, compile_sources)
         self.assertLess(compile_sources, unit)
         self.assertLess(unit, enforce)
         self.assertLess(enforce, dry)
         self.assertLess(dry, move)
+        self.assertLess(move, verify)
+        self.assertLess(verify, receipt_artifact)
+        self.assertLess(receipt_artifact, notify)
         self.assertNotIn("name: Run static and full unit validation", self.text)
         self.assertIn("python -m ruff check .", self.text)
         self.assertIn(
@@ -136,6 +146,45 @@ class TestV5ReleaseCommandContract(unittest.TestCase):
         self.assertIn("validation-logs/ruff.log", self.validate_text)
         self.assertIn("validation-logs/compileall.log", self.validate_text)
         self.assertIn("validation-logs/unit-test.log", self.validate_text)
+
+    def test_authoritative_receipt_verifies_remote_ref_and_is_retained(self):
+        self.assertIn("id: move", self.text)
+        self.assertIn("id: receipt", self.text)
+        self.assertIn(
+            "git ls-remote origin refs/heads/production",
+            self.text,
+        )
+        self.assertIn('test "$observed" = "$TARGET_SHA"', self.text)
+        self.assertIn(
+            '"status": "production_ref_verified"',
+            self.text,
+        )
+        self.assertIn(
+            '"observed_production_sha": os.environ["OBSERVED_PRODUCTION"]',
+            self.text,
+        )
+        self.assertIn("release-receipt/release-receipt.json", self.text)
+        self.assertIn(
+            "name: v5-production-release-receipt-${{ github.run_id }}",
+            self.text,
+        )
+        self.assertIn("if-no-files-found: error", self.text)
+        self.assertIn("retention-days: 90", self.text)
+        self.assertIn("paid_model_calls", self.text)
+        self.assertIn("model_cost_usd", self.text)
+
+    def test_pr_comment_is_optional_and_cannot_change_release_truth(self):
+        self.assertIn("name: Publish optional PR notification", self.text)
+        self.assertIn("id: notify", self.text)
+        self.assertIn("continue-on-error: true", self.text)
+        self.assertIn(
+            "if: github.event_name == 'pull_request' && steps.receipt.outcome == 'success'",
+            self.text,
+        )
+        self.assertIn("name: Record optional notification outcome", self.text)
+        self.assertIn("NOTIFICATION_OUTCOME: ${{ steps.notify.outcome }}", self.text)
+        self.assertNotIn("name: Publish release receipt", self.text)
+        self.assertNotIn("name: Record release result", self.text)
 
     def test_release_reuses_direction_and_rollback_guards(self):
         self.assertIn("git merge-base --is-ancestor", self.text)
