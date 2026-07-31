@@ -51,34 +51,66 @@ def _load_case(path: Path, class_name: str, expected: int, index: int):
     return case_type, methods
 
 
-def _run_case_class(
+def _run_direct(
     case_type: type[unittest.TestCase],
     methods: list[str],
-    result: unittest.TestResult,
-) -> None:
+) -> tuple[int, int, int, int]:
+    passed = 0
+    failures = 0
+    errors = 0
+    skipped = 0
     setup_class = getattr(case_type, "setUpClass", None)
     teardown_class = getattr(case_type, "tearDownClass", None)
     if callable(setup_class):
         setup_class()
     try:
-        for method in methods:
-            before_failures = len(result.failures)
-            before_errors = len(result.errors)
-            before_skipped = len(result.skipped)
-            case = case_type(method)
-            case.run(result)
-            if len(result.failures) > before_failures:
-                state = "FAIL"
-            elif len(result.errors) > before_errors:
-                state = "ERROR"
-            elif len(result.skipped) > before_skipped:
-                state = "SKIP"
+        for method_name in methods:
+            case = case_type(method_name)
+            try:
+                setup = getattr(case, "setUp", None)
+                if callable(setup):
+                    setup()
+                getattr(case, method_name)()
+            except unittest.SkipTest as exc:
+                skipped += 1
+                print(
+                    f"SKIP {case_type.__name__}.{method_name}: {exc}",
+                    flush=True,
+                )
+            except AssertionError:
+                failures += 1
+                print(
+                    f"FAIL {case_type.__name__}.{method_name}\n{traceback.format_exc()}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            except Exception:
+                errors += 1
+                print(
+                    f"ERROR {case_type.__name__}.{method_name}\n{traceback.format_exc()}",
+                    file=sys.stderr,
+                    flush=True,
+                )
             else:
-                state = "PASS"
-            print(f"{state} {case_type.__name__}.{method}", flush=True)
+                passed += 1
+                print(f"PASS {case_type.__name__}.{method_name}", flush=True)
+            finally:
+                teardown = getattr(case, "tearDown", None)
+                if callable(teardown):
+                    try:
+                        teardown()
+                    except Exception:
+                        errors += 1
+                        print(
+                            f"ERROR {case_type.__name__}.{method_name}.tearDown\n"
+                            f"{traceback.format_exc()}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
     finally:
         if callable(teardown_class):
             teardown_class()
+    return passed, failures, errors, skipped
 
 
 def main() -> int:
@@ -92,30 +124,36 @@ def main() -> int:
         expected_total += expected
     print(f"REGISTERED TOTAL: {expected_total}", flush=True)
 
-    result = unittest.TestResult()
-    try:
-        for case_type, methods in loaded:
-            _run_case_class(case_type, methods, result)
-    except Exception:
-        traceback.print_exc()
-        return 1
+    passed = failures = errors = skipped = 0
+    for case_type, methods in loaded:
+        try:
+            row = _run_direct(case_type, methods)
+        except Exception:
+            errors += len(methods)
+            print(
+                f"ERROR {case_type.__name__}.class_setup\n{traceback.format_exc()}",
+                file=sys.stderr,
+                flush=True,
+            )
+            continue
+        passed += row[0]
+        failures += row[1]
+        errors += row[2]
+        skipped += row[3]
 
-    for case, detail in result.failures:
-        print(f"FAILURE DETAIL {case.id()}\n{detail}", file=sys.stderr)
-    for case, detail in result.errors:
-        print(f"ERROR DETAIL {case.id()}\n{detail}", file=sys.stderr)
-
+    executed = passed + failures + errors + skipped
     print(
         "P0 REGRESSION RESULT: "
-        f"run={result.testsRun}, failures={len(result.failures)}, "
-        f"errors={len(result.errors)}, skipped={len(result.skipped)}",
+        f"run={executed}, passed={passed}, failures={failures}, "
+        f"errors={errors}, skipped={skipped}",
         flush=True,
     )
     return 0 if (
-        result.testsRun == expected_total
-        and not result.failures
-        and not result.errors
-        and not result.unexpectedSuccesses
+        executed == expected_total
+        and passed == expected_total
+        and failures == 0
+        and errors == 0
+        and skipped == 0
     ) else 1
 
 
