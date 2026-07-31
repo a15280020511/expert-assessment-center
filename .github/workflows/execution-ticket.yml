@@ -40,7 +40,7 @@ jobs:
       RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout production source for admission
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: production
           persist-credentials: false
@@ -51,7 +51,7 @@ jobs:
 
       - name: Publish explicit busy rejection
         if: steps.lock.outputs.allowed != 'true'
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
         with:
           script: |
             await github.rest.issues.createComment({
@@ -85,7 +85,7 @@ jobs:
 
       - name: Upload admission evidence
         if: always() && steps.lock.outputs.allowed == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ticket-admission-${{ github.run_id }}
           path: |
@@ -96,7 +96,7 @@ jobs:
 
       - name: Publish admission status
         if: steps.lock.outputs.allowed == 'true'
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
         env:
           STATUS_FILE: admission-status.md
         with:
@@ -130,13 +130,13 @@ jobs:
       OPENROUTER_APP_NAME: self-managed-open-model-expert-team-v5
     steps:
       - name: Checkout pinned production source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: production
           persist-credentials: false
 
       - name: Download admitted ticket
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: ticket-admission-${{ github.run_id }}
           path: admission-download
@@ -189,7 +189,7 @@ jobs:
 
       - name: Publish report comments
         if: steps.publish.outcome == 'success'
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
         env:
           COMMENT_DIR: ticket-artifacts/report-comments
         with:
@@ -232,7 +232,7 @@ jobs:
       - name: Upload primary ticket artifacts
         id: ticket_artifact
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ticket-result-${{ github.run_id }}
           path: ticket-artifacts/
@@ -280,7 +280,7 @@ jobs:
       - name: Upload final attestation artifact
         id: proof_artifact
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: final-attestation-${{ github.run_id }}
           path: |
@@ -292,7 +292,7 @@ jobs:
 
       - name: Publish authoritative V5 final status
         if: always()
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
         env:
           STATUS_FILE: final-status.md
           FINAL_ARTIFACT_ID: ${{ steps.proof_artifact.outputs.artifact-id }}
