@@ -38,7 +38,7 @@ MAX_RATIO_ITERATIONS = 10
 def _solver(seconds: float) -> cp_model.CpSolver:
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = max(1.0, float(seconds))
-    solver.parameters.num_search_workers = 8
+    solver.parameters.num_search_workers = 1
     solver.parameters.random_seed = 0
     return solver
 
