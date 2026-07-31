@@ -1,0 +1,43 @@
+name: Apply V5 Long Markdown Integrity Patch
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/v5-long-markdown-contract-integrity-r126'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repair branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: fix/v5-long-markdown-contract-integrity-r126
+          persist-credentials: true
+
+      - name: Apply deterministic source patches
+        run: |
+          if grep -q 'DEGRADED_SUCCESS' open-model-market/v5_execution_auditor_integrity.py && \
+             grep -q 'markdown_violations = task_delivery_contract.validate_markdown_contract' open-model-market/v5_runtime.py; then
+            echo 'Long Markdown integrity patch already applied.'
+            exit 0
+          fi
+          python scripts/apply_v5_long_markdown_integrity_patch.py
+
+      - name: Commit patch when changed
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add open-model-market/v5_task_delivery_contract.py open-model-market/v5_runtime.py open-model-market/v5_execution_auditor_integrity.py
+          git diff --cached --check
+          git commit -m 'fix(v5): preserve long Markdown contract integrity'
+          git push origin HEAD:fix/v5-long-markdown-contract-integrity-r126
