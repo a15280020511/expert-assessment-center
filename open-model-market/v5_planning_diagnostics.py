@@ -1,18 +1,22 @@
 """Constraint-faithful diagnostics for V5 planning failures.
 
 The production optimizer must fail closed, but a bare CP-SAT ``INFEASIBLE`` is
-not actionable. These helpers solve each interpretation without ticket ceilings,
-preserve the joint node/cost pair for every interpretation, and compare those
-pairs with the approved node and risk-adjusted cost budgets. No model call is
-performed.
+not actionable. These helpers reproduce exact coverage, model independence and
+task-global model-company uniqueness before comparing the resulting joint node
+and cost pair with approved limits. No model call is performed.
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any, Mapping, Sequence
 
 from ortools.sat.python import cp_model
 
 from execution_graph import GraphLimits
+from v5_model_company import (
+    REQUIRE_DISTINCT_MODEL_COMPANIES,
+    candidate_company,
+)
 from v5_planner import CandidateNode
 from v5_value_optimizer import CALL_OVERHEAD_USD
 
@@ -64,6 +68,10 @@ def _build_model(
     interpretation_id: str,
     meta: Mapping[str, Any],
     candidates: Sequence[CandidateNode],
+    *,
+    require_distinct_model_companies: bool = (
+        REQUIRE_DISTINCT_MODEL_COMPANIES
+    ),
 ) -> tuple[
     cp_model.CpModel,
     list[cp_model.IntVar],
@@ -77,7 +85,10 @@ def _build_model(
         if candidate.interpretation_id == interpretation_id
     ]
     model = cp_model.CpModel()
-    variables = [model.NewBoolVar(f"candidate_{index}") for index in range(len(scoped))]
+    variables = [
+        model.NewBoolVar(f"candidate_{index}")
+        for index in range(len(scoped))
+    ]
     keys = _coverage_keys(meta)
     missing: list[str] = []
     for key in keys:
@@ -90,6 +101,14 @@ def _build_model(
             missing.append(key)
         else:
             model.Add(sum(terms) == 1)
+
+    if require_distinct_model_companies:
+        indices_by_company: dict[str, list[int]] = defaultdict(list)
+        for index, candidate in enumerate(scoped):
+            indices_by_company[candidate_company(candidate)].append(index)
+        for indices in indices_by_company.values():
+            if len(indices) > 1:
+                model.Add(sum(variables[index] for index in indices) <= 1)
 
     for work_id, copies_raw in dict(meta.get("copies_by_work", {})).items():
         copies = int(copies_raw)
@@ -134,13 +153,58 @@ def _selected_ids(
     ]
 
 
+def _relaxed_company_diagnostic(
+    interpretation_id: str,
+    meta: Mapping[str, Any],
+    candidates: Sequence[CandidateNode],
+) -> dict[str, Any]:
+    model, variables, _, missing, scoped = _build_model(
+        interpretation_id,
+        meta,
+        candidates,
+        require_distinct_model_companies=False,
+    )
+    available_companies = sorted(
+        {candidate_company(candidate) for candidate in scoped}
+    )
+    if missing:
+        return {
+            "relaxed_feasible": False,
+            "minimum_required_nodes_without_company_uniqueness": None,
+            "available_company_count": len(available_companies),
+            "available_companies": available_companies,
+        }
+    model.Minimize(sum(variables))
+    solver = _solver()
+    status = solver.Solve(model)
+    if status not in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
+        return {
+            "relaxed_feasible": False,
+            "minimum_required_nodes_without_company_uniqueness": None,
+            "available_company_count": len(available_companies),
+            "available_companies": available_companies,
+        }
+    minimum_nodes = int(
+        sum(solver.Value(variable) for variable in variables)
+    )
+    return {
+        "relaxed_feasible": True,
+        "minimum_required_nodes_without_company_uniqueness": minimum_nodes,
+        "minimum_distinct_companies_required": minimum_nodes,
+        "available_company_count": len(available_companies),
+        "available_companies": available_companies,
+    }
+
+
 def _solve_minimum(
     interpretation_id: str,
     meta: Mapping[str, Any],
     candidates: Sequence[CandidateNode],
 ) -> dict[str, Any]:
     model, variables, costs, missing, scoped = _build_model(
-        interpretation_id, meta, candidates
+        interpretation_id,
+        meta,
+        candidates,
     )
     coverage_counts = {
         key: sum(
@@ -151,6 +215,11 @@ def _solve_minimum(
         )
         for key in _coverage_keys(meta)
     }
+    company_diagnostic = _relaxed_company_diagnostic(
+        interpretation_id,
+        meta,
+        candidates,
+    )
     if missing:
         return {
             "interpretation_id": interpretation_id,
@@ -161,36 +230,48 @@ def _solve_minimum(
             "minimum_required_nodes": None,
             "minimum_effective_expected_cost_usd": None,
             "minimum_node_solution_candidate_ids": [],
+            "model_company_diagnostic": company_diagnostic,
         }
 
     node_solver = _solver()
     model.Minimize(sum(variables))
     status = node_solver.Solve(model)
     if status not in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
+        company_conflict = bool(company_diagnostic["relaxed_feasible"])
         return {
             "interpretation_id": interpretation_id,
             "feasible_without_ticket_limits": False,
-            "failure_reason": "independence_or_exact_coverage_conflict",
+            "failure_reason": (
+                "model_company_diversity_conflict"
+                if company_conflict
+                else "independence_or_exact_coverage_conflict"
+            ),
             "missing_coverage_keys": [],
             "coverage_candidate_counts": coverage_counts,
             "minimum_required_nodes": None,
             "minimum_effective_expected_cost_usd": None,
             "minimum_node_solution_candidate_ids": [],
+            "model_company_diagnostic": company_diagnostic,
         }
 
-    minimum_nodes = int(sum(node_solver.Value(variable) for variable in variables))
-
-    # Rebuild after the node solve so objective replacement cannot accidentally
-    # retain state from a prior solve. Cost is minimized under the exact minimum
-    # node count, preserving one joint, executable remediation pair.
+    minimum_nodes = int(
+        sum(node_solver.Value(variable) for variable in variables)
+    )
     cost_model, cost_variables, cost_values, cost_missing, cost_scoped = _build_model(
-        interpretation_id, meta, candidates
+        interpretation_id,
+        meta,
+        candidates,
     )
     if cost_missing:
-        raise RuntimeError("coverage changed between deterministic diagnostic solves")
+        raise RuntimeError(
+            "coverage changed between deterministic diagnostic solves"
+        )
     cost_model.Add(sum(cost_variables) == minimum_nodes)
     cost_model.Minimize(
-        sum(cost * variable for cost, variable in zip(cost_values, cost_variables))
+        sum(
+            cost * variable
+            for cost, variable in zip(cost_values, cost_variables)
+        )
     )
     cost_solver = _solver()
     cost_status = cost_solver.Solve(cost_model)
@@ -201,7 +282,11 @@ def _solve_minimum(
             cost * cost_solver.Value(variable)
             for cost, variable in zip(cost_values, cost_variables)
         ) / COST_SCALE
-        selected_ids = _selected_ids(cost_solver, cost_variables, cost_scoped)
+        selected_ids = _selected_ids(
+            cost_solver,
+            cost_variables,
+            cost_scoped,
+        )
 
     return {
         "interpretation_id": interpretation_id,
@@ -214,6 +299,10 @@ def _solve_minimum(
             round(float(minimum_cost), 8) if minimum_cost is not None else None
         ),
         "minimum_node_solution_candidate_ids": selected_ids,
+        "model_company_diagnostic": {
+            **company_diagnostic,
+            "strict_company_unique_solution_exists": True,
+        },
     }
 
 
@@ -262,7 +351,10 @@ def _remediation_options(
                 ),
                 "fits_current_joint_limits": (
                     nodes <= int(limits.max_nodes)
-                    and (raw_budget is None or raw_cost <= raw_budget + 1e-12)
+                    and (
+                        raw_budget is None
+                        or raw_cost <= raw_budget + 1e-12
+                    )
                 ),
                 "minimum_node_solution_candidate_ids": list(
                     row.get("minimum_node_solution_candidate_ids") or []
@@ -293,11 +385,19 @@ def build_infeasibility_report(
         _solve_minimum(interpretation_id, meta, candidates)
         for interpretation_id, meta in sorted(interpretations.items())
     ]
-    feasible_rows = [row for row in rows if row["feasible_without_ticket_limits"]]
+    feasible_rows = [
+        row for row in rows if row["feasible_without_ticket_limits"]
+    ]
+    company_conflict_rows = [
+        row
+        for row in rows
+        if row.get("failure_reason") == "model_company_diversity_conflict"
+    ]
     raw_budget = None
     if limits.max_budget_usd is not None:
         raw_budget = float(limits.max_budget_usd) / max(
-            1.0, float(limits.cost_risk_multiplier)
+            1.0,
+            float(limits.cost_risk_multiplier),
         )
 
     node_fit = [
@@ -325,7 +425,9 @@ def build_infeasibility_report(
             <= raw_budget + 1e-12
         )
     ]
-    if not feasible_rows:
+    if not feasible_rows and company_conflict_rows:
+        code = "MODEL_COMPANY_DIVERSITY_INSUFFICIENT"
+    elif not feasible_rows:
         code = "CAPABILITY_OR_INDEPENDENCE_GAP"
     elif not node_fit:
         code = "BUDGET_INSUFFICIENT_NODES"
@@ -345,7 +447,11 @@ def build_infeasibility_report(
     )
     multiplier = max(1.0, float(limits.cost_risk_multiplier))
     calibration = candidate_bundle.get("hard_capability_calibration", {})
-    remediations = _remediation_options(feasible_rows, limits, raw_budget)
+    remediations = _remediation_options(
+        feasible_rows,
+        limits,
+        raw_budget,
+    )
     return {
         "version": 5,
         "status": "INFEASIBLE",
@@ -362,21 +468,38 @@ def build_infeasibility_report(
             "cost_risk_multiplier": float(limits.cost_risk_multiplier),
         },
         "candidate_counts": {
-            "before_pareto": int(candidate_bundle.get("candidate_count_before_pareto", 0)),
-            "after_pareto": int(candidate_bundle.get("candidate_count_after_pareto", 0)),
-            "pruned": int(candidate_bundle.get("pareto_pruned_count", 0)),
+            "before_pareto": int(
+                candidate_bundle.get("candidate_count_before_pareto", 0)
+            ),
+            "after_pareto": int(
+                candidate_bundle.get("candidate_count_after_pareto", 0)
+            ),
+            "pruned": int(
+                candidate_bundle.get("pareto_pruned_count", 0)
+            ),
+        },
+        "model_company_policy": {
+            "require_distinct_model_companies": True,
+            "scope": "all-substantive-nodes-in-one-task",
+            "failure_policy": "fail-closed-before-model-call",
+            "conflicting_interpretation_ids": [
+                row["interpretation_id"]
+                for row in company_conflict_rows
+            ],
         },
         "interpretations": rows,
-        # Backward-compatible fields are now joint-aware: minimum cost is the
-        # cheapest interpretation that fits the approved node ceiling.
         "minimum_required_nodes": global_min_nodes,
         "minimum_effective_expected_cost_usd": (
-            round(reported_min_cost, 8) if reported_min_cost is not None else None
+            round(reported_min_cost, 8)
+            if reported_min_cost is not None
+            else None
         ),
         "joint_limit_diagnostics": {
             "minimum_required_nodes_any_interpretation": global_min_nodes,
             "minimum_effective_expected_cost_usd_any_interpretation": (
-                round(global_min_cost, 8) if global_min_cost is not None else None
+                round(global_min_cost, 8)
+                if global_min_cost is not None
+                else None
             ),
             "minimum_effective_expected_cost_usd_within_node_limit": (
                 round(node_limited_min_cost, 8)
@@ -388,7 +511,9 @@ def build_infeasibility_report(
                 if node_limited_min_cost is not None
                 else None
             ),
-            "minimum_required_nodes_within_planning_budget": budget_limited_min_nodes,
+            "minimum_required_nodes_within_planning_budget": (
+                budget_limited_min_nodes
+            ),
             "jointly_feasible_interpretation_ids": [
                 row["interpretation_id"] for row in joint_fit
             ],
@@ -417,8 +542,12 @@ def build_candidate_generation_failure_report(
         ),
         "market_counts": {
             "endpoint_count": int(market.get("endpoint_count", 0)),
-            "real_endpoint_count": int(market.get("real_endpoint_count", 0)),
-            "synthetic_fixture_count": int(market.get("synthetic_fixture_count", 0)),
+            "real_endpoint_count": int(
+                market.get("real_endpoint_count", 0)
+            ),
+            "synthetic_fixture_count": int(
+                market.get("synthetic_fixture_count", 0)
+            ),
         },
         "model_calls_performed": 0,
         "fallback_used": False,
