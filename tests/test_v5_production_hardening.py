@@ -10,9 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
 from execution_graph import ExecutionGraph, GraphLimits, SelectedEdge, SelectedNode  # noqa: E402
-import v5_cost_reliability_hardening as legacy_cost  # noqa: E402
 import v5_production_hardening as hardening  # noqa: E402
-import v5_token_cost_policy as token_cost  # noqa: E402
+import v5_truncation_budget_policy as truncation  # noqa: E402
+from v5_planning_runtime import PlannerPolicy  # noqa: E402
 
 
 def _node(node_id, work_id, *, functions=("analysis",), model=None):
@@ -70,12 +70,16 @@ class TestV5ProductionHardening(unittest.TestCase):
                 "expected_output_tokens": 2500,
                 "expected_reasoning_tokens": 1600,
             },
-            "output_contract": {"machine_readable_required": True},
+            "reasoning_requirements": {"reasoning_enabled": True},
+            "output_contract": {
+                "required_fields": [],
+                "machine_readable_required": True,
+            },
         }]
         optimistic = hardening._ORIGINAL_ESTIMATED_COST(endpoint, works)
-        conservative = hardening.conservative_estimated_cost(endpoint, works)
-        usage = token_cost.estimated_completion_usage(works[0], 10000)
-        allowance = legacy_cost.completion_envelope(works[0], 10000)
+        conservative = PlannerPolicy._p95_cost(endpoint, works, 1.0)
+        usage = truncation.estimated_completion_usage(works[0], 10000)
+        allowance = truncation.completion_envelope(works[0], 10000)
         reliability_reserve = 1.0 + (0.98 - 0.96) * 1.75
         expected = round(
             ((1000 * 2.0) + (usage * 10.0))

@@ -17,7 +17,6 @@ bundle.
 """
 from __future__ import annotations
 
-import sys
 from typing import Any, Mapping, Sequence
 
 import v5_planner
@@ -250,8 +249,12 @@ def generate_calibrated_candidate_graph(
     market: Mapping[str, Any],
     *,
     maximum_per_group: int = 12,
+    candidate_factory: Any | None = None,
+    pruner: Any | None = None,
 ) -> dict[str, Any]:
-    """Generate candidates using rank-backed hard-capability proxy eligibility."""
+    """Generate candidates with explicitly supplied policy functions."""
+    candidate_factory = candidate_factory or v5_planner._candidate_for
+    pruner = pruner or v5_planner.pareto_prune
     endpoints = [
         endpoint
         for endpoint in market.get("endpoints", [])
@@ -336,7 +339,7 @@ def generate_calibrated_candidate_graph(
                         work_id
                     ]:
                         continue
-                    candidate = v5_planner._candidate_for(
+                    candidate = candidate_factory(
                         interpretation_id,
                         [key],
                         [work],
@@ -372,7 +375,7 @@ def generate_calibrated_candidate_graph(
                         continue
                     if endpoint_id not in eligible_endpoint_ids[right_id]:
                         continue
-                    candidate = v5_planner._candidate_for(
+                    candidate = candidate_factory(
                         interpretation_id,
                         [f"{left_id}#0", f"{right_id}#0"],
                         [works[left_id], works[right_id]],
@@ -405,7 +408,7 @@ def generate_calibrated_candidate_graph(
             ),
         }
 
-    pruned = v5_planner.pareto_prune(
+    pruned = pruner(
         all_candidates, maximum_per_group=maximum_per_group
     )
     if not pruned:
@@ -437,16 +440,5 @@ def generate_calibrated_candidate_graph(
 
 
 def install() -> None:
-    """Install calibrated candidate generation into all loaded V5 call paths."""
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _INSTALLED = True
-    v5_planner.generate_candidate_graph = generate_calibrated_candidate_graph
-    optimizer = sys.modules.get("v5_value_optimizer")
-    if optimizer is not None:
-        setattr(
-            optimizer,
-            "generate_candidate_graph",
-            generate_calibrated_candidate_graph,
-        )
+    """Deprecated compatibility no-op; use PlannerPolicy explicitly."""
+    return None

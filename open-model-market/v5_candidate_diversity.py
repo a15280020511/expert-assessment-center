@@ -7,13 +7,9 @@ filling the remaining group capacity from the Pareto frontier.
 """
 from __future__ import annotations
 
-import sys
 from typing import Sequence
 
-import v5_capability_calibration
-import v5_output_contract_delivery
 import v5_planner
-import v5_production_hardening
 from v5_planner import CandidateNode
 
 _INSTALLED = False
@@ -100,22 +96,5 @@ def diversity_preserving_pareto_prune(
 
 
 def install() -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        v5_production_hardening.install()
-        return
-    v5_planner.pareto_prune = diversity_preserving_pareto_prune
-    # Candidate qualification, diversity preservation, output-contract delivery,
-    # conservative cost control and resilient partial-success synthesis form one
-    # production safety unit. No alternate runtime or production entry is changed.
-    v5_capability_calibration.install()
-
-    optimizer = sys.modules.get("v5_value_optimizer")
-    if optimizer is not None:
-        v5_planner.optimize_execution_graph = optimizer.optimize_execution_graph
-
-    # Independence-aware benchmark logic now lives directly in v5_benchmark.py;
-    # do not replace its functions globally at runtime.
-    v5_output_contract_delivery.install()
-    v5_production_hardening.install()
-    _INSTALLED = True
+    """Deprecated compatibility no-op; use the function explicitly."""
+    return None

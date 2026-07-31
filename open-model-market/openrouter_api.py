@@ -1,4 +1,4 @@
-"""Minimal OpenRouter HTTP client with bounded responses and jittered retries."""
+"""Minimal OpenRouter HTTP client with bounded responses and structured failures."""
 from __future__ import annotations
 
 import json
@@ -17,7 +17,27 @@ MAX_RESPONSE_BYTES = 20 * 1024 * 1024
 
 
 class OpenRouterRequestError(RuntimeError):
-    pass
+    """Protocol-level failure with machine-readable recovery attributes."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: str = "invalid_response",
+        retryable: bool = False,
+        http_status: int | None = None,
+        retry_after_seconds: float | None = None,
+        request_sent: bool = False,
+        response_received: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.category = category
+        self.retryable = bool(retryable)
+        self.http_status = http_status
+        self.retry_after_seconds = retry_after_seconds
+        self.request_sent = bool(request_sent)
+        self.response_received = bool(response_received)
+
 
 
 def headers(api_key: Optional[str]) -> Dict[str, str]:
@@ -29,16 +49,23 @@ def headers(api_key: Optional[str]) -> Dict[str, str]:
     return result
 
 
-def _retry_delay(attempt: int, retry_after: str | None = None) -> float:
-    if retry_after:
+def _retry_after_seconds(retry_after: str | None) -> float | None:
+    if not retry_after:
+        return None
+    try:
+        return min(60.0, max(0.0, float(retry_after)))
+    except ValueError:
         try:
-            return min(60.0, max(0.0, float(retry_after)))
-        except ValueError:
-            try:
-                target = parsedate_to_datetime(retry_after).timestamp()
-                return min(60.0, max(0.0, target - time.time()))
-            except (TypeError, ValueError, OverflowError):
-                pass
+            target = parsedate_to_datetime(retry_after).timestamp()
+            return min(60.0, max(0.0, target - time.time()))
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+
+def _retry_delay(attempt: int, retry_after: str | None = None) -> float:
+    explicit = _retry_after_seconds(retry_after)
+    if explicit is not None:
+        return explicit
     base = min(2 ** attempt, 8)
     return base + random.uniform(0.0, max(0.25, base * 0.35))
 
@@ -47,15 +74,72 @@ def _decode_response(response: Any, url: str) -> Dict[str, Any]:
     raw = response.read(MAX_RESPONSE_BYTES + 1)
     if len(raw) > MAX_RESPONSE_BYTES:
         raise OpenRouterRequestError(
-            f"Response from {url} exceeds the {MAX_RESPONSE_BYTES}-byte safety limit."
+            f"Response from {url} exceeds the {MAX_RESPONSE_BYTES}-byte safety limit.",
+            category="invalid_response",
+            retryable=False,
+            request_sent=True,
+            response_received=True,
         )
     try:
         parsed = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise OpenRouterRequestError(f"Invalid JSON from {url}: {exc}") from exc
+        raise OpenRouterRequestError(
+            f"Invalid JSON from {url}: {exc}",
+            category="invalid_response",
+            retryable=False,
+            request_sent=True,
+            response_received=True,
+        ) from exc
     if not isinstance(parsed, dict):
-        raise OpenRouterRequestError(f"Non-object JSON from {url}")
+        raise OpenRouterRequestError(
+            f"Non-object JSON from {url}",
+            category="invalid_response",
+            retryable=False,
+            request_sent=True,
+            response_received=True,
+        )
     return parsed
+
+
+def _structured_error_code(body: str) -> str:
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    error = payload.get("error")
+    if isinstance(error, dict):
+        for key in ("code", "type"):
+            value = error.get(key)
+            if value not in {None, ""}:
+                return str(value).strip().casefold()
+    for key in ("code", "type"):
+        value = payload.get(key)
+        if value not in {None, ""}:
+            return str(value).strip().casefold()
+    return ""
+
+
+def _http_category(status: int, body: str) -> str:
+    code = _structured_error_code(body)
+    if status == 429:
+        return "rate_limited"
+    if status in {408, 504}:
+        return "timeout"
+    if code in {
+        "context_length_exceeded",
+        "context_window_exceeded",
+        "max_context_length_exceeded",
+    }:
+        return "context_overflow"
+    if code in {
+        "unsupported_parameter",
+        "invalid_parameter",
+        "parameter_not_supported",
+    }:
+        return "unsupported_parameter"
+    return "invalid_response"
 
 
 def request_json(
@@ -77,16 +161,50 @@ def request_json(
         except urllib.error.HTTPError as exc:
             body = exc.read(2000).decode("utf-8", errors="replace")
             retry_after = exc.headers.get("Retry-After") if exc.headers else None
+            retryable = exc.code in RETRYABLE_HTTP_CODES
             last_error = OpenRouterRequestError(
-                f"HTTP {exc.code} from OpenRouter after attempt {attempt + 1}/{max_retries + 1}: {body}"
+                f"HTTP {exc.code} from OpenRouter after attempt {attempt + 1}/{max_retries + 1}: {body}",
+                category=_http_category(exc.code, body),
+                retryable=retryable,
+                http_status=exc.code,
+                retry_after_seconds=_retry_after_seconds(retry_after),
+                request_sent=True,
+                response_received=True,
             )
-            if exc.code not in RETRYABLE_HTTP_CODES or attempt >= max_retries:
+            if not retryable or attempt >= max_retries:
                 raise last_error
-        except (urllib.error.URLError, TimeoutError, OpenRouterRequestError) as exc:
-            last_error = exc
+        except TimeoutError as exc:
+            last_error = OpenRouterRequestError(
+                f"OpenRouter request timed out after attempt {attempt + 1}/{max_retries + 1}: {exc}",
+                category="timeout",
+                retryable=True,
+                request_sent=True,
+                response_received=False,
+            )
             if attempt >= max_retries:
-                raise OpenRouterRequestError(
-                    f"OpenRouter request failed after {attempt + 1} attempt(s): {exc}"
-                ) from exc
+                raise last_error from exc
+        except urllib.error.URLError as exc:
+            reason = getattr(exc, "reason", None)
+            category = "timeout" if isinstance(reason, TimeoutError) else "invalid_response"
+            last_error = OpenRouterRequestError(
+                f"OpenRouter transport failed after attempt {attempt + 1}/{max_retries + 1}: {exc}",
+                category=category,
+                retryable=True,
+                request_sent=True,
+                response_received=False,
+            )
+            if attempt >= max_retries:
+                raise last_error from exc
+        except OpenRouterRequestError as exc:
+            last_error = exc
+            if not exc.retryable or attempt >= max_retries:
+                raise
         time.sleep(_retry_delay(attempt, retry_after))
-    raise OpenRouterRequestError(f"OpenRouter request failed: {last_error}")
+    if isinstance(last_error, OpenRouterRequestError):
+        raise last_error
+    raise OpenRouterRequestError(
+        f"OpenRouter request failed: {last_error}",
+        category="invalid_response",
+        retryable=False,
+        request_sent=True,
+    )

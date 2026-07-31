@@ -8,6 +8,8 @@ sys.path.insert(0, str(ROOT / "open-model-market"))
 import v5_candidate_diversity as diversity  # noqa: E402
 import v5_planner  # noqa: E402
 from v5_planner import CandidateNode  # noqa: E402
+from v5_planning_runtime import PlannerPolicy  # noqa: E402
+from v5_runtime import RuntimeConfig  # noqa: E402
 
 
 class TestV5CandidateDiversity(unittest.TestCase):
@@ -57,20 +59,24 @@ class TestV5CandidateDiversity(unittest.TestCase):
         self.assertEqual(len(kept), 2)
         self.assertEqual(len({row.model for row in kept}), 2)
 
-    def test_install_replaces_runtime_pruner(self):
+    def test_compatibility_install_is_no_op(self):
         original = v5_planner.pareto_prune
-        try:
-            diversity._INSTALLED = False
-            diversity.install()
-            self.assertIs(v5_planner.pareto_prune, diversity.diversity_preserving_pareto_prune)
-        finally:
-            v5_planner.pareto_prune = original
-            diversity._INSTALLED = False
+        diversity.install()
+        self.assertIs(v5_planner.pareto_prune, original)
 
-    def test_formal_pipeline_installs_candidate_diversity(self):
+    def test_formal_runtime_composes_diversity_explicitly(self):
+        policy = PlannerPolicy(RuntimeConfig(
+            total_call_limit=4,
+            recovery_call_limit=1,
+            cost_anomaly_usd=None,
+            quality_tier="value",
+        ))
+        self.assertIsNotNone(policy)
+        source = (ROOT / "open-model-market" / "v5_planning_runtime.py").read_text(encoding="utf-8")
         pipeline = (ROOT / "open-model-market" / "v5_pipeline.py").read_text(encoding="utf-8")
-        self.assertIn("import v5_candidate_diversity", pipeline)
-        self.assertIn("v5_candidate_diversity.install()", pipeline)
+        self.assertIn("diversity_preserving_pareto_prune", source)
+        self.assertIn("runtime.planner_policy.generate_candidate_graph", pipeline)
+        self.assertNotIn("v5_candidate_diversity.install()", pipeline)
 
 
 if __name__ == "__main__":

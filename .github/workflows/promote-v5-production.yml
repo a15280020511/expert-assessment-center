@@ -1,0 +1,128 @@
+name: Promote V5 Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact validated commit SHA to place on production
+        required: true
+        type: string
+      action:
+        description: Fast-forward promotion or validated ancestor rollback
+        required: true
+        default: promote
+        type: choice
+        options:
+          - promote
+          - rollback
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v5-production-release
+  cancel-in-progress: false
+
+jobs:
+  validate-and-move-production:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout target commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.target_sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Validate release direction
+        id: direction
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+          RELEASE_ACTION: ${{ inputs.action }}
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          git fetch origin main production --no-tags || git fetch origin main --no-tags
+          git merge-base --is-ancestor "$TARGET_SHA" origin/main
+          current="$(git ls-remote origin refs/heads/production | awk '{print $1}')"
+          echo "current_production=$current" >> "$GITHUB_OUTPUT"
+          if [[ "$RELEASE_ACTION" == "promote" ]]; then
+            if [[ -n "$current" ]]; then
+              git merge-base --is-ancestor "$current" "$TARGET_SHA"
+            fi
+          else
+            test -n "$current"
+            git merge-base --is-ancestor "$TARGET_SHA" "$current"
+          fi
+
+      - name: Install pinned zero-cost validation dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+
+      - name: Run static and full unit validation
+        run: |
+          python -m ruff check .
+          python -m compileall -q open-model-market tests
+          python -m unittest discover -s tests -p 'test*.py' -v
+
+      - name: Run deterministic no-call V5 regression
+        run: |
+          rm -rf production-validation-artifacts
+          python open-model-market/v5_pipeline.py \
+            --task "生产发布零费用回归：比较三个公共投资方案，完成财务、合规、证据、预测、红队和最终决策。" \
+            --catalog-file tests/fixtures/models.json \
+            --endpoint-file tests/fixtures/endpoints.json \
+            --dry-run \
+            --maximum-total-calls 4 \
+            --maximum-recovery-calls 1 \
+            --quality-tier value \
+            --output-dir production-validation-artifacts
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('production-validation-artifacts')
+          dry = json.loads((root / 'v5-dry-run.json').read_text())
+          runtime = json.loads((root / 'v5-runtime-config.json').read_text())
+          snapshot = json.loads((root / 'catalog-snapshot.json').read_text())
+          assert dry['status'] == 'planned-not-executed'
+          assert dry['approved_budget']['maximum_total_calls'] == 4
+          assert dry['approved_budget']['maximum_recovery_calls'] == 1
+          assert runtime['global_monkey_patching'] is False
+          assert runtime['cross_task_history_used'] is False
+          assert snapshot['cross_task_history_used'] is False
+          assert snapshot['catalog_snapshot_id'] == dry['catalog_snapshot_id']
+          PY
+
+      - name: Move production ref
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+          RELEASE_ACTION: ${{ inputs.action }}
+          CURRENT_PRODUCTION: ${{ steps.direction.outputs.current_production }}
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_ACTION" == "promote" ]]; then
+            git push origin "$TARGET_SHA:refs/heads/production"
+          else
+            git push \
+              --force-with-lease="refs/heads/production:$CURRENT_PRODUCTION" \
+              origin "$TARGET_SHA:refs/heads/production"
+          fi
+
+      - name: Record release result
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+          RELEASE_ACTION: ${{ inputs.action }}
+        run: |
+          {
+            echo "## V5 production ref updated"
+            echo
+            echo "- Action: \`$RELEASE_ACTION\`"
+            echo "- Target: \`$TARGET_SHA\`"
+            echo "- Runtime: \`V5 native production runtime\`"
+            echo "- Paid model calls: \`0\`"
+            echo "- Cross-task model history: \`disabled\`"
+          } >> "$GITHUB_STEP_SUMMARY"

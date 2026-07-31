@@ -83,8 +83,6 @@ class RunConfig:
     catalog_file: Optional[Path]
     max_estimated_cost_usd: Optional[float]
     budget_safety_factor: float
-    history_weight: float
-    history_path: Path
     max_completion_tokens: int
     judge_max_completion_tokens: int
     reasoning_effort: str
@@ -201,8 +199,6 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
         catalog_file=Path(catalog_arg) if catalog_arg else None,
         max_estimated_cost_usd=max_cost,
         budget_safety_factor=float(selection.get("budget_safety_factor", 1.25)),
-        history_weight=0.0,
-        history_path=Path("runtime-state/unused.json"),
         max_completion_tokens=max_tokens,
         judge_max_completion_tokens=int(execution.get("judge_max_completion_tokens", 4000)),
         reasoning_effort=reasoning,

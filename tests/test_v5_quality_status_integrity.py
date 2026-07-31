@@ -8,10 +8,8 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-import v5_executor  # noqa: E402
 import v5_production_hardening  # noqa: E402
 import v5_quality_status_integrity as quality_integrity  # noqa: E402
-import v5_token_cost_policy as token_cost  # noqa: E402
 import v5_truncation_budget_policy as truncation  # noqa: E402
 from execution_graph import ExecutionGraph, GraphLimits, SelectedNode  # noqa: E402
 from v5_execution_auditor_integrity import _node_quality  # noqa: E402
@@ -102,10 +100,6 @@ def single_node_graph():
 
 
 class V5QualityStatusIntegrityTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        v5_production_hardening.install()
-
     def test_canary_allowance_exceeds_observed_truncation_point(self):
         allowance = truncation.completion_envelope(canary_work(), 10_000)
         self.assertEqual(allowance, 9508)
@@ -118,28 +112,29 @@ class V5QualityStatusIntegrityTests(unittest.TestCase):
         self.assertEqual(usage, 8292)
         self.assertGreaterEqual(usage, 7588)
         self.assertLessEqual(usage, allowance)
-        self.assertIs(token_cost.estimated_completion_usage, truncation.estimated_completion_usage)
+        source = (ROOT / "open-model-market" / "v5_planning_runtime.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("truncation_policy.estimated_completion_usage", source)
+        self.assertIn("truncation_policy.completion_envelope", source)
+        self.assertNotIn("truncation_policy.install()", source)
 
     def test_degraded_node_cannot_be_full_success(self):
         raw = {
             "status": "success",
             "completion_mode": "full",
             "quality_status": "full_success",
-            "node_results": [
-                {
-                    "node_id": "node-wifi",
-                    "status": "success_degraded",
+            "node_results": [{
+                "node_id": "node-wifi",
+                "status": "success_degraded",
+                "quality_score": 0.48,
+                "attempts": [{
+                    "attempt_index": 1,
+                    "status": "quality_gate_failed",
+                    "gate_reasons": ["truncated-output", "quality-score<0.662"],
                     "quality_score": 0.48,
-                    "attempts": [
-                        {
-                            "attempt_index": 1,
-                            "status": "quality_gate_failed",
-                            "gate_reasons": ["truncated-output", "quality-score<0.662"],
-                            "quality_score": 0.48,
-                        }
-                    ],
-                }
-            ],
+                }],
+            }],
             "degradation": {"used": False, "extra_model_calls": 0},
         }
         fixed = quality_integrity.enforce_result_integrity(raw)
@@ -154,14 +149,12 @@ class V5QualityStatusIntegrityTests(unittest.TestCase):
             "status": "success",
             "completion_mode": "full",
             "quality_status": "full_success",
-            "node_results": [
-                {
-                    "node_id": "node-wifi",
-                    "status": "success_recovered",
-                    "quality_score": 0.82,
-                    "attempts": [],
-                }
-            ],
+            "node_results": [{
+                "node_id": "node-wifi",
+                "status": "success_recovered",
+                "quality_score": 0.82,
+                "attempts": [],
+            }],
         }
         fixed = quality_integrity.enforce_result_integrity(raw)
         self.assertEqual(fixed["completion_mode"], "full")
@@ -169,7 +162,7 @@ class V5QualityStatusIntegrityTests(unittest.TestCase):
         self.assertEqual(fixed["quality_integrity"]["status"], "PASS")
         self.assertTrue(fixed["quality_integrity"]["full_success_allowed"])
 
-    def test_real_executor_marks_truncated_usable_answer_degraded(self):
+    def test_native_runtime_marks_truncated_usable_answer_degraded(self):
         graph = single_node_graph()
         answer = (
             "conclusions assumptions uncertainties variables formulas calculations "
@@ -183,12 +176,10 @@ class V5QualityStatusIntegrityTests(unittest.TestCase):
                 "id": "response-truncated",
                 "model": payload["model"],
                 "provider": "openai/flex",
-                "choices": [
-                    {
-                        "finish_reason": "length",
-                        "message": {"content": answer},
-                    }
-                ],
+                "choices": [{
+                    "finish_reason": "length",
+                    "message": {"content": answer},
+                }],
                 "usage": {
                     "prompt_tokens": 900,
                     "completion_tokens": 6675,
@@ -205,7 +196,7 @@ class V5QualityStatusIntegrityTests(unittest.TestCase):
             model_max_retries=0,
         )
         with tempfile.TemporaryDirectory() as temp:
-            result = v5_executor.execute_v5_graph(
+            result = v5_production_hardening.resilient_execute_v5_graph(
                 graph,
                 run,
                 "wifi task",

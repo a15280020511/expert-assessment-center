@@ -1,11 +1,14 @@
-"""Reasoning-inclusive cost, endpoint-risk and bounded-output hardening for V5."""
+"""Current-catalog cost, endpoint-risk and bounded-output policies for V5.
+
+No cross-task model or provider history is read. Every estimate is derived only
+from the current task, current catalog/endpoint snapshot, and current run state.
+"""
 from __future__ import annotations
 
 import json
 import math
 import os
 from dataclasses import replace
-from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import v5_executor as executor
@@ -48,27 +51,6 @@ def _float(value: Any, default: float = 0.0) -> float:
     return number if math.isfinite(number) else default
 
 
-def _history_rows() -> Mapping[str, Any]:
-    path = os.getenv("MODEL_HISTORY_PATH", "").strip()
-    if not path:
-        return {}
-    try:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    models = payload.get("models") if isinstance(payload, Mapping) else None
-    return models if isinstance(models, Mapping) else {}
-
-
-def _history_for(model: str, provider_endpoint: str) -> Mapping[str, Any]:
-    rows = _history_rows()
-    row = rows.get(provider_endpoint)
-    if isinstance(row, Mapping):
-        return row
-    row = rows.get(model)
-    return row if isinstance(row, Mapping) else {}
-
-
 def completion_envelope(work: Mapping[str, Any], endpoint_max: int) -> int:
     """Return a conservative but bounded completion envelope."""
     context = work.get("context_requirements", {})
@@ -89,7 +71,7 @@ def conservative_estimated_cost(
     works: Sequence[Mapping[str, Any]],
     bundle_discount: float = 1.0,
 ) -> float:
-    """Use a reasoning-inclusive P95-style envelope before selection."""
+    """Use a reasoning-inclusive P95-style estimate from the current snapshot."""
     prompt_tokens = 0
     completion_tokens = 0
     endpoint_max = _int(endpoint.get("max_completion_tokens"), 0)
@@ -114,6 +96,7 @@ def conservative_estimated_cost(
 
 
 def hardened_candidate_for(*args: Any, **kwargs: Any) -> Any:
+    """Qualify a candidate only from current endpoint and current task data."""
     endpoint = args[4] if len(args) > 4 and isinstance(args[4], Mapping) else {}
     reliability = _clamp(_float(endpoint.get("reliability"), 0.0))
     if reliability < MIN_PROVIDER_RELIABILITY:
@@ -122,28 +105,11 @@ def hardened_candidate_for(*args: Any, **kwargs: Any) -> Any:
     if candidate is None:
         return None
 
-    history = _history_for(candidate.model, candidate.provider_endpoint)
-    calls = _int(history.get("calls") or history.get("sample_count"), 0)
-    observed = max(
-        _clamp(_float(history.get("failure_rate"), 0.0)),
-        _clamp(_float(history.get("empty_rate"), 0.0)),
-        _clamp(_float(history.get("truncation_rate"), 0.0)),
-        _clamp(_float(history.get("rate_limit_rate"), 0.0)),
-    )
-    if history.get("success_rate") is not None:
-        observed = max(observed, 1.0 - _clamp(_float(history.get("success_rate"), 1.0)))
-    confidence = min(1.0, calls / 20.0)
     failure = _clamp(
         max(candidate.failure_probability, 1.0 - reliability)
-        + confidence * observed * 0.80
         + (1.0 - reliability) * 0.50
     )
-    multiplier = max(
-        1.0,
-        _float(history.get("p95_cost_multiplier"), 1.0),
-        _float(history.get("cost_multiplier"), 1.0),
-    )
-    estimated_cost = candidate.estimated_cost * multiplier * (1.0 + failure * 0.40)
+    estimated_cost = candidate.estimated_cost * (1.0 + failure * 0.40)
 
     works = args[2] if len(args) > 2 and isinstance(args[2], Sequence) else ()
     endpoint_max = _int(endpoint.get("max_completion_tokens"), 0)
@@ -156,8 +122,9 @@ def hardened_candidate_for(*args: Any, **kwargs: Any) -> Any:
     profile = dict(candidate.parameter_profile)
     profile.update({
         "recommended_output_allowance_tokens": min(maximum, max(1_024, recommended)),
-        "cost_estimation_policy": "reasoning-inclusive-p95-envelope-r8",
+        "cost_estimation_policy": "current-snapshot-reasoning-inclusive-p95-r8",
         "provider_reliability_floor": MIN_PROVIDER_RELIABILITY,
+        "cross_task_history_used": False,
     })
     return replace(
         candidate,
@@ -341,6 +308,7 @@ def robust_extract_answer(response: Mapping[str, Any]) -> str:
 
 
 def install() -> None:
+    """Compatibility installer for non-production callers; no history is used."""
     global _INSTALLED
     global _ORIGINAL_CANDIDATE_FOR
     global _ORIGINAL_BUILD_NODE_PAYLOAD

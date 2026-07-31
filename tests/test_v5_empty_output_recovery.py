@@ -8,7 +8,6 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-import v5_executor  # noqa: E402
 import v5_production_hardening  # noqa: E402
 import v5_production_ticket  # noqa: E402
 from execution_graph import ExecutionGraph, GraphLimits, SelectedNode  # noqa: E402
@@ -110,11 +109,11 @@ def run_config():
     )
 
 
-class V5EmptyOutputRecoveryTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        v5_production_hardening.install()
+def execute(*args, **kwargs):
+    return v5_production_hardening.resilient_execute_v5_graph(*args, **kwargs)
 
+
+class V5EmptyOutputRecoveryTests(unittest.TestCase):
     def test_empty_response_retries_once_inside_shared_recovery_pool(self):
         calls = []
 
@@ -123,7 +122,7 @@ class V5EmptyOutputRecoveryTests(unittest.TestCase):
             return empty_response(payload) if len(calls) == 1 else good_response(payload)
 
         with tempfile.TemporaryDirectory() as temp:
-            result = v5_executor.execute_v5_graph(
+            result = execute(
                 graph(),
                 run_config(),
                 "task",
@@ -159,7 +158,7 @@ class V5EmptyOutputRecoveryTests(unittest.TestCase):
         ).to_dict()
         with tempfile.TemporaryDirectory() as temp:
             with self.assertRaisesRegex(Exception, "minimum audited work-coverage gate"):
-                v5_executor.execute_v5_graph(
+                execute(
                     graph([replacement]),
                     run_config(),
                     "task",
@@ -194,7 +193,7 @@ class V5EmptyOutputRecoveryTests(unittest.TestCase):
         ).to_dict()
         with tempfile.TemporaryDirectory() as temp:
             with self.assertRaises(Exception):
-                v5_executor.execute_v5_graph(
+                execute(
                     graph([replacement]),
                     run_config(),
                     "task",
@@ -216,13 +215,11 @@ class V5EmptyOutputRecoveryTests(unittest.TestCase):
             self.assertEqual(budget["recovery_calls_reserved"], 1)
             self.assertEqual(budget["retries_reserved"], 1)
             self.assertEqual(budget["replacements_reserved"], 0)
-            self.assertTrue(
-                any(
-                    denial["reason"] == "global-recovery-limit-exhausted"
-                    and denial["kind"] == "replacement"
-                    for denial in budget["denials"]
-                )
-            )
+            self.assertTrue(any(
+                denial["reason"] == "shared-recovery-pool-exhausted"
+                and denial["kind"] == "replacement"
+                for denial in budget["denials"]
+            ))
 
     def test_two_recovery_calls_allow_retry_then_replacement(self):
         replacement = node(
@@ -239,7 +236,7 @@ class V5EmptyOutputRecoveryTests(unittest.TestCase):
             return good_response(payload, "B")
 
         with tempfile.TemporaryDirectory() as temp:
-            result = v5_executor.execute_v5_graph(
+            result = execute(
                 graph([replacement]),
                 run_config(),
                 "task",
@@ -277,7 +274,7 @@ class V5EmptyOutputRecoveryTests(unittest.TestCase):
                     "status": "failed",
                     "completion_mode": "none",
                     "quality_status": "failed",
-                    "executor": "v5-r8-fault-aware",
+                    "executor": "v5-native-execution-engine",
                     "actual_cost_usd": 0.0,
                     "execution_budget": {
                         "calls_reserved": 1,
@@ -296,22 +293,23 @@ class V5EmptyOutputRecoveryTests(unittest.TestCase):
                 "selected_model": "vendor/model-a",
                 "resolved_model": "vendor/model-a",
                 "provider_endpoint": "vendor/model-a@provider-a",
-                "attempts": [
-                    {
-                        "provider_endpoint": "vendor/model-a@provider-a",
-                        "request": {
-                            "model": "vendor/model-a",
-                            "provider": {"only": ["provider-a"]},
-                            "max_tokens": 4096,
-                        },
-                        "answer": None,
-                        "response_id": None,
-                        "response_provider": None,
-                        "usage": {},
-                        "gate_reasons": ["answer-too-short"],
-                        "error": None,
-                    }
-                ],
+                "attempts": [{
+                    "provider_endpoint": "vendor/model-a@provider-a",
+                    "request": {
+                        "model": "vendor/model-a",
+                        "provider": {"only": ["provider-a"]},
+                        "max_tokens": 4096,
+                    },
+                    "answer": None,
+                    "response_id": None,
+                    "response_provider": None,
+                    "usage": {},
+                    "gate_reasons": ["answer-too-short"],
+                    "failure": {
+                        "category": "QUALITY_GATE_FAILED",
+                        "retryable": False,
+                    },
+                }],
             }
             (root / "v5-node-results.json").write_text(
                 json.dumps([failed_row]), encoding="utf-8"
@@ -350,7 +348,7 @@ class V5EmptyOutputRecoveryTests(unittest.TestCase):
             self.assertFalse(envelope["fallback_used"])
             self.assertFalse(runtime["legacy_runtime_present"])
 
-    def test_empty_no_usage_failure_is_marked_retryable(self):
+    def test_structured_retryable_failure_is_detected_without_text_parsing(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             (root / "v5-node-results.json").write_text(
@@ -360,8 +358,13 @@ class V5EmptyOutputRecoveryTests(unittest.TestCase):
                         "answer": None,
                         "response_id": None,
                         "usage": {},
-                        "error": None,
-                        "gate_reasons": ["answer-too-short"],
+                        "gate_reasons": ["PROVIDER_EMPTY_RESPONSE"],
+                        "failure": {
+                            "category": "PROVIDER_EMPTY_RESPONSE",
+                            "retryable": True,
+                            "request_sent": True,
+                            "response_received": True,
+                        },
                     }],
                 }]),
                 encoding="utf-8",
