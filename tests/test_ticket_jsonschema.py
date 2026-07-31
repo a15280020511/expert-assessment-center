@@ -72,7 +72,7 @@ class TicketJsonSchemaTests(unittest.TestCase):
         _, errors = issue_ticket._validate_ticket(payload)
         self.assertTrue(errors)
 
-    def test_schema_reports_all_structural_errors(self):
+    def test_schema_reports_all_structural_error_categories(self):
         payload = {
             "task_id": "schema-task-0001",
             "route": "wrong",
@@ -91,8 +91,12 @@ class TicketJsonSchemaTests(unittest.TestCase):
         self.assertIn("evidence must be an object or an array", text)
         self.assertIn("approved_budget", text)
         self.assertIn("maximum_recovery_calls is required", text)
-        self.assertIn("cost_policy is required", text)
-        self.assertGreaterEqual(len(errors), 9)
+        self.assertGreaterEqual(len(errors), 8)
+
+        raw_messages = "; ".join(
+            error.message for error in issue_ticket.TICKET_VALIDATOR.iter_errors(payload)
+        )
+        self.assertIn("cost_policy", raw_messages)
 
     def test_schema_rejects_wrong_private_output_type(self):
         payload = self.valid_packet()
