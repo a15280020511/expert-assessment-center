@@ -10,8 +10,11 @@ class WorkflowContractTests(unittest.TestCase):
     def setUpClass(cls):
         cls.text = WORKFLOW.read_text(encoding="utf-8")
 
-    def test_dynamic_graph_call_ceiling_is_explicit(self):
-        self.assertIn('TOTAL_MODEL_CALLS: "16"', self.text)
+    def test_dynamic_graph_uses_ticket_approved_call_ceiling(self):
+        self.assertNotIn('TOTAL_MODEL_CALLS: "16"', self.text)
+        self.assertIn("APPROVED_TOTAL_CALLS", self.text)
+        self.assertIn("--maximum-total-calls", self.text)
+        self.assertIn("--maximum-recovery-calls", self.text)
         self.assertIn("Execute hardened V5 R8 dynamic graph", self.text)
         self.assertNotIn("Execute fixed 3+1 expert team", self.text)
 
@@ -20,6 +23,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("v5_production_ticket.py", self.text)
         self.assertIn("v5_execution_auditor.py", self.text)
         self.assertIn("v5_final_status.py", self.text)
+        self.assertIn("v5_final_attestation.py", self.text)
         self.assertNotIn("expert_team_hardened.py", self.text)
         self.assertNotIn("python open-model-market/execution_auditor.py", self.text)
         self.assertNotIn("python open-model-market/final_status.py", self.text)
@@ -28,21 +32,29 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("github.event.comment.body == '/run-expert-team'", self.text)
         self.assertIn("startsWith(github.event.comment.body, '/retry-expert-team ')", self.text)
 
-    def test_production_does_not_silently_queue_distinct_tasks(self):
-        self.assertNotIn("group: expert-team-production", self.text)
-        self.assertNotIn("cancel-in-progress: false", self.text)
-        self.assertIn("v5_issue_ticket.py prepare", self.text)
+    def test_production_has_atomic_admission_and_execution_groups(self):
+        self.assertIn("group: expert-production-admission", self.text)
+        self.assertIn("group: expert-production-global", self.text)
+        self.assertIn("cancel-in-progress: false", self.text)
+        self.assertIn("v5_admission_lock.py", self.text)
+        self.assertIn("EXECUTION_BUSY", self.text)
 
-    def test_report_and_audit_precede_manifest_and_artifact_upload(self):
+    def test_report_audit_primary_artifact_and_final_attestation_order(self):
         report = self.text.index("name: Publish and verify full V5 report")
         audit = self.text.index("name: Run deterministic V5 execution audit")
-        refresh = self.text.index("name: Refresh final artifact manifest")
-        upload = self.text.index("name: Upload ticket artifacts")
-        final = self.text.index("name: Publish authoritative V5 final status")
+        refresh = self.text.index("name: Refresh primary artifact manifest")
+        upload = self.text.index("name: Upload primary ticket artifacts")
+        final = self.text.index("name: Render authoritative V5 final status")
+        attest = self.text.index("name: Generate post-upload final attestation")
+        proof = self.text.index("name: Upload final attestation artifact")
+        publish = self.text.index("name: Publish authoritative V5 final status")
         self.assertLess(report, audit)
         self.assertLess(audit, refresh)
         self.assertLess(refresh, upload)
         self.assertLess(upload, final)
+        self.assertLess(final, attest)
+        self.assertLess(attest, proof)
+        self.assertLess(proof, publish)
 
     def test_report_idempotency_trusts_only_actions_bot(self):
         self.assertIn('select(.user.login == "github-actions[bot]")', self.text)
@@ -56,12 +68,13 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("steps.secret.outputs.present != 'true'", tail)
         self.assertIn("steps.final.outcome == 'failure'", tail)
         self.assertIn("steps.final.outputs.status == 'FAIL'", tail)
+        self.assertIn("steps.upload_attestation.outcome != 'success'", tail)
         self.assertIn("run: exit 1", tail)
 
-    def test_production_has_no_fixed_dollar_ceiling(self):
+    def test_production_has_anomaly_guard_not_silent_fixed_cost_rewrite(self):
         self.assertNotIn("MAX_ESTIMATED_COST_USD", self.text)
-        self.assertNotIn("--max-estimated-cost-usd", self.text)
-        self.assertIn("TOTAL_MODEL_CALLS", self.text)
+        self.assertIn("COST_ANOMALY_USD", self.text)
+        self.assertIn("--cost-anomaly-usd", self.text)
 
     def test_no_manual_legacy_runtime_path_exists(self):
         legacy_version = "v" + "3"
