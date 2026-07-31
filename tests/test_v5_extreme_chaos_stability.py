@@ -284,18 +284,55 @@ class TestV5ExtremeChaosStability(unittest.TestCase):
         }
         return json.dumps(stable, ensure_ascii=False, sort_keys=True)
 
-    def test_60_parallel_mixed_complexity_full_dry_runs_are_isolated(self) -> None:
+    def test_60_parallel_success_and_fail_closed_dry_runs_are_isolated(self) -> None:
         scenarios = (
-            ("public-investment", PUBLIC_INVESTMENT_TASK, 16, 2),
-            ("closed-book-tabletop", FAILED_PRODUCTION_TASK, 4, 1),
-            ("supply-chain", SUPPLY_CHAIN_TASK, 8, 1),
-            ("wifi-decision", WIFI_TASK, 4, 1),
-            ("job-choice", JOB_CHOICE_TASK, 4, 1),
+            (
+                "public-investment-quality",
+                PUBLIC_INVESTMENT_TASK,
+                16,
+                2,
+                "quality",
+                "success",
+            ),
+            (
+                "public-investment-underprovisioned",
+                PUBLIC_INVESTMENT_TASK,
+                4,
+                1,
+                "value",
+                "failed-closed",
+            ),
+            (
+                "closed-book-tabletop",
+                FAILED_PRODUCTION_TASK,
+                4,
+                1,
+                "value",
+                "success",
+            ),
+            ("supply-chain", SUPPLY_CHAIN_TASK, 8, 1, "value", "success"),
+            ("wifi-decision", WIFI_TASK, 4, 1, "value", "success"),
+            ("job-choice", JOB_CHOICE_TASK, 4, 1, "value", "success"),
         )
         cases = [
-            (name, task, total_calls, recovery_calls, iteration)
-            for name, task, total_calls, recovery_calls in scenarios
-            for iteration in range(12)
+            (
+                name,
+                task,
+                total_calls,
+                recovery_calls,
+                quality_tier,
+                expected_status,
+                iteration,
+            )
+            for (
+                name,
+                task,
+                total_calls,
+                recovery_calls,
+                quality_tier,
+                expected_status,
+            ) in scenarios
+            for iteration in range(10)
         ]
         env = os.environ.copy()
         env.pop("OPENROUTER_API_KEY", None)
@@ -304,9 +341,17 @@ class TestV5ExtremeChaosStability(unittest.TestCase):
             root = Path(directory)
 
             def run_case(
-                case: tuple[str, str, int, int, int]
-            ) -> tuple[str, int, int, str, str]:
-                name, task, total_calls, recovery_calls, iteration = case
+                case: tuple[str, str, int, int, str, str, int]
+            ) -> tuple[str, int, str, str, str]:
+                (
+                    name,
+                    task,
+                    total_calls,
+                    recovery_calls,
+                    quality_tier,
+                    expected_status,
+                    iteration,
+                ) = case
                 output_dir = root / f"{name}-{iteration}"
                 command = [
                     sys.executable,
@@ -323,7 +368,7 @@ class TestV5ExtremeChaosStability(unittest.TestCase):
                     "--maximum-recovery-calls",
                     str(recovery_calls),
                     "--quality-tier",
-                    "value",
+                    quality_tier,
                     "--output-dir",
                     str(output_dir),
                 ]
@@ -336,14 +381,23 @@ class TestV5ExtremeChaosStability(unittest.TestCase):
                     timeout=240,
                     check=False,
                 )
-                if completed.returncode != 0:
+                diagnostics = completed.stdout + "\n" + completed.stderr
+                if expected_status == "failed-closed":
+                    if completed.returncode == 0:
+                        return name, iteration, "unexpected-success", "", diagnostics
+                    if "BUDGET_INSUFFICIENT_NODES" not in diagnostics:
+                        return name, iteration, "wrong-failure", "", diagnostics
+                    self.assertFalse((output_dir / "v5-execution-graph.json").exists())
                     return (
                         name,
                         iteration,
-                        completed.returncode,
+                        "failed-closed",
+                        "BUDGET_INSUFFICIENT_NODES",
                         "",
-                        completed.stdout + "\n" + completed.stderr,
                     )
+                if completed.returncode != 0:
+                    return name, iteration, "unexpected-failure", "", diagnostics
+
                 dry = json.loads((output_dir / "v5-dry-run.json").read_text())
                 graph = json.loads(
                     (output_dir / "v5-execution-graph.json").read_text()
@@ -359,11 +413,13 @@ class TestV5ExtremeChaosStability(unittest.TestCase):
                 )
                 self.assertEqual("planned-not-executed", dry["status"])
                 self.assertFalse(dry["production_entrypoint_changed"])
-                self.assertTrue(all((output_dir / name).is_file() for name in expected_files))
+                self.assertTrue(
+                    all((output_dir / expected).is_file() for expected in expected_files)
+                )
                 return (
                     name,
                     iteration,
-                    completed.returncode,
+                    "success",
                     self._graph_signature(graph),
                     "",
                 )
@@ -371,12 +427,17 @@ class TestV5ExtremeChaosStability(unittest.TestCase):
             with ThreadPoolExecutor(max_workers=12) as pool:
                 results = list(pool.map(run_case, cases))
 
-            self.assertEqual(60, len(list(root.iterdir())))
-
-        failures = [result for result in results if result[2] != 0]
-        self.assertFalse(failures, failures[0][4] if failures else "")
-        for name, _, _, _ in scenarios:
+        unexpected = [
+            result
+            for result in results
+            if result[2]
+            in {"unexpected-success", "unexpected-failure", "wrong-failure"}
+        ]
+        self.assertFalse(unexpected, unexpected[0][4] if unexpected else "")
+        for name, _, _, _, _, expected_status in scenarios:
+            observed_statuses = {result[2] for result in results if result[0] == name}
             signatures = {result[3] for result in results if result[0] == name}
+            self.assertEqual({expected_status}, observed_statuses, name)
             self.assertEqual(1, len(signatures), name)
 
 
