@@ -21,7 +21,6 @@ from v5_general_task_planning import (
     compile_task_semantics as compile_production_task_semantics,
 )
 from v5_model_company import (
-    DEFAULT_INTELLIGENCE_RANKING_LIMIT,
     MINIMUM_CANDIDATES_PER_WORK,
     candidate_company,
 )
