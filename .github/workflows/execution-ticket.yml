@@ -1,4 +1,8 @@
-name: Execution Ticket Expert Team
+name: Execution Ticket Expert Team V5
+
+# Preserved manual rollback command for repository-owner emergency use only.
+# It is documentation, is never executed by this V5 production workflow, and
+# no automatic fallback path exists: python open-model-market/expert_team_hardened.py
 
 on:
   issues:
@@ -25,7 +29,7 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      MODEL_HISTORY_PATH: runtime-state/model-performance.json
+      TOTAL_MODEL_CALLS: "16"
     steps:
       - name: Checkout pinned source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -45,37 +49,24 @@ jobs:
       - name: Compile production modules
         run: python -m py_compile open-model-market/*.py
 
-      - name: Parse, authorize, and de-duplicate ticket
+      - name: Parse, authorize, and de-duplicate V5 ticket
         id: prepare
         run: |
-          python open-model-market/issue_ticket_hardened.py prepare \
+          python open-model-market/v5_issue_ticket.py prepare \
             --event-path "$GITHUB_EVENT_PATH" \
             --output-dir ticket-artifacts
 
-      - name: Comment ticket accepted
+      - name: Comment V5 ticket accepted
         if: steps.prepare.outputs.accepted == 'true'
         run: |
-          python open-model-market/issue_ticket_hardened.py render \
+          python open-model-market/v5_issue_ticket.py render \
             --phase accepted --output-dir ticket-artifacts --run-url "$RUN_URL" > issue-comment.md
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          status = json.loads(Path("ticket-artifacts/ticket-status.json").read_text(encoding="utf-8"))
-          path = Path("issue-comment.md")
-          text = path.read_text(encoding="utf-8")
-          old = f"- 模型故障替换上限：`{status.get('maximum_replacements')}`\n"
-          new = f"- 额外调用额度（专家或裁判故障替换共享）：`{status.get('maximum_replacements')}`\n"
-          if old not in text:
-              raise SystemExit("expected replacement-limit line was not found")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
-          PY
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@issue-comment.md
 
       - name: Comment ticket rejected
         if: steps.prepare.outputs.accepted != 'true'
         run: |
-          python open-model-market/issue_ticket_hardened.py render \
+          python open-model-market/v5_issue_ticket.py render \
             --phase rejected --output-dir ticket-artifacts --run-url "$RUN_URL" > issue-comment.md
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@issue-comment.md
 
@@ -100,77 +91,28 @@ jobs:
           票据通过，但仓库缺少 Actions Secret：\`OPENROUTER_API_KEY\`。
 
           - Run: \`${RUN_URL}\`
-          - 专家模型调用：\`0\`
+          - V5模型调用：\`0\`
           EOF
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -F body=@issue-comment.md
 
-      - name: Restore latest model performance history
-        if: steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present == 'true'
-        shell: bash
-        run: |
-          set -u
-          mkdir -p runtime-state ticket-artifacts
-          artifact_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=model-performance-state&per_page=100" \
-            --jq '.artifacts | map(select(.expired == false)) | sort_by(.created_at) | reverse | .[0].id // empty' \
-            2>/dev/null || true)"
-          restore_status="no-prior-artifact"
-          if [[ -n "$artifact_id" ]]; then
-            restore_status="download-failed"
-            if gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" \
-              > /tmp/model-history.zip 2>/dev/null; then
-              restore_status="invalid-artifact"
-              if unzip -p /tmp/model-history.zip model-performance.json \
-                > /tmp/model-performance.json 2>/dev/null && \
-                python -m json.tool /tmp/model-performance.json >/dev/null 2>&1; then
-                mv /tmp/model-performance.json "$MODEL_HISTORY_PATH"
-                restore_status="restored"
-              fi
-            fi
-          fi
-          if [[ ! -s "$MODEL_HISTORY_PATH" ]] || \
-             ! python -m json.tool "$MODEL_HISTORY_PATH" >/dev/null 2>&1; then
-            printf '{"version":1,"models":{}}\n' > "$MODEL_HISTORY_PATH"
-            [[ "$restore_status" == "restored" ]] && restore_status="invalid-artifact"
-          fi
-          python - "$restore_status" "$artifact_id" <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          Path("ticket-artifacts/history-restore.json").write_text(
-              json.dumps(
-                  {
-                      "version": 1,
-                      "status": sys.argv[1],
-                      "artifact_id": sys.argv[2] or None,
-                      "fallback_used": sys.argv[1] != "restored",
-                  },
-                  ensure_ascii=False,
-                  indent=2,
-              ),
-              encoding="utf-8",
-          )
-          PY
-
-      - name: Execute fixed 3+1 expert team
+      - name: Execute hardened V5 R8 dynamic graph
         id: execute
         if: steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present == 'true'
         continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           QUALITY_TIER: ${{ steps.prepare.outputs.quality_tier }}
-          TOTAL_MODEL_CALLS: ${{ steps.prepare.outputs.calls }}
         run: |
           set -o pipefail
           EXPERT_TASK="$(cat ticket-artifacts/task.txt)"
-          export EXPERT_TASK
-          python open-model-market/expert_team_hardened.py \
+          python open-model-market/v5_production_ticket.py \
+            --task "$EXPERT_TASK" \
             --quality-tier "$QUALITY_TIER" \
             --require-live-catalog \
             --output-dir ticket-artifacts \
             2>&1 | tee ticket-artifacts/execution-console.log
 
-      - name: Publish and verify full report
+      - name: Publish and verify full V5 report
         id: publish
         if: steps.execute.outcome == 'success'
         continue-on-error: true
@@ -202,32 +144,12 @@ jobs:
           report_sha="$(jq -r '.report_sha256' ticket-artifacts/report-comments/report-comments-manifest.json)"
           grep -Fq "Report SHA256: \`${report_sha}\`" /tmp/trusted-issue-comments-after.txt
 
-      - name: Stage model performance state
-        id: stage_state
-        if: always() && steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present == 'true'
-        continue-on-error: true
-        run: |
-          mkdir -p performance-state
-          cp "$MODEL_HISTORY_PATH" performance-state/model-performance.json
-          cp "$MODEL_HISTORY_PATH" ticket-artifacts/model-performance.json
-
-      - name: Generate structured diagnostic bundle
-        id: diagnostics
-        if: always() && steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present == 'true'
-        continue-on-error: true
-        run: |
-          python open-model-market/diagnostic_bundle.py \
-            --output-dir ticket-artifacts \
-            --execute-outcome "${{ steps.execute.outcome }}" \
-            --publish-outcome "${{ steps.publish.outcome }}" \
-            --state-outcome "${{ steps.stage_state.outcome }}"
-
-      - name: Run deterministic execution audit
+      - name: Run deterministic V5 execution audit
         id: audit
         if: always() && steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present == 'true'
         continue-on-error: true
         run: |
-          python open-model-market/execution_auditor.py \
+          python open-model-market/v5_execution_auditor.py \
             --output-dir ticket-artifacts \
             --execute-outcome "${{ steps.execute.outcome }}" \
             --publish-outcome "${{ steps.publish.outcome }}"
@@ -253,34 +175,22 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: execution-ticket-${{ github.event.issue.number }}-${{ github.run_id }}
+          name: execution-ticket-v5-${{ github.event.issue.number }}-${{ github.run_id }}
           path: ticket-artifacts/
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload model performance state
-        id: upload_state
-        if: always() && steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present == 'true'
-        continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: model-performance-state
-          path: performance-state/model-performance.json
-          if-no-files-found: error
-          retention-days: 90
-
-      - name: Publish authoritative final status
+      - name: Publish authoritative V5 final status
         id: final
         if: always() && steps.prepare.outputs.accepted == 'true' && steps.secret.outputs.present == 'true'
         continue-on-error: true
         run: |
-          python open-model-market/final_status.py \
+          python open-model-market/v5_final_status.py \
             --output-dir ticket-artifacts \
             --run-url "$RUN_URL" \
             --audit-outcome "${{ steps.audit.outcome }}" \
             --manifest-outcome "${{ steps.manifest.outcome }}" \
             --ticket-upload-outcome "${{ steps.upload_ticket.outcome }}" \
-            --state-upload-outcome "${{ steps.upload_state.outcome }}" \
             --artifact-id "${{ steps.upload_ticket.outputs['artifact-id'] }}" \
             --artifact-url "${{ steps.upload_ticket.outputs['artifact-url'] }}" \
             --artifact-digest "${{ steps.upload_ticket.outputs['artifact-digest'] }}" \
