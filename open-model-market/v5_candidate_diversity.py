@@ -1,18 +1,18 @@
-"""Diversity-preserving Pareto pruning for V5 candidate nodes.
+"""Company-diversity-preserving Pareto pruning for V5 candidate nodes.
 
-A candidate dominated on quality/cost/failure can still be required to satisfy
-independent-copy constraints when the dominant candidate uses the same model as
-another copy. Therefore the pruner keeps every model's best representative before
-filling the remaining group capacity from the Pareto frontier.
+A candidate dominated on quality, cost, and failure can still be required by the
+task-global model-company uniqueness constraint. The pruner therefore keeps each
+company's best representative before filling remaining capacity from the Pareto
+frontier. Provider endpoints from the same model company do not count as
+independent alternatives.
 """
 from __future__ import annotations
 
 from typing import Sequence
 
 import v5_planner
+from v5_model_company_policy import row_company
 from v5_planner import CandidateNode
-
-_INSTALLED = False
 
 
 def _order_key(row: CandidateNode) -> tuple[float, float, float, str]:
@@ -26,9 +26,9 @@ def _order_key(row: CandidateNode) -> tuple[float, float, float, str]:
 
 def diversity_preserving_pareto_prune(
     candidates: Sequence[CandidateNode],
-    maximum_per_group: int = 12,
+    maximum_per_group: int = 24,
 ) -> list[CandidateNode]:
-    """Keep Pareto quality while reserving distinct-model alternatives."""
+    """Keep Pareto quality while reserving distinct-company alternatives."""
     limit = max(2, int(maximum_per_group))
     groups: dict[tuple[str, tuple[str, ...]], list[CandidateNode]] = {}
     for candidate in candidates:
@@ -49,13 +49,13 @@ def diversity_preserving_pareto_prune(
             )
         ]
 
-        best_by_model: dict[str, CandidateNode] = {}
+        best_by_company: dict[str, CandidateNode] = {}
         for row in ordered:
-            best_by_model.setdefault(row.model, row)
+            best_by_company.setdefault(row_company(row), row)
 
         selected: list[CandidateNode] = []
         selected_ids: set[str] = set()
-        for row in sorted(best_by_model.values(), key=_order_key):
+        for row in sorted(best_by_company.values(), key=_order_key):
             selected.append(row)
             selected_ids.add(row.candidate_id)
             if len(selected) >= limit:
@@ -96,5 +96,5 @@ def diversity_preserving_pareto_prune(
 
 
 def install() -> None:
-    """Deprecated compatibility no-op; use the function explicitly."""
+    """Deprecated compatibility no-op; formal runtime composes the function directly."""
     return None
