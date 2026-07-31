@@ -1,0 +1,49 @@
+name: Apply V5 Lint Remediation
+
+on:
+  push:
+    branches:
+      - fix/v5-canonical-validation-gate
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v5-lint-remediation
+  cancel-in-progress: false
+
+jobs:
+  remediate:
+    if: >-
+      github.actor == github.repository_owner &&
+      !contains(github.event.head_commit.message, 'chore: apply deterministic lint remediation')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: fix/v5-canonical-validation-gate
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-runtime.txt
+            requirements-dev.txt
+      - name: Install pinned formatter and validation dependencies
+        run: python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+      - name: Apply and verify deterministic remediation
+        run: python tools/apply_v5_lint_remediation.py
+      - name: Reject whitespace damage
+        run: git diff --check
+      - name: Commit verified remediation and remove one-shot machinery
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 1
+          git commit -m "chore: apply deterministic lint remediation"
+          git push origin HEAD:fix/v5-canonical-validation-gate
