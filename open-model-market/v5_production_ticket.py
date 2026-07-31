@@ -16,6 +16,10 @@ from typing import Any, Mapping, Sequence
 
 import v5_pipeline
 from v5_evidence_bundle import ApprovedRun, EvidenceBundleBuilder, EvidenceInputs
+from v5_model_company import (
+    DEFAULT_INTELLIGENCE_RANKING_LIMIT,
+    MINIMUM_CANDIDATES_PER_WORK,
+)
 from v5_recovery_runtime import build_production_runtime
 from v5_runtime import ProductionRuntime, RuntimeConfig
 
@@ -90,7 +94,10 @@ def _write_runtime_evidence(
         "runtime_version": RUNTIME_VERSION,
         "entrypoint": "v5_production_ticket.py",
         "runtime_constructor": "v5_runtime.ProductionRuntime",
-        "recovery_policy": "v5_recovery_runtime.cross-endpoint-cost-performance",
+        "recovery_policy": "v5_recovery_runtime.cross-endpoint-company-safe-cost-performance",
+        "model_company_policy": "task-global-all-different",
+        "intelligence_ranking_limit": DEFAULT_INTELLIGENCE_RANKING_LIMIT,
+        "maximum_candidates_per_work": MINIMUM_CANDIDATES_PER_WORK,
         "global_monkey_patching": False,
         "maximum_model_calls": total_calls,
         "maximum_total_calls": total_calls,
@@ -190,6 +197,7 @@ def _runtime(args: argparse.Namespace) -> ProductionRuntime:
         tools_allowed=False,
         live_catalog_required=args.require_live_catalog,
         provider_lock_required=True,
+        maximum_candidates_per_work=MINIMUM_CANDIDATES_PER_WORK,
     )
     return build_production_runtime(config)
 
@@ -199,9 +207,10 @@ def _pipeline_command(args: argparse.Namespace, output: Path, task: str) -> list
         "--task", task,
         "--output-dir", str(output),
         "--quality-tier", args.quality_tier,
+        "--ranking-limit", str(DEFAULT_INTELLIGENCE_RANKING_LIMIT),
         "--maximum-total-calls", str(args.maximum_total_calls),
         "--maximum-recovery-calls", str(args.maximum_recovery_calls),
-        "--maximum-candidates-per-work", "12",
+        "--maximum-candidates-per-work", str(MINIMUM_CANDIDATES_PER_WORK),
         "--solver-timeout-seconds", "20",
     ]
     if args.cost_anomaly_usd is not None:
@@ -233,6 +242,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "delegation_notice_included": False,
         "execution_constraints_supplied_by_runtime": True,
         "cross_endpoint_empty_response_recovery": True,
+        "task_global_model_company_uniqueness": True,
+        "intelligence_ranking_limit": DEFAULT_INTELLIGENCE_RANKING_LIMIT,
+        "maximum_candidates_per_work": MINIMUM_CANDIDATES_PER_WORK,
     })
     try:
         code = int(v5_pipeline.main(
@@ -256,6 +268,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "actual_cost_usd": envelope["actual_cost_usd"],
             "node_count": envelope["node_count"],
             "approved_total_calls": args.maximum_total_calls,
+            "model_company_policy": "task-global-all-different",
+            "intelligence_ranking_limit": DEFAULT_INTELLIGENCE_RANKING_LIMIT,
+            "maximum_candidates_per_work": MINIMUM_CANDIDATES_PER_WORK,
             "evidence_input_sha256": envelope["evidence_input_sha256"],
         }, ensure_ascii=False))
         return 0
@@ -294,6 +309,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "fallback_used": False,
             "legacy_runtime_present": False,
             "global_monkey_patching": False,
+            "task_global_model_company_uniqueness": True,
+            "intelligence_ranking_limit": DEFAULT_INTELLIGENCE_RANKING_LIMIT,
+            "maximum_candidates_per_work": MINIMUM_CANDIDATES_PER_WORK,
             "cross_task_history_used": False,
         })
         raise
