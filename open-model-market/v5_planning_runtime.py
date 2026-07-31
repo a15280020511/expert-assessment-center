@@ -5,6 +5,7 @@ import math
 from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
+import v5_budget_runtime_parity as budget_parity
 import v5_capability_calibration as capability_calibration
 import v5_candidate_diversity as candidate_diversity
 import v5_cost_reliability_hardening as cost_policy
@@ -58,6 +59,7 @@ class PlannerPolicy:
             "cost_estimation": "reasoning-and-truncation-aware-p95-usage",
             "candidate_configuration": "task-and-endpoint-dynamic",
             "pareto_pruning": "model-diversity-preserving",
+            "budget_runtime_parity": "explicit-runtime-hard-budget-to-raw-planning-budget",
             "cross_task_history_used": False,
         }
         return result
@@ -194,9 +196,37 @@ class PlannerPolicy:
         quality_tolerance_pct: float,
         solver_timeout_seconds: float,
     ) -> dict[str, Any]:
-        return value_optimizer.optimize_execution_graph(
+        """Optimize under the same risk-adjusted hard cost boundary as execution."""
+        raw_budget = budget_parity.planning_raw_budget_usd(limits)
+        planning_limits = replace(limits, max_budget_usd=raw_budget)
+        result = value_optimizer.optimize_execution_graph(
             candidate_bundle,
-            limits=limits,
+            limits=planning_limits,
             quality_tolerance_pct=quality_tolerance_pct,
             solver_timeout_seconds=solver_timeout_seconds,
         )
+
+        graph = result.get("execution_graph")
+        graph = graph if isinstance(graph, dict) else {}
+        raw_cost = max(0.0, float(graph.get("estimated_total_cost", 0.0) or 0.0))
+        multiplier = max(1.0, float(limits.cost_risk_multiplier))
+        risk_cost = raw_cost * multiplier
+        hard_budget = limits.max_budget_usd
+        if hard_budget is not None and risk_cost > float(hard_budget) + 1e-12:
+            raise base_planner.V5PlanningError(
+                "Risk-adjusted selected graph exceeds the runtime hard budget after solve"
+            )
+
+        parity = {
+            "hard_runtime_budget_usd": hard_budget,
+            "planning_raw_budget_usd": raw_budget,
+            "cost_risk_multiplier": multiplier,
+            "selected_raw_cost_usd": round(raw_cost, 8),
+            "selected_risk_adjusted_cost_usd": round(risk_cost, 8),
+            "policy": "explicit-planner-raw-budget-equals-runtime-hard-budget-divided-by-risk-multiplier",
+            "global_monkey_patching": False,
+        }
+        graph.setdefault("metadata", {})["budget_preflight_parity"] = parity
+        result["execution_graph"] = graph
+        result["budget_preflight_parity"] = parity
+        return result
