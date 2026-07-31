@@ -39,10 +39,10 @@ jobs:
         run: python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
       - name: Run explicit semantic wiring regressions
         run: |
-          python -m unittest tests.test_v5_general_task_planning -v
-          python -m unittest tests.test_v5_planning_scenario_matrix -v
-          python -m unittest tests.test_v5_consumer_decision_budget -v
-          python -m unittest tests.test_v5_tabletop_production_semantics -v
+          python tests/test_v5_general_task_planning.py
+          python tests/test_v5_planning_scenario_matrix.py
+          python tests/test_v5_consumer_decision_budget.py
+          python tests/test_v5_tabletop_production_semantics.py
       - name: Run original failed task zero-call planning regression
         shell: bash
         run: |
