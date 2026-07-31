@@ -101,5 +101,17 @@ class V5PlanningScenarioMatrixTests(unittest.TestCase):
         )
 
 
+def explicit_suite() -> unittest.TestSuite:
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(
+        V5PlanningScenarioMatrixTests
+    )
+    if suite.countTestCases() != 4:
+        raise RuntimeError(
+            f"scenario-matrix regression suite count mismatch: {suite.countTestCases()}"
+        )
+    return suite
+
+
 if __name__ == "__main__":
-    unittest.main()
+    result = unittest.TextTestRunner(verbosity=2).run(explicit_suite())
+    raise SystemExit(0 if result.wasSuccessful() else 1)
