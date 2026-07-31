@@ -11,6 +11,7 @@ import v5_cost_reliability_hardening as cost_policy
 import v5_dynamic_configuration as dynamic_configuration
 import v5_planner as base_planner
 import v5_token_cost_policy as token_policy
+import v5_truncation_budget_policy as truncation_policy
 import v5_value_optimizer as value_optimizer
 from execution_graph import GraphLimits
 
@@ -54,12 +55,51 @@ class PlannerPolicy:
         result["planning_policy"] = {
             "composition": "explicit-direct-call",
             "provider_reliability_floor": cost_policy.MIN_PROVIDER_RELIABILITY,
-            "cost_estimation": "reasoning-inclusive-p95-usage",
+            "cost_estimation": "reasoning-and-truncation-aware-p95-usage",
             "candidate_configuration": "task-and-endpoint-dynamic",
             "pareto_pruning": "model-diversity-preserving",
             "cross_task_history_used": False,
         }
         return result
+
+    @staticmethod
+    def _p95_cost(
+        endpoint: Mapping[str, Any],
+        works: Sequence[Mapping[str, Any]],
+        discount: float,
+    ) -> float:
+        prompt_tokens = 0
+        completion_tokens = 0
+        endpoint_max = int(endpoint.get("max_completion_tokens", 0) or 0)
+        for work in works:
+            context = work.get("context_requirements", {})
+            context = context if isinstance(context, Mapping) else {}
+            prompt_tokens += sum(
+                max(0, int(context.get(key, 0) or 0))
+                for key in (
+                    "system_prompt_tokens",
+                    "original_task_tokens",
+                    "visible_upstream_tokens",
+                )
+            )
+            completion_tokens += truncation_policy.estimated_completion_usage(
+                work,
+                endpoint_max,
+            )
+        prompt_tokens = int(math.ceil(prompt_tokens * discount))
+        completion_tokens = int(math.ceil(completion_tokens * discount))
+        prompt_price = float(endpoint.get("prompt_price_per_million", 0.0) or 0.0)
+        completion_price = float(endpoint.get("completion_price_per_million", 0.0) or 0.0)
+        base = (
+            prompt_tokens * prompt_price
+            + completion_tokens * completion_price
+        ) / 1_000_000
+        reliability = max(
+            0.0,
+            min(1.0, float(endpoint.get("reliability", 0.95) or 0.95)),
+        )
+        reliability_reserve = 1.0 + max(0.0, 0.98 - reliability) * 1.75
+        return round(base * reliability_reserve, 8)
 
     @staticmethod
     def candidate_factory(*args: Any, **kwargs: Any) -> Any:
@@ -76,30 +116,23 @@ class PlannerPolicy:
         works = [work for work in works if isinstance(work, Mapping)]
         endpoint_max = int(endpoint.get("max_completion_tokens", 0) or 0)
         discount = max(0.1, float(kwargs.get("bundle_discount", 1.0)))
-        failure = max(
-            candidate.failure_probability,
-            1.0 - reliability,
-        )
+        failure = max(candidate.failure_probability, 1.0 - reliability)
         failure = max(0.0, min(1.0, failure + (1.0 - reliability) * 0.50))
-        p95_cost = token_policy.p95_usage_estimated_cost(
-            endpoint,
-            works,
-            bundle_discount=discount,
-        )
+        p95_cost = PlannerPolicy._p95_cost(endpoint, works, discount)
         risk_adjusted_cost = p95_cost * (1.0 + failure * 0.40)
 
-        allowance = int(
-            math.ceil(
-                sum(cost_policy.completion_envelope(work, endpoint_max) for work in works)
-                * discount
-            )
-        )
-        usage = int(
-            math.ceil(
-                sum(token_policy.estimated_completion_usage(work, endpoint_max) for work in works)
-                * discount
-            )
-        )
+        allowance = int(math.ceil(
+            sum(
+                truncation_policy.completion_envelope(work, endpoint_max)
+                for work in works
+            ) * discount
+        ))
+        usage = int(math.ceil(
+            sum(
+                truncation_policy.estimated_completion_usage(work, endpoint_max)
+                for work in works
+            ) * discount
+        ))
         parameter_profile = dict(candidate.parameter_profile)
         parameter_profile.update({
             "recommended_output_allowance_tokens": max(1_024, allowance),
@@ -108,6 +141,7 @@ class PlannerPolicy:
             "output_allowance_is_cost_assumption": False,
             "p95_token_usage_multiplier": token_policy.P95_TOKEN_USAGE_MULTIPLIER,
             "structured_p95_token_usage_multiplier": token_policy.STRUCTURED_P95_TOKEN_USAGE_MULTIPLIER,
+            "truncation_pressure_policy": "reasoning-depth-contract-breadth-aware",
             "bundle_discount_applied_to_usage_estimate": round(discount, 6),
             "provider_reliability_floor": cost_policy.MIN_PROVIDER_RELIABILITY,
             "cross_task_history_used": False,
@@ -119,10 +153,9 @@ class PlannerPolicy:
             parameter_profile=parameter_profile,
         )
 
-        works_for_role = list(works)
-        role = dynamic_configuration._role_profile(works_for_role)
+        role = dynamic_configuration._role_profile(works)
         request, decisions = dynamic_configuration._dynamic_parameters(
-            works_for_role,
+            works,
             endpoint,
             candidate,
         )
