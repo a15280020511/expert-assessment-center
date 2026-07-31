@@ -1,6 +1,9 @@
 """Compile V5 task interpretations into auditable resource-demand matrices."""
 from __future__ import annotations
 
+import re
+from dataclasses import is_dataclass, replace
+from types import SimpleNamespace
 from typing import Any, Mapping
 
 import numpy as np
@@ -52,9 +55,31 @@ HARD_BY_OPERATION: Mapping[str, set[str]] = {
     "synthesis": {"synthesis"},
 }
 
+# A reversible field trial is not the same thing as validating external evidence.
+# Normalize only phrases where “validation” directly modifies a trial step/period.
+_TRIAL_VALIDATION_ZH = re.compile(r"验证(?=(步骤|计划|周期|期|流程|方案|试用))")
+_TRIAL_VALIDATION_EN = re.compile(r"\bvalidation(?=\s+(step|plan|period|workflow|trial))", re.I)
+
 
 def _clamp(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
+
+
+def _semantic_task_text(task: str) -> str:
+    text = _TRIAL_VALIDATION_ZH.sub("试用", str(task or ""))
+    return _TRIAL_VALIDATION_EN.sub("trial", text)
+
+
+def _semantic_run(run: Any) -> tuple[Any, bool]:
+    original = str(getattr(run, "task", "") or "")
+    normalized = _semantic_task_text(original)
+    if normalized == original:
+        return run, False
+    if is_dataclass(run) and not isinstance(run, type):
+        return replace(run, task=normalized), True
+    values = dict(vars(run)) if hasattr(run, "__dict__") else {}
+    values["task"] = normalized
+    return SimpleNamespace(**values), True
 
 
 def _capability_labels(interpretation: Mapping[str, Any]) -> list[str]:
@@ -75,12 +100,24 @@ def _work_capability_demands(work: Mapping[str, Any], labels: list[str]) -> tupl
             confidence[capability] = max(confidence.get(capability, 0.0), 0.68 + 0.26 * operation_weight)
         for capability in HARD_BY_OPERATION.get(str(operation), set()):
             hard[capability] = True
+
+    independence = work.get("independence_requirements", {})
+    high_assurance_domain = bool(
+        int(independence.get("minimum_independent_copies", 1) or 1) >= 2
+        or independence.get("different_model_required")
+        or independence.get("different_model_family_preferred")
+        or independence.get("different_provider_preferred")
+    )
     for domain, domain_weight_raw in work.get("domain_requirements", {}).items():
         label = f"domain:{domain}"
         value = _clamp(domain_weight_raw)
         demand[label] = max(demand.get(label, 0.0), value)
-        hard[label] = value >= 0.62
+        # Domain fit remains an optimization signal for ordinary work. It becomes
+        # a hard gate only when the task compiler explicitly requests independent
+        # high-assurance specialist coverage.
+        hard[label] = bool(high_assurance_domain and value >= 0.62)
         confidence[label] = max(confidence.get(label, 0.0), 0.72 + 0.22 * value)
+
     context = work.get("context_requirements", {})
     if int(context.get("required_context_tokens", 0)) >= 32768:
         demand["long_context"] = max(demand["long_context"], 0.84)
@@ -180,7 +217,8 @@ def compile_resource_matrices(compilation: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def compile_v5_task_resources(profile: Any, run: Any, max_interpretations: int = 3) -> dict[str, Any]:
-    semantics = compile_task_semantics(profile, run, max_interpretations=max_interpretations)
+    semantic_run, trial_validation_disambiguated = _semantic_run(run)
+    semantics = compile_task_semantics(profile, semantic_run, max_interpretations=max_interpretations)
     graphs = compile_atomic_work_graphs(semantics)
     matrices = compile_resource_matrices(semantics)
     return {
@@ -189,6 +227,11 @@ def compile_v5_task_resources(profile: Any, run: Any, max_interpretations: int =
         "task_semantics": semantics,
         "atomic_work_graphs": graphs,
         "resource_matrices": matrices,
+        "semantic_input_policy": {
+            "trial_validation_disambiguated": trial_validation_disambiguated,
+            "delegation_notice_must_be_excluded_upstream": True,
+            "domain_fit_hard_only_for_high_assurance_specialist_work": True,
+        },
         "phase_a_complete": True,
         "model_market_accessed": False,
     }
