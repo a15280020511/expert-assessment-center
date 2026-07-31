@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
 from execution_graph import ExecutionGraph, GraphLimits, SelectedNode  # noqa: E402
+from openrouter_api import OpenRouterRequestError  # noqa: E402
 import v5_production_hardening as hardening  # noqa: E402
 
 
@@ -75,7 +76,14 @@ class TestV5R8GateWiring(unittest.TestCase):
         def fake_call(run, payload):
             calls.append(payload["model"])
             if len(calls) == 1:
-                raise RuntimeError("HTTP 503 upstream temporarily unavailable")
+                raise OpenRouterRequestError(
+                    "opaque temporary provider failure",
+                    category="timeout",
+                    retryable=True,
+                    http_status=503,
+                    request_sent=True,
+                    response_received=True,
+                )
             return {
                 "id": "response-a",
                 "model": selected.model,
