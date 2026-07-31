@@ -1,4 +1,4 @@
-"""Task profiling, live catalog collection, model ranking, and cost helpers."""
+"""V5 task profiling, OpenRouter catalog collection, and cost helpers."""
 from __future__ import annotations
 
 import argparse
@@ -11,10 +11,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
-from openrouter_api import MODELS_URL, OpenRouterRequestError, request_json
-from performance_history import history_score, load_history
+from openrouter_api import MODELS_URL, request_json
 
 DEFAULT_CONFIG = Path(__file__).with_name("config.json")
 POLICY_FILE = Path(__file__).with_name("team_policy.json")
@@ -37,8 +36,8 @@ class TaskProfile:
     chinese: bool
     long_context: bool
     requested_context: int
-    team_pattern: str = "three-experts-plus-one-judge"
-    expert_count: int = 3
+    team_pattern: str = "dynamic-v5-dag"
+    expert_count: int = 0
 
 
 @dataclass
@@ -67,34 +66,6 @@ class ModelInfo:
         if self.prompt_price_per_million is None or self.completion_price_per_million is None:
             return None
         return self.prompt_price_per_million * 0.35 + self.completion_price_per_million * 0.65
-
-
-@dataclass(frozen=True)
-class SeatSpec:
-    key: str
-    function: str
-    profession: str
-    domain_focus: str
-    mission: str
-
-
-@dataclass(frozen=True)
-class SelectedExpert:
-    seat_key: str
-    function: str
-    profession: str
-    domain_focus: str
-    mission: str
-    model_id: str
-    selection_reason: str
-
-
-@dataclass(frozen=True)
-class SelectedJudge:
-    function: str
-    profession: str
-    model_id: str
-    selection_reason: str
 
 
 @dataclass(frozen=True)
@@ -174,30 +145,36 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
     if not all(isinstance(item, dict) for item in (selection, execution, provider)):
         raise ExpertTeamError("selection, execution, and provider must be JSON objects.")
 
-    task = (args.task or os.getenv("EXPERT_TASK") or "").strip()
+    task = (getattr(args, "task", None) or os.getenv("EXPERT_TASK") or "").strip()
     if not task:
         raise ExpertTeamError("Task is required. Use --task or EXPERT_TASK.")
     if len(task) > MAX_TASK_CHARS:
         raise ExpertTeamError(f"Task exceeds {MAX_TASK_CHARS} characters.")
 
-    tier = args.quality_tier or os.getenv("QUALITY_TIER") or selection.get("quality_tier", "value")
+    tier = getattr(args, "quality_tier", None) or os.getenv("QUALITY_TIER") or selection.get("quality_tier", "value")
     if tier not in {"budget", "value", "quality"}:
         raise ExpertTeamError("quality_tier must be budget, value, or quality.")
-    weights = dict((selection.get("weights") or {}).get(tier, {}))
-    required = {"quality", "popularity", "cost", "speed", "fit", "context"}
-    if set(weights) != required:
-        raise ExpertTeamError(f"Missing or invalid weights for {tier}.")
-    weights = {key: float(value) for key, value in weights.items()}
-    if not math.isclose(sum(weights.values()), 1.0, abs_tol=0.001):
-        raise ExpertTeamError(f"Weights for {tier} must sum to 1.0.")
+    weights = {
+        key: float(value)
+        for key, value in dict((selection.get("weights") or {}).get(tier, {})).items()
+    }
 
-    max_cost = _finite_number(args.max_estimated_cost_usd or os.getenv("MAX_ESTIMATED_COST_USD"), "max_estimated_cost_usd")
+    raw_cost = getattr(args, "max_estimated_cost_usd", None) or os.getenv("MAX_ESTIMATED_COST_USD")
+    max_cost = _finite_number(raw_cost, "max_estimated_cost_usd")
     if max_cost is not None and max_cost <= 0:
         raise ExpertTeamError("max_estimated_cost_usd must be greater than zero.")
 
-    ranking = int(args.ranking_limit or os.getenv("RANKING_LIMIT") or selection.get("ranking_limit", 20))
-    max_tokens = int(args.max_completion_tokens or os.getenv("MAX_COMPLETION_TOKENS") or execution.get("max_completion_tokens", 3000))
-    reasoning = args.reasoning_effort or os.getenv("REASONING_EFFORT") or execution.get("reasoning_effort", "high")
+    ranking = int(getattr(args, "ranking_limit", None) or os.getenv("RANKING_LIMIT") or selection.get("ranking_limit", 20))
+    max_tokens = int(
+        getattr(args, "max_completion_tokens", None)
+        or os.getenv("MAX_COMPLETION_TOKENS")
+        or execution.get("max_completion_tokens", 3000)
+    )
+    reasoning = (
+        getattr(args, "reasoning_effort", None)
+        or os.getenv("REASONING_EFFORT")
+        or execution.get("reasoning_effort", "high")
+    )
     if not 5 <= ranking <= 100:
         raise ExpertTeamError("ranking_limit must be between 5 and 100.")
     if not 256 <= max_tokens <= 32768:
@@ -209,10 +186,10 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
     if len(sorts) < 2:
         raise ExpertTeamError("catalog_sorts must contain at least two rankings.")
     caps = selection.get("soft_price_caps_per_million", {})
-    history_path = Path(os.getenv("MODEL_HISTORY_PATH", "runtime-state/model-performance.json"))
+    catalog_arg = getattr(args, "catalog_file", None)
     return RunConfig(
         task=task,
-        output_dir=Path(args.output_dir),
+        output_dir=Path(getattr(args, "output_dir", "v5-artifacts")),
         api_key=os.getenv("OPENROUTER_API_KEY"),
         quality_tier=tier,
         ranking_limit=ranking,
@@ -221,11 +198,11 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
         catalog_sorts=sorts,
         weights=weights,
         soft_price_cap=float(caps.get(tier, 15.0)),
-        catalog_file=Path(args.catalog_file) if args.catalog_file else None,
+        catalog_file=Path(catalog_arg) if catalog_arg else None,
         max_estimated_cost_usd=max_cost,
         budget_safety_factor=float(selection.get("budget_safety_factor", 1.25)),
-        history_weight=float(selection.get("history_weight", 0.12)),
-        history_path=history_path,
+        history_weight=0.0,
+        history_path=Path("runtime-state/unused.json"),
         max_completion_tokens=max_tokens,
         judge_max_completion_tokens=int(execution.get("judge_max_completion_tokens", 4000)),
         reasoning_effort=reasoning,
@@ -237,10 +214,10 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
         maximum_replacements=int(execution.get("maximum_replacements", 2)),
         parallel_workers=int(execution.get("parallel_workers", 3)),
         judge_context_budget_chars=int(execution.get("judge_context_budget_chars", 120000)),
-        require_all_experts=bool(execution.get("require_all_experts", True)),
+        require_all_experts=False,
         provider=dict(provider),
-        dry_run=bool(args.dry_run),
-        require_live_catalog=bool(args.require_live_catalog),
+        dry_run=bool(getattr(args, "dry_run", False)),
+        require_live_catalog=bool(getattr(args, "require_live_catalog", False)),
     )
 
 
@@ -265,19 +242,6 @@ def classify_task(task: str, run: RunConfig) -> TaskProfile:
     if long_context:
         context = max(context, 65536)
     return TaskProfile(domains, primary, secondary, complexity, score, high_stakes, chinese, long_context, context)
-
-
-def build_fixed_seats(profile: TaskProfile) -> Tuple[List[SeatSpec], str]:
-    policy = load_json(POLICY_FILE)
-    professions = policy["professions"]
-    primary = professions.get(profile.primary_domain, professions["general"])
-    secondary = professions.get(profile.secondary_domain, professions["general"])
-    result: List[SeatSpec] = []
-    for raw in policy["seats"]:
-        domain = profile.primary_domain if raw["key"] != "cross" else profile.secondary_domain
-        profession = primary[raw["key"]] if raw["key"] != "cross" else secondary["cross"]
-        result.append(SeatSpec(raw["key"], raw["function"], profession, domain, raw["mission"]))
-    return result, primary["judge"]
 
 
 def _expired(value: Any) -> bool:
@@ -322,7 +286,7 @@ def fetch_catalog(run: RunConfig) -> Tuple[Dict[str, ModelInfo], str]:
                 try:
                     sort_name, data = future.result()
                     payload[sort_name] = data
-                except Exception as exc:  # noqa: BLE001 - catalog degradation is explicit
+                except Exception as exc:  # noqa: BLE001 - degradation is explicit
                     errors[name] = str(exc)
         if len(payload) < 2:
             raise ExpertTeamError(f"Live catalog returned fewer than two usable rankings: {errors}")
@@ -338,21 +302,20 @@ def fetch_catalog(run: RunConfig) -> Tuple[Dict[str, ModelInfo], str]:
             if not isinstance(row, dict) or not isinstance(row.get("id"), str):
                 continue
             model_id = row["id"]
-            if model_id.startswith(ROUTER_PREFIXES) or ":online" in model_id:
+            if model_id.startswith(ROUTER_PREFIXES) or ":online" in model_id or ":batch" in model_id:
                 continue
             pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
             top = row.get("top_provider") if isinstance(row.get("top_provider"), dict) else {}
             architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
             reasoning = row.get("reasoning") if isinstance(row.get("reasoning"), dict) else {}
             if model_id not in models:
-                max_output = int(top.get("max_completion_tokens") or row.get("max_completion_tokens") or 0)
                 models[model_id] = ModelInfo(
                     id=model_id,
                     name=str(row.get("name") or model_id),
                     description=str(row.get("description") or ""),
                     author=model_id.split("/", 1)[0],
                     context_length=int(row.get("context_length") or top.get("context_length") or 0),
-                    max_completion_tokens=max_output,
+                    max_completion_tokens=int(top.get("max_completion_tokens") or row.get("max_completion_tokens") or 0),
                     prompt_price_per_million=_ppm(pricing, "prompt"),
                     completion_price_per_million=_ppm(pricing, "completion"),
                     supported_parameters=[str(item) for item in row.get("supported_parameters", [])],
@@ -366,12 +329,6 @@ def fetch_catalog(run: RunConfig) -> Tuple[Dict[str, ModelInfo], str]:
     if not models:
         raise ExpertTeamError("No usable direct models were returned by the catalog.")
     return models, source
-
-
-def _rank_component(rank: Optional[int], population: int) -> float:
-    if rank is None or population <= 1:
-        return 0.0
-    return max(0.0, 1.0 - (rank - 1) / (population - 1))
 
 
 def _domain_fit(model: ModelInfo, domain: str) -> float:
@@ -403,85 +360,11 @@ def _task_fit(model: ModelInfo, profile: TaskProfile) -> Tuple[float, List[str]]
     return min(score, 1.0), reasons
 
 
-def rank_models(models: Mapping[str, ModelInfo], profile: TaskProfile, run: RunConfig) -> List[ModelInfo]:
-    population = max(len(models), 2)
-    history = load_history(run.history_path)
-    ranked: List[ModelInfo] = []
-    for model in models.values():
-        if model.context_length < profile.requested_context:
-            continue
-        if model.max_completion_tokens < run.max_completion_tokens:
-            continue
-        if model.input_modalities and "text" not in model.input_modalities:
-            continue
-        if model.output_modalities and "text" not in model.output_modalities:
-            continue
-        if _expired(model.expiration_date):
-            continue
-        if model.prompt_price_per_million is None or model.completion_price_per_million is None:
-            continue
-        quality = _rank_component(model.ranks.get("intelligence-high-to-low"), population)
-        popularity = _rank_component(model.ranks.get("top-weekly"), population)
-        speed_parts = [
-            _rank_component(model.ranks.get("throughput-high-to-low"), population),
-            _rank_component(model.ranks.get("latency-low-to-high"), population),
-        ]
-        speed = sum(speed_parts) / len(speed_parts)
-        blended = model.blended_price_per_million or run.soft_price_cap * 10
-        cost = 1.0 / (1.0 + blended / max(run.soft_price_cap, 0.01))
-        context = min(1.0, math.log2(max(model.context_length, 2)) / math.log2(max(profile.requested_context * 4, 4)))
-        fit, reasons = _task_fit(model, profile)
-        hist = history_score(history.get(model.id, {}))
-        model.components = {
-            "quality": quality,
-            "popularity": popularity,
-            "cost": cost,
-            "speed": speed,
-            "fit": fit,
-            "context": context,
-            "history": hist,
-        }
-        base_score = sum(model.components[key] * run.weights[key] for key in run.weights)
-        model.score = base_score * (1.0 - run.history_weight) + hist * run.history_weight
-        model.fit_reasons = reasons + [f"历史运行分{hist:.3f}"]
-        if model.id.endswith(":free") and run.quality_tier != "budget":
-            model.score *= 0.78
-            model.fit_reasons.append("免费端点稳定性折扣")
-        ranked.append(model)
-    ranked.sort(key=lambda item: (-item.score, item.blended_price_per_million or math.inf, item.id))
-    if len(ranked) < 4:
-        raise ExpertTeamError("Live catalog needs at least four eligible direct models for the fixed 3+1 pattern.")
-    return ranked
-
-
 def estimate_call_cost(model: ModelInfo, input_chars: int, output_tokens: int) -> float:
     if model.prompt_price_per_million is None or model.completion_price_per_million is None:
         raise ExpertTeamError(f"Pricing missing for {model.id}.")
     input_tokens = math.ceil(max(0, input_chars) / 4)
-    return input_tokens / 1_000_000 * model.prompt_price_per_million + output_tokens / 1_000_000 * model.completion_price_per_million
-
-
-def ranking_rows(ranked: Sequence[ModelInfo], limit: Optional[int] = None) -> List[Dict[str, Any]]:
-    rows = ranked if limit is None else ranked[:limit]
-    return [
-        {
-            "dynamic_rank": index,
-            "model": model.id,
-            "name": model.name,
-            "author": model.author,
-            "dynamic_score": round(model.score, 6),
-            "official_ranks": model.ranks,
-            "components": {key: round(value, 6) for key, value in model.components.items()},
-            "prompt_usd_per_million": model.prompt_price_per_million,
-            "completion_usd_per_million": model.completion_price_per_million,
-            "context_length": model.context_length,
-            "max_completion_tokens": model.max_completion_tokens,
-            "supported_parameters": model.supported_parameters,
-            "input_modalities": model.input_modalities,
-            "output_modalities": model.output_modalities,
-            "knowledge_cutoff": model.knowledge_cutoff,
-            "expiration_date": model.expiration_date,
-            "fit_reasons": model.fit_reasons,
-        }
-        for index, model in enumerate(rows, 1)
-    ]
+    return (
+        input_tokens / 1_000_000 * model.prompt_price_per_million
+        + output_tokens / 1_000_000 * model.completion_price_per_million
+    )

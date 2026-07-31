@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT / "open-model-market"))
 from execution_graph import ExecutionGraph, GraphLimits  # noqa: E402
 from execution_graph_validator import validate_execution_graph  # noqa: E402
 from resource_matrix import compile_v5_task_resources  # noqa: E402
-from v5_benchmark import live_cutover_gate, planning_benchmark  # noqa: E402
+from v5_benchmark import planning_benchmark  # noqa: E402
 from v5_executor import V5ExecutionError, execute_v5_graph  # noqa: E402
 from v5_planner import compile_and_optimize_v5  # noqa: E402
 
@@ -33,7 +33,13 @@ class TestV5PlannerExecutor(unittest.TestCase):
 
     @staticmethod
     def run(task):
-        return SimpleNamespace(task=task, parallel_workers=4, api_key=None, model_timeout_seconds=30, model_max_retries=0)
+        return SimpleNamespace(
+            task=task,
+            parallel_workers=4,
+            api_key=None,
+            model_timeout_seconds=30,
+            model_max_retries=0,
+        )
 
     @staticmethod
     def models():
@@ -54,6 +60,7 @@ class TestV5PlannerExecutor(unittest.TestCase):
                 ranks={"intelligence-high-to-low": rank},
                 components={},
             )
+
         return [
             model("alpha/prime", "advanced reasoning mathematics research evidence business coding", 1, 8.0, 24.0),
             model("beta/value", "business finance economics investment strategy analysis research", 3, 2.0, 6.0),
@@ -73,7 +80,10 @@ class TestV5PlannerExecutor(unittest.TestCase):
                         "tag": f"provider-{index}",
                         "context_length": model.context_length,
                         "max_completion_tokens": model.max_completion_tokens,
-                        "pricing": {"prompt": model.prompt_price_per_million, "completion": model.completion_price_per_million},
+                        "pricing": {
+                            "prompt": model.prompt_price_per_million,
+                            "completion": model.completion_price_per_million,
+                        },
                         "supported_parameters": model.supported_parameters,
                         "uptime": 0.99 - index * 0.005,
                     }]
@@ -84,9 +94,17 @@ class TestV5PlannerExecutor(unittest.TestCase):
     def planner(self):
         run = self.run("比较城市公共投资方案，进行财务建模、法律合规、证据核验、预测、风险反证并给出最终决策。")
         resources = compile_v5_task_resources(self.profile(), run)
-        limits = GraphLimits(max_nodes=16, max_edges=64, max_stages=8, max_model_calls=16, max_retries=0, max_replacements=2)
+        limits = GraphLimits(
+            max_nodes=16,
+            max_edges=64,
+            max_stages=8,
+            max_model_calls=16,
+            max_retries=0,
+            max_replacements=2,
+        )
         return compile_and_optimize_v5(
-            self.models(), resources,
+            self.models(),
+            resources,
             endpoint_payloads=self.endpoints(),
             ranking_limit=50,
             limits=limits,
@@ -98,7 +116,10 @@ class TestV5PlannerExecutor(unittest.TestCase):
         planner = self.planner()
         self.assertGreater(planner["market"]["real_endpoint_count"], 0)
         self.assertEqual(planner["market"]["synthetic_fixture_count"], 0)
-        self.assertGreaterEqual(planner["candidate_graph"]["candidate_count_before_pareto"], planner["candidate_graph"]["candidate_count_after_pareto"])
+        self.assertGreaterEqual(
+            planner["candidate_graph"]["candidate_count_before_pareto"],
+            planner["candidate_graph"]["candidate_count_after_pareto"],
+        )
         self.assertGreater(planner["candidate_graph"]["candidate_count_after_pareto"], 0)
         graph = ExecutionGraph.from_mapping(planner["optimization"]["execution_graph"])
         self.assertFalse(validate_execution_graph(graph, GraphLimits()))
@@ -189,50 +210,22 @@ class TestV5PlannerExecutor(unittest.TestCase):
             self.assertLessEqual(budget["calls_reserved"], len(graph.nodes) + 2)
             self.assertTrue(any(row["reason"] == "global-replacement-limit-exhausted" for row in budget["denials"]))
 
-    def test_planning_benchmark_never_authorizes_production_cutover(self):
+    def test_planning_diagnostic_is_v5_only(self):
         benchmark = planning_benchmark(self.planner())
         self.assertTrue(benchmark["planning_gate_passed"])
-        self.assertFalse(benchmark["production_cutover_allowed"])
-        self.assertIn("v3_compatibility_baseline", benchmark["strategies"])
+        self.assertEqual(benchmark["runtime_policy"], "v5-only-no-alternate-runtime")
+        self.assertEqual(
+            set(benchmark["strategies"]),
+            {
+                "v5_joint_graph",
+                "strongest_single_model",
+                "lowest_price_single_model",
+                "random_feasible",
+                "lowest_cost_feasible",
+            },
+        )
         self.assertFalse(benchmark["strategies"]["strongest_single_model"]["feasible"])
         self.assertTrue(benchmark["strategies"]["strongest_single_model"]["hard_constraint_violations"])
-
-    @staticmethod
-    def live_records():
-        records = []
-        strategies = ["v5_joint_graph", "v3", "strongest_single_model", "lowest_price_single_model", "fixed_3_plus_1", "random_feasible"]
-        for task_index in range(5):
-            for strategy in strategies:
-                v5 = strategy == "v5_joint_graph"
-                records.append({
-                    "task_id": f"task-{task_index}",
-                    "strategy": strategy,
-                    "status": "success",
-                    "blind_quality_score": 0.88 if v5 else 0.84,
-                    "actual_cost_usd": 0.10 if v5 else 0.09,
-                    "latency_seconds": 2.0,
-                    "safety_failure": False,
-                    "blind_fatal_error": False,
-                    "blind_judge_count": 2,
-                    "blind_judge_models": ["judge/a", "judge/b"],
-                    "blind_judge_providers": ["provider-a", "provider-b"],
-                    "blind_judge_disagreement_points": 5.0,
-                })
-        return records
-
-    def test_live_cutover_gate_requires_real_multi_task_advantage(self):
-        records = self.live_records()
-        decision = live_cutover_gate(records)
-        self.assertTrue(decision["production_cutover_allowed"])
-        records[0]["safety_failure"] = True
-        self.assertFalse(live_cutover_gate(records)["production_cutover_allowed"])
-
-    def test_live_cutover_gate_rejects_non_independent_judging(self):
-        records = self.live_records()
-        records[0]["blind_judge_providers"] = ["provider-a", "provider-a"]
-        decision = live_cutover_gate(records)
-        self.assertFalse(decision["production_cutover_allowed"])
-        self.assertIn("v5_joint_graph:invalid-independent-blind-judging", decision["blockers"])
 
 
 if __name__ == "__main__":

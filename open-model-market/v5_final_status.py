@@ -85,8 +85,8 @@ def main() -> int:
         f"- Provider count: `{summary.get('substantive_provider_count', 0)}`",
         f"- Providers: `{', '.join(str(item) for item in providers) or 'unavailable'}`",
         "- External tools: `forbidden`",
-        "- V3 implicit fallback: `disabled`",
-        f"- V3 preserved for manual rollback: `{str(bool(runtime.get('v3_preserved_for_manual_rollback'))).lower() if isinstance(runtime, Mapping) else 'unknown'}`",
+        "- Alternate runtime fallback: `disabled`",
+        f"- Legacy runtime present: `{str(runtime.get('legacy_runtime_present')).lower() if isinstance(runtime, Mapping) else 'unknown'}`",
         f"- Artifact ID: `{args.artifact_id or 'unavailable'}`",
         f"- Artifact digest: `{args.artifact_digest or 'unavailable'}`",
     ]
@@ -118,12 +118,12 @@ def main() -> int:
     elif status == "DEGRADED":
         lines.extend([
             "",
-            "V5 已交付，但发生受控降级。不得表述为完整正常 PASS；V3 不会被自动调用。",
+            "V5 已交付，但发生受控降级。不得表述为完整正常 PASS；系统不会调用其他运行时。",
         ])
     else:
         lines.extend([
             "",
-            "本次 V5 运行不得表述为成功。系统已失败关闭，未自动回退 V3；诊断和中间证据保存在 Artifact（若上传成功）。",
+            "本次 V5 运行不得表述为成功。系统已失败关闭，不调用其他运行时；诊断和中间证据保存在 Artifact（若上传成功）。",
         ])
 
     print("\n".join(lines) + "\n")

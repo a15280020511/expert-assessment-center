@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""V5 production ticket adapter over the preserved hardened ticket parser."""
+"""V5 production ticket adapter over the shared hardened ticket parser."""
 from __future__ import annotations
 
 import argparse
@@ -28,7 +28,8 @@ def prepare(args: argparse.Namespace) -> int:
     status["call_policy"] = "dynamic-graph-actual-use-with-16-call-hard-ceiling"
     status["cost_policy"] = "finite-by-call-and-token-bounds-no-fixed-dollar-ceiling"
     status["analysis_owner"] = "github-v5-dynamic-expert-graph"
-    status["v3_fallback_policy"] = "disabled"
+    status["fallback_policy"] = "disabled-fail-closed"
+    status["legacy_runtime_present"] = False
     if status.get("accepted") is True:
         status["reason"] = (
             "ticket, authorization, uniqueness, V5 dynamic graph call ceiling, "
@@ -48,7 +49,7 @@ def render(args: argparse.Namespace) -> int:
         "- 分析责任：`GitHub 专家团 + 裁判`": "- 分析责任：`GitHub V5动态专家DAG + 动态综合节点`",
         "- 固定组合：`3名专家 + 1名裁判`": "- 组合方式：`根据任务资源矩阵动态计算节点、职业、模型、Provider、提示词和参数`",
         "- 批准调用数：`16`": "- 动态调用安全上限：`16`（实际调用由任务规划决定）",
-        "- 额外调用额度（专家或裁判故障替换共享）：`2`": "- 全局故障恢复：`最多2次有限替换；不自动回退V3`",
+        "- 额外调用额度（专家或裁判故障替换共享）：`2`": "- 全局故障恢复：`最多2次有限替换；失败后关闭，不调用其他运行时`",
         "- 选模方式：`稳定和能力硬门槛；通过后value档性价比优先；厂商独立`": "- 选模方式：`实时目录 + 任务资源矩阵 + CP-SAT整体性价比优化`",
         "- 推理参数：`受控动态字段；生产统一low reasoning与low verbosity；不发送人为Token上限`": "- 推理参数：`按节点价值动态计算reasoning、采样、上下文和输出许可`",
         "- 语义路由：`默认关闭`": "- 隐式路由：`禁止；模型与Provider显式锁定`",
@@ -57,7 +58,11 @@ def render(args: argparse.Namespace) -> int:
     for old, new in replacements.items():
         text = text.replace(old, new)
     if args.phase == "accepted":
-        text += "\n- 生产运行时：`V5 R8`\n- V3隐式fallback：`禁止`\n- V3状态：`仅保留人工回滚，不参与本次执行`\n"
+        text += (
+            "\n- 生产运行时：`V5 R8`"
+            "\n- 失败策略：`失败关闭；不调用其他运行时`"
+            "\n- 旧运行时状态：`已从当前代码树删除`\n"
+        )
     print(text.rstrip())
     return result
 

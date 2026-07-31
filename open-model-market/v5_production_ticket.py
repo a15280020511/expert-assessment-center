@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Run the hardened V5 R8 graph from a production execution ticket.
 
-This adapter is intentionally independent from the preserved V3 runtime. It
-installs the consolidated R8 policies, delegates planning/execution to the V5
-pipeline, and writes a compact compatibility envelope for the production
-publisher and evidence bundle. It never falls back to V3.
+The adapter installs the consolidated V5 policies, delegates planning and
+execution to the dynamic pipeline, and writes the production evidence bundle.
+It fails closed and has no alternate runtime path.
 """
 from __future__ import annotations
 
@@ -146,8 +145,8 @@ def _normalize(output: Path) -> dict[str, Any]:
         "model_count": len(models),
         "provider_count": len(providers),
         "production_entrypoint": True,
-        "v3_fallback_used": False,
-        "v3_deleted": False,
+        "fallback_used": False,
+        "legacy_runtime_present": False,
         "ticket_task_id": ticket.get("task_id") if isinstance(ticket, Mapping) else None,
     }
     _write(output / "expert-team-result.json", envelope)
@@ -156,8 +155,8 @@ def _normalize(output: Path) -> dict[str, Any]:
         "entrypoint": "v5_production_ticket.py",
         "hardening": "v5_production_hardening.install",
         "maximum_model_calls": MAX_MODEL_CALLS,
-        "fallback_policy": "fail-closed-no-v3-fallback",
-        "v3_preserved_for_manual_rollback": True,
+        "fallback_policy": "fail-closed-no-alternate-runtime",
+        "legacy_runtime_present": False,
     })
     return envelope
 
@@ -209,7 +208,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "message": str(exc),
             "traceback": traceback.format_exc(),
             "retryable": False,
-            "v3_fallback_used": False,
+            "fallback_used": False,
+            "legacy_runtime_present": False,
         })
         raise
 

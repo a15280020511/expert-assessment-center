@@ -67,11 +67,10 @@ class TestV5CandidateDiversity(unittest.TestCase):
             v5_planner.pareto_prune = original
             diversity._INSTALLED = False
 
-    def test_pilot_entrypoint_reaches_candidate_diversity_through_tiered_layer(self):
-        entry = (ROOT / "open-model-market" / "v5_low_cost_pilot_entry.py").read_text(encoding="utf-8")
-        tiered = (ROOT / "open-model-market" / "v5_low_cost_pilot_v4.py").read_text(encoding="utf-8")
-        self.assertIn("import v5_low_cost_pilot_v4 as pilot_v4", entry)
-        self.assertIn("v5_candidate_diversity.install()", tiered)
+    def test_formal_pipeline_installs_candidate_diversity(self):
+        pipeline = (ROOT / "open-model-market" / "v5_pipeline.py").read_text(encoding="utf-8")
+        self.assertIn("import v5_candidate_diversity", pipeline)
+        self.assertIn("v5_candidate_diversity.install()", pipeline)
 
 
 if __name__ == "__main__":

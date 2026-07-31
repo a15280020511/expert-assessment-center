@@ -25,11 +25,15 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Validate expert report integrity
+      - name: Validate V5 production integrity
         run: |
           set -euo pipefail
           python -m compileall -q open-model-market tests
-          PYTHONPATH=open-model-market python -m unittest tests/test_report_integrity.py -v
+          PYTHONPATH=open-model-market python -m unittest \
+            tests.test_v5_production_cutover \
+            tests.test_workflow_contract \
+            tests.test_legacy_runtime_removed \
+            -v
           python - <<'PY'
           import json
           from pathlib import Path

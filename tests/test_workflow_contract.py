@@ -15,12 +15,12 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("Execute hardened V5 R8 dynamic graph", self.text)
         self.assertNotIn("Execute fixed 3+1 expert team", self.text)
 
-    def test_production_uses_v5_native_entrypoints(self):
+    def test_production_uses_only_v5_entrypoints(self):
         self.assertIn("v5_issue_ticket.py prepare", self.text)
         self.assertIn("v5_production_ticket.py", self.text)
         self.assertIn("v5_execution_auditor.py", self.text)
         self.assertIn("v5_final_status.py", self.text)
-        self.assertNotIn("name: Execute fixed 3+1 expert team", self.text)
+        self.assertNotIn("expert_team_hardened.py", self.text)
         self.assertNotIn("python open-model-market/execution_auditor.py", self.text)
         self.assertNotIn("python open-model-market/final_status.py", self.text)
 
@@ -63,15 +63,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("--max-estimated-cost-usd", self.text)
         self.assertIn("TOTAL_MODEL_CALLS", self.text)
 
-    def test_v3_is_manual_rollback_documentation_not_active_runtime(self):
-        marker = "python open-model-market/expert_team_hardened.py"
-        self.assertEqual(self.text.count(marker), 1)
-        self.assertIn("manual rollback command", self.text)
-        self.assertIn("never executed", self.text)
-        self.assertNotIn("name: Execute fixed 3+1 expert team", self.text)
-        self.assertIn("v5_production_ticket.py", self.text)
-
-    def test_obsolete_v3_history_restore_is_removed_from_v5_entrypoint(self):
+    def test_no_manual_legacy_runtime_path_exists(self):
+        legacy_version = "v" + "3"
+        self.assertNotIn(legacy_version, self.text.casefold())
+        self.assertNotIn("manual rollback", self.text.casefold())
         self.assertNotIn("Restore latest model performance history", self.text)
         self.assertNotIn("model-performance-state", self.text)
 

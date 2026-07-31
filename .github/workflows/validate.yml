@@ -6,13 +6,10 @@ on:
       - "open-model-market/**"
       - "tests/**"
       - ".github/workflows/execution-ticket.yml"
-      - ".github/workflows/expert-team.yml"
-      - ".github/workflows/expert-team-canary.yml"
       - ".github/workflows/expert-integrity-validate.yml"
-      - ".github/workflows/v5-low-cost-pilot.yml"
+      - ".github/workflows/v5-validate.yml"
       - ".github/workflows/validate.yml"
       - ".github/dependabot.yml"
-      - "docs/v5-low-cost-pilot.md"
       - "requirements*.txt"
       - "README.md"
   push:
@@ -21,13 +18,10 @@ on:
       - "open-model-market/**"
       - "tests/**"
       - ".github/workflows/execution-ticket.yml"
-      - ".github/workflows/expert-team.yml"
-      - ".github/workflows/expert-team-canary.yml"
       - ".github/workflows/expert-integrity-validate.yml"
-      - ".github/workflows/v5-low-cost-pilot.yml"
+      - ".github/workflows/v5-validate.yml"
       - ".github/workflows/validate.yml"
       - ".github/dependabot.yml"
-      - "docs/v5-low-cost-pilot.md"
       - "requirements*.txt"
       - "README.md"
 
@@ -36,9 +30,9 @@ permissions:
 
 jobs:
   validate:
-    name: Validate toolkit
+    name: Validate V5 toolkit
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -52,138 +46,53 @@ jobs:
             requirements-dev.txt
       - name: Install pinned Python dependencies
         run: python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
-      - name: Verify Python dependency consistency
-        run: python -m pip check
-      - name: Verify OR-Tools runtime
-        run: python -c "from ortools.sat.python import cp_model; print(cp_model.CpModel())"
+      - name: Verify dependencies and OR-Tools
+        run: |
+          python -m pip check
+          python -c "from ortools.sat.python import cp_model; print(cp_model.CpModel())"
       - name: Run Ruff safety checks
         shell: bash
         run: |
           set -o pipefail
           python -m ruff check --select E9,F63,F7,F82 open-model-market tests 2>&1 | tee ruff.log
-      - name: Compile Python
-        run: python -m py_compile open-model-market/*.py
-      - name: Verify center-local maintenance and delivery controls exist
+      - name: Compile current Python tree
+        run: python -m py_compile open-model-market/*.py tests/*.py
+      - name: Verify V5 production files
         run: |
           test -s .github/dependabot.yml
           test -s .github/workflows/validate.yml
+          test -s .github/workflows/v5-validate.yml
           test -s .github/workflows/expert-integrity-validate.yml
-          test -s .github/workflows/expert-team-canary.yml
-          test -s .github/workflows/expert-team.yml
           test -s .github/workflows/execution-ticket.yml
-          test -s open-model-market/v5_low_cost_pilot.py
-          test -s open-model-market/v5_low_cost_pilot_entry.py
-          test -s docs/v5-low-cost-pilot.md
-          test -s open-model-market/resource_requirements.py
-          test -s open-model-market/resource_plan_optimizer.py
-          test -s open-model-market/value_resource_plan_optimizer.py
-          test -s open-model-market/resource_plan_compat.py
-          test -s open-model-market/resource_runtime_compat.py
-          test -s open-model-market/resource_call_budget.py
-          test -s open-model-market/FULL_DYNAMIC_RESOURCE_PLANNING.md
-          test -s open-model-market/dynamic_runtime.py
-      - name: Run unit tests
+          test -s open-model-market/v5_pipeline.py
+          test -s open-model-market/v5_production_ticket.py
+          test -s open-model-market/v5_issue_ticket.py
+          test -s open-model-market/v5_execution_auditor.py
+          test -s open-model-market/v5_final_status.py
+          test -s open-model-market/v5_production_hardening.py
+          test -s open-model-market/v5_executor.py
+          test -s open-model-market/v5_planner.py
+          test -s open-model-market/v5_value_optimizer.py
+      - name: Run current unit tests
         shell: bash
         run: |
           set -o pipefail
           python -m unittest discover -s tests -v 2>&1 | tee unit-test.log
-      - name: Verify secure full-dynamic dry-run
+      - name: Run deterministic V5 end-to-end dry-run
         run: |
-          python open-model-market/expert_team_hardened.py \
-            --task "Static validation: compare a software investment with technical, financial and risk constraints" \
-            --catalog-file tests/fixtures/models.json --dry-run --output-dir validation-artifacts
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          root = Path("validation-artifacts")
-          plan = json.loads((root / "model-selection.json").read_text())
-          optimization = json.loads((root / "team-optimization.json").read_text())
-          requirements = json.loads((root / "task-resource-requirements.json").read_text())
-          dry = json.loads((root / "expert-team-dry-run.json").read_text())
-          routing = json.loads((root / "task-routing.json").read_text())
-          request_audit = json.loads((root / "request-audit.json").read_text())
-          config = json.loads(Path("open-model-market/config.json").read_text())
-          forbidden = {"tools", "tool_choice", "plugins", "web_search_options", "file_search", "models"}
-
-          expert_count = int(plan["expert_count"])
-          assert expert_count >= 1
-          assert expert_count + 1 <= 16
-          assert config["routing"]["enabled"] is False
-          assert config["selection"]["optimizer"]["engine"] == "google-or-tools-cp-sat"
-          assert plan["team_pattern"] == f"{expert_count}-dynamic-work-packages-plus-synthesis"
-          assert plan["external_tools_allowed"] is False
-
-          assert optimization["version"] == 3
-          assert optimization["optimizer"] == "google-or-tools-cp-sat"
-          assert optimization["selection_method"] == "resource-demand-first-cost-performance-v3"
-          assert optimization["solver_status"] in {"OPTIMAL", "FEASIBLE"}
-          assert optimization["fallback_used"] is False
-          assert optimization["highest_principle"] == "maximum_cost_performance"
-          assert optimization["objective_order"] == [
-            "hard_resource_coverage",
-            "maximum_cost_performance",
-          ]
-          assert optimization["cost_performance_ratio"] > 0
-          assert optimization["expert_count"] == expert_count
-          assert len(optimization["selected"]) == expert_count + 1
-          assert len(plan["experts"]) == expert_count
-          assert len(plan["inference_parameters"]) == expert_count + 1
-
-          selected_models = {row["model"] for row in optimization["selected"].values()}
-          assert len(selected_models) == expert_count + 1
-          assert all(row["prompt_modules"] for row in optimization["selected"].values())
-          assert all(row["prompt_profile_id"].startswith("prompt-") for row in optimization["selected"].values())
-          assert all(row["resource_profile_id"].startswith("params-") for row in optimization["selected"].values())
-          assert all(row["parameters"] for row in optimization["selected"].values())
-
-          assert requirements["architecture"] == "task-to-resource-requirements-before-market-lookup"
-          assert requirements["atomic_work_units"]
-          assert requirements["requested_market_attributes"]
-          assert requirements["history_input_used"] is False
-          assert requirements["fixed_team_mode_used"] is False
-          assert requirements["fixed_seat_template_used"] is False
-          assert requirements["fixed_prompt_template_used"] is False
-          assert requirements["fixed_parameter_template_used"] is False
-
-          assert plan["approved_total_model_calls"] >= expert_count + 1
-          assert plan["model_call_allocation"]["semantic_router_calls"] == 0
-          assert plan["estimated_cost_policy"] == "provider-max-theoretical-not-a-limit"
-          assert plan["hard_cost_limit_usd"] is None
-          assert routing["attempted"] is False
-          assert routing["call_consumed"] is False
-          assert routing["request_payload"] is None
-          assert routing["request_token_ceiling_sent"] is False
-          assert routing["status"] == "disabled"
-          assert dry["task_routing"]["call_consumed"] is False
-          assert dry["optimizer"] == "google-or-tools-cp-sat"
-          assert request_audit["status"] == "PASS"
-          assert request_audit["expected_request_count"] == 0
-
-          for parameters in plan["inference_parameters"].values():
-              assert parameters["request_token_ceiling_sent"] is False
-              assert parameters["reasoning_token_ceiling_sent"] is False
-              assert parameters["output_token_policy"] == "provider-model-limit-only"
-              assert parameters["parameter_template"].startswith("params-")
-              assert "max_tokens" not in parameters
-              assert parameters["provider_max_completion_tokens"] > 0
-
-          for request in dry["expert_requests"]:
-              assert not forbidden.intersection(request)
-              assert not request["model"].startswith("openrouter/")
-              assert ":online" not in request["model"]
-              assert ":batch" not in request["model"]
-              assert "max_tokens" not in request
-              assert "max_completion_tokens" not in request
-              system = str(request.get("messages", [{}])[0].get("content") or "")
-              assert "本次资源矩阵选定的提示词模块" in system
-
-          assert (root / "artifact-manifest.json").exists()
-          PY
+          python open-model-market/v5_pipeline.py \
+            --task "比较三个城市公共投资方案，完成财务建模、政策与法律合规、证据核验、预测推演、独立红队反证和最终决策。" \
+            --catalog-file tests/fixtures/models.json \
+            --endpoint-file tests/fixtures/endpoints.json \
+            --dry-run \
+            --output-dir validation-artifacts
+          test -s validation-artifacts/v5-execution-graph.json
+          test -s validation-artifacts/v5-planning-benchmark.json
+          test -s validation-artifacts/artifact-manifest.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: expert-team-validation-${{ github.run_id }}
+          name: v5-toolkit-validation-${{ github.run_id }}
           path: |
             validation-artifacts/
             unit-test.log

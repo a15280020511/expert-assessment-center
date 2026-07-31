@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end V5 planning/execution entrypoint isolated from the V3 runtime."""
+"""End-to-end standalone V5 planning and execution entrypoint."""
 from __future__ import annotations
 
 import argparse
@@ -29,7 +29,7 @@ def _load_json(path: str | Path) -> Mapping[str, Any]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Compile and execute a V5 dynamic expert DAG without importing or changing the V3 production runtime."
+        description="Compile and execute the standalone V5 dynamic expert DAG."
     )
     parser.add_argument("--task", help="Task text. Can also use EXPERT_TASK.")
     parser.add_argument("--config", default=str(market.DEFAULT_CONFIG))
@@ -55,12 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _rank_v5_models(models: Mapping[str, Any], profile: Any, run: Any) -> list[Any]:
-    """Rank only with current catalog intelligence, price, fit, and context.
-
-    This function intentionally does not import V3 selector modules, history,
-    popularity, throughput, latency, fixed-seat pools, or unstable-name heuristics.
-    Endpoint stability is compiled separately from the real endpoint inventory.
-    """
+    """Rank with current catalog intelligence, price, fit, and context only."""
     ranked: list[Any] = []
     for model in models.values():
         model_id = str(getattr(model, "id", ""))
@@ -94,7 +89,7 @@ def _rank_v5_models(models: Mapping[str, Any], profile: Any, run: Any) -> list[A
             "popularity_used": 0.0,
         }
         model.score = 0.52 * intelligence + 0.24 * fit + 0.19 * min(1.0, value) + 0.05 * context_ratio
-        model.fit_reasons = list(reasons) + ["V5隔离排序：未使用历史、速度、热度或固定席位过滤"]
+        model.fit_reasons = list(reasons) + ["V5独立排序：未使用历史、速度、热度或固定席位过滤"]
         ranked.append(model)
     ranked.sort(
         key=lambda row: (
@@ -122,8 +117,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     models, catalog_source = market.fetch_catalog(run)
     ranked = _rank_v5_models(models, profile, run)
 
-    # Install the paired candidate-safety layers before every formal V5 plan:
-    # sparse-catalog hard-capability calibration plus diversity-preserving Pareto.
     v5_candidate_diversity.install()
     resources = compile_v5_task_resources(profile, run)
     write_task_resource_artifacts(resources, output)
@@ -194,7 +187,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "requests": requests,
             "planning_benchmark": benchmark,
             "production_entrypoint_changed": False,
-            "v3_runtime_imported": False,
+            "legacy_runtime_present": False,
+            "fallback_policy": "fail-closed-no-alternate-runtime",
         })
         write_manifest(output)
         print(f"V5 dry-run artifacts written to {output}")
