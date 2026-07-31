@@ -44,6 +44,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--endpoint-file", help="Deterministic model endpoint fixture keyed by model ID.")
     parser.add_argument("--maximum-candidates-per-work", type=int, default=12)
+    parser.add_argument("--maximum-total-calls", type=int, default=16)
+    parser.add_argument("--maximum-recovery-calls", type=int, default=2)
+    parser.add_argument("--cost-anomaly-usd", type=float)
     parser.add_argument(
         "--quality-tolerance-pct",
         type=float,
@@ -55,8 +58,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _rank_v5_models(models: Mapping[str, Any], profile: Any, run: Any) -> list[Any]:
-    """Rank with current catalog intelligence, price, fit, and context only."""
-    ranked: list[Any] = []
+    """Build a deduplicated multi-channel pool before CP-SAT optimization."""
+    eligible: list[Any] = []
     for model in models.values():
         model_id = str(getattr(model, "id", ""))
         if not model_id or model_id.startswith("openrouter/") or ":online" in model_id or ":batch" in model_id:
@@ -88,24 +91,63 @@ def _rank_v5_models(models: Mapping[str, Any], profile: Any, run: Any) -> list[A
             "speed_used": 0.0,
             "popularity_used": 0.0,
         }
-        model.score = 0.52 * intelligence + 0.24 * fit + 0.19 * min(1.0, value) + 0.05 * context_ratio
-        model.fit_reasons = list(reasons) + ["V5独立排序：未使用历史、速度、热度或固定席位过滤"]
-        ranked.append(model)
-    ranked.sort(
-        key=lambda row: (
-            int((row.ranks or {}).get("intelligence-high-to-low", 10_000)),
-            -(float(row.components.get("task_fit", 0.0))),
-            float(row.blended_price_per_million or math.inf),
-            row.id,
-        )
-    )
-    if len(ranked) < 2:
-        raise market.ExpertTeamError("V5 requires at least two eligible direct models after task-independent safety filtering.")
-    return ranked[: max(2, int(run.ranking_limit))]
+        model.score = 0.42 * intelligence + 0.30 * fit + 0.23 * min(1.0, value) + 0.05 * context_ratio
+        model.fit_reasons = list(reasons) + [
+            "V5多通道候选池：智能、任务匹配、性价比、低价合格和上下文适配分别入围"
+        ]
+        eligible.append(model)
+
+    if len(eligible) < 2:
+        raise market.ExpertTeamError("V5 requires at least two eligible direct models after safety filtering.")
+
+    limit = max(2, int(run.ranking_limit))
+    channels = [
+        sorted(eligible, key=lambda row: (int(row.components["intelligence_rank"]), row.id)),
+        sorted(eligible, key=lambda row: (-float(row.components["task_fit"]), -float(row.score), row.id)),
+        sorted(eligible, key=lambda row: (-float(row.components["value_index"]), float(row.blended_price_per_million or math.inf), row.id)),
+        sorted(eligible, key=lambda row: (float(row.blended_price_per_million or math.inf), -float(row.components["task_fit"]), row.id)),
+        sorted(eligible, key=lambda row: (-float(row.components["context_fit"]), -float(row.score), row.id)),
+    ]
+    selected: list[Any] = []
+    seen: set[str] = set()
+    index = 0
+    while len(selected) < limit and any(index < len(channel) for channel in channels):
+        for channel in channels:
+            if index >= len(channel):
+                continue
+            model = channel[index]
+            if model.id in seen:
+                continue
+            seen.add(model.id)
+            selected.append(model)
+            if len(selected) >= limit:
+                break
+        index += 1
+    return selected
 
 
 def _write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+
+def _validated_budget(args: argparse.Namespace, run: Any) -> tuple[int, int, int, float | None]:
+    total = int(args.maximum_total_calls)
+    recovery = int(args.maximum_recovery_calls)
+    if not 4 <= total <= 16:
+        raise ValueError("maximum-total-calls must be between 4 and 16")
+    if not 0 <= recovery <= 4:
+        raise ValueError("maximum-recovery-calls must be between 0 and 4")
+    if recovery >= total:
+        raise ValueError("maximum-recovery-calls must leave at least one initial call")
+
+    approved_initial = total - recovery
+    tier = str(run.quality_tier or "value")
+    tier_cap = {"budget": 4, "value": 6, "quality": approved_initial}.get(tier, 6)
+    planning_nodes = max(1, min(approved_initial, tier_cap))
+    anomaly = args.cost_anomaly_usd
+    if anomaly is not None and (not math.isfinite(anomaly) or anomaly <= 0):
+        raise ValueError("cost-anomaly-usd must be a finite positive number")
+    return total, recovery, planning_nodes, anomaly
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -113,6 +155,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     run = market.build_run_config(args)
     output = Path(run.output_dir)
     output.mkdir(parents=True, exist_ok=True)
+    total_calls, recovery_calls, planning_nodes, anomaly_budget = _validated_budget(args, run)
     profile = market.classify_task(run.task, run)
     models, catalog_source = market.fetch_catalog(run)
     ranked = _rank_v5_models(models, profile, run)
@@ -135,13 +178,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         allow_synthetic = False
 
     limits = GraphLimits(
-        max_nodes=16,
+        max_nodes=planning_nodes,
         max_edges=64,
         max_stages=8,
-        max_model_calls=16,
-        max_retries=min(2, max(0, int(run.model_max_retries))),
-        max_replacements=min(2, max(0, int(run.maximum_replacements))),
-        max_budget_usd=run.max_estimated_cost_usd,
+        max_model_calls=total_calls,
+        max_retries=0,
+        max_replacements=recovery_calls,
+        max_budget_usd=anomaly_budget,
     )
     planner = compile_and_optimize_v5(
         ranked,
@@ -156,6 +199,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     planner["market"]["catalog_source"] = catalog_source
     planner["market"]["endpoint_source"] = endpoint_source
+    planner["market"]["candidate_pool_policy"] = "multi-channel-deduplicated-before-optimizer"
     planner["market"]["ranked_models"] = [
         {
             "rank": index,
@@ -169,6 +213,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         for index, model in enumerate(ranked, 1)
     ]
+    planner["optimization"]["approved_budget"] = {
+        "maximum_total_calls": total_calls,
+        "maximum_recovery_calls": recovery_calls,
+        "maximum_initial_calls": total_calls - recovery_calls,
+        "planning_node_cap": planning_nodes,
+        "cost_anomaly_usd": anomaly_budget,
+        "quality_tier": run.quality_tier,
+    }
     _write_json(output / "v5-model-endpoint-market.json", planner["market"])
     _write_json(output / "v5-candidate-graph.json", planner["candidate_graph"])
     _write_json(output / "v5-optimization.json", planner["optimization"])
@@ -189,6 +241,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "production_entrypoint_changed": False,
             "legacy_runtime_present": False,
             "fallback_policy": "fail-closed-no-alternate-runtime",
+            "approved_budget": planner["optimization"]["approved_budget"],
         })
         write_manifest(output)
         print(f"V5 dry-run artifacts written to {output}")
