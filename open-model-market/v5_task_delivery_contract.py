@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from hashlib import sha256
 from typing import Any, Mapping, Sequence
 
 _IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -71,6 +72,79 @@ def _nonempty(value: Any) -> bool:
     if isinstance(value, (list, tuple, set)):
         return bool(value)
     return True
+
+
+def explicit_contract_kind(contract: Mapping[str, Any]) -> str:
+    if contract.get("explicit_user_contract"):
+        return "exact-json"
+    if contract.get("explicit_markdown_contract"):
+        return "exact-markdown"
+    return "generic"
+
+
+def contract_digest(contract: Mapping[str, Any]) -> str:
+    """Hash the full semantic contract; list order remains significant."""
+    canonical = json.dumps(
+        dict(contract),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def contract_integrity_profile(
+    contract: Mapping[str, Any],
+    source_work_ids: Sequence[str],
+) -> dict[str, Any]:
+    kind = explicit_contract_kind(contract)
+    return {
+        "output_contract_integrity_required": True,
+        "output_contract_integrity_sha256": contract_digest(contract),
+        "output_contract_kind": kind,
+        "explicit_output_contract_expected": kind in {"exact-json", "exact-markdown"},
+        "output_contract_source_work_ids": sorted({str(value) for value in source_work_ids}),
+    }
+
+
+def validate_contract_integrity(
+    contract: Mapping[str, Any],
+    parameter_profile: Mapping[str, Any],
+) -> list[str]:
+    """Detect any contract loss or reordering across planning/runtime layers."""
+    required = bool(parameter_profile.get("output_contract_integrity_required"))
+    expected_digest = str(
+        parameter_profile.get("output_contract_integrity_sha256") or ""
+    )
+    if not required and not expected_digest:
+        return []
+    violations: list[str] = []
+    if not expected_digest:
+        violations.append("output-contract-integrity-digest-missing")
+        return violations
+
+    expected_kind = str(parameter_profile.get("output_contract_kind") or "")
+    actual_kind = explicit_contract_kind(contract)
+    if expected_kind and expected_kind != actual_kind:
+        violations.append(
+            f"output-contract-kind-mismatch:{expected_kind}:{actual_kind}"
+        )
+    if parameter_profile.get("explicit_output_contract_expected") and actual_kind == "generic":
+        violations.append("explicit-output-contract-metadata-stripped")
+    if contract_digest(contract) != expected_digest:
+        violations.append("output-contract-integrity-sha256-mismatch")
+
+    required_fields = [str(value) for value in contract.get("required_fields", [])]
+    if actual_kind == "exact-json":
+        exact = [str(value) for value in contract.get("exact_top_level_fields", [])]
+        if required_fields != exact:
+            violations.append("exact-json-required-field-order-or-content-mismatch")
+    elif actual_kind == "exact-markdown":
+        exact = [str(value) for value in contract.get("exact_markdown_headings", [])]
+        if required_fields != exact:
+            violations.append("exact-markdown-required-heading-order-or-content-mismatch")
+    return list(dict.fromkeys(violations))
 
 
 def _normalized_heading(value: str) -> str:

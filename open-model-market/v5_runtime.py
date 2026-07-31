@@ -659,8 +659,11 @@ class ExecutionEngine:
         markdown_violations = task_delivery_contract.validate_markdown_contract(
             answer or "", node.output_contract
         )
+        integrity_violations = task_delivery_contract.validate_contract_integrity(
+            node.output_contract, node.parameter_profile
+        )
         contract_violations = list(dict.fromkeys(
-            [*explicit_violations, *markdown_violations]
+            [*integrity_violations, *explicit_violations, *markdown_violations]
         ))
         complete = (
             (not required or all(populated(field) for field in required))
@@ -999,9 +1002,32 @@ class ExecutionEngine:
     def _preflight(self, graph: ExecutionGraph) -> dict[str, Any]:
         risk_cost = graph.estimated_total_cost * self.config.cost_risk_multiplier
         providers: dict[str, int] = {}
+        blockers: list[str] = []
+        contract_integrity: dict[str, list[str]] = {}
         for node in graph.nodes:
             providers[self._provider(node)] = providers.get(self._provider(node), 0) + 1
-        blockers = []
+            violations = task_delivery_contract.validate_contract_integrity(
+                node.output_contract, node.parameter_profile
+            )
+            if violations:
+                contract_integrity[node.node_id] = violations
+                blockers.append(f"output-contract-integrity:{node.node_id}")
+        recovery_pool = graph.metadata.get("recovery_pool", {})
+        if isinstance(recovery_pool, Mapping):
+            for selected_id, rows in recovery_pool.items():
+                if not isinstance(rows, list):
+                    continue
+                for index, row in enumerate(rows):
+                    if not isinstance(row, Mapping):
+                        continue
+                    violations = task_delivery_contract.validate_contract_integrity(
+                        row.get("output_contract", {}),
+                        row.get("parameter_profile", {}),
+                    )
+                    if violations:
+                        key = f"recovery:{selected_id}:{index}"
+                        contract_integrity[key] = violations
+                        blockers.append(f"output-contract-integrity:{key}")
         if (
             self.config.cost_anomaly_usd is not None
             and risk_cost > self.config.cost_anomaly_usd + 1e-12
@@ -1013,7 +1039,8 @@ class ExecutionEngine:
             "risk_adjusted_cost_upper_usd": round(risk_cost, 8),
             "cost_anomaly_usd": self.config.cost_anomaly_usd,
             "provider_counts": providers,
-            "blockers": blockers,
+            "output_contract_integrity": contract_integrity,
+            "blockers": list(dict.fromkeys(blockers)),
             "policy": "native-runtime-preflight-before-first-call",
         }
 
