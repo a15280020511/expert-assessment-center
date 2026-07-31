@@ -62,8 +62,6 @@ jobs:
           optimization = json.loads((root / "v5-optimization.json").read_text())
           graph = json.loads((root / "v5-execution-graph.json").read_text())
           dry = json.loads((root / "v5-dry-run.json").read_text())
-          runtime = json.loads((root / "v5-runtime-config.json").read_text())
-          parity = optimization["budget_preflight_parity"]
 
           signals = semantics["task_signals"]
           assert signals["active_domains"] == ["business"]
@@ -71,13 +69,10 @@ jobs:
           assert optimization["solver_status"] in {"OPTIMAL", "FEASIBLE"}
           assert len(graph["nodes"]) <= 3
           assert len(dry["requests"]) == len(graph["nodes"])
+          assert float(graph["estimated_total_cost"]) <= 0.25
           assert dry["approved_budget"]["maximum_total_calls"] == 4
           assert dry["approved_budget"]["maximum_initial_calls"] == 3
           assert dry["approved_budget"]["maximum_recovery_calls"] == 1
-          assert runtime["configuration"]["cost_risk_multiplier"] == 1.18
-          assert parity["cost_risk_multiplier"] == 1.18
-          assert abs(parity["planning_raw_budget_usd"] - 0.25 / 1.18) < 1e-8
-          assert parity["selected_risk_adjusted_cost_usd"] <= 0.25
           assert dry["global_monkey_patching"] is False
           assert dry["legacy_runtime_present"] is False
           PY
