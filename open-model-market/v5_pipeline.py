@@ -15,11 +15,16 @@ from execution_graph import ExecutionGraph, GraphLimits
 from resource_matrix import compile_v5_task_resources
 from task_resource_artifacts import write_task_resource_artifacts
 from v5_benchmark import planning_benchmark, write_benchmark
+from v5_endpoint_catalog import fetch_live_endpoint_payloads
 from v5_general_task_planning import (
     classify_task as classify_production_task,
     compile_task_semantics as compile_production_task_semantics,
 )
-from v5_planner import fetch_live_endpoint_payloads
+from v5_model_company import (
+    DEFAULT_INTELLIGENCE_RANKING_LIMIT,
+    MINIMUM_CANDIDATES_PER_WORK,
+    candidate_company,
+)
 from v5_planning_diagnostics import (
     build_candidate_generation_failure_report,
     build_infeasibility_report,
@@ -50,7 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--require-live-catalog", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--endpoint-file", help="Deterministic model endpoint fixture keyed by model ID.")
-    parser.add_argument("--maximum-candidates-per-work", type=int, default=12)
+    parser.add_argument(
+        "--maximum-candidates-per-work",
+        type=int,
+        default=MINIMUM_CANDIDATES_PER_WORK,
+    )
     parser.add_argument("--maximum-total-calls", type=int, default=16)
     parser.add_argument("--maximum-recovery-calls", type=int, default=2)
     parser.add_argument("--cost-anomaly-usd", type=float)
@@ -204,15 +213,21 @@ def _annotate_market(
     endpoint_source: str,
     catalog_snapshot_id: str,
 ) -> None:
+    companies = [candidate_company(model) for model in ranked]
     compiled_market["catalog_source"] = catalog_source
     compiled_market["endpoint_source"] = endpoint_source
     compiled_market["catalog_snapshot_id"] = catalog_snapshot_id
-    compiled_market["candidate_pool_policy"] = "multi-channel-deduplicated-before-optimizer"
+    compiled_market["candidate_pool_policy"] = "top-150-multi-channel-company-diverse-before-optimizer"
+    compiled_market["model_company_policy"] = "task-global-all-different"
+    compiled_market["ranked_model_count"] = len(ranked)
+    compiled_market["ranked_company_count"] = len(set(companies))
+    compiled_market["endpoint_fetch_policy"] = "bounded-concurrent-deterministic-order"
     compiled_market["cross_task_history_used"] = False
     compiled_market["ranked_models"] = [
         {
             "rank": index,
             "model": model.id,
+            "model_company": candidate_company(model),
             "official_intelligence_rank": (model.ranks or {}).get("intelligence-high-to-low"),
             "prompt_usd_per_million": model.prompt_price_per_million,
             "completion_usd_per_million": model.completion_price_per_million,
@@ -256,8 +271,12 @@ def main(
         endpoint_source = "synthetic-fixture-derived-from-model-catalog"
         allow_synthetic = True
     else:
-        endpoint_payloads = fetch_live_endpoint_payloads(ranked, run, maximum_models=run.ranking_limit)
-        endpoint_source = "openrouter-live-model-endpoints"
+        endpoint_payloads = fetch_live_endpoint_payloads(
+            ranked,
+            run,
+            maximum_models=run.ranking_limit,
+        )
+        endpoint_source = "openrouter-live-model-endpoints-bounded-concurrent"
         allow_synthetic = False
 
     snapshot = runtime.build_catalog_snapshot(
@@ -343,6 +362,9 @@ def main(
         "planning_node_cap": planning_nodes,
         "cost_anomaly_usd": anomaly_budget,
         "quality_tier": run.quality_tier,
+        "ranking_limit": run.ranking_limit,
+        "maximum_candidates_per_work": runtime.config.maximum_candidates_per_work,
+        "model_company_policy": "task-global-all-different",
         "runtime_config_sha256": sha256(
             json.dumps(runtime.config.to_dict(), sort_keys=True, default=str).encode("utf-8")
         ).hexdigest(),
@@ -369,6 +391,9 @@ def main(
             "approved_budget": planner["optimization"]["approved_budget"],
             "catalog_snapshot_id": snapshot.snapshot_id,
             "runtime_version": runtime.describe()["runtime_version"],
+            "model_company_policy": "task-global-all-different",
+            "ranking_limit": run.ranking_limit,
+            "maximum_candidates_per_work": runtime.config.maximum_candidates_per_work,
             "global_monkey_patching": False,
         })
         write_manifest(output)
