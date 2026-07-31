@@ -13,6 +13,7 @@ import v5_production_ticket  # noqa: E402
 from v5_model_company import (  # noqa: E402
     DEFAULT_INTELLIGENCE_RANKING_LIMIT,
     MINIMUM_CANDIDATES_PER_WORK,
+    candidate_company,
 )
 from v5_planning_diagnostics import build_infeasibility_report  # noqa: E402
 
@@ -67,6 +68,16 @@ class V5Top150HardeningTests(unittest.TestCase):
         )
         run = model_market.build_run_config(args)
         self.assertEqual(run.ranking_limit, 150)
+
+    def test_catalog_model_id_resolves_company(self):
+        self.assertEqual(
+            candidate_company(SimpleNamespace(id="deepmind/gemini-test")),
+            "google",
+        )
+        self.assertEqual(
+            candidate_company({"model_id": "qwen/qwen-test"}),
+            "alibaba",
+        )
 
     def test_pipeline_defaults_to_24_company_diverse_candidates(self):
         args = v5_pipeline.build_parser().parse_args(["--task", "test"])
