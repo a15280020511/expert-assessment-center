@@ -11,12 +11,23 @@ permissions:
 jobs:
   export-source:
     if: >-
-      github.actor == github.repository_owner &&
+      github.actor == 'a15280020511' &&
       github.event.issue.title == '[maintenance-source-export] production audit snapshot' &&
       github.event.comment.body == '/export-production-source'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - name: Publish start receipt
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## SOURCE_EXPORT_STARTED\n\n- Run: \`${context.runId}\``
+            })
+
       - name: Checkout pinned production source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
