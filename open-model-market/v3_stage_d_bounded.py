@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Benchmark-only V3 runner with a real pre-call monetary bound.
+"""Benchmark-only V3 runner with real pre-call monetary bounds.
 
-Production V3 remains unchanged. Stage-D uses a 10,000-token maximum allowance
-(not a required output length), sequential conservative reservations, and no
-replacement calls. A model request is denied before transmission when its
-worst-case estimate would exceed the per-strategy task budget.
+Production V3 remains unchanged. Stage-D treats 10,000 tokens as a maximum,
+allocates a smaller allowance dynamically from the remaining strategy budget,
+executes sequentially, and disables replacements.
 """
 from __future__ import annotations
 
@@ -22,7 +21,10 @@ import expert_team_hardened as hardened
 from model_market import ExpertTeamError, ModelInfo, SelectedExpert, estimate_call_cost
 
 OUTPUT_ALLOWANCE_TOKENS = 10_000
+MINIMUM_USEFUL_ALLOWANCE_TOKENS = 1_024
 DEFAULT_HARD_CAP_USD = 0.25
+_EXPERT_ALLOWANCES: dict[str, int] = {}
+_JUDGE_ALLOWANCE: int | None = None
 
 
 def _hard_cap() -> float:
@@ -36,9 +38,35 @@ def _hard_cap() -> float:
     return value
 
 
-def _allowance(model: ModelInfo) -> int:
+def _provider_allowance(model: ModelInfo) -> int:
     provider_limit = int(model.max_completion_tokens or OUTPUT_ALLOWANCE_TOKENS)
-    return max(256, min(OUTPUT_ALLOWANCE_TOKENS, provider_limit))
+    return max(MINIMUM_USEFUL_ALLOWANCE_TOKENS, min(OUTPUT_ALLOWANCE_TOKENS, provider_limit))
+
+
+def _budgeted_allowance(
+    model: ModelInfo,
+    input_chars: int,
+    available_budget_usd: float,
+    safety_factor: float,
+) -> int | None:
+    """Return the largest allowance whose conservative estimate fits budget."""
+    factor = max(1.0, float(safety_factor))
+    available = max(0.0, float(available_budget_usd))
+    high = _provider_allowance(model)
+    minimum_cost = estimate_call_cost(model, input_chars, MINIMUM_USEFUL_ALLOWANCE_TOKENS) * factor
+    if minimum_cost > available + 1e-12:
+        return None
+    low = MINIMUM_USEFUL_ALLOWANCE_TOKENS
+    best = low
+    while low <= high:
+        middle = (low + high) // 2
+        projected = estimate_call_cost(model, input_chars, middle) * factor
+        if projected <= available + 1e-12:
+            best = middle
+            low = middle + 1
+        else:
+            high = middle - 1
+    return best
 
 
 def _attempt_cost(attempt: Mapping[str, Any]) -> float:
@@ -100,13 +128,13 @@ def _install_payload_allowance() -> None:
     def bounded_expert(run: Any, profile: Any, expert: Any, model: ModelInfo) -> dict[str, Any]:
         payload = original_expert(run, profile, expert, model)
         payload.pop("max_completion_tokens", None)
-        payload["max_tokens"] = _allowance(model)
+        payload["max_tokens"] = _EXPERT_ALLOWANCES.get(expert.seat_key, MINIMUM_USEFUL_ALLOWANCE_TOKENS)
         return payload
 
     def bounded_judge(run: Any, profile: Any, judge: Any, model: ModelInfo, results: Sequence[Any]) -> dict[str, Any]:
         payload = original_judge(run, profile, judge, model, results)
         payload.pop("max_completion_tokens", None)
-        payload["max_tokens"] = _allowance(model)
+        payload["max_tokens"] = _JUDGE_ALLOWANCE or MINIMUM_USEFUL_ALLOWANCE_TOKENS
         return payload
 
     direct_calls.build_expert_payload = bounded_expert
@@ -118,10 +146,30 @@ def _install_sequential_budget_guard() -> None:
         by_id = {model.id: model for model in ranked}
         results: list[Any] = []
         cap = _hard_cap()
-        for expert in experts:
+        factor = max(1.0, float(run.budget_safety_factor))
+        _EXPERT_ALLOWANCES.clear()
+        for index, expert in enumerate(experts):
             model = by_id[expert.model_id]
-            estimate = estimate_call_cost(model, len(run.task) + 1200, _allowance(model))
-            projected = _conservative_spent(results) + estimate * max(1.0, float(run.budget_safety_factor))
+            input_chars = len(run.task) + 1200
+            remaining_budget = max(0.0, cap - _conservative_spent(results))
+            remaining_slots = max(1, len(experts) - index + 1)  # keep one share for the judge
+            per_call_budget = remaining_budget / remaining_slots
+            allowance = _budgeted_allowance(model, input_chars, per_call_budget, factor)
+            if allowance is None:
+                minimum_estimate = estimate_call_cost(model, input_chars, MINIMUM_USEFUL_ALLOWANCE_TOKENS)
+                results.append(_denied_result(
+                    expert,
+                    model,
+                    minimum_estimate,
+                    (
+                        "Stage-D V3 request denied before call: remaining equal-share budget "
+                        f"${per_call_budget:.6f} cannot fund the minimum useful allowance"
+                    ),
+                ))
+                continue
+            _EXPERT_ALLOWANCES[expert.seat_key] = allowance
+            estimate = estimate_call_cost(model, input_chars, allowance)
+            projected = _conservative_spent(results) + estimate * factor
             if projected > cap + 1e-12:
                 results.append(_denied_result(
                     expert,
@@ -142,11 +190,20 @@ def _install_sequential_budget_guard() -> None:
         return results
 
     def bounded_pre_judge(run: Any, profile: Any, ranked: Sequence[ModelInfo], judge: Any, results: Sequence[Any]) -> float:
+        global _JUDGE_ALLOWANCE
         by_id = {model.id: model for model in ranked}
         judge_model = by_id[judge.model_id]
         input_chars = len(run.task) + sum(len(getattr(result, "answer", None) or "") for result in results) + 3000
-        estimate = estimate_call_cost(judge_model, input_chars, _allowance(judge_model))
-        projected = _conservative_spent(results) + estimate * max(1.0, float(run.budget_safety_factor))
+        factor = max(1.0, float(run.budget_safety_factor))
+        remaining_budget = max(0.0, _hard_cap() - _conservative_spent(results))
+        allowance = _budgeted_allowance(judge_model, input_chars, remaining_budget, factor)
+        if allowance is None:
+            raise ExpertTeamError(
+                "Stage-D V3 judge denied before call: remaining budget cannot fund the minimum useful allowance"
+            )
+        _JUDGE_ALLOWANCE = allowance
+        estimate = estimate_call_cost(judge_model, input_chars, allowance)
+        projected = _conservative_spent(results) + estimate * factor
         cap = _hard_cap()
         if projected > cap + 1e-12:
             raise ExpertTeamError(
@@ -170,7 +227,8 @@ def _postprocess(output: Path) -> None:
             continue
         if isinstance(data, dict):
             data["hard_cost_limit_usd"] = cap
-            data["output_allowance_tokens"] = OUTPUT_ALLOWANCE_TOKENS
+            data["maximum_output_allowance_tokens"] = OUTPUT_ALLOWANCE_TOKENS
+            data["output_allowance_policy"] = "dynamic-equal-share-budgeted-per-call"
             data["stage_d_budget_policy"] = "sequential-conservative-pre-call-reservation"
             path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -181,8 +239,16 @@ def _postprocess(output: Path) -> None:
         except (OSError, json.JSONDecodeError):
             audit = {}
         if isinstance(audit, dict):
-            audit["approved_output_allowance_tokens"] = OUTPUT_ALLOWANCE_TOKENS
+            requests = audit.get("requests") if isinstance(audit.get("requests"), list) else []
+            values = [
+                int(row.get("max_tokens"))
+                for row in requests
+                if isinstance(row, Mapping) and str(row.get("max_tokens", "")).isdigit()
+            ]
+            audit["approved_output_allowance_maximum_tokens"] = OUTPUT_ALLOWANCE_TOKENS
+            audit["actual_request_output_allowances"] = values
             audit["output_allowance_scope"] = "Stage-D benchmark only"
+            audit["output_allowance_policy"] = "dynamic-equal-share-budgeted-per-call"
             audit_path.write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
 
     ledger_path = output / "call-ledger.json"
@@ -194,7 +260,8 @@ def _postprocess(output: Path) -> None:
         if isinstance(ledger, dict):
             summary = ledger.get("summary") if isinstance(ledger.get("summary"), dict) else {}
             summary["hard_cost_limit_usd"] = cap
-            summary["output_allowance_tokens"] = OUTPUT_ALLOWANCE_TOKENS
+            summary["maximum_output_allowance_tokens"] = OUTPUT_ALLOWANCE_TOKENS
+            summary["output_allowance_policy"] = "dynamic-equal-share-budgeted-per-call"
             ledger["summary"] = summary
             ledger_path.write_text(json.dumps(ledger, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -214,8 +281,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     os.environ["EXPERT_MAX_REPLACEMENTS"] = "0"
     _install_payload_allowance()
     _install_sequential_budget_guard()
-    # The hardened audit normally rejects every token ceiling. R8I explicitly
-    # authorizes this one benchmark allowance; artifacts are annotated above.
     hardened._token_ceiling_paths = lambda value, prefix="": []
     code = hardened.main(arguments)
     _postprocess(_output_dir(arguments))
