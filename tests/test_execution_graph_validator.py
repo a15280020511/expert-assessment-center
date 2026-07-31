@@ -6,11 +6,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-from execution_graph import ExecutionGraph, GraphLimits, SelectedEdge, SelectedNode  # noqa: E402
-from execution_graph_validator import derive_execution_stages, validate_execution_graph  # noqa: E402
+from execution_graph import (  # noqa: E402
+    ExecutionGraph,
+    GraphLimits,
+    SelectedEdge,
+    SelectedNode,
+)
+from execution_graph_validator import (  # noqa: E402
+    derive_execution_stages,
+    validate_execution_graph,
+)
 
 
-def node(node_id, work, model, *, group=None, cost=0.1, request_config=None):
+def node(
+    node_id,
+    work,
+    model,
+    *,
+    group=None,
+    cost=0.1,
+    request_config=None,
+):
     return SelectedNode(
         node_id=node_id,
         assigned_work=(work,),
@@ -34,13 +50,35 @@ def node(node_id, work, model, *, group=None, cost=0.1, request_config=None):
 class ExecutionGraphValidatorTests(unittest.TestCase):
     def valid_graph(self):
         nodes = (
-            node("analysis", "work-analysis", "vendor-a/model-a", group="independent-core"),
-            node("review", "work-review", "vendor-b/model-b", group="independent-core"),
+            node(
+                "analysis",
+                "work-analysis",
+                "vendor-a/model-a",
+                group="independent-core",
+            ),
+            node(
+                "review",
+                "work-review",
+                "vendor-b/model-b",
+                group="independent-core",
+            ),
             node("final", "work-final", "vendor-c/model-c"),
         )
         edges = (
-            SelectedEdge("analysis", "final", "synthesis", "structured_conclusion", "allow"),
-            SelectedEdge("review", "final", "synthesis", "structured_conclusion", "allow"),
+            SelectedEdge(
+                "analysis",
+                "final",
+                "synthesis",
+                "structured_conclusion",
+                "allow",
+            ),
+            SelectedEdge(
+                "review",
+                "final",
+                "synthesis",
+                "structured_conclusion",
+                "allow",
+            ),
         )
         return ExecutionGraph(
             nodes=nodes,
@@ -48,7 +86,11 @@ class ExecutionGraphValidatorTests(unittest.TestCase):
             execution_stages=(("analysis", "review"), ("final",)),
             entry_nodes=("analysis", "review"),
             final_nodes=("final",),
-            required_work=("work-analysis", "work-review", "work-final"),
+            required_work=(
+                "work-analysis",
+                "work-review",
+                "work-final",
+            ),
             estimated_quality=0.91,
             quality_floor=0.89,
             estimated_total_cost=0.3,
@@ -62,14 +104,23 @@ class ExecutionGraphValidatorTests(unittest.TestCase):
         graph = self.valid_graph()
         cyclic = replace(
             graph,
-            edges=graph.edges + (
-                SelectedEdge("final", "analysis", "correction", "full_text", "allow"),
+            edges=graph.edges
+            + (
+                SelectedEdge(
+                    "final",
+                    "analysis",
+                    "correction",
+                    "full_text",
+                    "allow",
+                ),
             ),
             execution_stages=(("review",), ("final",), ("analysis",)),
             entry_nodes=("review",),
             final_nodes=("analysis",),
         )
-        codes = {issue.code for issue in validate_execution_graph(cyclic)}
+        codes = {
+            issue.code for issue in validate_execution_graph(cyclic)
+        }
         self.assertIn("cycle", codes)
 
     def test_tool_fields_are_rejected_recursively(self):
@@ -77,7 +128,12 @@ class ExecutionGraphValidatorTests(unittest.TestCase):
         bad = replace(
             graph,
             nodes=(
-                replace(graph.nodes[0], request_config={"nested": {"tool_choice": "auto"}}),
+                replace(
+                    graph.nodes[0],
+                    request_config={
+                        "nested": {"tool_choice": "auto"}
+                    },
+                ),
                 *graph.nodes[1:],
             ),
         )
@@ -92,7 +148,13 @@ class ExecutionGraphValidatorTests(unittest.TestCase):
             graph.nodes[2],
         )
         bad_edges = graph.edges + (
-            SelectedEdge("analysis", "review", "review", "full_text", "allow"),
+            SelectedEdge(
+                "analysis",
+                "review",
+                "review",
+                "full_text",
+                "allow",
+            ),
         )
         bad = replace(
             graph,
@@ -103,13 +165,39 @@ class ExecutionGraphValidatorTests(unittest.TestCase):
         codes = {issue.code for issue in validate_execution_graph(bad)}
         self.assertIn("independent_same_model", codes)
         self.assertIn("independent_visibility", codes)
+        self.assertIn("model_company_reuse", codes)
+
+    def test_same_company_different_models_are_rejected_globally(self):
+        graph = self.valid_graph()
+        bad = replace(
+            graph,
+            nodes=(
+                graph.nodes[0],
+                replace(
+                    graph.nodes[1],
+                    model="vendor-a/model-b",
+                ),
+                graph.nodes[2],
+            ),
+        )
+        issues = validate_execution_graph(bad)
+        company_issues = [
+            issue
+            for issue in issues
+            if issue.code == "model_company_reuse"
+        ]
+        self.assertEqual(len(company_issues), 1)
+        self.assertIn("vendor-a", company_issues[0].message)
 
     def test_required_work_and_budget_are_hard_limits(self):
         graph = replace(
             self.valid_graph(),
             required_work=self.valid_graph().required_work + ("missing",),
         )
-        issues = validate_execution_graph(graph, GraphLimits(max_budget_usd=0.2))
+        issues = validate_execution_graph(
+            graph,
+            GraphLimits(max_budget_usd=0.2),
+        )
         codes = {issue.code for issue in issues}
         self.assertIn("work_coverage", codes)
         self.assertIn("budget_limit", codes)
