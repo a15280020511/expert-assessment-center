@@ -53,11 +53,12 @@ class V5TabletopProductionSemanticsTests(unittest.TestCase):
         self.assertIs(original, model_market.classify_task)
         self.assertTrue(profile.high_stakes)
         self.assertFalse(profile.long_context)
+        self.assertEqual(profile.complexity, "complex")
         self.assertEqual("security", profile.primary_domain)
         self.assertNotIn("research", profile.domains)
         self.assertNotIn("business", profile.domains)
 
-    def test_original_failed_task_compiles_to_one_budget_compatible_work_unit(self) -> None:
+    def test_original_failed_task_compiles_to_four_company_diverse_work_units(self) -> None:
         run = self.run_config()
         profile = v5_general_task_planning.classify_task(run.task, run)
         bundle = resource_matrix.compile_v5_task_resources(
@@ -70,24 +71,40 @@ class V5TabletopProductionSemanticsTests(unittest.TestCase):
         )
         semantics = bundle["task_semantics"]
         signals = semantics["task_signals"]
-        self.assertTrue(signals["closed_book_tabletop_compaction_applied"])
+        self.assertFalse(signals["closed_book_tabletop_compaction_applied"])
+        self.assertTrue(signals["closed_book_tabletop_decomposition_applied"])
         self.assertFalse(signals["external_evidence_required"])
-        self.assertEqual(["security"], signals["active_domains"])
-        self.assertEqual(["analysis", "decision_comparison"], signals["active_operations"])
+        self.assertEqual(4, signals["minimum_planned_work_units"])
+        self.assertEqual(4, signals["minimum_distinct_model_companies"])
         self.assertEqual(1, len(semantics["interpretations"]))
-        work = semantics["interpretations"][0]["atomic_work"][0]
-        self.assertEqual(1, len(semantics["interpretations"][0]["atomic_work"]))
+        works = semantics["interpretations"][0]["atomic_work"]
+        self.assertEqual(4, len(works))
+
+        synthesis = next(
+            work for work in works if "synthesis" in work["operation_requirements"]
+        )
+        self.assertEqual(3, len(synthesis["dependencies"]))
         self.assertEqual(
             12,
-            work["output_contract"]["task_explicit_delivery_section_count"],
+            synthesis["output_contract"]["task_explicit_delivery_section_count"],
         )
-        self.assertTrue(work["output_contract"]["task_explicit_long_form_required"])
-        self.assertNotIn("evidence_validation", work["operation_requirements"])
-        self.assertNotIn("forecasting", work["operation_requirements"])
-        self.assertNotIn("adversarial_reasoning", work["operation_requirements"])
+        self.assertTrue(
+            synthesis["output_contract"]["task_explicit_long_form_required"]
+        )
+        self.assertTrue(
+            synthesis["output_contract"]["explicit_markdown_contract"]
+        )
+        self.assertTrue(
+            all(work["output_contract"]["fail_closed_on_quality_gate"] for work in works)
+        )
+        self.assertFalse(
+            any("evidence_validation" in work["operation_requirements"] for work in works)
+        )
+        self.assertFalse(
+            any("forecasting" in work["operation_requirements"] for work in works)
+        )
         matrix = bundle["resource_matrices"]["matrices"][0]
-        self.assertEqual(1, matrix["shape"]["work_count"])
-        self.assertEqual([], matrix["hard_requirements"])
+        self.assertGreaterEqual(matrix["shape"]["work_count"], 4)
 
     def test_deprecated_install_is_a_noop(self) -> None:
         before = model_market.classify_task
