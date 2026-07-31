@@ -27,6 +27,7 @@ class V5ValueRatioUnitTests(unittest.TestCase):
             ),
             quality_tolerance_pct=2.0,
             solver_timeout_seconds=10.0,
+            require_distinct_model_companies=False,
         )
         planner = {**base, "optimization": optimization}
         benchmark = planning_benchmark(planner)
