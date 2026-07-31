@@ -63,12 +63,27 @@ class TestV5ReleaseCommandContract(unittest.TestCase):
         )
         self.assertIn('test "$changed" = ".release-request.json"', self.text)
 
-    def test_release_still_runs_zero_cost_validation_before_ref_move(self):
-        unit = self.text.index("name: Run static and full unit validation")
+    def test_release_validation_is_split_without_lowering_the_gate(self):
+        ruff = self.text.index("name: Run Ruff")
+        compile_sources = self.text.index("name: Compile Python sources")
+        unit = self.text.index("name: Run full unit test suite")
         dry = self.text.index("name: Run deterministic no-call V5 regression")
         move = self.text.index("name: Move production ref")
+
+        self.assertLess(ruff, compile_sources)
+        self.assertLess(compile_sources, unit)
         self.assertLess(unit, dry)
         self.assertLess(dry, move)
+        self.assertNotIn("name: Run static and full unit validation", self.text)
+        self.assertIn("run: python -m ruff check .", self.text)
+        self.assertIn(
+            "run: python -m compileall -q open-model-market tests",
+            self.text,
+        )
+        self.assertIn(
+            "run: python -m unittest discover -s tests -p 'test*.py' -v",
+            self.text,
+        )
         self.assertIn("--maximum-total-calls 4", self.text)
         self.assertIn("--maximum-recovery-calls 1", self.text)
         self.assertNotIn("OPENROUTER_API_KEY", self.text)
