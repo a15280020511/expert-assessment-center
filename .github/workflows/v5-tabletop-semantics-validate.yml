@@ -5,16 +5,26 @@ on:
     paths:
       - "open-model-market/v5_pipeline.py"
       - "open-model-market/v5_general_task_planning.py"
+      - "open-model-market/v5_closed_book_safety.py"
+      - "open-model-market/v5_strict_safety_runtime.py"
+      - "open-model-market/v5_task_delivery_contract.py"
+      - "open-model-market/v5_output_contract_delivery.py"
       - "open-model-market/resource_matrix.py"
       - "tests/test_v5_tabletop_production_semantics.py"
+      - "tests/test_v5_extreme_tabletop_fail_closed.py"
       - ".github/workflows/v5-tabletop-semantics-validate.yml"
   push:
     branches: [main]
     paths:
       - "open-model-market/v5_pipeline.py"
       - "open-model-market/v5_general_task_planning.py"
+      - "open-model-market/v5_closed_book_safety.py"
+      - "open-model-market/v5_strict_safety_runtime.py"
+      - "open-model-market/v5_task_delivery_contract.py"
+      - "open-model-market/v5_output_contract_delivery.py"
       - "open-model-market/resource_matrix.py"
       - "tests/test_v5_tabletop_production_semantics.py"
+      - "tests/test_v5_extreme_tabletop_fail_closed.py"
       - ".github/workflows/v5-tabletop-semantics-validate.yml"
 
 permissions:
@@ -37,24 +47,26 @@ jobs:
             requirements-dev.txt
       - name: Install pinned dependencies
         run: python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
-      - name: Run explicit semantic wiring regressions
+      - name: Run explicit semantic and safety regressions
         run: |
           python tests/test_v5_general_task_planning.py
           python tests/test_v5_planning_scenario_matrix.py
           python tests/test_v5_consumer_decision_budget.py
           python tests/test_v5_tabletop_production_semantics.py
+          python -m unittest tests.test_v5_extreme_tabletop_fail_closed -v
       - name: Run original failed task zero-call planning regression
         shell: bash
         run: |
-          cat > tabletop-task.txt <<'TASK'
-          真实复杂闭卷任务：福州市一所小学夜班期间发生第五类复合事件。已知条件仅限题面：校内只有1名夜班保安；20:35开始雷雨并伴随频繁闪电；20:43教学楼顶层一处天窗出现裂纹且有雨水渗入，禁止靠近其正下方；20:49消防水箱区域传出持续流水声，来源未知，禁止保安进入受限设备区域；20:56一楼西侧走廊出现局部积水，但尚未接触可见电气设施；21:02校门外有2名自称校外活动承办方人员要求取回器材，无法核验当晚授权；21:08值班手机剩余27%电量；纸质登记显示1名维修人员签入时间清晰但签出栏空白；门卫室有纸质通讯录、手电筒1支、机械钥匙、灭火器、急救包、警戒带和纸笔；禁止保安独自进入设备区域，禁止站在裂纹天窗下方，禁止触碰未知积水附近电气设施，禁止与门外人员发生肢体冲突，禁止擅自宣布风险解除。请在不联网、不调用工具、不编造电话号码、外部制度、设备状态、人员位置或专业检测结论的前提下，完成从20:35到22:05的90分钟应急桌面推演。必须分别给出：1）已知事实、假设、推断和未知项；2）按分钟或事件触发的行动时间线；3）裂纹天窗、设备区流水声、走廊积水、身份不明访客、人员去向不明五条风险链；4）生命安全优先级和决策树；5）可执行的通信顺序与通话要点模板，不填写虚构号码；6）门禁、隔离、警戒、照明、手机电量和证据记录措施；7）一票否决、撤离、封控和升级条件；8）至少12种失败模式及预防措施；9）关键资源耗尽与替代方案；10）22:05前的结束或移交判定；11）事后24小时和7天整改清单；12）红队反证和仍未解决的不确定性。每一项必须有独立Markdown二级标题，标题文字须与上述12项完全一致并保持上述顺序，内容不得合并；三级及更低标题只能作为所属二级章节的内部结构；不得建议违法、冒险、靠近潜在坠落区域、擅入设备区或单人对抗行为。
-          TASK
+          python - <<'PY' > tabletop-task.txt
+          from tests.test_v5_tabletop_production_semantics import FAILED_PRODUCTION_TASK
+          print(FAILED_PRODUCTION_TASK)
+          PY
           python open-model-market/v5_pipeline.py \
             --task "$(cat tabletop-task.txt)" \
             --catalog-file tests/fixtures/models.json \
             --endpoint-file tests/fixtures/endpoints.json \
             --dry-run \
-            --maximum-total-calls 4 \
+            --maximum-total-calls 6 \
             --maximum-recovery-calls 1 \
             --cost-anomaly-usd 0.25 \
             --quality-tier value \
@@ -63,29 +75,47 @@ jobs:
         run: |
           python - <<'PY'
           import json
+          import sys
           from pathlib import Path
+
+          sys.path.insert(0, "open-model-market")
+          from v5_model_company import canonical_model_company
 
           root = Path("v5-tabletop-regression-artifacts")
           semantics = json.loads((root / "task-interpretations.json").read_text())
-          matrix = json.loads((root / "task-resource-matrix.json").read_text())
           optimization = json.loads((root / "v5-optimization.json").read_text())
           graph = json.loads((root / "v5-execution-graph.json").read_text())
           dry = json.loads((root / "v5-dry-run.json").read_text())
 
           signals = semantics["task_signals"]
-          assert signals["closed_book_tabletop_compaction_applied"] is True
+          works = semantics["interpretations"][0]["atomic_work"]
+          synthesis = next(
+              work for work in works if "synthesis" in work["operation_requirements"]
+          )
+          selected_companies = {
+              canonical_model_company(node["model"]) for node in graph["nodes"]
+          }
+
+          assert signals["closed_book_tabletop_compaction_applied"] is False
+          assert signals["closed_book_tabletop_decomposition_applied"] is True
+          assert signals["minimum_planned_work_units"] == 4
+          assert signals["minimum_distinct_model_companies"] == 4
+          assert signals["high_stakes_degraded_delivery_allowed"] is False
           assert signals["external_evidence_required"] is False
-          assert signals["active_domains"] == ["security"]
-          assert signals["active_operations"] == ["analysis", "decision_comparison"]
+          assert signals["active_operations"] == [
+              "analysis", "decision_comparison", "adversarial_reasoning", "synthesis"
+          ]
           assert len(semantics["interpretations"]) == 1
-          assert len(semantics["interpretations"][0]["atomic_work"]) == 1
-          assert matrix["matrices"][0]["hard_requirements"] == []
+          assert len(works) == 4
+          assert synthesis["output_contract"]["explicit_markdown_contract"] is True
+          assert synthesis["output_contract"]["fail_closed_on_quality_gate"] is True
           assert optimization["solver_status"] in {"OPTIMAL", "FEASIBLE"}
-          assert 1 <= len(graph["nodes"]) <= 3
-          assert len(dry["requests"]) == len(graph["nodes"])
+          assert len(graph["nodes"]) == 4
+          assert len(selected_companies) == 4
+          assert len(dry["requests"]) == 4
           assert float(graph["estimated_total_cost"]) <= 0.25
-          assert dry["approved_budget"]["maximum_total_calls"] == 4
-          assert dry["approved_budget"]["maximum_initial_calls"] == 3
+          assert dry["approved_budget"]["maximum_total_calls"] == 6
+          assert dry["approved_budget"]["maximum_initial_calls"] == 5
           assert dry["approved_budget"]["maximum_recovery_calls"] == 1
           assert dry["global_monkey_patching"] is False
           assert not (root / "v5-planning-infeasibility.json").exists()
