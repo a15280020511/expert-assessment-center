@@ -295,11 +295,11 @@ def _strict_work(work: semantics.AtomicWork, task: str) -> semantics.AtomicWork:
         "must_separate_fact_assumption_inference": True,
     }
     data["independence_requirements"] = {
-        "independent_execution_preferred": False,
+        "independent_execution_preferred": True,
         "minimum_independent_copies": 1,
         "different_model_required": False,
         "different_model_family_preferred": False,
-        "different_provider_preferred": False,
+        "different_provider_preferred": True,
     }
     return semantics.AtomicWork(**data)
 
