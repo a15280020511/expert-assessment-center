@@ -72,15 +72,33 @@ jobs:
           test -s open-model-market/v5_final_status.py
           test -s open-model-market/v5_final_attestation.py
           test -s open-model-market/v5_production_hardening.py
+          test -s open-model-market/v5_general_task_planning.py
+          test -s open-model-market/v5_planning_diagnostics.py
           test -s open-model-market/v5_total_call_cap.py
           test -s open-model-market/v5_executor.py
           test -s open-model-market/v5_planner.py
           test -s open-model-market/v5_value_optimizer.py
+          test -s tests/test_v5_general_task_planning.py
+          test -s tests/test_v5_general_task_full_planning.py
+          test -s tests/test_v5_planning_scenario_matrix.py
       - name: Run current unit tests
         shell: bash
         run: |
           set -o pipefail
           python -m unittest discover -s tests -v 2>&1 | tee unit-test.log
+      - name: Run mandatory P0 general-task regressions
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_v5_general_task_planning.py" -v 2>&1 | tee general-task-classification.log
+          python -m unittest discover -s tests -p "test_v5_general_task_full_planning.py" -v 2>&1 | tee general-task-full-planning.log
+          python -m unittest discover -s tests -p "test_v5_planning_scenario_matrix.py" -v 2>&1 | tee general-task-scenario-matrix.log
+          grep -q "V5GeneralTaskPlanningTests" general-task-classification.log
+          grep -q "V5GeneralTaskFullPlanningTests" general-task-full-planning.log
+          grep -q "V5PlanningScenarioMatrixTests" general-task-scenario-matrix.log
+          grep -q "OK" general-task-classification.log
+          grep -q "OK" general-task-full-planning.log
+          grep -q "OK" general-task-scenario-matrix.log
       - name: Run deterministic V5 end-to-end dry-run
         run: |
           python open-model-market/v5_pipeline.py \
@@ -102,6 +120,9 @@ jobs:
           path: |
             validation-artifacts/
             unit-test.log
+            general-task-classification.log
+            general-task-full-planning.log
+            general-task-scenario-matrix.log
             ruff.log
           if-no-files-found: warn
           retention-days: 7
