@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Augment the deterministic V5 audit with node-level quality integrity."""
+"""Audit native V5 production execution with node-level quality integrity."""
 from __future__ import annotations
 
 import argparse
@@ -12,6 +12,11 @@ from v5_quality_status_integrity import (
     DEGRADED_SUCCESS_STATUSES,
     STRICT_SUCCESS_STATUSES,
 )
+
+NATIVE_RUNTIME_VERSION = "v5-native-runtime-1"
+NATIVE_EXECUTOR = "v5-native-execution-engine"
+LEGACY_RUNTIME_FAILURE = "V5 production result envelope is missing"
+LEGACY_EXECUTOR_FAILURE = "R8 fault-aware executor evidence is missing"
 
 
 def _load(path: Path, default: Any) -> Any:
@@ -71,12 +76,71 @@ def _node_quality(root: Path) -> dict[str, Any]:
     }
 
 
+def _apply_native_contract(root: Path, result: dict[str, Any]) -> dict[str, Any]:
+    """Replace only obsolete R8-name checks with the formal native contract.
+
+    The legacy base auditor still performs the substantive budget, request,
+    graph, report, Provider and fail-closed checks. This adapter removes its two
+    obsolete identifier failures only when the native evidence is present, and
+    fails closed for every other identifier value.
+    """
+    envelope = _load(root / "expert-team-result.json", {})
+    envelope = envelope if isinstance(envelope, Mapping) else {}
+    summary = _load(root / "v5-execution-summary.json", {})
+    summary = summary if isinstance(summary, Mapping) else {}
+    runtime = _load(root / "production-runtime.json", {})
+    runtime = runtime if isinstance(runtime, Mapping) else {}
+
+    runtime_versions = {
+        str(envelope.get("runtime_version") or ""),
+        str(runtime.get("runtime_version") or ""),
+    }
+    runtime_versions.discard("")
+    executor = str(summary.get("executor") or envelope.get("executor") or "")
+    failures = list(result.get("failures") or [])
+
+    if runtime_versions == {NATIVE_RUNTIME_VERSION}:
+        failures = [reason for reason in failures if reason != LEGACY_RUNTIME_FAILURE]
+    else:
+        failures.append(
+            "native runtime version evidence is missing or inconsistent: "
+            + (", ".join(sorted(runtime_versions)) if runtime_versions else "missing")
+        )
+
+    if executor == NATIVE_EXECUTOR:
+        failures = [reason for reason in failures if reason != LEGACY_EXECUTOR_FAILURE]
+    else:
+        failures.append(
+            f"native executor evidence is missing or inconsistent: {executor or 'missing'}"
+        )
+
+    checks = dict(result.get("checks") or {})
+    checks.update(
+        {
+            "native_runtime_version": NATIVE_RUNTIME_VERSION,
+            "observed_runtime_versions": sorted(runtime_versions),
+            "native_executor": NATIVE_EXECUTOR,
+            "observed_executor": executor,
+            "native_contract_status": (
+                "PASS"
+                if runtime_versions == {NATIVE_RUNTIME_VERSION} and executor == NATIVE_EXECUTOR
+                else "FAIL"
+            ),
+        }
+    )
+    result["runtime_version"] = NATIVE_RUNTIME_VERSION
+    result["checks"] = checks
+    result["failures"] = list(dict.fromkeys(failures))
+    return result
+
+
 def audit(root: Path, *, execute_outcome: str, publish_outcome: str) -> dict[str, Any]:
     result = base.audit(
         root,
         execute_outcome=execute_outcome,
         publish_outcome=publish_outcome,
     )
+    result = _apply_native_contract(root, result)
     summary = _load(root / "v5-execution-summary.json", {})
     summary = summary if isinstance(summary, Mapping) else {}
     evidence = _node_quality(root)
@@ -134,6 +198,24 @@ def audit(root: Path, *, execute_outcome: str, publish_outcome: str) -> dict[str
         if result["degradations"]
         else "PASS"
     )
+    if result["status"] == "PASS":
+        result["primary_failure"] = {
+            "code": "NONE",
+            "stage": "completed",
+            "message": "",
+            "retryable": False,
+        }
+    elif result["failures"]:
+        primary = result.get("primary_failure")
+        primary = dict(primary) if isinstance(primary, Mapping) else {}
+        if primary.get("message") in {LEGACY_RUNTIME_FAILURE, LEGACY_EXECUTOR_FAILURE, ""}:
+            primary = {
+                "code": "V5_PRODUCTION_AUDIT_FAILED",
+                "stage": "v5-production-audit",
+                "message": result["failures"][0],
+                "retryable": False,
+            }
+        result["primary_failure"] = primary
     return result
 
 
