@@ -5,17 +5,24 @@ from typing import Any, Mapping
 
 REQUIRE_DISTINCT_MODEL_COMPANIES = True
 MINIMUM_CANDIDATES_PER_WORK = 24
+DEFAULT_INTELLIGENCE_RANKING_LIMIT = 150
 
 MODEL_COMPANY_ALIASES: Mapping[str, str] = {
+    "01-ai": "01-ai",
+    "ai21": "ai21-labs",
+    "ai21-labs": "ai21-labs",
     "alibaba": "alibaba",
     "qwen": "alibaba",
     "anthropic": "anthropic",
     "amazon": "amazon",
+    "amazon-nova": "amazon",
     "bytedance": "bytedance",
     "bytedance-seed": "bytedance",
     "cohere": "cohere",
-    "deepseek": "deepseek",
+    "deepmind": "google",
     "google": "google",
+    "google-ai": "google",
+    "deepseek": "deepseek",
     "meta": "meta",
     "meta-llama": "meta",
     "microsoft": "microsoft",
@@ -24,14 +31,19 @@ MODEL_COMPANY_ALIASES: Mapping[str, str] = {
     "mistralai": "mistral",
     "moonshot": "moonshot",
     "moonshotai": "moonshot",
+    "nous-research": "nous-research",
+    "nousresearch": "nous-research",
     "nvidia": "nvidia",
     "openai": "openai",
     "perplexity": "perplexity",
     "stepfun": "stepfun",
+    "tencent": "tencent",
+    "thudm": "zhipu",
     "x-ai": "xai",
     "xai": "xai",
     "z-ai": "zhipu",
     "zhipu": "zhipu",
+    "zhipu-ai": "zhipu",
 }
 
 
