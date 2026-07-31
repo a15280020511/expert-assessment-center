@@ -17,7 +17,11 @@ class TicketJsonSchemaTests(unittest.TestCase):
             "task_id": "schema-task-0001",
             "route": "expert-team",
             "task": {"question": "验证机器可读票据合同", "requirements": ["中文"]},
-            "approved_budget": {"calls": 4},
+            "approved_budget": {
+                "calls": 6,
+                "maximum_recovery_calls": 2,
+                "cost_policy": "unbounded_with_anomaly_guard",
+            },
         }
 
     def test_repository_schema_is_valid_draft_2020_12(self):
@@ -27,7 +31,7 @@ class TicketJsonSchemaTests(unittest.TestCase):
     def test_valid_packet_has_no_schema_errors(self):
         validated, errors = issue_ticket._validate_ticket(self.valid_packet())
         self.assertEqual(errors, [])
-        self.assertEqual(validated["calls"], 4)
+        self.assertEqual(validated["calls"], 6)
         self.assertEqual(validated["max_cost_usd"], 0.0)
         self.assertEqual(validated["quality_tier"], "value")
 
@@ -62,11 +66,11 @@ class TicketJsonSchemaTests(unittest.TestCase):
         self.assertIn("database", nested_messages)
         self.assertIn("bad", nested_messages)
 
-    def test_legacy_max_cost_is_accepted_but_optional(self):
+    def test_legacy_max_cost_is_rejected(self):
         payload = self.valid_packet()
         payload["approved_budget"]["max_cost_usd"] = 1.0
         _, errors = issue_ticket._validate_ticket(payload)
-        self.assertEqual(errors, [])
+        self.assertTrue(errors)
 
     def test_schema_reports_all_structural_errors(self):
         payload = {
@@ -85,10 +89,10 @@ class TicketJsonSchemaTests(unittest.TestCase):
         self.assertIn("task.question is required", text)
         self.assertIn("task.requirements must be an array", text)
         self.assertIn("evidence must be an object or an array", text)
-        self.assertIn("approved_budget must contain only calls and max_cost_usd", text)
-        self.assertNotIn("approved_budget.max_cost_usd is required", text)
-        self.assertIn("approved_budget.calls must be between 4 and 6", text)
-        self.assertGreaterEqual(len(errors), 8)
+        self.assertIn("approved_budget", text)
+        self.assertIn("maximum_recovery_calls is required", text)
+        self.assertIn("cost_policy is required", text)
+        self.assertGreaterEqual(len(errors), 9)
 
     def test_schema_rejects_wrong_private_output_type(self):
         payload = self.valid_packet()
