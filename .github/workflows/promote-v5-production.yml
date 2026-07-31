@@ -137,12 +137,17 @@ jobs:
           python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
           python -m pip check
 
-      - name: Run static and full unit validation
+      - name: Run Ruff
         working-directory: release-target
-        run: |
-          python -m ruff check .
-          python -m compileall -q open-model-market tests
-          python -m unittest discover -s tests -p 'test*.py' -v
+        run: python -m ruff check .
+
+      - name: Compile Python sources
+        working-directory: release-target
+        run: python -m compileall -q open-model-market tests
+
+      - name: Run full unit test suite
+        working-directory: release-target
+        run: python -m unittest discover -s tests -p 'test*.py' -v
 
       - name: Run deterministic no-call V5 regression
         working-directory: release-target
