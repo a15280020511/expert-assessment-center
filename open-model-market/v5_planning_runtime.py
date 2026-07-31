@@ -5,6 +5,7 @@ import math
 from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
+import v5_budget_runtime_parity as budget_parity
 import v5_capability_calibration as capability_calibration
 import v5_candidate_diversity as candidate_diversity
 import v5_cost_reliability_hardening as cost_policy
@@ -12,7 +13,6 @@ import v5_dynamic_configuration as dynamic_configuration
 import v5_planner as base_planner
 import v5_token_cost_policy as token_policy
 import v5_truncation_budget_policy as truncation_policy
-import v5_value_optimizer as value_optimizer
 from execution_graph import GraphLimits
 
 
@@ -58,6 +58,7 @@ class PlannerPolicy:
             "cost_estimation": "reasoning-and-truncation-aware-p95-usage",
             "candidate_configuration": "task-and-endpoint-dynamic",
             "pareto_pruning": "model-diversity-preserving",
+            "budget_preflight_parity": "direct-risk-budgeted-optimizer-call",
             "cross_task_history_used": False,
         }
         return result
@@ -194,7 +195,14 @@ class PlannerPolicy:
         quality_tolerance_pct: float,
         solver_timeout_seconds: float,
     ) -> dict[str, Any]:
-        return value_optimizer.optimize_execution_graph(
+        """Optimize on the same risk-adjusted cost basis enforced by runtime.
+
+        The explicit production runtime does not install compatibility monkey
+        patches. Calling the parity policy directly prevents the optimizer from
+        admitting a graph that the runtime will reject before the first model
+        call.
+        """
+        return budget_parity.risk_budgeted_optimize_execution_graph(
             candidate_bundle,
             limits=limits,
             quality_tolerance_pct=quality_tolerance_pct,

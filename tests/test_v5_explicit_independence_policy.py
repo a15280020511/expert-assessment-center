@@ -126,12 +126,24 @@ class TestV5ExplicitIndependencePolicy(unittest.TestCase):
         self.assertTrue(policy["different_model_required"])
         self.assertFalse(policy["different_provider_required"])
 
-    def test_formal_runtime_uses_explicit_value_optimizer(self):
+    def test_formal_runtime_uses_value_optimizer_through_budget_parity(self):
         original = v5_planner.optimize_execution_graph
-        source = (ROOT / "open-model-market" / "v5_planning_runtime.py").read_text(
-            encoding="utf-8"
+        planning_source = (
+            ROOT / "open-model-market" / "v5_planning_runtime.py"
+        ).read_text(encoding="utf-8")
+        parity_source = (
+            ROOT / "open-model-market" / "v5_budget_runtime_parity.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "budget_parity.risk_budgeted_optimize_execution_graph",
+            planning_source,
         )
-        self.assertIn("value_optimizer.optimize_execution_graph", source)
+        self.assertNotIn("return value_optimizer.optimize_execution_graph", planning_source)
+        self.assertIn(
+            "_ORIGINAL_OPTIMIZE = value_optimizer.optimize_execution_graph",
+            parity_source,
+        )
         self.assertIs(v5_planner.optimize_execution_graph, original)
         self.assertIsNot(v5_planner.optimize_execution_graph, optimizer.optimize_execution_graph)
 
