@@ -108,12 +108,17 @@ jobs:
           assert optimization["solver_status"] in {"OPTIMAL", "FEASIBLE"}
           assert optimization["fallback_used"] is False
           assert optimization["highest_principle"] == "maximum_cost_performance"
-          assert optimization["objective_order"] == ["hard_constraints", "maximum_cost_performance"]
+          assert optimization["objective_order"] == ["hard_constraints", "maximum_expected_cost_performance"]
           assert optimization["cost_performance_ratio"] > 0
+          assert optimization["selected_initial_cost_usd"] > 0
+          assert optimization["selected_expected_recovery_cost_usd"] >= 0
+          assert optimization["selected_effective_cost_usd"] >= optimization["selected_initial_cost_usd"]
+          assert optimization["marginal_utility_stop"]["mandatory_work_exception"]
           assert optimization["approved_budget"]["maximum_total_calls"] == 16
           assert optimization["approved_budget"]["maximum_recovery_calls"] == 2
           assert optimization["approved_budget"]["maximum_initial_calls"] == 14
           assert graph["metadata"]["highest_principle"] == "maximum_cost_performance"
+          assert graph["metadata"]["marginal_utility_stop"]
           assert 1 <= len(graph["nodes"]) <= 14
           assert len(graph["execution_stages"]) <= 8
           assert graph["entry_nodes"]
@@ -123,6 +128,8 @@ jobs:
           assert dry["production_entrypoint_changed"] is False
           assert dry["approved_budget"]["maximum_total_calls"] == 16
           assert benchmark["planning_gate_passed"] is True
+          assert benchmark["cost_performance_claim_allowed"] is True
+          assert benchmark["feasible_comparator_count"] >= 2
           assert benchmark["runtime_policy"] == "v5-only-no-alternate-runtime"
           assert set(benchmark["strategies"]) == {
               "v5_joint_graph",
@@ -130,7 +137,10 @@ jobs:
               "lowest_price_single_model",
               "random_feasible",
               "lowest_cost_feasible",
+              "highest_utility_feasible",
           }
+          assert benchmark["strategies"]["lowest_cost_feasible"]["feasible"] is True
+          assert benchmark["strategies"]["highest_utility_feasible"]["feasible"] is True
 
           for node, request in zip(graph["nodes"], dry["requests"]):
               assert not forbidden.intersection(request)

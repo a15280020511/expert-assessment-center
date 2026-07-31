@@ -121,7 +121,19 @@ class TestV5PlannerExecutor(unittest.TestCase):
             planner["candidate_graph"]["candidate_count_after_pareto"],
         )
         self.assertGreater(planner["candidate_graph"]["candidate_count_after_pareto"], 0)
-        graph = ExecutionGraph.from_mapping(planner["optimization"]["execution_graph"])
+        optimization = planner["optimization"]
+        self.assertEqual(
+            optimization["objective_order"],
+            ["hard_constraints", "maximum_expected_cost_performance"],
+        )
+        self.assertGreater(optimization["selected_initial_cost_usd"], 0)
+        self.assertGreaterEqual(optimization["selected_expected_recovery_cost_usd"], 0)
+        self.assertGreaterEqual(
+            optimization["selected_effective_cost_usd"],
+            optimization["selected_initial_cost_usd"],
+        )
+        self.assertIn("marginal_utility_stop", optimization)
+        graph = ExecutionGraph.from_mapping(optimization["execution_graph"])
         self.assertFalse(validate_execution_graph(graph, GraphLimits()))
         self.assertLessEqual(len(graph.nodes), 16)
         self.assertTrue(all(node.request_config["provider"]["allow_fallbacks"] is False for node in graph.nodes))
@@ -210,7 +222,7 @@ class TestV5PlannerExecutor(unittest.TestCase):
             self.assertLessEqual(budget["calls_reserved"], len(graph.nodes) + 2)
             self.assertTrue(any(row["reason"] == "global-replacement-limit-exhausted" for row in budget["denials"]))
 
-    def test_planning_diagnostic_is_v5_only(self):
+    def test_planning_diagnostic_is_constraint_faithful_and_proves_value(self):
         benchmark = planning_benchmark(self.planner())
         self.assertTrue(benchmark["planning_gate_passed"])
         self.assertEqual(benchmark["runtime_policy"], "v5-only-no-alternate-runtime")
@@ -222,7 +234,16 @@ class TestV5PlannerExecutor(unittest.TestCase):
                 "lowest_price_single_model",
                 "random_feasible",
                 "lowest_cost_feasible",
+                "highest_utility_feasible",
             },
+        )
+        self.assertGreaterEqual(benchmark["feasible_comparator_count"], 2)
+        self.assertTrue(benchmark["strategies"]["lowest_cost_feasible"]["feasible"])
+        self.assertTrue(benchmark["strategies"]["highest_utility_feasible"]["feasible"])
+        self.assertTrue(benchmark["cost_performance_claim_allowed"], benchmark)
+        self.assertEqual(
+            benchmark["value_proof_status"],
+            "PROVEN_AGAINST_GENERATED_FEASIBLE_COMPARATORS",
         )
         self.assertFalse(benchmark["strategies"]["strongest_single_model"]["feasible"])
         self.assertTrue(benchmark["strategies"]["strongest_single_model"]["hard_constraint_violations"])
