@@ -1,9 +1,9 @@
 """Cost-performance-first V5 execution-graph optimizer.
 
-This module keeps V5 market compilation and candidate generation unchanged,
-but replaces the old maximum-quality-then-quality-band objective. Hard
-constraints are mandatory; the primary objective is risk-adjusted task utility
-per effective dollar, including a small per-call operating overhead.
+Hard constraints are mandatory. The primary objective is risk-adjusted task
+utility per effective expected dollar. Effective cost includes the initial
+model request, the candidate's expected one-step recovery cost, and operating
+overhead for both the initial and expected recovery calls.
 """
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from v5_planner import (
 
 COST_SCALE = 1_000_000
 QUALITY_SCALE = 100_000
+PROBABILITY_SCALE = 100_000
 CALL_OVERHEAD_USD = 0.0001
 MAX_RATIO_ITERATIONS = 10
 
@@ -100,18 +101,28 @@ def _work_requires_distinct_model(
     candidate_indices: Sequence[int],
     work_id: str,
 ) -> bool:
-    """Return the explicit hard model-independence policy for one work unit.
-
-    Candidate generation places a work ID in ``independence_groups`` only when
-    the semantic compiler declared independent execution for that work. The
-    graph validator applies its hard no-model-reuse rule to the same group.
-    Ordinary redundant copies deliberately have no group: they remain separate
-    calls, while model/provider diversity is a preference handled by selection
-    and R8 provider rebalancing rather than an undeclared feasibility gate.
-    """
+    """Return the explicit hard model-independence policy for one work unit."""
     return any(
         work_id in candidates[index].independence_groups
         for index in candidate_indices
+    )
+
+
+def _scaled_cost(candidate: CandidateNode) -> int:
+    return max(0, int(round(candidate.estimated_cost * COST_SCALE)))
+
+
+def _scaled_expected_recovery_cost(candidate: CandidateNode) -> int:
+    """Price one bounded replacement attempt by its estimated failure probability."""
+    return max(
+        0,
+        int(
+            round(
+                candidate.estimated_cost
+                * _clamp(candidate.failure_probability)
+                * COST_SCALE
+            )
+        ),
     )
 
 
@@ -122,7 +133,7 @@ def optimize_execution_graph(
     quality_tolerance_pct: float = 2.0,
     solver_timeout_seconds: float = 20.0,
 ) -> dict[str, Any]:
-    """Select the feasible V5 graph with maximum total cost-performance.
+    """Select the feasible V5 graph with maximum expected cost-performance.
 
     ``quality_tolerance_pct`` remains in the signature only for compatibility
     with older callers. It is recorded as ignored and does not affect solving.
@@ -162,13 +173,11 @@ def optimize_execution_graph(
                 model.Add(sum(terms) == y[interpretation_id])
 
     model.Add(sum(x) <= limits.max_nodes)
-    actual_cost_terms = [
-        int(round(candidate.estimated_cost * COST_SCALE)) * x[index]
+    initial_cost_terms = [
+        _scaled_cost(candidate) * x[index]
         for index, candidate in enumerate(candidates)
     ]
-    actual_cost = sum(actual_cost_terms)
-    if limits.max_budget_usd is not None:
-        model.Add(actual_cost <= int(round(limits.max_budget_usd * COST_SCALE)))
+    initial_cost = sum(initial_cost_terms)
 
     hard_independence_constraints: list[dict[str, Any]] = []
     for interpretation_id, meta in interpretations.items():
@@ -233,7 +242,25 @@ def optimize_execution_graph(
 
     call_count = sum(x)
     call_overhead = max(1, int(round(CALL_OVERHEAD_USD * COST_SCALE)))
-    effective_cost = actual_cost + call_count * call_overhead
+    expected_recovery_cost_terms = [
+        _scaled_expected_recovery_cost(candidate) * x[index]
+        for index, candidate in enumerate(candidates)
+    ]
+    expected_recovery_cost = sum(expected_recovery_cost_terms)
+    expected_recovery_overhead_terms = [
+        int(round(_clamp(candidate.failure_probability) * call_overhead)) * x[index]
+        for index, candidate in enumerate(candidates)
+    ]
+    expected_recovery_overhead = sum(expected_recovery_overhead_terms)
+    effective_cost = (
+        initial_cost
+        + expected_recovery_cost
+        + call_count * call_overhead
+        + expected_recovery_overhead
+    )
+    if limits.max_budget_usd is not None:
+        model.Add(effective_cost <= int(round(limits.max_budget_usd * COST_SCALE)))
+
     solver, status, phase_status = _solve_cost_performance(
         model,
         quality_expr,
@@ -267,17 +294,22 @@ def optimize_execution_graph(
         limits,
     )
     graph_data = graph.to_dict()
-    graph_data.setdefault("metadata", {})["highest_principle"] = (
-        "maximum_cost_performance"
-    )
-    graph_data["metadata"]["objective_order"] = [
+    metadata = graph_data.setdefault("metadata", {})
+    metadata["highest_principle"] = "maximum_cost_performance"
+    metadata["objective_order"] = [
         "hard_constraints",
-        "maximum_cost_performance",
+        "maximum_expected_cost_performance",
     ]
-    graph_data["metadata"]["cost_performance_definition"] = (
-        "risk_adjusted_task_utility_divided_by_estimated_model_cost_plus_call_overhead"
+    metadata["cost_performance_definition"] = (
+        "risk_adjusted_task_utility_divided_by_initial_cost_plus_expected_recovery_cost_plus_call_overhead"
     )
-    graph_data["metadata"]["independence_policy"] = {
+    metadata["marginal_utility_stop"] = {
+        "scope": "optional graph expansion across feasible task interpretations and candidate bundles",
+        "criterion": "accept expansion only when it improves the global risk-adjusted utility/effective-expected-cost ratio",
+        "tie_break": "for equal best ratio choose the lower effective expected cost",
+        "mandatory_work_exception": "hard required coverage is never dropped for price",
+    }
+    metadata["independence_policy"] = {
         "hard_model_diversity_scope": "explicit-independence-groups-only",
         "hard_provider_diversity_scope": "none",
         "provider_diversity": "preferred-and-enforced-by-r8-runtime-rebalancing",
@@ -289,27 +321,40 @@ def optimize_execution_graph(
     }
 
     selected_quality = max(0, _value(solver, quality_expr))
+    selected_initial_cost = max(0, _value(solver, initial_cost))
+    selected_recovery_cost = max(0, _value(solver, expected_recovery_cost))
     selected_effective_cost = max(1, _value(solver, effective_cost))
+    selected_expected_recovery_calls = sum(
+        _clamp(candidates[index].failure_probability)
+        for index in selected_indices
+    )
     return {
         "version": 5,
         "optimizer": "google-or-tools-cp-sat",
-        "selection_method": "execution-graph-cost-performance-v5",
+        "selection_method": "execution-graph-expected-cost-performance-v5",
         "solver_status": solver.StatusName(status),
         "phase_status": phase_status,
         "selected_interpretation": selected_interpretation,
         "highest_principle": "maximum_cost_performance",
-        "objective_order": ["hard_constraints", "maximum_cost_performance"],
+        "objective_order": ["hard_constraints", "maximum_expected_cost_performance"],
         "cost_performance_definition": (
-            "risk_adjusted_task_utility_divided_by_estimated_model_cost_plus_call_overhead"
+            "risk_adjusted_task_utility_divided_by_initial_cost_plus_expected_recovery_cost_plus_call_overhead"
         ),
         "selected_quality_objective_scaled": selected_quality,
+        "selected_initial_cost_scaled": selected_initial_cost,
+        "selected_expected_recovery_cost_scaled": selected_recovery_cost,
         "selected_effective_cost_scaled": selected_effective_cost,
+        "selected_initial_cost_usd": round(selected_initial_cost / COST_SCALE, 8),
+        "selected_expected_recovery_cost_usd": round(selected_recovery_cost / COST_SCALE, 8),
+        "selected_effective_cost_usd": round(selected_effective_cost / COST_SCALE, 8),
+        "selected_expected_recovery_calls": round(selected_expected_recovery_calls, 6),
         "cost_scale": COST_SCALE,
         "call_overhead_usd": CALL_OVERHEAD_USD,
         "cost_performance_ratio": round(
             selected_quality / selected_effective_cost,
             9,
         ),
+        "marginal_utility_stop": metadata["marginal_utility_stop"],
         "deprecated_quality_tolerance_pct_ignored": float(quality_tolerance_pct),
         "selected_candidate_ids": [
             candidates[index].candidate_id for index in selected_indices
