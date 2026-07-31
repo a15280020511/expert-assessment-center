@@ -1,4 +1,4 @@
-"""Deterministic planning diagnostics for the V5 dynamic execution graph."""
+"""Deterministic, constraint-faithful planning diagnostics for V5."""
 from __future__ import annotations
 
 import json
@@ -6,18 +6,62 @@ import random
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from ortools.sat.python import cp_model
+
+from v5_value_optimizer import CALL_OVERHEAD_USD
+
+COST_SCALE = 1_000_000
+UTILITY_SCALE = 100_000
+
 
 def _coverage(candidate: Mapping[str, Any]) -> set[str]:
     return {str(x) for x in candidate.get("coverage_keys", [])}
+
+
+def _risk_adjusted_utility(row: Mapping[str, Any]) -> float:
+    quality = float(row.get("estimated_quality", 0.0))
+    failure = max(0.0, min(1.0, float(row.get("failure_probability", 0.0))))
+    uncertainty = max(0.0, min(1.0, float(row.get("quality_uncertainty", 0.0))))
+    return max(0.0, quality * (1.0 - 0.35 * failure) - 0.10 * uncertainty)
+
+
+def _effective_expected_cost(row: Mapping[str, Any]) -> float:
+    initial = max(0.0, float(row.get("estimated_cost", 0.0)))
+    failure = max(0.0, min(1.0, float(row.get("failure_probability", 0.0))))
+    return initial * (1.0 + failure) + CALL_OVERHEAD_USD * (1.0 + failure)
+
+
+def _constraint_map(optimization: Mapping[str, Any], interpretation_id: str) -> dict[str, dict[str, bool]]:
+    result: dict[str, dict[str, bool]] = {}
+    rows = optimization.get("hard_independence_constraints")
+    if not isinstance(rows, list):
+        return result
+    for row in rows:
+        if not isinstance(row, Mapping) or str(row.get("interpretation_id")) != interpretation_id:
+            continue
+        work_id = str(row.get("work_id") or "")
+        if not work_id:
+            continue
+        result[work_id] = {
+            "different_model_required": bool(row.get("different_model_required")),
+            "different_provider_required": bool(row.get("different_provider_required")),
+        }
+    return result
 
 
 def _metrics(
     rows: Sequence[Mapping[str, Any]],
     required: set[str],
     copies_by_work: Mapping[str, Any],
+    independence: Mapping[str, Mapping[str, bool]],
+    interpretation_score: float,
 ) -> dict[str, Any]:
     covered = set().union(*(_coverage(row) for row in rows)) if rows else set()
     violations: list[str] = []
+    for key in required:
+        count = sum(key in _coverage(row) for row in rows)
+        if count != 1:
+            violations.append(f"{key}:selection-count={count}")
     for work_id, copies_raw in copies_by_work.items():
         copies = int(copies_raw)
         if copies < 2:
@@ -26,23 +70,37 @@ def _metrics(
         for copy_index in range(copies):
             key = f"{work_id}#{copy_index}"
             matches = [row for row in rows if key in _coverage(row)]
-            if len(matches) != 1:
-                violations.append(f"{work_id}:copy-{copy_index}-selection-count={len(matches)}")
-                continue
-            selected_by_copy.append(matches[0])
-        if len(selected_by_copy) == copies:
+            if len(matches) == 1:
+                selected_by_copy.append(matches[0])
+        policy = independence.get(str(work_id), {})
+        if len(selected_by_copy) == copies and policy.get("different_model_required"):
             models = [str(row.get("model") or "") for row in selected_by_copy]
-            endpoints = [str(row.get("provider_endpoint") or "") for row in selected_by_copy]
             if len(set(models)) != copies:
                 violations.append(f"{work_id}:independent-copies-reuse-model")
+        if len(selected_by_copy) == copies and policy.get("different_provider_required"):
+            endpoints = [str(row.get("provider_endpoint") or "") for row in selected_by_copy]
             if len(set(endpoints)) != copies:
                 violations.append(f"{work_id}:independent-copies-reuse-endpoint")
+
+    utility = sum(_risk_adjusted_utility(row) for row in rows) + max(0.0, interpretation_score) * 0.25
+    expected_recovery_cost = sum(
+        max(0.0, float(row.get("estimated_cost", 0.0)))
+        * max(0.0, min(1.0, float(row.get("failure_probability", 0.0))))
+        for row in rows
+    )
+    initial_cost = sum(max(0.0, float(row.get("estimated_cost", 0.0))) for row in rows)
+    effective_cost = sum(_effective_expected_cost(row) for row in rows)
     quality = sum(float(row.get("estimated_quality", 0.0)) for row in rows) / max(1, len(rows))
+    ratio = utility / max(1e-12, effective_cost)
     return {
         "feasible": required <= covered and not violations,
         "coverage_ratio": round(len(required & covered) / max(1, len(required)), 6),
         "estimated_quality": round(quality, 6),
-        "estimated_cost_usd": round(sum(float(row.get("estimated_cost", 0.0)) for row in rows), 8),
+        "risk_adjusted_utility": round(utility, 8),
+        "estimated_initial_cost_usd": round(initial_cost, 8),
+        "estimated_recovery_cost_usd": round(expected_recovery_cost, 8),
+        "effective_expected_cost_usd": round(effective_cost, 8),
+        "cost_performance_ratio": round(ratio, 9),
         "node_count": len(rows),
         "hard_constraint_violations": violations,
         "models": sorted({str(row.get("model") or "") for row in rows}),
@@ -50,69 +108,125 @@ def _metrics(
     }
 
 
-def _greedy(
+def _add_independence_constraints(
+    model: cp_model.CpModel,
+    variables: Sequence[Any],
+    candidates: Sequence[Mapping[str, Any]],
+    copies_by_work: Mapping[str, Any],
+    independence: Mapping[str, Mapping[str, bool]],
+) -> None:
+    for work_id, copies_raw in copies_by_work.items():
+        copies = int(copies_raw)
+        policy = independence.get(str(work_id), {})
+        if copies < 2 or not any(policy.values()):
+            continue
+        by_copy: dict[int, list[int]] = {}
+        for copy_index in range(copies):
+            key = f"{work_id}#{copy_index}"
+            by_copy[copy_index] = [
+                index for index, row in enumerate(candidates) if key in _coverage(row)
+            ]
+        for left_copy in range(copies):
+            for right_copy in range(left_copy + 1, copies):
+                for left in by_copy[left_copy]:
+                    for right in by_copy[right_copy]:
+                        same_model = str(candidates[left].get("model")) == str(candidates[right].get("model"))
+                        same_provider = str(candidates[left].get("provider_endpoint")) == str(candidates[right].get("provider_endpoint"))
+                        if (policy.get("different_model_required") and same_model) or (
+                            policy.get("different_provider_required") and same_provider
+                        ):
+                            model.Add(variables[left] + variables[right] <= 1)
+
+
+def _solve_plan(
     required: set[str],
     candidates: Sequence[Mapping[str, Any]],
-    key: Any,
-    maximum_nodes: int = 16,
+    copies_by_work: Mapping[str, Any],
+    independence: Mapping[str, Mapping[str, bool]],
+    *,
+    maximum_nodes: int,
+    objective: str,
+    fixed_model: str | None = None,
+    random_seed: int = 0,
 ) -> list[Mapping[str, Any]]:
-    remaining = set(required)
-    selected: list[Mapping[str, Any]] = []
-    pool = list(candidates)
-    while remaining and len(selected) < maximum_nodes:
-        useful = [row for row in pool if _coverage(row) & remaining]
-        if not useful:
-            break
-        useful.sort(key=lambda row: key(row, len(_coverage(row) & remaining)))
-        chosen = useful[0]
-        selected.append(chosen)
-        remaining -= _coverage(chosen)
-        pool = [row for row in pool if row.get("candidate_id") != chosen.get("candidate_id")]
-    return selected
+    if not candidates or maximum_nodes <= 0:
+        return []
+    model = cp_model.CpModel()
+    variables = [model.NewBoolVar(f"candidate_{index}") for index in range(len(candidates))]
+    for key in sorted(required):
+        terms = [variables[index] for index, row in enumerate(candidates) if key in _coverage(row)]
+        if not terms:
+            return []
+        model.Add(sum(terms) == 1)
+    model.Add(sum(variables) <= maximum_nodes)
+    if fixed_model is not None:
+        for index, row in enumerate(candidates):
+            if str(row.get("model") or "") != fixed_model:
+                model.Add(variables[index] == 0)
+    _add_independence_constraints(model, variables, candidates, copies_by_work, independence)
+
+    if objective == "cost":
+        expression = sum(
+            max(1, int(round(_effective_expected_cost(row) * COST_SCALE))) * variables[index]
+            for index, row in enumerate(candidates)
+        )
+        model.Minimize(expression)
+    elif objective == "quality":
+        expression = sum(
+            max(0, int(round(_risk_adjusted_utility(row) * UTILITY_SCALE))) * variables[index]
+            for index, row in enumerate(candidates)
+        )
+        model.Maximize(expression)
+    elif objective == "random":
+        rng = random.Random(random_seed)
+        expression = sum(rng.randint(1, 100_000) * variables[index] for index in range(len(candidates)))
+        model.Minimize(expression)
+    else:
+        raise ValueError(f"Unknown benchmark objective: {objective}")
+
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = 10.0
+    solver.parameters.num_search_workers = 1
+    solver.parameters.random_seed = random_seed
+    status = solver.Solve(model)
+    if status not in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
+        return []
+    return [row for index, row in enumerate(candidates) if solver.Value(variables[index])]
 
 
-def _single_model(
+def _single_model_plan(
     required: set[str],
     candidates: Sequence[Mapping[str, Any]],
+    copies_by_work: Mapping[str, Any],
+    independence: Mapping[str, Mapping[str, bool]],
+    *,
+    maximum_nodes: int,
     strongest: bool,
 ) -> list[Mapping[str, Any]]:
-    by_model: dict[str, list[Mapping[str, Any]]] = {}
-    for row in candidates:
-        by_model.setdefault(str(row.get("model") or ""), []).append(row)
     plans: list[list[Mapping[str, Any]]] = []
-    for rows in by_model.values():
-        plan = _greedy(
+    for model_id in sorted({str(row.get("model") or "") for row in candidates}):
+        plan = _solve_plan(
             required,
-            rows,
-            (lambda row, gain: (-gain, -float(row.get("estimated_quality", 0.0)), float(row.get("estimated_cost", 0.0))))
-            if strongest
-            else (lambda row, gain: (-gain, float(row.get("estimated_cost", 0.0)), -float(row.get("estimated_quality", 0.0)))),
+            candidates,
+            copies_by_work,
+            independence,
+            maximum_nodes=maximum_nodes,
+            objective="quality" if strongest else "cost",
+            fixed_model=model_id,
         )
-        if plan and required <= set().union(*(_coverage(row) for row in plan)):
+        if plan:
             plans.append(plan)
     if not plans:
         return []
     if strongest:
-        return max(
-            plans,
-            key=lambda rows: (
-                sum(float(row.get("estimated_quality", 0.0)) for row in rows) / len(rows),
-                -sum(float(row.get("estimated_cost", 0.0)) for row in rows),
-            ),
-        )
-    return min(
-        plans,
-        key=lambda rows: (
-            sum(float(row.get("estimated_cost", 0.0)) for row in rows),
-            -sum(float(row.get("estimated_quality", 0.0)) for row in rows) / len(rows),
-        ),
-    )
+        return max(plans, key=lambda rows: (sum(_risk_adjusted_utility(row) for row in rows), -sum(_effective_expected_cost(row) for row in rows)))
+    return min(plans, key=lambda rows: (sum(_effective_expected_cost(row) for row in rows), -sum(_risk_adjusted_utility(row) for row in rows)))
 
 
 def planning_benchmark(planner_bundle: Mapping[str, Any], *, random_seed: int = 20260730) -> dict[str, Any]:
     optimization = planner_bundle["optimization"]
     graph = optimization["execution_graph"]
-    interpretation_id = optimization["selected_interpretation"]
+    interpretation_id = str(optimization["selected_interpretation"])
     meta = planner_bundle["candidate_graph"]["interpretations"][interpretation_id]
     required = {
         f"{work_id}#{copy_index}"
@@ -122,44 +236,92 @@ def planning_benchmark(planner_bundle: Mapping[str, Any], *, random_seed: int = 
     candidates = [
         row
         for row in planner_bundle["candidate_graph"]["candidates"]
-        if row["interpretation_id"] == interpretation_id
+        if str(row["interpretation_id"]) == interpretation_id
     ]
     selected_ids = set(optimization["selected_candidate_ids"])
     selected = [row for row in candidates if row["candidate_id"] in selected_ids]
-    strongest_single = _single_model(required, candidates, strongest=True)
-    cheapest_single = _single_model(required, candidates, strongest=False)
-    rng = random.Random(random_seed)
-    randomized = list(candidates)
-    rng.shuffle(randomized)
-    random_plan = _greedy(required, randomized, lambda row, gain: (-gain, rng.random()))
-    cheapest_feasible = _greedy(
-        required,
-        candidates,
-        lambda row, gain: (-gain, float(row["estimated_cost"]), -float(row["estimated_quality"])),
+    independence = _constraint_map(optimization, interpretation_id)
+    maximum_nodes = max(1, len(graph.get("nodes") or selected))
+    interpretation_score = float(meta.get("metrics", {}).get("interpretation_score", 0.5))
+
+    strongest_single = _single_model_plan(
+        required, candidates, meta["copies_by_work"], independence,
+        maximum_nodes=maximum_nodes, strongest=True,
     )
+    cheapest_single = _single_model_plan(
+        required, candidates, meta["copies_by_work"], independence,
+        maximum_nodes=maximum_nodes, strongest=False,
+    )
+    random_plan = _solve_plan(
+        required, candidates, meta["copies_by_work"], independence,
+        maximum_nodes=maximum_nodes, objective="random", random_seed=random_seed,
+    )
+    cheapest_feasible = _solve_plan(
+        required, candidates, meta["copies_by_work"], independence,
+        maximum_nodes=maximum_nodes, objective="cost",
+    )
+    strongest_feasible = _solve_plan(
+        required, candidates, meta["copies_by_work"], independence,
+        maximum_nodes=maximum_nodes, objective="quality",
+    )
+
     strategies = {
-        "v5_joint_graph": _metrics(selected, required, meta["copies_by_work"]),
-        "strongest_single_model": _metrics(strongest_single, required, meta["copies_by_work"]),
-        "lowest_price_single_model": _metrics(cheapest_single, required, meta["copies_by_work"]),
-        "random_feasible": _metrics(random_plan, required, meta["copies_by_work"]),
-        "lowest_cost_feasible": _metrics(cheapest_feasible, required, meta["copies_by_work"]),
+        "v5_joint_graph": _metrics(selected, required, meta["copies_by_work"], independence, interpretation_score),
+        "strongest_single_model": _metrics(strongest_single, required, meta["copies_by_work"], independence, interpretation_score),
+        "lowest_price_single_model": _metrics(cheapest_single, required, meta["copies_by_work"], independence, interpretation_score),
+        "random_feasible": _metrics(random_plan, required, meta["copies_by_work"], independence, interpretation_score),
+        "lowest_cost_feasible": _metrics(cheapest_feasible, required, meta["copies_by_work"], independence, interpretation_score),
+        "highest_utility_feasible": _metrics(strongest_feasible, required, meta["copies_by_work"], independence, interpretation_score),
     }
     v5 = strategies["v5_joint_graph"]
+    feasible_comparators = {
+        name: row
+        for name, row in strategies.items()
+        if name != "v5_joint_graph" and row["feasible"]
+    }
     dominated = []
-    for name, row in strategies.items():
-        if name == "v5_joint_graph" or not row["feasible"]:
-            continue
-        if v5["estimated_quality"] >= row["estimated_quality"] and v5["estimated_cost_usd"] <= row["estimated_cost_usd"]:
+    for name, row in feasible_comparators.items():
+        if (
+            v5["risk_adjusted_utility"] >= row["risk_adjusted_utility"]
+            and v5["effective_expected_cost_usd"] <= row["effective_expected_cost_usd"]
+        ):
             dominated.append(name)
+    best_comparator_ratio = max(
+        (float(row["cost_performance_ratio"]) for row in feasible_comparators.values()),
+        default=0.0,
+    )
+    ratio_proven = bool(
+        feasible_comparators
+        and v5["feasible"]
+        and float(v5["cost_performance_ratio"]) + 1e-9 >= best_comparator_ratio
+    )
+    gate = bool(
+        v5["feasible"]
+        and v5["coverage_ratio"] == 1.0
+        and feasible_comparators
+    )
     return {
         "version": 5,
-        "benchmark_type": "deterministic-planning-diagnostic",
+        "benchmark_type": "deterministic-constraint-faithful-planning-proof",
         "runtime_policy": "v5-only-no-alternate-runtime",
         "selected_interpretation": interpretation_id,
         "required_coverage_keys": sorted(required),
+        "independence_policy": independence,
+        "maximum_comparable_nodes": maximum_nodes,
         "strategies": strategies,
-        "v5_pareto_dominates": dominated,
-        "planning_gate_passed": bool(v5["feasible"] and v5["coverage_ratio"] == 1.0),
+        "feasible_comparator_count": len(feasible_comparators),
+        "best_comparator_cost_performance_ratio": round(best_comparator_ratio, 9),
+        "v5_pareto_dominates": sorted(dominated),
+        "cost_performance_claim_allowed": ratio_proven,
+        "value_proof_status": (
+            "PROVEN_AGAINST_GENERATED_FEASIBLE_COMPARATORS"
+            if ratio_proven
+            else "NOT_PROVEN"
+        ),
+        "planning_gate_passed": gate,
+        "planning_gate_definition": (
+            "selected graph is feasible with complete coverage and at least one independently generated feasible comparator"
+        ),
         "execution_graph_summary": {
             "estimated_quality": graph["estimated_quality"],
             "estimated_total_cost": graph["estimated_total_cost"],
