@@ -2,10 +2,10 @@
   "selection": {
     "team_pattern": "resource-demand-first-dynamic-work-packages-plus-synthesis",
     "quality_tier": "value",
-    "ranking_limit": 100,
+    "ranking_limit": 150,
     "minimum_context_length": 16384,
     "candidate_pool_per_seat": 24,
-    "candidate_pool_policy": "top-100-multi-channel-intelligence-fit-value-price-context-company-diversity",
+    "candidate_pool_policy": "top-150-multi-channel-intelligence-fit-value-price-context-company-diversity",
     "require_distinct_model_companies": true,
     "model_company_identity": "canonicalized-direct-model-author-prefix",
     "company_shortage_policy": "expand-pool-then-fail-closed",
@@ -50,7 +50,7 @@
     "minimum_semantic_confidence": 0.65,
     "max_completion_tokens": 900,
     "max_budget_share": 0.20,
-    "max_intelligence_rank": 30
+    "max_intelligence_rank": 150
   },
   "execution": {
     "max_completion_tokens": 10000,
