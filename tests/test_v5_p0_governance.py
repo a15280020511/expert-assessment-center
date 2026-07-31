@@ -114,7 +114,8 @@ class V5P0GovernanceTests(unittest.TestCase):
         schema = (MARKET / "execution-ticket.schema.json").read_text(encoding="utf-8")
         config = (MARKET / "config.json").read_text(encoding="utf-8")
         report = (MARKET / "publish_report.py").read_text(encoding="utf-8")
-        self.assertNotIn("a15280020511/test", schema)
+        legacy_repository = "a15280020511/" + "test"
+        self.assertNotIn(legacy_repository, schema)
         self.assertNotIn("fixed 3+1", schema)
         self.assertNotIn("max_cost_usd", schema)
         self.assertNotIn("resource_requirements.py", config)
