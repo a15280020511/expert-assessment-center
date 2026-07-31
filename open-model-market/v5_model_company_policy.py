@@ -60,8 +60,8 @@ def model_company(model_id: Any, author: Any = None) -> str:
     """Return one stable company identifier for a model namespace."""
     model = str(model_id or "").strip()
     namespace = str(author or "").strip()
-    if not namespace and "/" in model:
-        namespace = model.split("/", 1)[0]
+    if not namespace:
+        namespace = model.split("/", 1)[0] if "/" in model else model
     company = _slug(namespace)
     if not company:
         raise ValueError(f"Cannot derive model company from model ID: {model!r}")
@@ -191,24 +191,27 @@ def build_disjoint_recovery_pool(
     interpretation_id: str,
     maximum_rows_per_node: int,
 ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Any]]:
-    """Build recovery pools whose companies are disjoint across the whole task.
+    """Build globally company-disjoint recovery pools using round-robin allocation.
 
-    Companies used by the original graph are excluded. A fallback company is
-    allocated to at most one selected node, so two simultaneous replacements
-    cannot introduce a duplicate company later in the same run.
+    Companies used by the original graph are excluded. Each fallback company is
+    allocated to at most one selected node. Allocation proceeds one candidate per
+    node per round, preventing early nodes from consuming every backup company.
     """
     maximum = max(0, int(maximum_rows_per_node))
-    selected = [dict(row) for row in selected_rows if isinstance(row, Mapping)]
+    selected = sorted(
+        [dict(row) for row in selected_rows if isinstance(row, Mapping)],
+        key=lambda row: str(row.get("candidate_id") or row.get("node_id") or ""),
+    )
     candidates = [dict(row) for row in candidate_rows if isinstance(row, Mapping)]
-    selected_ids = {str(row.get("candidate_id") or row.get("node_id") or "") for row in selected}
+    selected_ids = {
+        str(row.get("candidate_id") or row.get("node_id") or "")
+        for row in selected
+    }
     selected_companies = {row_company(row) for row in selected}
-    reserved_recovery_companies: set[str] = set()
+    ranked_by_node: dict[str, list[dict[str, Any]]] = {}
     pool: dict[str, list[dict[str, Any]]] = {}
 
-    for chosen in sorted(
-        selected,
-        key=lambda row: str(row.get("candidate_id") or row.get("node_id") or ""),
-    ):
+    for chosen in selected:
         node_id = str(chosen.get("candidate_id") or chosen.get("node_id") or "")
         selected_model = str(chosen.get("model") or "")
         selected_endpoint = str(chosen.get("provider_endpoint") or "")
@@ -223,27 +226,31 @@ def build_disjoint_recovery_pool(
             and str(row.get("model") or "") != selected_model
             and str(row.get("provider_endpoint") or "") != selected_endpoint
             and row_company(row) not in selected_companies
-            and row_company(row) not in reserved_recovery_companies
         ]
         alternatives.sort(key=lambda row: _recovery_sort_key(row, selected_provider))
+        ranked_by_node[node_id] = alternatives
+        pool[node_id] = []
 
-        chosen_rows: list[dict[str, Any]] = []
-        local_companies: set[str] = set()
-        for alternative in alternatives:
-            company = row_company(alternative)
-            if company in local_companies or company in reserved_recovery_companies:
-                continue
-            enriched = dict(alternative)
-            enriched["model_company"] = company
-            chosen_rows.append(enriched)
-            local_companies.add(company)
-            reserved_recovery_companies.add(company)
-            if len(chosen_rows) >= maximum:
+    reserved_recovery_companies: set[str] = set()
+    positions = {node_id: 0 for node_id in pool}
+    for _round in range(maximum):
+        for node_id in sorted(pool):
+            rows = ranked_by_node[node_id]
+            while positions[node_id] < len(rows):
+                alternative = rows[positions[node_id]]
+                positions[node_id] += 1
+                company = row_company(alternative)
+                if company in reserved_recovery_companies:
+                    continue
+                enriched = dict(alternative)
+                enriched["model_company"] = company
+                pool[node_id].append(enriched)
+                reserved_recovery_companies.add(company)
                 break
-        pool[node_id] = chosen_rows
 
     audit = {
         "source": "current-run-frozen-candidate-graph",
+        "allocation": "round-robin-one-company-per-node-per-round",
         "same_company_model_replacement_allowed": False,
         "selected_company_reuse_allowed": False,
         "recovery_company_reuse_across_nodes_allowed": False,
