@@ -191,7 +191,7 @@ class TestV5OutputContractDelivery(unittest.TestCase):
             ROOT / "open-model-market" / "v5_production_hardening.py"
         ).read_text(encoding="utf-8")
         self.assertNotIn("V5_COMPACT_OUTPUT_CONTRACT", workflow)
-        self.assertIn("v5_output_contract_delivery.install()", production)
+        self.assertIn("dynamic_prompt_delivery.install()", production)
 
 
 if __name__ == "__main__":
