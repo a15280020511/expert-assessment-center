@@ -51,7 +51,9 @@ jobs:
             open-model-market/v5_benchmark.py \
             open-model-market/v5_pipeline.py \
             open-model-market/v5_production_ticket.py \
-            open-model-market/v5_execution_auditor.py
+            open-model-market/v5_execution_auditor.py \
+            open-model-market/v5_final_attestation.py \
+            open-model-market/v5_total_call_cap.py
       - name: Run V5 unit and recovery tests
         shell: bash
         run: |
@@ -62,6 +64,7 @@ jobs:
             tests.test_execution_graph_properties \
             tests.test_v5_planner_executor \
             tests.test_v5_production_cutover \
+            tests.test_v5_p0_governance \
             tests.test_legacy_runtime_removed \
             -v 2>&1 | tee v5-unit-test.log
       - name: Run deterministic V5 end-to-end dry-run
@@ -71,6 +74,9 @@ jobs:
             --catalog-file tests/fixtures/models.json \
             --endpoint-file tests/fixtures/endpoints.json \
             --dry-run \
+            --maximum-total-calls 16 \
+            --maximum-recovery-calls 2 \
+            --quality-tier quality \
             --output-dir v5-validation-artifacts
       - name: Verify V5 artifacts and safety invariants
         run: |
@@ -94,6 +100,7 @@ jobs:
           assert market["real_endpoint_count"] > 0
           assert market["synthetic_fixture_count"] == 0
           assert market["phase_b_invariants"]["provider_endpoint_is_explicit"] is True
+          assert market["candidate_pool_policy"] == "multi-channel-deduplicated-before-optimizer"
           assert candidates["candidate_count_after_pareto"] > 0
           assert candidates["candidate_count_after_pareto"] <= candidates["candidate_count_before_pareto"]
           assert optimization["version"] == 5
@@ -103,14 +110,18 @@ jobs:
           assert optimization["highest_principle"] == "maximum_cost_performance"
           assert optimization["objective_order"] == ["hard_constraints", "maximum_cost_performance"]
           assert optimization["cost_performance_ratio"] > 0
+          assert optimization["approved_budget"]["maximum_total_calls"] == 16
+          assert optimization["approved_budget"]["maximum_recovery_calls"] == 2
+          assert optimization["approved_budget"]["maximum_initial_calls"] == 14
           assert graph["metadata"]["highest_principle"] == "maximum_cost_performance"
-          assert 1 <= len(graph["nodes"]) <= 16
+          assert 1 <= len(graph["nodes"]) <= 14
           assert len(graph["execution_stages"]) <= 8
           assert graph["entry_nodes"]
           assert graph["final_nodes"]
           assert graph["required_work"]
           assert dry["status"] == "planned-not-executed"
           assert dry["production_entrypoint_changed"] is False
+          assert dry["approved_budget"]["maximum_total_calls"] == 16
           assert benchmark["planning_gate_passed"] is True
           assert benchmark["runtime_policy"] == "v5-only-no-alternate-runtime"
           assert set(benchmark["strategies"]) == {
