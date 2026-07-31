@@ -88,20 +88,40 @@ class V5CompanyDiversityTests(unittest.TestCase):
             cost_risk_multiplier=1.18,
         )
 
-    def test_explicit_variable_is_enabled_and_pool_is_expanded(self):
+    def test_explicit_variable_pool_and_top100_range_are_enabled(self):
         self.assertTrue(company_policy.REQUIRE_DISTINCT_MODEL_COMPANIES)
         self.assertEqual(company_policy.MINIMUM_CANDIDATES_PER_WORK, 24)
         policy = PlannerPolicy(runtime_config=None)
         self.assertTrue(policy.require_distinct_model_companies)
         self.assertEqual(policy.minimum_candidates_per_work, 24)
 
-        config = json.loads(
-            (ROOT / "open-model-market" / "optimization_policy.json").read_text(
+        runtime_config = json.loads(
+            (ROOT / "open-model-market" / "config.json").read_text(
                 encoding="utf-8"
             )
         )
-        self.assertTrue(config["require_distinct_model_companies"])
-        self.assertEqual(config["candidate_pool_per_seat"], 24)
+        selection = runtime_config["selection"]
+        self.assertEqual(selection["ranking_limit"], 100)
+        self.assertEqual(selection["candidate_pool_per_seat"], 24)
+        self.assertTrue(selection["require_distinct_model_companies"])
+
+        optimization = json.loads(
+            (
+                ROOT
+                / "open-model-market"
+                / "optimization_policy.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            optimization["official_intelligence_ranking_limit"],
+            100,
+        )
+        self.assertTrue(optimization["require_distinct_model_companies"])
+        self.assertEqual(optimization["candidate_pool_per_seat"], 24)
+        self.assertIn(
+            "official intelligence rank within top 100",
+            optimization["hard_constraints"],
+        )
 
     def test_company_aliases_are_canonicalized(self):
         self.assertEqual(
@@ -123,35 +143,40 @@ class V5CompanyDiversityTests(unittest.TestCase):
 
     def test_pruner_keeps_dominated_distinct_company_alternative(self):
         rows = [
-            v5_planner.CandidateNode(**candidate(
-                "openai-best",
-                "w1#0",
-                "openai/gpt-a",
-                quality=0.95,
-                cost=0.005,
-            )),
-            v5_planner.CandidateNode(**candidate(
-                "openai-second",
-                "w1#0",
-                "openai/gpt-b",
-                quality=0.90,
-                cost=0.008,
-            )),
-            v5_planner.CandidateNode(**candidate(
-                "anthropic-dominated",
-                "w1#0",
-                "anthropic/claude-a",
-                quality=0.70,
-                cost=0.02,
-            )),
+            v5_planner.CandidateNode(
+                **candidate(
+                    "openai-best",
+                    "w1#0",
+                    "openai/gpt-a",
+                    quality=0.95,
+                    cost=0.005,
+                )
+            ),
+            v5_planner.CandidateNode(
+                **candidate(
+                    "openai-second",
+                    "w1#0",
+                    "openai/gpt-b",
+                    quality=0.90,
+                    cost=0.008,
+                )
+            ),
+            v5_planner.CandidateNode(
+                **candidate(
+                    "anthropic-dominated",
+                    "w1#0",
+                    "anthropic/claude-a",
+                    quality=0.70,
+                    cost=0.02,
+                )
+            ),
         ]
         kept = company_policy.company_preserving_pareto_prune(
             rows,
             maximum_per_group=2,
         )
         companies = {
-            company_policy.candidate_company(row)
-            for row in kept
+            company_policy.candidate_company(row) for row in kept
         }
         self.assertIn("openai", companies)
         self.assertIn("anthropic", companies)
@@ -160,7 +185,12 @@ class V5CompanyDiversityTests(unittest.TestCase):
         rows = [
             candidate("oa-w1", "w1#0", "openai/gpt-a", quality=0.95),
             candidate("oa-w2", "w2#0", "openai/gpt-b", quality=0.96),
-            candidate("an-w2", "w2#0", "anthropic/claude-a", quality=0.75),
+            candidate(
+                "an-w2",
+                "w2#0",
+                "anthropic/claude-a",
+                quality=0.75,
+            ),
         ]
         result = company_policy.risk_budgeted_optimize_execution_graph(
             bundle(rows),
@@ -201,9 +231,24 @@ class V5CompanyDiversityTests(unittest.TestCase):
         rows = [
             candidate("oa-w1", "w1#0", "openai/gpt-a", quality=0.95),
             candidate("go-w1", "w1#0", "google/gemini-a", quality=0.70),
-            candidate("an-w1", "w1#0", "anthropic/claude-b", quality=0.80),
-            candidate("an-w2", "w2#0", "anthropic/claude-a", quality=0.94),
-            candidate("mi-w2", "w2#0", "mistralai/mistral-a", quality=0.72),
+            candidate(
+                "an-w1",
+                "w1#0",
+                "anthropic/claude-b",
+                quality=0.80,
+            ),
+            candidate(
+                "an-w2",
+                "w2#0",
+                "anthropic/claude-a",
+                quality=0.94,
+            ),
+            candidate(
+                "mi-w2",
+                "w2#0",
+                "mistralai/mistral-a",
+                quality=0.72,
+            ),
             candidate("oa-w2", "w2#0", "openai/gpt-b", quality=0.82),
         ]
         result = company_policy.risk_budgeted_optimize_execution_graph(
@@ -213,7 +258,9 @@ class V5CompanyDiversityTests(unittest.TestCase):
         )
         graph = result["execution_graph"]
         selected_companies = set(
-            graph["metadata"]["model_company_policy"]["selected_companies"]
+            graph["metadata"]["model_company_policy"][
+                "selected_companies"
+            ]
         )
         recovery_pool = graph["metadata"]["recovery_pool"]
         for alternatives in recovery_pool.values():
