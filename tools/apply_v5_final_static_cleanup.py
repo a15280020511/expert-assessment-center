@@ -38,16 +38,6 @@ def main() -> None:
         "strengthened execution auditor",
     )
     production.write_text(text, encoding="utf-8")
-
-    contract = ROOT / "tests" / "test_workflow_contract.py"
-    text = contract.read_text(encoding="utf-8")
-    text = once(
-        text,
-        '        self.assertIn("v5_execution_auditor.py", self.text)\n',
-        '        self.assertIn("v5_execution_auditor_integrity.py", self.text)\n',
-        "workflow auditor assertion",
-    )
-    contract.write_text(text, encoding="utf-8")
     print("final static cleanup applied")
 
 
