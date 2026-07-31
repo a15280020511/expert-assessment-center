@@ -65,6 +65,8 @@ jobs:
           expected_count = int(ticket.get('part_count') or 0)
           expected_lengths = {int(key): int(value) for key, value in ticket.get('part_lengths', {}).items()}
           expected_hashes = {int(key): str(value) for key, value in ticket.get('part_sha256', {}).items()}
+          expected_sub_lengths = {int(key): int(value) for key, value in ticket.get('part2_subpart_lengths', {}).items()}
+          expected_sub_hashes = {int(key): str(value) for key, value in ticket.get('part2_subpart_sha256', {}).items()}
           if sorted(expected_lengths) != list(range(1, expected_count + 1)):
               raise SystemExit('expected part lengths are incomplete')
           if sorted(expected_hashes) != list(range(1, expected_count + 1)):
@@ -72,17 +74,41 @@ jobs:
 
           comments = json.loads(Path('/tmp/comments.json').read_text(encoding='utf-8'))
           parts = {}
+          subparts = {}
           pattern = re.compile(r'^PATCH_PART (\d{3})/(\d{3})\n([A-Za-z0-9+/=]+)$')
+          subpattern = re.compile(r'^PATCH_SUBPART 002/004 (\d{3})\n([A-Za-z0-9+/=]+)$')
           for row in comments:
-              match = pattern.fullmatch(str(row.get('body') or '').strip())
-              if not match:
+              body = str(row.get('body') or '').strip()
+              match = pattern.fullmatch(body)
+              if match:
+                  index, total, payload = int(match.group(1)), int(match.group(2)), match.group(3)
+                  if total != expected_count or index in parts:
+                      raise SystemExit('patch part metadata is invalid or duplicated')
+                  parts[index] = payload
                   continue
-              index, total, payload = int(match.group(1)), int(match.group(2)), match.group(3)
-              if total != expected_count or index in parts:
-                  raise SystemExit('patch part metadata is invalid or duplicated')
-              parts[index] = payload
+              submatch = subpattern.fullmatch(body)
+              if submatch:
+                  index, payload = int(submatch.group(1)), submatch.group(2)
+                  if index in subparts:
+                      raise SystemExit('patch subpart is duplicated')
+                  subparts[index] = payload
+
           if sorted(parts) != list(range(1, expected_count + 1)):
               raise SystemExit('patch parts are missing')
+          if subparts:
+              if sorted(subparts) != [1, 2, 3, 4]:
+                  raise SystemExit('part 2 subparts are incomplete')
+              if sorted(expected_sub_lengths) != [1, 2, 3, 4] or sorted(expected_sub_hashes) != [1, 2, 3, 4]:
+                  raise SystemExit('part 2 subpart expectations are incomplete')
+              for index in [1, 2, 3, 4]:
+                  payload = subparts[index]
+                  digest = hashlib.sha256(payload.encode('ascii')).hexdigest()
+                  if len(payload) != expected_sub_lengths[index] or digest != expected_sub_hashes[index]:
+                      raise SystemExit(
+                          f'part 2 subpart {index} integrity mismatch: '
+                          f'length={len(payload)} hash={digest}'
+                      )
+              parts[2] = ''.join(subparts[index] for index in [1, 2, 3, 4])
 
           normalized = {}
           repairs = []
@@ -122,6 +148,7 @@ jobs:
               'patch_sha256': digest,
               'patch_bytes': len(patch),
               'parts': len(normalized),
+              'part2_rebuilt_from_subparts': bool(subparts),
               'transport_repairs': repairs,
           }, sort_keys=True))
           PY
