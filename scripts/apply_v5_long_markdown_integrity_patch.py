@@ -11,6 +11,24 @@ def replace_once(path: str, old: str, new: str) -> None:
 
 
 replace_once(
+    "open-model-market/v5_task_delivery_contract.py",
+    'r"(?:(?<=^)|(?<=[；;\\n]))\\s*(\\d{1,2})[）).、]\\s*([^；;\\n]+)",',
+    'r"(?:(?<=^)|(?<=[：:；;\\n]))\\s*(\\d{1,2})[）).、]\\s*([^；;\\n]+)",',
+)
+replace_once(
+    "open-model-market/v5_task_delivery_contract.py",
+    '''    segment = text[min(cue_positions):] if cue_positions else text
+    headings: list[str] = []
+''',
+    '''    segment = text[min(cue_positions):] if cue_positions else text
+    contract_cue = _MARKDOWN_CUE_RE.search(segment)
+    if contract_cue:
+        segment = segment[:contract_cue.start()]
+    headings: list[str] = []
+''',
+)
+
+replace_once(
     "open-model-market/v5_runtime.py",
     '''        for line in answer.splitlines():
             match = re.match(r"^\\s{0,3}#{1,6}\\s+(.+?)\\s*#*\\s*$", line)
