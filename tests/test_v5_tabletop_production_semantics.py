@@ -39,7 +39,7 @@ FAILED_PRODUCTION_TASK = (
 
 class V5TabletopProductionSemanticsTests(unittest.TestCase):
     @staticmethod
-    def run() -> SimpleNamespace:
+    def run_config() -> SimpleNamespace:
         return SimpleNamespace(
             task=FAILED_PRODUCTION_TASK,
             minimum_context_length=16_384,
@@ -47,7 +47,7 @@ class V5TabletopProductionSemanticsTests(unittest.TestCase):
         )
 
     def test_explicit_classifier_preserves_safety_without_research_false_positive(self) -> None:
-        run = self.run()
+        run = self.run_config()
         original = model_market.classify_task
         profile = v5_general_task_planning.classify_task(run.task, run)
         self.assertIs(original, model_market.classify_task)
@@ -58,7 +58,7 @@ class V5TabletopProductionSemanticsTests(unittest.TestCase):
         self.assertNotIn("business", profile.domains)
 
     def test_original_failed_task_compiles_to_one_budget_compatible_work_unit(self) -> None:
-        run = self.run()
+        run = self.run_config()
         profile = v5_general_task_planning.classify_task(run.task, run)
         bundle = resource_matrix.compile_v5_task_resources(
             profile,
