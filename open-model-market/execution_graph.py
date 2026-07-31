@@ -1,7 +1,8 @@
 """V5 execution-graph contracts.
 
-The contracts remain backward compatible with earlier V5 graph JSON. Production
-resilience limits are conservative defaults and are never optimized away.
+The contracts remain backward compatible with earlier V5 graph JSON.
+Task-specific planning variables are optimized dynamically. Only fail-closed
+platform ceilings and strict delivery defaults are fixed here.
 """
 from __future__ import annotations
 
@@ -34,10 +35,14 @@ class SelectedNode:
     def from_mapping(cls, value: Mapping[str, Any]) -> "SelectedNode":
         return cls(
             node_id=str(value.get("node_id") or ""),
-            assigned_work=tuple(str(x) for x in value.get("assigned_work", ())),
+            assigned_work=tuple(
+                str(x) for x in value.get("assigned_work", ())
+            ),
             professional_capabilities={
                 str(k): float(v)
-                for k, v in dict(value.get("professional_capabilities", {})).items()
+                for k, v in dict(
+                    value.get("professional_capabilities", {})
+                ).items()
             },
             functions=tuple(str(x) for x in value.get("functions", ())),
             prompt_profile=dict(value.get("prompt_profile", {})),
@@ -46,10 +51,16 @@ class SelectedNode:
             model=str(value.get("model") or ""),
             provider_endpoint=str(value.get("provider_endpoint") or ""),
             output_contract=dict(value.get("output_contract", {})),
-            estimated_quality=float(value.get("estimated_quality", 0.0)),
-            quality_uncertainty=float(value.get("quality_uncertainty", 0.0)),
+            estimated_quality=float(
+                value.get("estimated_quality", 0.0)
+            ),
+            quality_uncertainty=float(
+                value.get("quality_uncertainty", 0.0)
+            ),
             estimated_cost=float(value.get("estimated_cost", 0.0)),
-            failure_probability=float(value.get("failure_probability", 0.0)),
+            failure_probability=float(
+                value.get("failure_probability", 0.0)
+            ),
             request_config=dict(value.get("request_config", {})),
             independence_group=(
                 str(value["independence_group"])
@@ -79,7 +90,9 @@ class SelectedEdge:
             target=str(value.get("target") or ""),
             relation_type=str(value.get("relation_type") or ""),
             payload_type=str(value.get("payload_type") or ""),
-            visibility_policy=str(value.get("visibility_policy") or ""),
+            visibility_policy=str(
+                value.get("visibility_policy") or ""
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -103,17 +116,39 @@ class ExecutionGraph:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "ExecutionGraph":
-        raw_stages: Sequence[Sequence[Any]] = value.get("execution_stages", ())
+        raw_stages: Sequence[Sequence[Any]] = value.get(
+            "execution_stages",
+            (),
+        )
         return cls(
-            nodes=tuple(SelectedNode.from_mapping(x) for x in value.get("nodes", ())),
-            edges=tuple(SelectedEdge.from_mapping(x) for x in value.get("edges", ())),
-            execution_stages=tuple(tuple(str(x) for x in stage) for stage in raw_stages),
-            entry_nodes=tuple(str(x) for x in value.get("entry_nodes", ())),
-            final_nodes=tuple(str(x) for x in value.get("final_nodes", ())),
-            required_work=tuple(str(x) for x in value.get("required_work", ())),
-            estimated_quality=float(value.get("estimated_quality", 0.0)),
+            nodes=tuple(
+                SelectedNode.from_mapping(x)
+                for x in value.get("nodes", ())
+            ),
+            edges=tuple(
+                SelectedEdge.from_mapping(x)
+                for x in value.get("edges", ())
+            ),
+            execution_stages=tuple(
+                tuple(str(x) for x in stage)
+                for stage in raw_stages
+            ),
+            entry_nodes=tuple(
+                str(x) for x in value.get("entry_nodes", ())
+            ),
+            final_nodes=tuple(
+                str(x) for x in value.get("final_nodes", ())
+            ),
+            required_work=tuple(
+                str(x) for x in value.get("required_work", ())
+            ),
+            estimated_quality=float(
+                value.get("estimated_quality", 0.0)
+            ),
             quality_floor=float(value.get("quality_floor", 0.0)),
-            estimated_total_cost=float(value.get("estimated_total_cost", 0.0)),
+            estimated_total_cost=float(
+                value.get("estimated_total_cost", 0.0)
+            ),
             metadata=dict(value.get("metadata", {})),
         )
 
@@ -121,7 +156,9 @@ class ExecutionGraph:
         return {
             "nodes": [node.to_dict() for node in self.nodes],
             "edges": [edge.to_dict() for edge in self.edges],
-            "execution_stages": [list(stage) for stage in self.execution_stages],
+            "execution_stages": [
+                list(stage) for stage in self.execution_stages
+            ],
             "entry_nodes": list(self.entry_nodes),
             "final_nodes": list(self.final_nodes),
             "required_work": list(self.required_work),
@@ -134,7 +171,7 @@ class ExecutionGraph:
 
 @dataclass(frozen=True)
 class GraphLimits:
-    """Non-optimizable safety and production-resilience ceilings."""
+    """Task-agnostic emergency ceilings and strict delivery defaults."""
 
     max_nodes: int = 16
     max_edges: int = 64
@@ -144,12 +181,13 @@ class GraphLimits:
     max_replacements: int = 2
     max_budget_usd: float | None = None
 
-    # Delivery gates.
-    min_required_work_coverage: float = 2.0 / 3.0
+    # Delivery gates are fail-closed unless an explicit future ticket contract
+    # authorizes a separately audited degradation policy.
+    min_required_work_coverage: float = 1.0
     min_successful_content_nodes: int = 1
-    allow_degraded_success: bool = True
+    allow_degraded_success: bool = False
 
-    # Reliability and cost-risk policy.
+    # Reliability and cost-risk emergency guardrails.
     max_node_failure_probability: float = 0.18
     cost_risk_multiplier: float = 1.35
     max_provider_share: float = 0.60
