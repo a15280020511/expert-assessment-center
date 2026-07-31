@@ -1,0 +1,6 @@
+{
+  "schema_version": "v5-production-release-1",
+  "action": "promote",
+  "target_sha": "993aa99d89f16a7ac3b3bc27cff638967e858569",
+  "request_id": "v5-r139-20260731"
+}
