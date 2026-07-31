@@ -5,7 +5,7 @@ on:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   migrate:
@@ -19,19 +19,22 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: chore/node24-actions-production-hardening
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Apply immutable Node 24 pins
-        run: python scripts/apply_node24_action_pins.py
-
-      - name: Commit migration when changed
         run: |
-          if git diff --quiet; then
-            exit 0
-          fi
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add .github/workflows
-          git diff --cached --check
-          git commit -m 'chore(actions): upgrade workflows to immutable Node 24 releases'
-          git push origin HEAD:chore/node24-actions-production-hardening
+          python scripts/apply_node24_action_pins.py
+          git diff --name-only -- .github/workflows > node24-changed-files.txt
+          test -s node24-changed-files.txt
+          git diff --check
+          cat node24-changed-files.txt
+
+      - name: Upload deterministic migration result
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: node24-workflow-migration-${{ github.run_id }}
+          path: |
+            .github/workflows/
+            node24-changed-files.txt
+          if-no-files-found: error
+          retention-days: 1
