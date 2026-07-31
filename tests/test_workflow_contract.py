@@ -105,7 +105,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("refs/heads/production", self.promotion)
         self.assertIn("python -m unittest discover", self.promotion)
         self.assertIn("--dry-run", self.promotion)
-        self.assertIn("--maximum-total-calls 4", self.promotion)
+        self.assertIn("--maximum-total-calls 6", self.promotion)
+        self.assertIn("len(graph['nodes']) == 4", self.promotion)
         self.assertNotIn("OPENROUTER_API_KEY", self.promotion)
 
 
