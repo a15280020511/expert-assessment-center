@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+# Retry marker: branch advanced while the first one-shot run was pushing.
 import re
 from pathlib import Path
 
