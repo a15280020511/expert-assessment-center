@@ -13,6 +13,11 @@ from typing import Any, Mapping, Sequence
 from ortools.sat.python import cp_model
 
 from execution_graph import GraphLimits
+from v5_model_company_policy import (
+    add_task_company_constraints,
+    assert_selected_companies_unique,
+    build_disjoint_recovery_pool,
+)
 from v5_planner import (
     CandidateNode,
     V5PlanningError,
@@ -172,6 +177,7 @@ def optimize_execution_graph(
             else:
                 model.Add(sum(terms) == y[interpretation_id])
 
+    company_constraints = add_task_company_constraints(model, x, candidates)
     model.Add(sum(x) <= limits.max_nodes)
     initial_cost_terms = [
         _scaled_cost(candidate) * x[index]
@@ -208,6 +214,7 @@ def optimize_execution_graph(
                     "work_id": str(work_id),
                     "copies": copies,
                     "different_model_required": require_distinct_model,
+                    "different_model_company_required": True,
                     "different_provider_required": False,
                     "provider_diversity_mode": "preferred-runtime-rebalancing",
                 }
@@ -279,6 +286,10 @@ def optimize_execution_graph(
     if len(selected_interpretations) != 1:
         raise V5PlanningError("Solver did not select exactly one interpretation.")
     selected_interpretation = selected_interpretations[0]
+    try:
+        company_audit = assert_selected_companies_unique(candidates, selected_indices)
+    except ValueError as exc:
+        raise V5PlanningError(str(exc)) from exc
 
     normalized_quality = _clamp(
         sum(candidates[index].estimated_quality for index in selected_indices)
@@ -295,6 +306,16 @@ def optimize_execution_graph(
     )
     graph_data = graph.to_dict()
     metadata = graph_data.setdefault("metadata", {})
+    selected_rows = [candidates[index].to_dict() for index in selected_indices]
+    recovery_pool, recovery_policy = build_disjoint_recovery_pool(
+        selected_rows,
+        [candidate.to_dict() for candidate in candidates],
+        interpretation_id=selected_interpretation,
+        maximum_rows_per_node=limits.max_replacements,
+    )
+    metadata["recovery_pool"] = recovery_pool
+    metadata["recovery_pool_policy"] = recovery_policy
+    metadata["model_company_policy"] = company_audit
     metadata["highest_principle"] = "maximum_cost_performance"
     metadata["objective_order"] = [
         "hard_constraints",
@@ -313,9 +334,11 @@ def optimize_execution_graph(
         "mandatory_work_exception": "hard required coverage is never dropped for price",
     }
     metadata["independence_policy"] = {
+        "hard_model_company_diversity_scope": "entire-selected-task",
+        "hard_model_company_uniqueness": True,
         "hard_model_diversity_scope": "explicit-independence-groups-only",
         "hard_provider_diversity_scope": "none",
-        "provider_diversity": "preferred-and-enforced-by-r8-runtime-rebalancing",
+        "provider_diversity": "preferred-and-enforced-by-runtime-rebalancing",
         "constraints": [
             row
             for row in hard_independence_constraints
@@ -369,6 +392,8 @@ def optimize_execution_graph(
         "selected_candidate_ids": [
             candidates[index].candidate_id for index in selected_indices
         ],
+        "model_company_policy": company_audit,
+        "hard_model_company_constraints": company_constraints,
         "hard_independence_constraints": hard_independence_constraints,
         "execution_graph": graph_data,
         "fallback_used": False,
@@ -381,9 +406,9 @@ def compile_and_optimize_v5(
     *,
     endpoint_payloads: Mapping[str, Mapping[str, Any]] | None = None,
     allow_synthetic_fixture: bool = False,
-    ranking_limit: int = 50,
+    ranking_limit: int = 150,
     limits: GraphLimits | None = None,
-    maximum_per_group: int = 12,
+    maximum_per_group: int = 24,
     quality_tolerance_pct: float = 2.0,
     solver_timeout_seconds: float = 20.0,
 ) -> dict[str, Any]:
