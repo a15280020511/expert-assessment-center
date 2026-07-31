@@ -12,7 +12,7 @@ import v5_general_task_planning  # noqa: E402
 
 class V5PlanningScenarioMatrixTests(unittest.TestCase):
     @staticmethod
-    def run(task: str):
+    def run_config(task: str):
         return SimpleNamespace(
             task=task,
             minimum_context_length=16_384,
@@ -20,7 +20,7 @@ class V5PlanningScenarioMatrixTests(unittest.TestCase):
         )
 
     def classify_and_compile(self, task: str):
-        run = self.run(task)
+        run = self.run_config(task)
         profile = v5_general_task_planning.classify_task(task, run)
         bundle = resource_matrix.compile_v5_task_resources(
             profile,
