@@ -5,6 +5,7 @@ import v5_budget_runtime_parity as budget_parity
 import v5_cost_reliability_hardening as cost_reliability
 import v5_dynamic_configuration as dynamic_configuration
 import v5_dynamic_prompt_delivery as dynamic_prompt_delivery
+import v5_general_task_planning as general_task_planning
 import v5_r8_executor as resilient
 import v5_r8_gate_wiring as gate_wiring
 import v5_r8_policy as runtime_policy
@@ -28,6 +29,9 @@ resilient_execute_v5_graph = resilient.resilient_execute_v5_graph
 
 
 def install() -> None:
+    # Task classification and semantic compaction must be installed before the
+    # pipeline module binds its planning functions.
+    general_task_planning.install()
     runtime_policy.install()
     cost_reliability.install()
     token_cost.install()

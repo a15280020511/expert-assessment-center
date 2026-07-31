@@ -10,6 +10,7 @@ from typing import Any, Mapping, Sequence
 
 import model_market as market
 import v5_candidate_diversity
+import v5_value_optimizer as value_optimizer
 from artifact_manifest import write_manifest
 from execution_graph import ExecutionGraph, GraphLimits
 from resource_matrix import compile_v5_task_resources
@@ -17,7 +18,10 @@ from task_resource_artifacts import write_task_resource_artifacts
 from v5_benchmark import planning_benchmark, write_benchmark
 from v5_executor import build_node_payload, execute_v5_graph
 from v5_planner import fetch_live_endpoint_payloads
-from v5_value_optimizer import compile_and_optimize_v5
+from v5_planning_diagnostics import (
+    build_candidate_generation_failure_report,
+    build_infeasibility_report,
+)
 
 
 def _load_json(path: str | Path) -> Mapping[str, Any]:
@@ -150,6 +154,31 @@ def _validated_budget(args: argparse.Namespace, run: Any) -> tuple[int, int, int
     return total, recovery, planning_nodes, anomaly
 
 
+def _annotate_market(
+    compiled_market: dict[str, Any],
+    *,
+    ranked: Sequence[Any],
+    catalog_source: str,
+    endpoint_source: str,
+) -> None:
+    compiled_market["catalog_source"] = catalog_source
+    compiled_market["endpoint_source"] = endpoint_source
+    compiled_market["candidate_pool_policy"] = "multi-channel-deduplicated-before-optimizer"
+    compiled_market["ranked_models"] = [
+        {
+            "rank": index,
+            "model": model.id,
+            "official_intelligence_rank": (model.ranks or {}).get("intelligence-high-to-low"),
+            "prompt_usd_per_million": model.prompt_price_per_million,
+            "completion_usd_per_million": model.completion_price_per_million,
+            "context_length": model.context_length,
+            "max_completion_tokens": model.max_completion_tokens,
+            "components": dict(model.components),
+        }
+        for index, model in enumerate(ranked, 1)
+    ]
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     run = market.build_run_config(args)
@@ -186,33 +215,66 @@ def main(argv: Sequence[str] | None = None) -> int:
         max_replacements=recovery_calls,
         max_budget_usd=anomaly_budget,
     )
-    planner = compile_and_optimize_v5(
+
+    compiled_market = value_optimizer.compile_model_endpoint_market(
         ranked,
         resources,
         endpoint_payloads=endpoint_payloads,
-        allow_synthetic_fixture=allow_synthetic,
         ranking_limit=run.ranking_limit,
-        limits=limits,
-        maximum_per_group=max(3, min(30, int(args.maximum_candidates_per_work))),
-        quality_tolerance_pct=max(0.0, min(20.0, float(args.quality_tolerance_pct))),
-        solver_timeout_seconds=max(1.0, float(args.solver_timeout_seconds)),
+        allow_synthetic_fixture=allow_synthetic,
     )
-    planner["market"]["catalog_source"] = catalog_source
-    planner["market"]["endpoint_source"] = endpoint_source
-    planner["market"]["candidate_pool_policy"] = "multi-channel-deduplicated-before-optimizer"
-    planner["market"]["ranked_models"] = [
-        {
-            "rank": index,
-            "model": model.id,
-            "official_intelligence_rank": (model.ranks or {}).get("intelligence-high-to-low"),
-            "prompt_usd_per_million": model.prompt_price_per_million,
-            "completion_usd_per_million": model.completion_price_per_million,
-            "context_length": model.context_length,
-            "max_completion_tokens": model.max_completion_tokens,
-            "components": dict(model.components),
-        }
-        for index, model in enumerate(ranked, 1)
-    ]
+    _annotate_market(
+        compiled_market,
+        ranked=ranked,
+        catalog_source=catalog_source,
+        endpoint_source=endpoint_source,
+    )
+    _write_json(output / "v5-model-endpoint-market.json", compiled_market)
+
+    try:
+        candidate_graph = value_optimizer.generate_candidate_graph(
+            resources,
+            compiled_market,
+            maximum_per_group=max(3, min(30, int(args.maximum_candidates_per_work))),
+        )
+    except Exception as exc:
+        report = build_candidate_generation_failure_report(
+            resources,
+            compiled_market,
+            message=str(exc),
+        )
+        _write_json(output / "v5-planning-infeasibility.json", report)
+        write_manifest(output)
+        raise market.ExpertTeamError(
+            f"{report['code']}: {report['message']}"
+        ) from exc
+
+    _write_json(output / "v5-candidate-graph.json", candidate_graph)
+    try:
+        optimization = value_optimizer.optimize_execution_graph(
+            candidate_graph,
+            limits=limits,
+            quality_tolerance_pct=max(0.0, min(20.0, float(args.quality_tolerance_pct))),
+            solver_timeout_seconds=max(1.0, float(args.solver_timeout_seconds)),
+        )
+    except Exception as exc:
+        report = build_infeasibility_report(
+            candidate_graph,
+            limits,
+            message=str(exc),
+        )
+        _write_json(output / "v5-planning-infeasibility.json", report)
+        write_manifest(output)
+        raise market.ExpertTeamError(
+            f"{report['code']}: {report['message']}"
+        ) from exc
+
+    planner = {
+        "version": 5,
+        "market": compiled_market,
+        "candidate_graph": candidate_graph,
+        "optimization": optimization,
+    }
     planner["optimization"]["approved_budget"] = {
         "maximum_total_calls": total_calls,
         "maximum_recovery_calls": recovery_calls,
@@ -221,8 +283,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         "cost_anomaly_usd": anomaly_budget,
         "quality_tier": run.quality_tier,
     }
-    _write_json(output / "v5-model-endpoint-market.json", planner["market"])
-    _write_json(output / "v5-candidate-graph.json", planner["candidate_graph"])
     _write_json(output / "v5-optimization.json", planner["optimization"])
     _write_json(output / "v5-execution-graph.json", planner["optimization"]["execution_graph"])
 
