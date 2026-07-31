@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "solver": "google-or-tools-cp-sat",
   "topology": {
     "simple": 1,
@@ -13,15 +13,20 @@
     "long_context",
     "three_or_more_domains"
   ],
-  "candidate_pool_per_seat": 12,
+  "official_intelligence_ranking_limit": 100,
+  "candidate_pool_per_seat": 24,
   "solver_timeout_seconds": 8.0,
   "strict_provider_diversity": true,
+  "require_distinct_model_companies": true,
+  "model_company_identity": "canonicalized-direct-model-author-prefix",
+  "company_shortage_policy": "expand-pool-then-fail-closed",
   "hard_constraints": [
     "stable direct model only",
-    "official intelligence rank within top 50",
+    "official intelligence rank within top 100",
     "context and output capacity sufficient",
     "one model per seat",
     "no model reuse",
+    "no model-company reuse inside one task",
     "no provider reuse when strict diversity is enabled",
     "high-stakes task requires red-team seat",
     "budget must not be exceeded when supplied",
@@ -35,7 +40,8 @@
       "high_stakes",
       "long_context",
       "requested_context",
-      "quality_tier"
+      "quality_tier",
+      "require_distinct_model_companies"
     ],
     "optional_override_fields": [
       "objective",

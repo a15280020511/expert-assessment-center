@@ -2,17 +2,22 @@
 
 Hard constraints are mandatory. The primary objective is risk-adjusted task
 utility per effective expected dollar. Effective cost includes the initial
-model request, the candidate's expected one-step recovery cost, and operating
-overhead for both the initial and expected recovery calls.
+model request, expected one-step recovery cost, and operating overhead.
 """
 from __future__ import annotations
 
 import math
+from collections import defaultdict
 from typing import Any, Mapping, Sequence
 
 from ortools.sat.python import cp_model
 
 from execution_graph import GraphLimits
+from v5_model_company import (
+    MINIMUM_CANDIDATES_PER_WORK,
+    REQUIRE_DISTINCT_MODEL_COMPANIES,
+    candidate_company,
+)
 from v5_planner import (
     CandidateNode,
     V5PlanningError,
@@ -33,7 +38,7 @@ MAX_RATIO_ITERATIONS = 10
 def _solver(seconds: float) -> cp_model.CpSolver:
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = max(1.0, float(seconds))
-    solver.parameters.num_search_workers = 8
+    solver.parameters.num_search_workers = 1
     solver.parameters.random_seed = 0
     return solver
 
@@ -50,7 +55,6 @@ def _solve_cost_performance(
 ) -> tuple[cp_model.CpSolver, int, list[str]]:
     """Solve the discrete quality/effective-cost ratio with linear iterations."""
     phase_status: list[str] = []
-
     model.Minimize(effective_cost)
     solver = _solver(timeout_seconds)
     status = solver.Solve(model)
@@ -62,7 +66,6 @@ def _solve_cost_performance(
 
     best_quality = max(0, _value(solver, quality))
     best_cost = max(1, _value(solver, effective_cost))
-
     for iteration in range(MAX_RATIO_ITERATIONS):
         divisor = math.gcd(best_quality, best_cost) or 1
         numerator = best_quality // divisor
@@ -71,13 +74,17 @@ def _solve_cost_performance(
         candidate_solver = _solver(timeout_seconds)
         candidate_status = candidate_solver.Solve(model)
         phase_status.append(
-            f"ratio-iteration-{iteration + 1}:{candidate_solver.StatusName(candidate_status)}"
+            f"ratio-iteration-{iteration + 1}:"
+            f"{candidate_solver.StatusName(candidate_status)}"
         )
         if candidate_status not in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
             break
         candidate_quality = max(0, _value(candidate_solver, quality))
         candidate_cost = max(1, _value(candidate_solver, effective_cost))
-        residual = candidate_quality * denominator - candidate_cost * numerator
+        residual = (
+            candidate_quality * denominator
+            - candidate_cost * numerator
+        )
         solver = candidate_solver
         status = candidate_status
         best_quality = candidate_quality
@@ -89,7 +96,9 @@ def _solve_cost_performance(
     model.Minimize(effective_cost)
     tie_solver = _solver(timeout_seconds)
     tie_status = tie_solver.Solve(model)
-    phase_status.append(f"best-ratio-lowest-cost:{tie_solver.StatusName(tie_status)}")
+    phase_status.append(
+        f"best-ratio-lowest-cost:{tie_solver.StatusName(tie_status)}"
+    )
     if tie_status in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
         solver = tie_solver
         status = tie_status
@@ -101,7 +110,6 @@ def _work_requires_distinct_model(
     candidate_indices: Sequence[int],
     work_id: str,
 ) -> bool:
-    """Return the explicit hard model-independence policy for one work unit."""
     return any(
         work_id in candidates[index].independence_groups
         for index in candidate_indices
@@ -113,7 +121,6 @@ def _scaled_cost(candidate: CandidateNode) -> int:
 
 
 def _scaled_expected_recovery_cost(candidate: CandidateNode) -> int:
-    """Price one bounded replacement attempt by its estimated failure probability."""
     return max(
         0,
         int(
@@ -126,18 +133,66 @@ def _scaled_expected_recovery_cost(candidate: CandidateNode) -> int:
     )
 
 
+def _company_safe_recovery_pool(
+    candidates: Sequence[CandidateNode],
+    selected: Sequence[CandidateNode],
+    interpretation_id: str,
+    limits: GraphLimits,
+    *,
+    require_distinct_model_companies: bool,
+) -> dict[str, list[dict[str, Any]]]:
+    selected_ids = {row.candidate_id for row in selected}
+    selected_companies = {candidate_company(row) for row in selected}
+    result: dict[str, list[dict[str, Any]]] = {}
+    for chosen in selected:
+        alternatives = [
+            row
+            for row in candidates
+            if row.interpretation_id == interpretation_id
+            and row.coverage_keys == chosen.coverage_keys
+            and row.candidate_id not in selected_ids
+            and row.model != chosen.model
+        ]
+        alternatives.sort(
+            key=lambda row: (
+                -row.estimated_quality,
+                row.estimated_cost,
+                row.failure_probability,
+                row.candidate_id,
+            )
+        )
+        safe: list[dict[str, Any]] = []
+        seen_companies: set[str] = set()
+        for row in alternatives:
+            company = candidate_company(row)
+            if (
+                require_distinct_model_companies
+                and company in selected_companies
+            ):
+                continue
+            if company in seen_companies:
+                continue
+            payload = row.to_dict()
+            payload["model_company"] = company
+            safe.append(payload)
+            seen_companies.add(company)
+            if len(safe) >= limits.max_replacements + 1:
+                break
+        result[chosen.candidate_id] = safe
+    return result
+
+
 def optimize_execution_graph(
     candidate_bundle: Mapping[str, Any],
     *,
     limits: GraphLimits | None = None,
     quality_tolerance_pct: float = 2.0,
     solver_timeout_seconds: float = 20.0,
+    require_distinct_model_companies: bool = (
+        REQUIRE_DISTINCT_MODEL_COMPANIES
+    ),
 ) -> dict[str, Any]:
-    """Select the feasible V5 graph with maximum expected cost-performance.
-
-    ``quality_tolerance_pct`` remains in the signature only for compatibility
-    with older callers. It is recorded as ignored and does not affect solving.
-    """
+    """Select the feasible graph with maximum expected cost-performance."""
     limits = limits or GraphLimits()
     candidates = _candidate_objects(candidate_bundle)
     interpretations = dict(candidate_bundle.get("interpretations", {}))
@@ -149,7 +204,10 @@ def optimize_execution_graph(
         interpretation_id: model.NewBoolVar(f"interpretation_{index}")
         for index, interpretation_id in enumerate(sorted(interpretations))
     }
-    x = [model.NewBoolVar(f"candidate_{index}") for index in range(len(candidates))]
+    x = [
+        model.NewBoolVar(f"candidate_{index}")
+        for index in range(len(candidates))
+    ]
     model.Add(sum(y.values()) == 1)
     for index, candidate in enumerate(candidates):
         model.Add(x[index] <= y[candidate.interpretation_id])
@@ -173,11 +231,18 @@ def optimize_execution_graph(
                 model.Add(sum(terms) == y[interpretation_id])
 
     model.Add(sum(x) <= limits.max_nodes)
-    initial_cost_terms = [
+    initial_cost = sum(
         _scaled_cost(candidate) * x[index]
         for index, candidate in enumerate(candidates)
-    ]
-    initial_cost = sum(initial_cost_terms)
+    )
+
+    company_indices: dict[str, list[int]] = defaultdict(list)
+    for index, candidate in enumerate(candidates):
+        company_indices[candidate_company(candidate)].append(index)
+    if require_distinct_model_companies:
+        for indices in company_indices.values():
+            if len(indices) > 1:
+                model.Add(sum(x[index] for index in indices) <= 1)
 
     hard_independence_constraints: list[dict[str, Any]] = []
     for interpretation_id, meta in interpretations.items():
@@ -195,7 +260,11 @@ def optimize_execution_graph(
                     and key in candidate.coverage_keys
                 ]
             scoped_indices = sorted(
-                {index for indices in copy_candidates.values() for index in indices}
+                {
+                    index
+                    for indices in copy_candidates.values()
+                    for index in indices
+                }
             )
             require_distinct_model = _work_requires_distinct_model(
                 candidates,
@@ -208,8 +277,13 @@ def optimize_execution_graph(
                     "work_id": str(work_id),
                     "copies": copies,
                     "different_model_required": require_distinct_model,
+                    "different_company_required": bool(
+                        require_distinct_model_companies
+                    ),
                     "different_provider_required": False,
-                    "provider_diversity_mode": "preferred-runtime-rebalancing",
+                    "provider_diversity_mode": (
+                        "preferred-runtime-rebalancing"
+                    ),
                 }
             )
             if not require_distinct_model:
@@ -218,7 +292,10 @@ def optimize_execution_graph(
                 for right_copy in range(left_copy + 1, copies):
                     for left in copy_candidates[left_copy]:
                         for right in copy_candidates[right_copy]:
-                            if candidates[left].model == candidates[right].model:
+                            if (
+                                candidates[left].model
+                                == candidates[right].model
+                            ):
                                 model.Add(x[left] + x[right] <= 1)
 
     quality_terms = []
@@ -228,7 +305,9 @@ def optimize_execution_graph(
             * (1.0 - 0.35 * candidate.failure_probability)
             - 0.10 * candidate.quality_uncertainty
         )
-        quality_terms.append(int(round(score * QUALITY_SCALE)) * x[index])
+        quality_terms.append(
+            int(round(score * QUALITY_SCALE)) * x[index]
+        )
     for interpretation_id, variable in y.items():
         interpretation_score = float(
             interpretations[interpretation_id]
@@ -236,22 +315,26 @@ def optimize_execution_graph(
             .get("interpretation_score", 0.5)
         )
         quality_terms.append(
-            int(round(interpretation_score * QUALITY_SCALE * 0.25)) * variable
+            int(round(interpretation_score * QUALITY_SCALE * 0.25))
+            * variable
         )
     quality_expr = sum(quality_terms)
 
     call_count = sum(x)
     call_overhead = max(1, int(round(CALL_OVERHEAD_USD * COST_SCALE)))
-    expected_recovery_cost_terms = [
+    expected_recovery_cost = sum(
         _scaled_expected_recovery_cost(candidate) * x[index]
         for index, candidate in enumerate(candidates)
-    ]
-    expected_recovery_cost = sum(expected_recovery_cost_terms)
-    expected_recovery_overhead_terms = [
-        int(round(_clamp(candidate.failure_probability) * call_overhead)) * x[index]
+    )
+    expected_recovery_overhead = sum(
+        int(
+            round(
+                _clamp(candidate.failure_probability) * call_overhead
+            )
+        )
+        * x[index]
         for index, candidate in enumerate(candidates)
-    ]
-    expected_recovery_overhead = sum(expected_recovery_overhead_terms)
+    )
     effective_cost = (
         initial_cost
         + expected_recovery_cost
@@ -259,17 +342,30 @@ def optimize_execution_graph(
         + expected_recovery_overhead
     )
     if limits.max_budget_usd is not None:
-        model.Add(effective_cost <= int(round(limits.max_budget_usd * COST_SCALE)))
+        model.Add(
+            effective_cost
+            <= int(round(limits.max_budget_usd * COST_SCALE))
+        )
 
-    solver, status, phase_status = _solve_cost_performance(
-        model,
-        quality_expr,
-        effective_cost,
-        solver_timeout_seconds,
-    )
+    try:
+        solver, status, phase_status = _solve_cost_performance(
+            model,
+            quality_expr,
+            effective_cost,
+            solver_timeout_seconds,
+        )
+    except V5PlanningError as exc:
+        if require_distinct_model_companies:
+            raise V5PlanningError(
+                f"{exc}; distinct-model-company hard constraint active; "
+                f"available_companies={len(company_indices)}"
+            ) from exc
+        raise
 
     selected_indices = [
-        index for index, variable in enumerate(x) if solver.Value(variable)
+        index
+        for index, variable in enumerate(x)
+        if solver.Value(variable)
     ]
     selected_interpretations = [
         interpretation_id
@@ -277,11 +373,29 @@ def optimize_execution_graph(
         if solver.Value(variable)
     ]
     if len(selected_interpretations) != 1:
-        raise V5PlanningError("Solver did not select exactly one interpretation.")
+        raise V5PlanningError(
+            "Solver did not select exactly one interpretation."
+        )
     selected_interpretation = selected_interpretations[0]
+    selected_candidates = [
+        candidates[index] for index in selected_indices
+    ]
+    selected_companies = [
+        candidate_company(row) for row in selected_candidates
+    ]
+    if (
+        require_distinct_model_companies
+        and len(selected_companies) != len(set(selected_companies))
+    ):
+        raise V5PlanningError(
+            "Selected graph violates the distinct-model-company hard constraint."
+        )
 
     normalized_quality = _clamp(
-        sum(candidates[index].estimated_quality for index in selected_indices)
+        sum(
+            candidates[index].estimated_quality
+            for index in selected_indices
+        )
         / max(1, len(selected_indices))
     )
     graph = _selected_graph(
@@ -307,25 +421,82 @@ def optimize_execution_graph(
         "risk_adjusted_utility_per_effective_expected_usd"
     )
     metadata["marginal_utility_stop"] = {
-        "scope": "optional graph expansion across feasible task interpretations and candidate bundles",
-        "criterion": "accept expansion only when it improves the global risk-adjusted utility/effective-expected-cost ratio",
-        "tie_break": "for equal best ratio choose the lower effective expected cost",
-        "mandatory_work_exception": "hard required coverage is never dropped for price",
+        "scope": (
+            "optional graph expansion across feasible task "
+            "interpretations and candidate bundles"
+        ),
+        "criterion": (
+            "accept expansion only when it improves the global "
+            "risk-adjusted utility/effective-expected-cost ratio"
+        ),
+        "tie_break": (
+            "for equal best ratio choose the lower effective expected cost"
+        ),
+        "mandatory_work_exception": (
+            "hard required coverage is never dropped for price"
+        ),
     }
     metadata["independence_policy"] = {
-        "hard_model_diversity_scope": "explicit-independence-groups-only",
+        "hard_model_diversity_scope": (
+            "explicit-independence-groups-only"
+        ),
+        "hard_model_company_diversity_scope": (
+            "all-substantive-nodes-in-one-task"
+        ),
         "hard_provider_diversity_scope": "none",
-        "provider_diversity": "preferred-and-enforced-by-r8-runtime-rebalancing",
+        "provider_diversity": (
+            "preferred-and-enforced-by-r8-runtime-rebalancing"
+        ),
         "constraints": [
             row
             for row in hard_independence_constraints
             if row["interpretation_id"] == selected_interpretation
         ],
     }
+    metadata["model_company_policy"] = {
+        "require_distinct_model_companies": bool(
+            require_distinct_model_companies
+        ),
+        "company_identity_source": (
+            "canonicalized-direct-model-author-prefix"
+        ),
+        "selected_company_count": len(set(selected_companies)),
+        "selected_companies": sorted(set(selected_companies)),
+        "node_company_by_candidate_id": {
+            row.candidate_id: candidate_company(row)
+            for row in selected_candidates
+        },
+        "candidate_company_count": len(company_indices),
+        "candidate_pool_minimum_per_work": (
+            MINIMUM_CANDIDATES_PER_WORK
+        ),
+        "same_company_reuse_allowed": (
+            not require_distinct_model_companies
+        ),
+        "failure_policy": "fail-closed-before-model-call",
+    }
+    metadata["recovery_pool"] = _company_safe_recovery_pool(
+        candidates,
+        selected_candidates,
+        selected_interpretation,
+        limits,
+        require_distinct_model_companies=(
+            require_distinct_model_companies
+        ),
+    )
+    metadata["recovery_company_policy"] = {
+        "replacement_company_must_be_unused_by_selected_graph": bool(
+            require_distinct_model_companies
+        ),
+        "one_best_replacement_per_company": True,
+    }
 
     selected_quality = max(0, _value(solver, quality_expr))
     selected_initial_cost = max(0, _value(solver, initial_cost))
-    selected_recovery_cost = max(0, _value(solver, expected_recovery_cost))
+    selected_recovery_cost = max(
+        0,
+        _value(solver, expected_recovery_cost),
+    )
     selected_effective_cost = max(1, _value(solver, effective_cost))
     selected_expected_recovery_calls = sum(
         _clamp(candidates[index].failure_probability)
@@ -339,12 +510,18 @@ def optimize_execution_graph(
     return {
         "version": 5,
         "optimizer": "google-or-tools-cp-sat",
-        "selection_method": "execution-graph-expected-cost-performance-v5",
+        "selection_method": (
+            "execution-graph-expected-cost-performance-v5-"
+            "distinct-model-companies"
+        ),
         "solver_status": solver.StatusName(status),
         "phase_status": phase_status,
         "selected_interpretation": selected_interpretation,
         "highest_principle": "maximum_cost_performance",
-        "objective_order": ["hard_constraints", "maximum_expected_cost_performance"],
+        "objective_order": [
+            "hard_constraints",
+            "maximum_expected_cost_performance",
+        ],
         "cost_performance_definition": (
             "risk_adjusted_task_utility_divided_by_initial_cost_plus_expected_recovery_cost_plus_call_overhead"
         ),
@@ -353,23 +530,51 @@ def optimize_execution_graph(
         ),
         "selected_quality_objective_scaled": selected_quality,
         "selected_initial_cost_scaled": selected_initial_cost,
-        "selected_expected_recovery_cost_scaled": selected_recovery_cost,
+        "selected_expected_recovery_cost_scaled": (
+            selected_recovery_cost
+        ),
         "selected_effective_cost_scaled": selected_effective_cost,
-        "selected_initial_cost_usd": round(selected_initial_cost / COST_SCALE, 8),
-        "selected_expected_recovery_cost_usd": round(selected_recovery_cost / COST_SCALE, 8),
-        "selected_effective_cost_usd": round(selected_effective_cost / COST_SCALE, 8),
-        "selected_expected_recovery_calls": round(selected_expected_recovery_calls, 6),
+        "selected_initial_cost_usd": round(
+            selected_initial_cost / COST_SCALE,
+            8,
+        ),
+        "selected_expected_recovery_cost_usd": round(
+            selected_recovery_cost / COST_SCALE,
+            8,
+        ),
+        "selected_effective_cost_usd": round(
+            selected_effective_cost / COST_SCALE,
+            8,
+        ),
+        "selected_expected_recovery_calls": round(
+            selected_expected_recovery_calls,
+            6,
+        ),
         "quality_scale": QUALITY_SCALE,
         "cost_scale": COST_SCALE,
         "call_overhead_usd": CALL_OVERHEAD_USD,
         "scaled_objective_ratio": round(scaled_objective_ratio, 9),
-        "cost_performance_ratio": round(public_cost_performance_ratio, 9),
+        "cost_performance_ratio": round(
+            public_cost_performance_ratio,
+            9,
+        ),
         "marginal_utility_stop": metadata["marginal_utility_stop"],
-        "deprecated_quality_tolerance_pct_ignored": float(quality_tolerance_pct),
+        "deprecated_quality_tolerance_pct_ignored": float(
+            quality_tolerance_pct
+        ),
         "selected_candidate_ids": [
-            candidates[index].candidate_id for index in selected_indices
+            candidates[index].candidate_id
+            for index in selected_indices
         ],
-        "hard_independence_constraints": hard_independence_constraints,
+        "selected_model_companies": sorted(
+            set(selected_companies)
+        ),
+        "require_distinct_model_companies": bool(
+            require_distinct_model_companies
+        ),
+        "hard_independence_constraints": (
+            hard_independence_constraints
+        ),
         "execution_graph": graph_data,
         "fallback_used": False,
     }
@@ -383,9 +588,12 @@ def compile_and_optimize_v5(
     allow_synthetic_fixture: bool = False,
     ranking_limit: int = 50,
     limits: GraphLimits | None = None,
-    maximum_per_group: int = 12,
+    maximum_per_group: int = MINIMUM_CANDIDATES_PER_WORK,
     quality_tolerance_pct: float = 2.0,
     solver_timeout_seconds: float = 20.0,
+    require_distinct_model_companies: bool = (
+        REQUIRE_DISTINCT_MODEL_COMPANIES
+    ),
 ) -> dict[str, Any]:
     market = compile_model_endpoint_market(
         ranked,
@@ -397,13 +605,19 @@ def compile_and_optimize_v5(
     candidates = generate_candidate_graph(
         resource_bundle,
         market,
-        maximum_per_group=maximum_per_group,
+        maximum_per_group=max(
+            MINIMUM_CANDIDATES_PER_WORK,
+            int(maximum_per_group),
+        ),
     )
     optimization = optimize_execution_graph(
         candidates,
         limits=limits,
         quality_tolerance_pct=quality_tolerance_pct,
         solver_timeout_seconds=solver_timeout_seconds,
+        require_distinct_model_companies=(
+            require_distinct_model_companies
+        ),
     )
     return {
         "version": 5,

@@ -2,10 +2,13 @@
   "selection": {
     "team_pattern": "resource-demand-first-dynamic-work-packages-plus-synthesis",
     "quality_tier": "value",
-    "ranking_limit": 50,
+    "ranking_limit": 100,
     "minimum_context_length": 16384,
-    "candidate_pool_per_seat": 12,
-    "candidate_pool_policy": "multi-channel-intelligence-fit-value-price-context",
+    "candidate_pool_per_seat": 24,
+    "candidate_pool_policy": "top-100-multi-channel-intelligence-fit-value-price-context-company-diversity",
+    "require_distinct_model_companies": true,
+    "model_company_identity": "canonicalized-direct-model-author-prefix",
+    "company_shortage_policy": "expand-pool-then-fail-closed",
     "budget_safety_factor": 1.25,
     "catalog_sorts": [
       "intelligence-high-to-low",
@@ -25,6 +28,7 @@
       "engine": "google-or-tools-cp-sat",
       "requirement_compiler": "resource_matrix.py",
       "joint_resource_optimizer": "v5_value_optimizer.py",
+      "company_identity_policy": "v5_model_company.py",
       "runtime_prompt_binding": "v5_dynamic_prompt_delivery.py",
       "fallback_to_legacy_greedy_selector": false
     },

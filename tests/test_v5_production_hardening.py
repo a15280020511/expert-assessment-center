@@ -16,6 +16,7 @@ from v5_planning_runtime import PlannerPolicy  # noqa: E402
 
 
 def _node(node_id, work_id, *, functions=("analysis",), model=None):
+    resolved_model = model or f"company-{node_id}/{node_id}"
     return SelectedNode(
         node_id=node_id,
         assigned_work=(work_id,),
@@ -24,8 +25,8 @@ def _node(node_id, work_id, *, functions=("analysis",), model=None):
         prompt_profile={"modules": ["structured_delivery"]},
         reasoning_profile={"reasoning_enabled": True, "effort": "medium"},
         parameter_profile={"supported_parameters": ["response_format", "structured_outputs"]},
-        model=model or f"vendor/{node_id}",
-        provider_endpoint=f"vendor/{node_id}@provider-{node_id}",
+        model=resolved_model,
+        provider_endpoint=f"{resolved_model}@provider-{node_id}",
         output_contract={
             "required_fields": ["conclusions", "assumptions", "uncertainties", "evidence_gaps"],
             "machine_readable_required": False,

@@ -1,10 +1,4 @@
-"""Keep V5 planning, zero-call gates, and R8 runtime on one cost basis.
-
-The hard runtime budget is an upper bound after uncertainty reserve. The optimizer
-therefore receives only the raw planning budget that remains after dividing by the
-runtime cost-risk multiplier. This module also makes the discrete ratio iteration
-count depend on candidate-space size while preserving deterministic hard bounds.
-"""
+"""Keep V5 planning, zero-call gates, and runtime on one cost basis."""
 from __future__ import annotations
 
 import math
@@ -15,6 +9,7 @@ from typing import Any, Mapping
 import v5_planner as planner
 import v5_value_optimizer as value_optimizer
 from execution_graph import GraphLimits
+from v5_model_company import REQUIRE_DISTINCT_MODEL_COMPANIES
 
 _INSTALLED = False
 _LOCK = Lock()
@@ -23,15 +18,16 @@ _ORIGINAL_RATIO_ITERATIONS = int(value_optimizer.MAX_RATIO_ITERATIONS)
 
 
 def planning_raw_budget_usd(limits: GraphLimits) -> float | None:
-    """Return the maximum raw graph estimate that can pass runtime preflight."""
     if limits.max_budget_usd is None:
         return None
     multiplier = max(1.0, float(limits.cost_risk_multiplier))
     return max(0.0, float(limits.max_budget_usd) / multiplier)
 
 
-def adaptive_ratio_iterations(candidate_bundle: Mapping[str, Any], timeout_seconds: float) -> int:
-    """Bound optimizer iterations by actual search-space size and time allowance."""
+def adaptive_ratio_iterations(
+    candidate_bundle: Mapping[str, Any],
+    timeout_seconds: float,
+) -> int:
     count = max(1, len(candidate_bundle.get("candidates", [])))
     size_term = 2 * int(math.ceil(math.log2(count + 1)))
     time_term = int(max(1.0, float(timeout_seconds)) // 4)
@@ -44,15 +40,19 @@ def risk_budgeted_optimize_execution_graph(
     limits: GraphLimits | None = None,
     quality_tolerance_pct: float = 2.0,
     solver_timeout_seconds: float = 20.0,
+    require_distinct_model_companies: bool = (
+        REQUIRE_DISTINCT_MODEL_COMPANIES
+    ),
 ) -> dict[str, Any]:
-    """Optimize under the exact raw budget implied by the runtime hard budget."""
+    """Optimize under the raw budget and the same company hard constraint."""
     limits = limits or GraphLimits()
     raw_budget = planning_raw_budget_usd(limits)
     planning_limits = replace(limits, max_budget_usd=raw_budget)
-    iterations = adaptive_ratio_iterations(candidate_bundle, solver_timeout_seconds)
+    iterations = adaptive_ratio_iterations(
+        candidate_bundle,
+        solver_timeout_seconds,
+    )
 
-    # The legacy optimizer exposes the iteration cap as a module constant. Serialize
-    # the temporary override so concurrent planners cannot observe each other's cap.
     with _LOCK:
         previous = int(value_optimizer.MAX_RATIO_ITERATIONS)
         value_optimizer.MAX_RATIO_ITERATIONS = iterations
@@ -62,6 +62,9 @@ def risk_budgeted_optimize_execution_graph(
                 limits=planning_limits,
                 quality_tolerance_pct=quality_tolerance_pct,
                 solver_timeout_seconds=solver_timeout_seconds,
+                require_distinct_model_companies=(
+                    require_distinct_model_companies
+                ),
             )
         finally:
             value_optimizer.MAX_RATIO_ITERATIONS = previous
@@ -72,9 +75,13 @@ def risk_budgeted_optimize_execution_graph(
     multiplier = max(1.0, float(limits.cost_risk_multiplier))
     risk_cost = raw_cost * multiplier
     hard_budget = limits.max_budget_usd
-    if hard_budget is not None and risk_cost > float(hard_budget) + 1e-12:
+    if (
+        hard_budget is not None
+        and risk_cost > float(hard_budget) + 1e-12
+    ):
         raise planner.V5PlanningError(
-            "Risk-adjusted selected graph exceeds the runtime hard budget after solve"
+            "Risk-adjusted selected graph exceeds the runtime hard budget "
+            "after solve"
         )
 
     parity = {
@@ -84,19 +91,31 @@ def risk_budgeted_optimize_execution_graph(
         "selected_raw_cost_usd": round(raw_cost, 8),
         "selected_risk_adjusted_cost_usd": round(risk_cost, 8),
         "adaptive_ratio_iterations": iterations,
-        "policy": "optimizer-raw-budget-equals-runtime-hard-budget-divided-by-risk-multiplier",
+        "require_distinct_model_companies": bool(
+            require_distinct_model_companies
+        ),
+        "policy": (
+            "optimizer-raw-budget-equals-runtime-hard-budget-divided-by-"
+            "risk-multiplier"
+        ),
     }
-    graph.setdefault("metadata", {})["budget_preflight_parity"] = parity
+    graph.setdefault("metadata", {})[
+        "budget_preflight_parity"
+    ] = parity
     result["budget_preflight_parity"] = parity
     result["adaptive_ratio_iterations"] = iterations
     return result
 
 
 def install() -> None:
-    """Install one optimizer policy for formal, diagnostic, and compatibility paths."""
+    """Compatibility installer for old diagnostic paths."""
     global _INSTALLED
     if _INSTALLED:
         return
-    value_optimizer.optimize_execution_graph = risk_budgeted_optimize_execution_graph
-    planner.optimize_execution_graph = risk_budgeted_optimize_execution_graph
+    value_optimizer.optimize_execution_graph = (
+        risk_budgeted_optimize_execution_graph
+    )
+    planner.optimize_execution_graph = (
+        risk_budgeted_optimize_execution_graph
+    )
     _INSTALLED = True

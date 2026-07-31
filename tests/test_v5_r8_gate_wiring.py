@@ -12,6 +12,7 @@ import v5_production_hardening as hardening  # noqa: E402
 
 
 def node(name):
+    model = f"vendor-{name}/model-{name}"
     return SelectedNode(
         node_id=name,
         assigned_work=(f"work-{name}",),
@@ -20,10 +21,15 @@ def node(name):
         prompt_profile={"modules": ["structured_delivery"]},
         reasoning_profile={"reasoning_enabled": True, "effort": "medium"},
         parameter_profile={"supported_parameters": ["max_tokens"]},
-        model=f"vendor/{name}",
-        provider_endpoint=f"vendor/{name}@provider-{name}",
+        model=model,
+        provider_endpoint=f"{model}@provider-{name}",
         output_contract={
-            "required_fields": ["conclusions", "assumptions", "uncertainties", "evidence_gaps"],
+            "required_fields": [
+                "conclusions",
+                "assumptions",
+                "uncertainties",
+                "evidence_gaps",
+            ],
             "machine_readable_required": False,
             "must_separate_fact_assumption_inference": True,
         },
@@ -88,10 +94,12 @@ class TestV5R8GateWiring(unittest.TestCase):
                 "id": "response-a",
                 "model": selected.model,
                 "provider": "provider-a",
-                "choices": [{
-                    "finish_reason": "stop",
-                    "message": {"content": answer("retry")},
-                }],
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": answer("retry")},
+                    }
+                ],
                 "usage": {"cost": 0.001},
             }, 0.01
 
@@ -110,7 +118,10 @@ class TestV5R8GateWiring(unittest.TestCase):
         self.assertEqual(calls, [selected.model, selected.model])
         self.assertEqual(result["status"], "success")
         self.assertTrue(result["recovery_used"])
-        self.assertEqual(result["node_results"][0]["status"], "success_retried")
+        self.assertEqual(
+            result["node_results"][0]["status"],
+            "success_retried",
+        )
 
     def test_optional_work_is_excluded_from_configurable_coverage(self):
         a, b = node("a"), node("b")
@@ -121,7 +132,12 @@ class TestV5R8GateWiring(unittest.TestCase):
                     "id": "response-a",
                     "model": a.model,
                     "provider": "provider-a",
-                    "choices": [{"finish_reason": "stop", "message": {"content": answer("a")}}],
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"content": answer("a")},
+                        }
+                    ],
                     "usage": {"cost": 0.001},
                 }, 0.01
             raise RuntimeError("empty optional node")
@@ -141,7 +157,10 @@ class TestV5R8GateWiring(unittest.TestCase):
         )
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["work_coverage"]["coverage_ratio"], 1.0)
-        self.assertEqual(result["delivery_policy"]["optional_work_ids"], ["work-b"])
+        self.assertEqual(
+            result["delivery_policy"]["optional_work_ids"],
+            ["work-b"],
+        )
 
     def test_non_degradable_work_and_degraded_disable_are_hard_gates(self):
         a, b = node("a"), node("b")
@@ -152,12 +171,20 @@ class TestV5R8GateWiring(unittest.TestCase):
                     "id": "response-a",
                     "model": a.model,
                     "provider": "provider-a",
-                    "choices": [{"finish_reason": "stop", "message": {"content": answer("a")}}],
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"content": answer("a")},
+                        }
+                    ],
                     "usage": {"cost": 0.001},
                 }, 0.01
             raise RuntimeError("required node failed")
 
-        with self.assertRaisesRegex(Exception, "production delivery policy"):
+        with self.assertRaisesRegex(
+            Exception,
+            "production delivery policy",
+        ):
             hardening.resilient_execute_v5_graph(
                 graph([a, b], {"non_degradable_work_ids": ["work-b"]}),
                 SimpleNamespace(parallel_workers=2, api_key=None),
@@ -173,7 +200,10 @@ class TestV5R8GateWiring(unittest.TestCase):
                 ),
             )
 
-        with self.assertRaisesRegex(Exception, "production delivery policy"):
+        with self.assertRaisesRegex(
+            Exception,
+            "production delivery policy",
+        ):
             hardening.resilient_execute_v5_graph(
                 graph([a, b]),
                 SimpleNamespace(parallel_workers=2, api_key=None),
@@ -198,12 +228,20 @@ class TestV5R8GateWiring(unittest.TestCase):
                     "id": "response-a",
                     "model": a.model,
                     "provider": "provider-a",
-                    "choices": [{"finish_reason": "stop", "message": {"content": answer("a")}}],
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"content": answer("a")},
+                        }
+                    ],
                     "usage": {"cost": 0.001},
                 }, 0.01
             raise RuntimeError("node failed")
 
-        with self.assertRaisesRegex(Exception, "insufficient-successful-content-nodes"):
+        with self.assertRaisesRegex(
+            Exception,
+            "insufficient-successful-content-nodes",
+        ):
             hardening.resilient_execute_v5_graph(
                 graph([a, b, c]),
                 SimpleNamespace(parallel_workers=3, api_key=None),

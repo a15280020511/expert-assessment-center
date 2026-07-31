@@ -5,9 +5,9 @@ import math
 from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
-import v5_budget_runtime_parity as budget_parity
 import v5_capability_calibration as capability_calibration
 import v5_candidate_diversity as candidate_diversity
+import v5_company_diversity as company_diversity
 import v5_cost_reliability_hardening as cost_policy
 import v5_dynamic_configuration as dynamic_configuration
 import v5_planner as base_planner
@@ -21,6 +21,12 @@ class PlannerPolicy:
 
     def __init__(self, runtime_config: Any) -> None:
         self.config = runtime_config
+        self.require_distinct_model_companies = (
+            company_diversity.REQUIRE_DISTINCT_MODEL_COMPANIES
+        )
+        self.minimum_candidates_per_work = (
+            company_diversity.MINIMUM_CANDIDATES_PER_WORK
+        )
 
     def compile_market(
         self,
@@ -52,13 +58,29 @@ class PlannerPolicy:
         result = dict(market)
         result["endpoints"] = endpoints
         result["endpoint_count"] = len(endpoints)
+        result["model_company_count"] = len(
+            {
+                company_diversity.canonical_model_company(
+                    str(endpoint.get("model_id") or "")
+                )
+                for endpoint in endpoints
+            }
+        )
         result["planning_policy"] = {
             "composition": "explicit-direct-call",
             "provider_reliability_floor": cost_policy.MIN_PROVIDER_RELIABILITY,
             "cost_estimation": "reasoning-and-truncation-aware-p95-usage",
             "candidate_configuration": "task-and-endpoint-dynamic",
-            "pareto_pruning": "model-diversity-preserving",
+            "pareto_pruning": "model-company-diversity-preserving",
             "budget_preflight_parity": "direct-risk-budgeted-optimizer-call",
+            "require_distinct_model_companies": (
+                self.require_distinct_model_companies
+            ),
+            "model_company_identity": (
+                "canonicalized-direct-model-author-prefix"
+            ),
+            "minimum_candidates_per_work": self.minimum_candidates_per_work,
+            "company_shortage_policy": "expand-pool-then-fail-closed",
             "cross_task_history_used": False,
         }
         return result
@@ -89,8 +111,12 @@ class PlannerPolicy:
             )
         prompt_tokens = int(math.ceil(prompt_tokens * discount))
         completion_tokens = int(math.ceil(completion_tokens * discount))
-        prompt_price = float(endpoint.get("prompt_price_per_million", 0.0) or 0.0)
-        completion_price = float(endpoint.get("completion_price_per_million", 0.0) or 0.0)
+        prompt_price = float(
+            endpoint.get("prompt_price_per_million", 0.0) or 0.0
+        )
+        completion_price = float(
+            endpoint.get("completion_price_per_million", 0.0) or 0.0
+        )
         base = (
             prompt_tokens * prompt_price
             + completion_tokens * completion_price
@@ -105,48 +131,92 @@ class PlannerPolicy:
     @staticmethod
     def candidate_factory(*args: Any, **kwargs: Any) -> Any:
         """Apply base, reliability, P95-cost, usage and dynamic configuration."""
-        endpoint = args[4] if len(args) > 4 and isinstance(args[4], Mapping) else {}
-        reliability = max(0.0, min(1.0, float(endpoint.get("reliability", 0.0) or 0.0)))
+        endpoint = (
+            args[4]
+            if len(args) > 4 and isinstance(args[4], Mapping)
+            else {}
+        )
+        reliability = max(
+            0.0,
+            min(1.0, float(endpoint.get("reliability", 0.0) or 0.0)),
+        )
         if reliability < cost_policy.MIN_PROVIDER_RELIABILITY:
             return None
         candidate = base_planner._candidate_for(*args, **kwargs)
         if candidate is None:
             return None
 
-        works = args[2] if len(args) > 2 and isinstance(args[2], Sequence) else ()
+        works = (
+            args[2]
+            if len(args) > 2 and isinstance(args[2], Sequence)
+            else ()
+        )
         works = [work for work in works if isinstance(work, Mapping)]
         endpoint_max = int(endpoint.get("max_completion_tokens", 0) or 0)
         discount = max(0.1, float(kwargs.get("bundle_discount", 1.0)))
         failure = max(candidate.failure_probability, 1.0 - reliability)
-        failure = max(0.0, min(1.0, failure + (1.0 - reliability) * 0.50))
+        failure = max(
+            0.0,
+            min(1.0, failure + (1.0 - reliability) * 0.50),
+        )
         p95_cost = PlannerPolicy._p95_cost(endpoint, works, discount)
         risk_adjusted_cost = p95_cost * (1.0 + failure * 0.40)
 
-        allowance = int(math.ceil(
-            sum(
-                truncation_policy.completion_envelope(work, endpoint_max)
-                for work in works
-            ) * discount
-        ))
-        usage = int(math.ceil(
-            sum(
-                truncation_policy.estimated_completion_usage(work, endpoint_max)
-                for work in works
-            ) * discount
-        ))
+        allowance = int(
+            math.ceil(
+                sum(
+                    truncation_policy.completion_envelope(
+                        work,
+                        endpoint_max,
+                    )
+                    for work in works
+                )
+                * discount
+            )
+        )
+        usage = int(
+            math.ceil(
+                sum(
+                    truncation_policy.estimated_completion_usage(
+                        work,
+                        endpoint_max,
+                    )
+                    for work in works
+                )
+                * discount
+            )
+        )
         parameter_profile = dict(candidate.parameter_profile)
-        parameter_profile.update({
-            "recommended_output_allowance_tokens": max(1_024, allowance),
-            "estimated_completion_usage_tokens": max(1, usage),
-            "cost_estimation_policy": "reasoning-inclusive-p95-usage-not-max-allowance-r8",
-            "output_allowance_is_cost_assumption": False,
-            "p95_token_usage_multiplier": token_policy.P95_TOKEN_USAGE_MULTIPLIER,
-            "structured_p95_token_usage_multiplier": token_policy.STRUCTURED_P95_TOKEN_USAGE_MULTIPLIER,
-            "truncation_pressure_policy": "reasoning-depth-contract-breadth-aware",
-            "bundle_discount_applied_to_usage_estimate": round(discount, 6),
-            "provider_reliability_floor": cost_policy.MIN_PROVIDER_RELIABILITY,
-            "cross_task_history_used": False,
-        })
+        parameter_profile.update(
+            {
+                "recommended_output_allowance_tokens": max(1_024, allowance),
+                "estimated_completion_usage_tokens": max(1, usage),
+                "cost_estimation_policy": (
+                    "reasoning-inclusive-p95-usage-not-max-allowance-r8"
+                ),
+                "output_allowance_is_cost_assumption": False,
+                "p95_token_usage_multiplier": (
+                    token_policy.P95_TOKEN_USAGE_MULTIPLIER
+                ),
+                "structured_p95_token_usage_multiplier": (
+                    token_policy.STRUCTURED_P95_TOKEN_USAGE_MULTIPLIER
+                ),
+                "truncation_pressure_policy": (
+                    "reasoning-depth-contract-breadth-aware"
+                ),
+                "bundle_discount_applied_to_usage_estimate": round(
+                    discount,
+                    6,
+                ),
+                "provider_reliability_floor": (
+                    cost_policy.MIN_PROVIDER_RELIABILITY
+                ),
+                "model_company": company_diversity.canonical_model_company(
+                    candidate.model
+                ),
+                "cross_task_history_used": False,
+            }
+        )
         candidate = replace(
             candidate,
             failure_probability=round(failure, 6),
@@ -179,13 +249,26 @@ class PlannerPolicy:
         *,
         maximum_per_group: int,
     ) -> dict[str, Any]:
-        return capability_calibration.generate_calibrated_candidate_graph(
+        expanded_limit = max(
+            self.minimum_candidates_per_work,
+            int(maximum_per_group),
+        )
+        result = capability_calibration.generate_calibrated_candidate_graph(
             resource_bundle,
             market,
-            maximum_per_group=maximum_per_group,
+            maximum_per_group=expanded_limit,
             candidate_factory=self.candidate_factory,
             pruner=candidate_diversity.diversity_preserving_pareto_prune,
         )
+        result["model_company_policy"] = {
+            "require_distinct_model_companies": (
+                self.require_distinct_model_companies
+            ),
+            "candidate_pool_requested_per_work": int(maximum_per_group),
+            "candidate_pool_effective_per_work": expanded_limit,
+            "company_shortage_policy": "expand-pool-then-fail-closed",
+        }
+        return result
 
     def optimize_execution_graph(
         self,
@@ -195,16 +278,13 @@ class PlannerPolicy:
         quality_tolerance_pct: float,
         solver_timeout_seconds: float,
     ) -> dict[str, Any]:
-        """Optimize on the same risk-adjusted cost basis enforced by runtime.
-
-        The explicit production runtime does not install compatibility monkey
-        patches. Calling the parity policy directly prevents the optimizer from
-        admitting a graph that the runtime will reject before the first model
-        call.
-        """
-        return budget_parity.risk_budgeted_optimize_execution_graph(
+        """Optimize under budget parity and the global company hard constraint."""
+        return company_diversity.risk_budgeted_optimize_execution_graph(
             candidate_bundle,
             limits=limits,
             quality_tolerance_pct=quality_tolerance_pct,
             solver_timeout_seconds=solver_timeout_seconds,
+            require_distinct_model_companies=(
+                self.require_distinct_model_companies
+            ),
         )
