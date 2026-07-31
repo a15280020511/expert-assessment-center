@@ -2,8 +2,8 @@
 
 A provider can occasionally return a successful HTTP envelope with no answer,
 response ID, usage, or billed cost. When the ticket reserves recovery capacity,
-V5 should use exactly one same-endpoint retry before considering a replacement.
-When recovery is zero, fail-closed behavior is unchanged.
+V5 uses exactly one same-endpoint retry before considering a replacement. When
+recovery is zero, fail-closed behavior is unchanged.
 """
 from __future__ import annotations
 
@@ -119,8 +119,8 @@ def fault_aware_execute_node(
 
 
 def install() -> None:
+    """Replace both the source symbol and the active executor binding."""
     global _INSTALLED
-    if _INSTALLED:
-        return
     runtime.fault_aware_execute_node = fault_aware_execute_node
+    executor._execute_node = fault_aware_execute_node
     _INSTALLED = True
