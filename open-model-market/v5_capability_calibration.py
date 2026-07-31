@@ -17,7 +17,6 @@ bundle.
 """
 from __future__ import annotations
 
-import sys
 from typing import Any, Mapping, Sequence
 
 import v5_planner
@@ -441,16 +440,5 @@ def generate_calibrated_candidate_graph(
 
 
 def install() -> None:
-    """Install calibrated candidate generation into all loaded V5 call paths."""
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _INSTALLED = True
-    v5_planner.generate_candidate_graph = generate_calibrated_candidate_graph
-    optimizer = sys.modules.get("v5_value_optimizer")
-    if optimizer is not None:
-        setattr(
-            optimizer,
-            "generate_candidate_graph",
-            generate_calibrated_candidate_graph,
-        )
+    """Deprecated compatibility no-op; use PlannerPolicy explicitly."""
+    return None

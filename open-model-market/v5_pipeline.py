@@ -90,9 +90,6 @@ def _rank_v5_models(models: Mapping[str, Any], profile: Any, run: Any) -> list[A
             "task_fit": fit,
             "value_index": value,
             "context_fit": context_ratio,
-            "history_used": 0.0,
-            "speed_used": 0.0,
-            "popularity_used": 0.0,
         }
         model.score = 0.42 * intelligence + 0.30 * fit + 0.23 * min(1.0, value) + 0.05 * context_ratio
         model.fit_reasons = list(reasons) + [

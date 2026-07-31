@@ -832,11 +832,13 @@ class ExecutionEngine:
                 -node.estimated_quality,
             )
         )
+        last_attempted_node = selected
         if category in self.recovery_policy.replace_categories:
             for replacement in alternatives:
                 attempted = call(replacement, "replacement")
                 if attempted is None:
                     continue
+                last_attempted_node = replacement
                 if attempted.status == "passed":
                     return self._node_result(
                         selected, replacement, attempts, attempted, "success_recovered"
@@ -848,7 +850,7 @@ class ExecutionEngine:
 
         if best is not None:
             return self._node_result(selected, best[1], attempts, best[0], "success_degraded")
-        active = alternatives[-1] if alternatives else selected
+        active = last_attempted_node
         return RuntimeNodeResult(
             node_id=selected.node_id,
             assigned_work=selected.assigned_work,
