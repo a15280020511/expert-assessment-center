@@ -4,9 +4,30 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import subprocess
 from pathlib import Path
 
 from v5_evidence_bundle import build_final_attestation_record
+
+_COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def checked_out_commit_sha() -> str:
+    """Return the exact source commit executed in the current checkout."""
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError("cannot resolve checked-out execution commit") from exc
+    commit_sha = completed.stdout.strip().casefold()
+    if not _COMMIT_SHA_RE.fullmatch(commit_sha):
+        raise RuntimeError("checked-out execution commit is not a full Git SHA")
+    return commit_sha
 
 
 def main() -> int:
@@ -23,6 +44,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        execution_commit_sha = checked_out_commit_sha()
         attestation = build_final_attestation_record(
             root=Path(args.output_dir),
             primary_artifact_id=args.primary_artifact_id,
@@ -30,8 +52,13 @@ def main() -> int:
             primary_artifact_url=args.primary_artifact_url,
             audit_status=args.audit_status,
             run_id=args.run_id,
-            commit_sha=args.commit_sha,
+            commit_sha=execution_commit_sha,
             final_status_file=Path(args.final_status_file),
+        )
+        attestation["commit_sha_source"] = "checked-out-git-head"
+        attestation["event_context_commit_sha"] = str(args.commit_sha).strip().casefold()
+        attestation["event_context_commit_matched_checkout"] = (
+            attestation["event_context_commit_sha"] == execution_commit_sha
         )
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
