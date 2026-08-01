@@ -320,7 +320,7 @@ def _numbered_sequences(text: str) -> list[list[str]]:
     return unique
 
 
-def extract_explicit_markdown_contract(task: str) -> dict[str, Any]:
+def _extract_explicit_markdown_contract_legacy(task: str) -> dict[str, Any]:
     text = str(task or "")
     cue = _MARKDOWN_CUE_RE.search(text)
     if not cue:
@@ -725,3 +725,149 @@ def delivery_rule(contract: Mapping[str, Any]) -> str:
             + "。"
         )
     return "".join(parts)
+
+_CHINESE_INTEGER_DIGITS = {
+    "零": 0,
+    "〇": 0,
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+}
+_INLINE_MARKDOWN_CONTRACT_RE = re.compile(
+    r"(?:严格|必须|务必|请)?\s*(?:依次|严格依次|按照顺序)?\s*"
+    r"(?:使用|采用|按照|保留)\s*"
+    r"(?P<count>\d{1,3}|[零〇一二两三四五六七八九十百]{1,4})\s*个?\s*"
+    r"(?:Markdown\s*)?(?:二级标题|H2|level[- ]2\s+headings?)"
+    r"[^：:\n]{0,80}[：:]\s*(?P<headings>[^；;。\n]+)",
+    re.IGNORECASE,
+)
+_FINAL_FORMAT_LINE_RE = re.compile(
+    r"(?:"
+    r"(?:严格|必须|务必|请)?\s*(?:依次|严格依次|按照顺序)?\s*"
+    r"(?:使用|采用|按照|保留)[^。；;\n]{0,180}"
+    r"(?:Markdown\s*)?(?:二级标题|H2|level[- ]2\s+headings?)"
+    r"|(?:JSON\s*)?顶层[^。；;\n]{0,180}(?:字段|键|包含)"
+    r"|top[- ]level[^.;\n]{0,180}(?:fields|keys)"
+    r"|(?:严格|必须|请|use|include|provide)[^。；;\n]{0,180}"
+    r"(?:Markdown\s*)?(?:表格|table)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _chinese_integer(value: str) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    if text == "十":
+        return 10
+    if "百" in text:
+        left, _, right = text.partition("百")
+        hundreds = _CHINESE_INTEGER_DIGITS.get(left, 1 if not left else None)
+        remainder = _chinese_integer(right) if right else 0
+        if hundreds is None or remainder is None:
+            return None
+        return 100 * hundreds + remainder
+    if "十" in text:
+        left, _, right = text.partition("十")
+        tens = _CHINESE_INTEGER_DIGITS.get(left, 1 if not left else None)
+        ones = _CHINESE_INTEGER_DIGITS.get(right, 0 if not right else None)
+        if tens is None or ones is None:
+            return None
+        return 10 * tens + ones
+    if len(text) == 1:
+        return _CHINESE_INTEGER_DIGITS.get(text)
+    return None
+
+
+def _inline_delimited_markdown_headings(task: str) -> list[str]:
+    match = _INLINE_MARKDOWN_CONTRACT_RE.search(str(task or ""))
+    if not match:
+        return []
+    expected = _chinese_integer(match.group("count"))
+    if expected is None or expected < 2 or expected > 128:
+        return []
+    raw = match.group("headings").strip()
+    for delimiter in ("、", "，", ","):
+        values = [_clean_heading(value) for value in raw.split(delimiter)]
+        values = [value for value in values if value]
+        if len(values) != expected:
+            continue
+        normalized = [_normalized_heading(value) for value in values]
+        if all(normalized) and len(set(normalized)) == len(normalized):
+            return values
+    return []
+
+
+def extract_explicit_markdown_contract(task: str) -> dict[str, Any]:
+    headings = _inline_delimited_markdown_headings(task)
+    if not headings:
+        return _extract_explicit_markdown_contract_legacy(task)
+    return {
+        "explicit_markdown_contract": True,
+        "exact_markdown_headings": headings,
+        "markdown_heading_level": 2,
+        "markdown_headings_must_be_nonempty": True,
+        "markdown_heading_order_required": True,
+        "task_explicit_delivery_section_count": len(headings),
+        "task_explicit_long_form_required": len(headings) >= 8,
+        "contract_extraction_policy": (
+            "explicit-format-text-only-inline-delimited"
+        ),
+    }
+
+
+def project_task_for_node(
+    task: str,
+    output_contract: Mapping[str, Any],
+) -> str:
+    """Remove final delivery-format clauses from internal-node task text."""
+    text = str(task or "")
+    if explicit_contract_kind(output_contract) != "generic":
+        return text
+    explicit = extract_explicit_markdown_contract(text)
+    json_contract = extract_explicit_contract(text)
+    table_contract = extract_explicit_table_contract(text)
+    if not (explicit or json_contract or table_contract):
+        return text
+
+    heading_keys = {
+        _normalized_heading(value)
+        for value in explicit.get("exact_markdown_headings", [])
+        if _normalized_heading(value)
+    }
+    rendered: list[str] = []
+    skip_numbered_headings = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        format_match = _FINAL_FORMAT_LINE_RE.search(line)
+        if format_match:
+            prefix = line[: format_match.start()].rstrip(" ：:；;，,。")
+            if prefix and not prefix.startswith("-"):
+                rendered.append(prefix)
+            skip_numbered_headings = bool(explicit)
+            continue
+        numbered = re.match(r"^\s*\d{1,3}[）).、:]\s*(.+?)\s*$", line)
+        if numbered and skip_numbered_headings:
+            if _normalized_heading(numbered.group(1)) in heading_keys:
+                continue
+        if line and _normalized_heading(line) in heading_keys:
+            continue
+        skip_numbered_headings = False
+        rendered.append(raw_line)
+
+    projected = "\n".join(rendered).strip()
+    notice = (
+        "内部节点任务投影：只处理事实、计算、证据、风险和本节点原子工作；"
+        "用户指定的最终报告格式仅由最终综合节点执行。"
+    )
+    return f"{projected}\n\n{notice}" if projected else notice
