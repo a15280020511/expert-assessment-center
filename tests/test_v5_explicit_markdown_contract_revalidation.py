@@ -27,6 +27,16 @@ TASK = (
     "1. 已知事实与未知；2. 风险优先级；3. 前15分钟行动；4. 通信降级；"
     "5. 门禁与人员清点；6. 资源分配；7. 失败模式与红队；8. 最终条件式建议。"
 )
+TRAILING_REQUIREMENT_TASK = (
+    "严格依次使用四个Markdown二级标题：题面事实、计算与校验、"
+    "推断与未知、结论与反转条件；每节不得为空；不得调用外部工具。"
+)
+TRAILING_REQUIREMENT_HEADINGS = [
+    "题面事实",
+    "计算与校验",
+    "推断与未知",
+    "结论与反转条件",
+]
 INTERNAL_HEADINGS = [
     "agreements",
     "assumptions",
@@ -65,6 +75,15 @@ class V5ExplicitMarkdownContractRevalidationTests(unittest.TestCase):
         self.assertTrue(contract["explicit_markdown_contract"])
         self.assertEqual(contract["exact_markdown_headings"], HEADINGS)
         self.assertTrue(contract["markdown_heading_order_required"])
+
+    def test_trailing_requirements_are_not_absorbed_into_last_heading(self) -> None:
+        contract = contract_policy.extract_explicit_markdown_contract(
+            TRAILING_REQUIREMENT_TASK
+        )
+        self.assertEqual(
+            contract["exact_markdown_headings"],
+            TRAILING_REQUIREMENT_HEADINGS,
+        )
 
     def test_synthesis_contract_replaces_internal_generic_headings(self) -> None:
         contract = compiler._output_contract(TASK, {"synthesis": 1.0}, False)

@@ -233,7 +233,7 @@ def _recompiled_task_contract(task: str) -> dict[str, Any]:
 def _final_contract_violations(
     graph: Mapping[str, Any],
     report: str,
-    task: str,
+    task: str = "",
 ) -> list[str]:
     final_ids = {
         str(value)

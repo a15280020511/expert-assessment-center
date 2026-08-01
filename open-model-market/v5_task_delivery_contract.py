@@ -791,11 +791,23 @@ def _chinese_integer(value: str) -> int | None:
     return None
 
 
+_HEADING_TRAILING_REQUIREMENT_RE = re.compile(
+    r"[；;。]\s*(?=(?:每|各|不得|禁止|必须|务必|应当|内容|章节|执行|输出|"
+    r"each|all|must|do\s+not|section))",
+    re.IGNORECASE,
+)
+
+
 def _valid_heading_sequence(
     values: Sequence[str],
     expected: int,
 ) -> list[str]:
-    headings = [_clean_heading(value) for value in values]
+    headings = [
+        _clean_heading(
+            _HEADING_TRAILING_REQUIREMENT_RE.split(str(value), maxsplit=1)[0]
+        )
+        for value in values
+    ]
     headings = [value for value in headings if value]
     if len(headings) != expected:
         return []
