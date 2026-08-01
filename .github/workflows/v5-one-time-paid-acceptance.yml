@@ -3,7 +3,7 @@ name: V5 One-Time Paid Acceptance
 on:
   push:
     branches:
-      - "fix/v5-constitution-p0-publication-integrity"
+      - "fix/v5-**"
     paths:
       - ".github/v5-paid-acceptance-request.json"
 
@@ -64,7 +64,9 @@ jobs:
           python -m compileall -q open-model-market tests tools
           python -m unittest \
             tests.test_workflow_contract \
+            tests.test_v5_constitution \
             tests.test_v5_constitutional_runtime \
+            tests.test_v5_paid_acceptance_revalidation \
             tests.test_v5_global_company_calibration \
             tests.test_v5_production_cutover \
             tests.test_v5_p0_governance \
@@ -81,6 +83,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf paid-acceptance-artifacts
+          mkdir -p paid-acceptance-artifacts
           task=$(cat <<'TASK'
           比较方案A“自建内部工单系统”和方案B“采用托管SaaS工单系统”。分别完成成本结构与选择阈值分析、实施与运营风险反证，并形成综合决策。不得调用外部工具。严格使用以下4个Markdown二级标题，顺序不得改变，每项不得为空：
           1）已知条件、假设与未知项
@@ -89,6 +92,7 @@ jobs:
           4）综合结论、适用条件与下一步
           TASK
           )
+          printf '%s\n' "$task" > paid-acceptance-artifacts/paid-acceptance-task.txt
           python open-model-market/v5_pipeline.py \
             --task "$task" \
             --require-live-catalog \
@@ -127,8 +131,10 @@ jobs:
           assert summary["status"] == "success", summary
           assert summary["completion_mode"] == "full", summary
           assert audit["status"] == "PASS", audit
-          assert audit["policy"] == "recompute-from-actual-successful-node-models"
+          assert audit["policy"] == "recompute-from-all-actual-cross-node-calls-and-successes"
           assert not audit["duplicate_successful_companies"]
+          assert not audit["duplicate_called_companies"]
+          assert not audit["unknown_company_models"]
           assert len(audit["successful_node_models"]) == len(graph["nodes"])
           companies = [row["company"] for row in audit["successful_node_models"]]
           assert len(companies) == len(set(companies)), companies
@@ -191,6 +197,10 @@ jobs:
               json.dumps(verdict, ensure_ascii=False, indent=2) + "\n",
               encoding="utf-8",
           )
+          import sys
+          sys.path.insert(0, "open-model-market")
+          from artifact_manifest import write_manifest
+          write_manifest(root)
           print(json.dumps(verdict, ensure_ascii=False))
           PY
 
@@ -220,8 +230,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       REPOSITORY: ${{ github.repository }}
-      BRANCH: fix/v5-constitution-p0-publication-integrity
-      PR_NUMBER: "170"
+      BRANCH: ${{ github.ref_name }}
       PAID_RUN_ID: ${{ github.run_id }}
       PAID_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
       PAID_HEAD_SHA: ${{ github.sha }}
@@ -229,9 +238,22 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: fix/v5-constitution-p0-publication-integrity
+          ref: ${{ env.BRANCH }}
           fetch-depth: 0
           persist-credentials: true
+
+      - name: Resolve unique open Draft PR
+        id: pr
+        run: |
+          set -euo pipefail
+          pr_number=$(gh pr list \
+            --repo "$REPOSITORY" \
+            --head "$BRANCH" \
+            --base main \
+            --state open \
+            --json number,isDraft \
+            --jq 'map(select(.isDraft == true)) | if length == 1 then .[0].number else error("expected exactly one open Draft PR") end')
+          echo "number=$pr_number" >> "$GITHUB_OUTPUT"
 
       - name: Resolve and download this Run Artifact
         id: artifact
@@ -264,111 +286,47 @@ jobs:
             echo "artifact_digest=$artifact_digest"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Independently verify Artifact and create attestation
+      - name: Independently recompute raw Artifact evidence
         env:
           ARTIFACT_ID: ${{ steps.artifact.outputs.artifact_id }}
           ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact_digest }}
         shell: bash
         run: |
           set -euo pipefail
+          python open-model-market/v5_paid_acceptance_revalidation.py \
+            --root paid-evidence \
+            --head-sha "$PAID_HEAD_SHA" \
+            --run-id "$PAID_RUN_ID" \
+            --run-url "$PAID_RUN_URL" \
+            --maximum-calls 4 \
+            --maximum-cost 0.03 \
+            --artifact-id "$ARTIFACT_ID" \
+            --artifact-name "$EXPECTED_ARTIFACT_NAME" \
+            --artifact-digest "$ARTIFACT_DIGEST" \
+            --output v5-paid-acceptance-attestation.json
           python - <<'PY'
           import json
-          import os
           from pathlib import Path
 
-          root = Path("paid-evidence")
-          paths = list(root.rglob("paid-acceptance-verdict.json"))
-          if len(paths) != 1:
-              raise SystemExit(f"Expected one paid verdict, found {len(paths)}")
-          verdict = json.loads(paths[0].read_text())
-          if verdict.get("status") != "PASS":
-              raise SystemExit("Paid acceptance verdict is not PASS")
-          if verdict.get("head_sha") != os.environ["PAID_HEAD_SHA"]:
-              raise SystemExit("Paid verdict SHA differs from this Run head SHA")
-          if str(verdict.get("workflow_run_id")) != os.environ["PAID_RUN_ID"]:
-              raise SystemExit("Paid verdict run ID differs from this Run")
-          if verdict.get("workflow_run_url") != os.environ["PAID_RUN_URL"]:
-              raise SystemExit("Paid verdict run URL differs from this Run")
-          digest = os.environ["ARTIFACT_DIGEST"]
-          if not digest.startswith("sha256:"):
-              raise SystemExit("Artifact digest is absent or not SHA-256")
-
-          calls = int(verdict.get("model_calls") or 0)
-          cost = float(verdict.get("actual_cost_usd") or -1.0)
-          if not 1 <= calls <= 4:
-              raise SystemExit(f"Paid model calls outside bound: {calls}")
-          if not 0.0 <= cost <= 0.03:
-              raise SystemExit(f"Paid cost outside bound: {cost}")
-          if verdict.get("completion_mode") != "full":
-              raise SystemExit("Paid completion mode is not full")
-          if verdict.get("quality_status") != "full_success":
-              raise SystemExit("Paid quality status is not full_success")
-          if verdict.get("actual_model_company_audit") != "PASS":
-              raise SystemExit("Paid actual-company audit is not PASS")
-          for field in (
-              "production_ref_moved",
-              "public_report_published",
-              "external_tools_allowed",
-              "cross_task_history_used",
-          ):
-              if verdict.get(field) is not False:
-                  raise SystemExit(f"Paid verdict violated {field}")
-          companies = [
-              str(row.get("company") or "")
-              for row in verdict.get("successful_models", [])
-          ]
-          if not companies or len(companies) != len(set(companies)):
-              raise SystemExit("Paid successful model companies are not unique")
-
-          request = json.loads(
-              Path(".github/v5-paid-acceptance-request.json").read_text()
+          value = json.loads(
+              Path("v5-paid-acceptance-attestation.json").read_text()
           )
-          attestation = {
-              "schema_version": "v5-paid-acceptance-attestation-2",
-              "status": "PASS",
-              "request_id": request["request_id"],
-              "paid_workflow_run_id": os.environ["PAID_RUN_ID"],
-              "paid_workflow_run_url": os.environ["PAID_RUN_URL"],
-              "paid_head_sha": os.environ["PAID_HEAD_SHA"],
-              "paid_artifact_id": int(os.environ["ARTIFACT_ID"]),
-              "paid_artifact_name": os.environ["EXPECTED_ARTIFACT_NAME"],
-              "paid_artifact_digest": digest,
-              "model_calls": calls,
-              "actual_cost_usd": cost,
-              "cost_cap_usd": 0.03,
-              "node_count": int(verdict.get("node_count") or 0),
-              "successful_models": verdict.get("successful_models", []),
-              "completion_mode": verdict["completion_mode"],
-              "quality_status": verdict["quality_status"],
-              "contract_heading_count": int(verdict.get("contract_heading_count") or 0),
-              "actual_model_company_audit": verdict["actual_model_company_audit"],
-              "external_tools_allowed": False,
-              "production_ref_moved": False,
-              "public_report_published": False,
-              "cross_task_history_used": False,
-              "independent_artifact_revalidation": True,
-              "artifact_bound_to_same_run": True,
-              "branch_head_unchanged_before_attestation": True,
-          }
-          Path("v5-paid-acceptance-attestation.json").write_text(
-              json.dumps(attestation, ensure_ascii=False, indent=2) + "\n",
-              encoding="utf-8",
-          )
+          companies = value["successful_companies"]
           Path("paid-acceptance-comment.md").write_text(
               "## V5 bounded paid acceptance: PASS\n\n"
-              f"- Paid Run: `{attestation['paid_workflow_run_url']}`\n"
-              f"- Paid head SHA: `{attestation['paid_head_sha']}`\n"
-              f"- Paid Artifact ID: `{attestation['paid_artifact_id']}`\n"
-              f"- Paid Artifact digest: `{attestation['paid_artifact_digest']}`\n"
-              f"- Model calls: `{calls}` / `4`\n"
-              f"- Actual cost: `${cost:.8f}` / `$0.03`\n"
-              f"- Nodes: `{attestation['node_count']}`\n"
+              f"- Paid Run: `{value['paid_workflow_run_url']}`\n"
+              f"- Paid head SHA: `{value['paid_head_sha']}`\n"
+              f"- Paid Artifact ID: `{value['paid_artifact_id']}`\n"
+              f"- Paid Artifact digest: `{value['paid_artifact_digest']}`\n"
+              f"- Model calls: `{value['model_calls']}` / `4`\n"
+              f"- Actual cost: `${value['actual_cost_usd']:.8f}` / `$0.03`\n"
+              f"- Nodes: `{value['node_count']}`\n"
               f"- Companies: `{', '.join(companies)}`\n"
               "- Completion: `full`\n"
               "- Quality: `full_success`\n"
-              "- Exact contract: `PASS`\n"
-              "- Actual company audit: `PASS`\n"
-              "- Independent Artifact revalidation: `PASS`\n"
+              "- Constitutional report validation: `PASS`\n"
+              "- Manifest file revalidation: `PASS`\n"
+              "- Raw evidence recomputation: `PASS`\n"
               "- External tools: `disabled`\n"
               "- Public publication: `none`\n"
               "- Production ref movement: `none`\n",
@@ -393,7 +351,7 @@ jobs:
 
       - name: Publish attestation to Draft PR
         run: |
-          gh pr comment "$PR_NUMBER" \
+          gh pr comment "${{ steps.pr.outputs.number }}" \
             --repo "$REPOSITORY" \
             --body-file paid-acceptance-comment.md
 
@@ -431,7 +389,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       REPOSITORY: ${{ github.repository }}
-      PR_NUMBER: "170"
+      BRANCH: ${{ github.ref_name }}
       PAID_RESULT: ${{ needs.paid-generic-acceptance.result }}
       ATTESTATION_RESULT: ${{ needs.independently-attest-paid-artifact.result }}
       RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -452,4 +410,11 @@ jobs:
 
           No production qualification is granted. Inspect the Run and its uploaded evidence before another bounded attempt.
           EOF
-          gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body-file failure.md
+          pr_number=$(gh pr list \
+            --repo "$REPOSITORY" \
+            --head "$BRANCH" \
+            --base main \
+            --state open \
+            --json number,isDraft \
+            --jq 'map(select(.isDraft == true)) | if length == 1 then .[0].number else error("expected exactly one open Draft PR") end')
+          gh pr comment "$pr_number" --repo "$REPOSITORY" --body-file failure.md
