@@ -380,7 +380,7 @@ jobs:
               raise SystemExit("independent artifact revalidation is missing")
           independent = json.loads(independent_path.read_text(encoding="utf-8"))
           if independent.get("schema_version") != "v5-independent-artifact-revalidation-3":
-              raise SystemExit("independent artifact revalidation schema is not v3")
+              raise SystemExit("independent artifact revalidation schema is not current")
           final_status = json.loads(
               Path("ticket-artifacts/final-status.json").read_text(encoding="utf-8")
           )
