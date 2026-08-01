@@ -88,7 +88,7 @@ class TestReasoningVisibleOutputBudget(unittest.TestCase):
             2_048,
         )
 
-    def test_long_form_synthesis_gets_larger_non侵占_visible_reserve(self):
+    def test_long_form_synthesis_gets_larger_protected_visible_reserve(self):
         node = _node(
             functions=("synthesis",),
             allowance=15_992,
