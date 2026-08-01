@@ -190,11 +190,27 @@ class TestV5LongMarkdownContractIntegrity(unittest.TestCase):
                 "contract_incomplete_node_ids": ["degraded"],
                 "all_nodes_strict": False,
             }
+            constitutional = {
+                "failures": [],
+                "checks": {
+                    "task_constraints": {"fail_closed": True},
+                    "evidence_integrity_status": "PASS",
+                    "actual_model_company_audit_status": "PASS",
+                },
+            }
             with patch.object(auditor.base, "audit", return_value=base_result), patch.object(
                 auditor,
                 "_apply_native_contract",
                 side_effect=lambda _root, value, _planning: value,
-            ), patch.object(auditor, "_node_quality", return_value=evidence):
+            ), patch.object(
+                auditor,
+                "_node_quality",
+                return_value=evidence,
+            ), patch.object(
+                auditor,
+                "_constitutional_evidence",
+                return_value=constitutional,
+            ):
                 result = auditor.audit(root, execute_outcome="success", publish_outcome="success")
             self.assertEqual(result["status"], "DEGRADED")
             self.assertEqual(result["primary_failure"]["code"], "DEGRADED_SUCCESS")
