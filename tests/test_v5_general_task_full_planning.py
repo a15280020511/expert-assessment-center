@@ -11,6 +11,7 @@ import v5_general_task_planning  # noqa: E402
 import v5_value_optimizer  # noqa: E402
 from execution_graph import ExecutionGraph, GraphLimits  # noqa: E402
 from tests.test_v5_planner_executor import TestV5PlannerExecutor  # noqa: E402
+from v5_model_company import canonical_model_company  # noqa: E402
 from v5_planning_diagnostics import build_infeasibility_report  # noqa: E402
 
 
@@ -106,9 +107,7 @@ class V5GeneralTaskFullPlanningTests(unittest.TestCase):
         self.assertGreaterEqual(len(graph.nodes), 1)
         self.assertLessEqual(len(graph.nodes), 4)
         self.assertFalse(optimization["fallback_used"])
-        companies = [
-            node.parameter_profile["model_company"] for node in graph.nodes
-        ]
+        companies = [canonical_model_company(node.model) for node in graph.nodes]
         self.assertEqual(len(companies), len(set(companies)))
         self.assertTrue(
             resources["semantic_input_policy"][
@@ -128,7 +127,8 @@ class V5GeneralTaskFullPlanningTests(unittest.TestCase):
         self.assertGreaterEqual(report["minimum_required_nodes"], 1)
         self.assertLessEqual(report["minimum_required_nodes"], 4)
         self.assertEqual(report["model_calls_performed"], 0)
-        self.assertFalse(report["cross_task_history_used"])
+        calibration = report["hard_capability_calibration"]
+        self.assertFalse(calibration["cross_task_history_used"])
 
     def test_diagnostic_reports_cost_budget_shortage(self):
         task = "比较两个套餐，计算12个月成本、盈亏平衡时间和敏感性。"
