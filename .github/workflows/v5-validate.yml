@@ -47,6 +47,7 @@ jobs:
             open-model-market/resource_matrix.py \
             open-model-market/v5_planner.py \
             open-model-market/v5_planning_runtime.py \
+            open-model-market/v5_global_company_calibration.py \
             open-model-market/v5_cross_endpoint_planner.py \
             open-model-market/v5_constitutional_runtime.py \
             open-model-market/v5_value_optimizer.py \
@@ -70,6 +71,7 @@ jobs:
             tests.test_v5_explicit_runtime \
             tests.test_v5_empty_output_recovery \
             tests.test_v5_constitutional_runtime \
+            tests.test_v5_global_company_calibration \
             tests.test_v5_r8_gate_wiring \
             tests.test_v5_production_cutover \
             tests.test_v5_p0_governance \
@@ -113,6 +115,8 @@ jobs:
           assert market["phase_b_invariants"]["provider_endpoint_is_explicit"] is True
           assert market["candidate_pool_policy"] == "task-adaptive-multi-channel-deduplicated"
           assert market["candidate_pool_expansion_policy"] == "feasibility-and-marginal-value-driven"
+          assert market["planning_policy"]["capability_pool_policy"] == "evidence-backed-global-company-assignment-calibration"
+          assert market["planning_policy"]["proxy_floor_lowered"] is False
           assert market["cross_task_history_used"] is False
           assert search["policy"] == "task-shape-feasibility-marginal-value"
           assert search["attempts"]
@@ -121,6 +125,14 @@ jobs:
           assert search["cross_task_history_used"] is False
           assert candidates["candidate_count_after_pareto"] > 0
           assert candidates["candidate_count_after_pareto"] <= candidates["candidate_count_before_pareto"]
+          calibration = candidates["hard_capability_calibration"]
+          assert calibration["version"] == 3
+          assert calibration["model_company_policy"] == "task-global-all-different"
+          assert calibration["capability_scores_modified"] is False
+          assert calibration["task_demands_modified"] is False
+          assert calibration["hard_labels_modified"] is False
+          assert calibration["proxy_floor_lowered"] is False
+          assert calibration["cross_task_history_used"] is False
           assert optimization["version"] == 5
           assert optimization["optimizer"] == "google-or-tools-cp-sat"
           assert optimization["solver_status"] in {"OPTIMAL", "FEASIBLE"}
