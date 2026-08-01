@@ -65,7 +65,6 @@ def _v5_schema_error(error: Any) -> str:
     return hardened.base._format_schema_error(error)
 
 
-
 def _reject(status: dict[str, Any], reason: str) -> None:
     errors = list(status.get("errors") or [])
     if reason not in errors:
@@ -211,10 +210,18 @@ def prepare(args: argparse.Namespace) -> int:
     hardened._rewrite_outputs(status)
     for key in (
         "maximum_recovery_calls",
+        "maximum_replacements",
         "maximum_initial_calls",
         "cost_anomaly_usd",
+        "max_cost_usd",
         "trigger_mode",
         "execution_id",
+        "analysis_owner",
+        "fallback_policy",
+        "legacy_runtime_present",
+        "cross_task_history_used",
+        "call_policy",
+        "cost_policy",
     ):
         hardened.base._write_output(key, status.get(key, ""))
     return result
