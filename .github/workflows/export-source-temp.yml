@@ -59,11 +59,15 @@ jobs:
           base64 --decode /tmp/v5-constitutional-patch.b64 > /tmp/v5-constitutional-patch.tar.xz
           test "$(sha256sum /tmp/v5-constitutional-patch.tar.xz | awk '{print $1}')" = "0b8be9624564a130087fa07528ee06703e484343345c7b7b9bfbfe17fa5461cd"
           tar -xJf /tmp/v5-constitutional-patch.tar.xz
+          git checkout -- \
+            .github/workflows/execution-ticket.yml \
+            .github/workflows/v5-one-time-paid-acceptance.yml \
+            .github/workflows/export-source-temp.yml
           rm .github/v5-constitutional-patch.part-* .github/v5-constitutional-patch.ready
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
           python -m compileall -q open-model-market tests tools
           echo "changed=true" >> "$GITHUB_OUTPUT"
-      - name: Commit constitutional hardening
+      - name: Commit constitutional hardening source
         if: steps.apply.outputs.changed == 'true'
         shell: bash
         run: |
@@ -72,5 +76,9 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --cached --quiet && exit 1
+          if git diff --cached --name-only | grep -q '^.github/workflows/'; then
+            echo 'Workflow file unexpectedly entered the source-only commit.' >&2
+            exit 1
+          fi
           git commit -m "fix(v5): enforce constitutional completeness and dynamic planning"
           git push origin HEAD:fix/v5-constitutional-completeness-dynamic
