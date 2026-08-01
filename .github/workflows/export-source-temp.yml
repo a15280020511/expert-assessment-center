@@ -40,7 +40,9 @@ jobs:
             '03 20000 6d54253d6cdb365a49781cf4de8467852a8663696a1bc0d7972faeee61abdaf2'
             '04 20000 28924f7390cd5ece7b184b7f3ec2b69c8a26625e636fb5aa9655ab3b479a8c45'
             '05 20000 2d36f0f90fa165de70fd63c7a111198c6e9f737733a710910ddef2cb5c5138df'
-            '06 12468 eee955d5faa1ddbb2bf30276ad6f1e8596f1dda553306ec5bf4eaa2d93b1ff98'
+            '06a 4000 6e61f0d3e48c18837f5941073b23572516ee59d4994193d6ace1c7378b83bd7a'
+            '06b 4000 9d9dc50de9b199f8b5964e129adc21240b7c5b6733243545c80d1b747102e8ce'
+            '06c 4468 aac7ca6672575227fffb6b581dff3e5b08a2d1cbc562893a85475fbabdb82287'
           )
           for row in "${expected[@]}"; do
             read -r index size digest <<< "$row"
