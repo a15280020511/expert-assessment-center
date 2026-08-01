@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import random
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -142,6 +144,57 @@ def _http_category(status: int, body: str) -> str:
     return "invalid_response"
 
 
+def _request_with_hard_deadline(
+    request: urllib.request.Request,
+    url: str,
+    timeout_seconds: float,
+) -> Dict[str, Any]:
+    """Bound the complete open/read/decode operation by wall-clock time.
+
+    ``urllib`` applies its timeout to individual socket operations, not to the
+    whole request lifecycle. A daemon worker prevents a slow upstream response
+    from holding the production runtime beyond the configured model deadline.
+    """
+    timeout = max(0.001, float(timeout_seconds))
+    results: queue.Queue[tuple[str, Any]] = queue.Queue()
+
+    def worker() -> None:
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                results.put(("ok", _decode_response(response, url)))
+        except BaseException as exc:  # forwarded to the caller thread
+            results.put(("error", exc))
+
+    thread = threading.Thread(
+        target=worker,
+        name="openrouter-hard-deadline",
+        daemon=True,
+    )
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        raise OpenRouterRequestError(
+            f"OpenRouter request exceeded hard deadline of {timeout:g} seconds.",
+            category="timeout",
+            retryable=True,
+            request_sent=True,
+            response_received=False,
+        )
+    try:
+        status, value = results.get_nowait()
+    except queue.Empty as exc:
+        raise OpenRouterRequestError(
+            "OpenRouter request worker exited without a result.",
+            category="invalid_response",
+            retryable=False,
+            request_sent=True,
+            response_received=False,
+        ) from exc
+    if status == "error":
+        raise value
+    return value
+
+
 def request_json(
     url: str,
     api_key: Optional[str],
@@ -156,8 +209,11 @@ def request_json(
         request = urllib.request.Request(url, data=data, headers=headers(api_key), method=method)
         retry_after = None
         try:
-            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-                return _decode_response(response, url)
+            return _request_with_hard_deadline(
+                request,
+                url,
+                timeout_seconds,
+            )
         except urllib.error.HTTPError as exc:
             body = exc.read(2000).decode("utf-8", errors="replace")
             retry_after = exc.headers.get("Retry-After") if exc.headers else None
