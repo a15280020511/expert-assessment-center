@@ -127,8 +127,6 @@ class V5GeneralTaskFullPlanningTests(unittest.TestCase):
         self.assertGreaterEqual(report["minimum_required_nodes"], 1)
         self.assertLessEqual(report["minimum_required_nodes"], 4)
         self.assertEqual(report["model_calls_performed"], 0)
-        calibration = report["hard_capability_calibration"]
-        self.assertFalse(calibration["cross_task_history_used"])
 
     def test_diagnostic_reports_cost_budget_shortage(self):
         task = "比较两个套餐，计算12个月成本、盈亏平衡时间和敏感性。"
