@@ -1,0 +1,65 @@
+name: One-Time V5 Runtime Decoupling
+
+on:
+  push:
+    branches:
+      - fix/v5-constitutional-semantic-evidence-dynamic-20260801
+    paths:
+      - .github/workflows/one-time-v5-runtime-decoupling.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-time-v5-runtime-decoupling
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: fix/v5-constitutional-semantic-evidence-dynamic-20260801
+          fetch-depth: 0
+      - name: Apply deterministic import decoupling
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("open-model-market/v5_runtime.py")
+          source = path.read_text(encoding="utf-8")
+          old_import = "import v5_executor as legacy_executor\n"
+          if source.count(old_import) != 1:
+              raise SystemExit("unexpected legacy executor import count")
+          source = source.replace(old_import, "")
+
+          marker = 'STRICT_SUCCESS_STATUSES = {"success", "success_retried", "success_recovered"}\n'
+          if source.count(marker) != 1:
+              raise SystemExit("unexpected runtime constants marker count")
+          native_fields = '''STRICT_SUCCESS_STATUSES = {"success", "success_retried", "success_recovered"}\nFORBIDDEN_REQUEST_FIELDS = {\n    "tools",\n    "tool_choice",\n    "plugins",\n    "web_search",\n    "web_search_options",\n    "file_search",\n    "browser",\n    "code_interpreter",\n    "models",\n}\n'''
+          source = source.replace(marker, native_fields)
+
+          old_reference = "legacy_executor.FORBIDDEN_FIELDS"
+          if source.count(old_reference) != 1:
+              raise SystemExit("unexpected legacy forbidden-field reference count")
+          source = source.replace(old_reference, "FORBIDDEN_REQUEST_FIELDS")
+          path.write_text(source, encoding="utf-8")
+          PY
+          python -m py_compile open-model-market/v5_runtime.py
+          ! grep -q "import v5_executor" open-model-market/v5_runtime.py
+          ! grep -q "legacy_executor" open-model-market/v5_runtime.py
+      - name: Commit exact runtime decoupling
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add open-model-market/v5_runtime.py
+          git diff --cached --check
+          git commit -m "refactor(v5): remove native runtime dependency on legacy executor"
+          git push origin HEAD:fix/v5-constitutional-semantic-evidence-dynamic-20260801
