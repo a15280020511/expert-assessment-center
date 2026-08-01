@@ -31,8 +31,8 @@ class V5GlobalCompanyCalibrationTests(unittest.TestCase):
         endpoints = [
             endpoint("company-a", 0.90),
             endpoint("company-b", 0.85),
-            endpoint("company-c", 0.80),
-            endpoint("company-d", 0.75),
+            endpoint("company-c", 0.55),
+            endpoint("company-d", 0.50),
         ]
         work = {
             "work_id": "work-1",
@@ -50,8 +50,8 @@ class V5GlobalCompanyCalibrationTests(unittest.TestCase):
                 work,
                 endpoints,
                 {
-                    "complex_reasoning": 0.90,
-                    "evidence_validation": 0.90,
+                    "complex_reasoning": 1.0,
+                    "evidence_validation": 1.0,
                 },
                 {"complex_reasoning", "evidence_validation"},
                 required_copies=2,
@@ -59,6 +59,7 @@ class V5GlobalCompanyCalibrationTests(unittest.TestCase):
             )
         )
         self.assertEqual(4, len(selected_ids))
+        self.assertEqual(2, audit["static_eligible_company_count"])
         self.assertEqual(4, audit["work_candidate_company_breadth_target"])
         self.assertEqual(4, audit["selected_eligible_company_count"])
         self.assertEqual(
@@ -80,7 +81,7 @@ class V5GlobalCompanyCalibrationTests(unittest.TestCase):
             endpoint("company-a", 0.90),
             endpoint("company-b", 0.85),
             {
-                **endpoint("company-c", 0.80),
+                **endpoint("company-c", 0.50),
                 "benchmark_confidence": 0.20,
             },
         ]
@@ -98,7 +99,7 @@ class V5GlobalCompanyCalibrationTests(unittest.TestCase):
         _, audit = calibration._eligibility_for_global_assignment(
             work,
             endpoints,
-            {"complex_reasoning": 0.90},
+            {"complex_reasoning": 1.0},
             {"complex_reasoning"},
             required_copies=2,
             global_company_target=3,
