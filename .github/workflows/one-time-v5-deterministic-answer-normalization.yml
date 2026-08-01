@@ -1,0 +1,168 @@
+name: One-Time V5 Deterministic Answer Normalization
+
+on:
+  push:
+    branches:
+      - "bootstrap/v5-deterministic-answer-normalization-20260802"
+    paths:
+      - "tools/one_time_v5_deterministic_answer_normalization.py"
+      - ".github/workflows/one-time-v5-deterministic-answer-normalization.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-time-v5-deterministic-answer-normalization
+  cancel-in-progress: true
+
+jobs:
+  build-qualified-fix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      BASE_SHA: 017db244236403ca6a24c080d1b3fa58169eb8b5
+      TARGET_BRANCH: fix/v5-deterministic-answer-normalization-20260802
+      BOOTSTRAP_BRANCH: bootstrap/v5-deterministic-answer-normalization-20260802
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ env.BASE_SHA }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-runtime.txt
+            requirements-dev.txt
+
+      - name: Apply deterministic answer-normalization transformer
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git fetch origin "$BOOTSTRAP_BRANCH" "$TARGET_BRANCH"
+          git show \
+            "origin/$BOOTSTRAP_BRANCH:tools/one_time_v5_deterministic_answer_normalization.py" \
+            > tools/.one_time_v5_deterministic_answer_normalization.py
+          python tools/.one_time_v5_deterministic_answer_normalization.py
+          rm tools/.one_time_v5_deterministic_answer_normalization.py
+          git diff --check
+
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+
+      - name: Run static and targeted gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p normalization-validation-logs
+          python -m ruff check . --fix \
+            2>&1 | tee normalization-validation-logs/ruff-fix.log
+          python -m ruff check . \
+            2>&1 | tee normalization-validation-logs/ruff.log
+          python -m compileall -q open-model-market tests tools \
+            2>&1 | tee normalization-validation-logs/compileall.log
+          python -m unittest \
+            tests.test_v5_deterministic_answer_normalization \
+            tests.test_v5_v4_contract_isolation \
+            tests.test_v5_task_constraints \
+            tests.test_v5_constitutional_runtime \
+            tests.test_v5_critical_delivery_reliability \
+            -v 2>&1 | tee normalization-validation-logs/targeted-tests.log
+          grep -q '^OK$' normalization-validation-logs/targeted-tests.log
+
+      - name: Run full unit suite and 50 native P0 regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p 'test*.py' -v \
+            2>&1 | tee normalization-validation-logs/full-unit.log
+          grep -q '^Ran 278 tests in ' normalization-validation-logs/full-unit.log
+          grep -q '^OK$' normalization-validation-logs/full-unit.log
+          python tools/run_v5_p0_regressions.py \
+            2>&1 | tee normalization-validation-logs/p0.log
+          grep -q 'REGISTERED V5V4ContractIsolationTests: 7' \
+            normalization-validation-logs/p0.log
+          grep -q 'REGISTERED V5DeterministicAnswerNormalizationTests: 5' \
+            normalization-validation-logs/p0.log
+          grep -q 'REGISTERED TOTAL: 50' normalization-validation-logs/p0.log
+          grep -q \
+            'P0 REGRESSION RESULT: run=50, passed=50, failures=0, errors=0, skipped=0' \
+            normalization-validation-logs/p0.log
+
+      - name: Freeze zero-cost qualification evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > open-model-market/v5-deterministic-answer-normalization-fix-evidence.json <<'JSON'
+          {
+            "schema_version": "v5-deterministic-answer-normalization-fix-1",
+            "status": "PASS",
+            "source_paid_run_id": "30713895907",
+            "source_paid_artifact_id": 8822799992,
+            "source_paid_artifact_digest": "sha256:d16e7e14793e2a1d6ab5e1020d54e3d57f6dcd55bd09d5f315bdd0fd0b1e8d85",
+            "normalization_is_model_free": true,
+            "normalization_is_task_generic": true,
+            "allowed_quantities_derived_from_current_task": true,
+            "output_contract_derived_from_current_node": true,
+            "unsupported_quantity_lines_removed_at_minimum_physical_line_granularity": true,
+            "complete_unique_h2_sections_may_be_reordered_only": true,
+            "missing_duplicate_or_empty_sections_are_not_repaired": true,
+            "raw_provider_answer_preserved": true,
+            "transformation_audit_preserved": true,
+            "text_invented": false,
+            "original_quality_contract_and_evidence_gates_reexecuted": true,
+            "non_quality_failures_never_overridden": true,
+            "full_unit_test_count": 278,
+            "p0_regression_count": 50,
+            "paid_model_calls": 0,
+            "production_ref_moved": false
+          }
+          JSON
+          python -m json.tool \
+            open-model-market/v5-deterministic-answer-normalization-fix-evidence.json \
+            >/dev/null
+          git diff --check
+
+      - name: Commit exact qualified code tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          changed="$(git status --short)"
+          printf '%s\n' "$changed"
+          test -n "$changed"
+          git switch -C "$TARGET_BRANCH"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            open-model-market/v5_deterministic_answer_normalization.py \
+            open-model-market/v5_runtime.py \
+            open-model-market/v5_constitutional_runtime.py \
+            open-model-market/v5-deterministic-answer-normalization-fix-evidence.json \
+            tests/test_v5_deterministic_answer_normalization.py \
+            tools/run_v5_p0_regressions.py
+          unexpected_untracked="$(
+            git status --short \
+              | grep '^??' \
+              | grep -v '^?? normalization-validation-logs/' \
+              || true
+          )"
+          test -z "$unexpected_untracked"
+          git commit -m \
+            "fix(v5): normalize closed-world answers deterministically"
+          git push \
+            --force-with-lease="refs/heads/$TARGET_BRANCH:$BASE_SHA" \
+            origin "HEAD:refs/heads/$TARGET_BRANCH"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: v5-deterministic-answer-normalization-${{ github.run_id }}
+          path: normalization-validation-logs/
+          if-no-files-found: warn
+          retention-days: 14
