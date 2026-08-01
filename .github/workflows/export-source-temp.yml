@@ -5,7 +5,7 @@ on:
     branches:
       - fix/v5-constitutional-completeness-dynamic
     paths:
-      - .github/v5-constitutional-patch.b64
+      - .github/v5-constitutional-patch.ready
 
 permissions:
   contents: write
@@ -25,10 +25,10 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF_NAME" = "fix/v5-constitutional-completeness-dynamic"
-          base64 --decode .github/v5-constitutional-patch.b64 > /tmp/v5-constitutional-patch.tar.gz
-          test "$(sha256sum /tmp/v5-constitutional-patch.tar.gz | awk '{print $1}')" = "e1b4bbd3162d8b844dac6ad42a492b8e2cf51017e2b24c62e8bf08e53b0fb2ff"
-          tar -xzf /tmp/v5-constitutional-patch.tar.gz
-          rm .github/v5-constitutional-patch.b64
+          cat .github/v5-constitutional-patch.part-* | base64 --decode > /tmp/v5-constitutional-patch.tar.xz
+          test "$(sha256sum /tmp/v5-constitutional-patch.tar.xz | awk '{print $1}')" = "0b8be9624564a130087fa07528ee06703e484343345c7b7b9bfbfe17fa5461cd"
+          tar -xJf /tmp/v5-constitutional-patch.tar.xz
+          rm .github/v5-constitutional-patch.part-* .github/v5-constitutional-patch.ready
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
           python -m compileall -q open-model-market tests tools
       - name: Commit constitutional hardening
