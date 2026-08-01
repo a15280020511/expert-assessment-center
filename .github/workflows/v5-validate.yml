@@ -47,8 +47,11 @@ jobs:
           test -s open-model-market/v5_constitutional_pipeline.py
           test -s open-model-market/v5_constitutional_runtime.py
           test -s open-model-market/v5_task_constraints.py
+          test -s open-model-market/v5_deterministic_answer_normalization.py
           test -s open-model-market/v5_execution_primitives.py
           test -s open-model-market/v5_independent_artifact_revalidation.py
+          test -s open-model-market/v5-deterministic-answer-normalization-fix-evidence.json
+          test -s tests/test_v5_deterministic_answer_normalization.py
           test -s open-model-market/legacy-cleanup-report.json
           test -s open-model-market/constitutional-qualification-report.json
           test ! -e open-model-market/v5_executor.py
@@ -57,6 +60,10 @@ jobs:
           test ! -e open-model-market/v5_r8_executor.py
           test "$(jq -r '.status' open-model-market/legacy-cleanup-report.json)" = "PASS"
           test "$(jq -r '.v5_executor_production_reachable' open-model-market/legacy-cleanup-report.json)" = "false"
+          test "$(jq -r '.status' open-model-market/v5-deterministic-answer-normalization-fix-evidence.json)" = "PASS"
+          test "$(jq -r '.normalization_is_model_free' open-model-market/v5-deterministic-answer-normalization-fix-evidence.json)" = "true"
+          test "$(jq -r '.text_invented' open-model-market/v5-deterministic-answer-normalization-fix-evidence.json)" = "false"
+          test "$(jq -r '.p0_regression_count' open-model-market/v5-deterministic-answer-normalization-fix-evidence.json)" = "50"
           python - <<'PY'
           import ast
           from pathlib import Path
@@ -98,6 +105,7 @@ jobs:
             tests.test_execution_graph_properties \
             tests.test_v5_constitutional_runtime \
             tests.test_v5_task_constraints \
+            tests.test_v5_deterministic_answer_normalization \
             tests.test_v5_dynamic_model_fit \
             tests.test_v5_global_company_calibration \
             tests.test_v5_cross_endpoint_recovery \
