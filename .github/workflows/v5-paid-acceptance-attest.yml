@@ -1,0 +1,235 @@
+name: Attest V5 Paid Acceptance
+
+on:
+  push:
+    branches:
+      - "fix/v5-constitution-p0-publication-integrity"
+    paths:
+      - ".github/v5-paid-acceptance-attest-request.json"
+
+permissions:
+  actions: read
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: v5-paid-acceptance-attestation
+  cancel-in-progress: false
+
+jobs:
+  attest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      BRANCH: fix/v5-constitution-p0-publication-integrity
+      PR_NUMBER: "170"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: fix/v5-constitution-p0-publication-integrity
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Validate attestation request
+        run: |
+          set -euo pipefail
+          jq -e '
+            type == "object" and
+            (keys | sort) == ["expected_cost_cap_usd", "paid_workflow", "request_id", "schema_version"] and
+            .schema_version == "v5-paid-acceptance-attest-1" and
+            .paid_workflow == "v5-one-time-paid-acceptance.yml" and
+            .expected_cost_cap_usd == 0.03 and
+            (.request_id | test("^[a-z0-9][a-z0-9._-]{0,63}$"))
+          ' .github/v5-paid-acceptance-attest-request.json >/dev/null
+
+      - name: Resolve completed paid acceptance run and Artifact
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          encoded_branch=$(python - <<'PY'
+          import urllib.parse
+          print(urllib.parse.quote("fix/v5-constitution-p0-publication-integrity", safe=""))
+          PY
+          )
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/$REPOSITORY/actions/workflows/v5-one-time-paid-acceptance.yml/runs?branch=$encoded_branch&status=completed&per_page=20" \
+            > paid-runs.json
+          run_id=$(jq -er '.workflow_runs | sort_by(.created_at) | reverse | .[0].id' paid-runs.json)
+          conclusion=$(jq -er --argjson id "$run_id" '.workflow_runs[] | select(.id == $id) | .conclusion' paid-runs.json)
+          run_sha=$(jq -er --argjson id "$run_id" '.workflow_runs[] | select(.id == $id) | .head_sha' paid-runs.json)
+          run_url=$(jq -er --argjson id "$run_id" '.workflow_runs[] | select(.id == $id) | .html_url' paid-runs.json)
+          test "$conclusion" = "success"
+
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/$REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" \
+            > paid-artifacts.json
+          artifact_id=$(jq -er '
+            .artifacts
+            | map(select(.name | startswith("v5-paid-acceptance-")))
+            | sort_by(.created_at)
+            | reverse
+            | .[0].id
+          ' paid-artifacts.json)
+          artifact_name=$(jq -er --argjson id "$artifact_id" '.artifacts[] | select(.id == $id) | .name' paid-artifacts.json)
+          artifact_digest=$(jq -r --argjson id "$artifact_id" '.artifacts[] | select(.id == $id) | (.digest // "")' paid-artifacts.json)
+          {
+            echo "run_id=$run_id"
+            echo "run_sha=$run_sha"
+            echo "run_url=$run_url"
+            echo "artifact_id=$artifact_id"
+            echo "artifact_name=$artifact_name"
+            echo "artifact_digest=$artifact_digest"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download and independently verify paid evidence
+        id: verify
+        env:
+          PAID_RUN_ID: ${{ steps.resolve.outputs.run_id }}
+          PAID_RUN_SHA: ${{ steps.resolve.outputs.run_sha }}
+          PAID_RUN_URL: ${{ steps.resolve.outputs.run_url }}
+          ARTIFACT_ID: ${{ steps.resolve.outputs.artifact_id }}
+          ARTIFACT_NAME: ${{ steps.resolve.outputs.artifact_name }}
+          ARTIFACT_DIGEST: ${{ steps.resolve.outputs.artifact_digest }}
+          ATTESTATION_RUN_ID: ${{ github.run_id }}
+          ATTESTATION_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p paid-evidence
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/$REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" \
+            > paid-evidence.zip
+          unzip -q paid-evidence.zip -d paid-evidence
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path("paid-evidence")
+          verdict_paths = list(root.rglob("paid-acceptance-verdict.json"))
+          if len(verdict_paths) != 1:
+              raise SystemExit(
+                  f"Expected one paid verdict, found {len(verdict_paths)}"
+              )
+          verdict_path = verdict_paths[0]
+          verdict = json.loads(verdict_path.read_text())
+          if verdict.get("status") != "PASS":
+              raise SystemExit("Paid acceptance verdict is not PASS")
+          if verdict.get("head_sha") != os.environ["PAID_RUN_SHA"]:
+              raise SystemExit("Paid verdict SHA differs from workflow head SHA")
+          if verdict.get("workflow_run_id") != os.environ["PAID_RUN_ID"]:
+              raise SystemExit("Paid verdict run ID differs from resolved run")
+          if verdict.get("workflow_run_url") != os.environ["PAID_RUN_URL"]:
+              raise SystemExit("Paid verdict run URL differs from resolved run")
+          calls = int(verdict.get("model_calls") or 0)
+          cost = float(verdict.get("actual_cost_usd") or -1.0)
+          if not 1 <= calls <= 4:
+              raise SystemExit(f"Paid model calls outside bound: {calls}")
+          if not 0.0 <= cost <= 0.03:
+              raise SystemExit(f"Paid cost outside bound: {cost}")
+          if verdict.get("completion_mode") != "full":
+              raise SystemExit("Paid completion mode is not full")
+          if verdict.get("quality_status") != "full_success":
+              raise SystemExit("Paid quality status is not full_success")
+          if verdict.get("actual_model_company_audit") != "PASS":
+              raise SystemExit("Paid actual-company audit is not PASS")
+          if verdict.get("production_ref_moved") is not False:
+              raise SystemExit("Paid run claims production ref movement")
+          if verdict.get("public_report_published") is not False:
+              raise SystemExit("Paid run claims public report publication")
+          if verdict.get("external_tools_allowed") is not False:
+              raise SystemExit("Paid run allowed external tools")
+          companies = [
+              str(row.get("company") or "")
+              for row in verdict.get("successful_models", [])
+          ]
+          if not companies or len(companies) != len(set(companies)):
+              raise SystemExit("Paid successful model companies are not unique")
+
+          attestation = {
+              "schema_version": "v5-paid-acceptance-attestation-1",
+              "status": "PASS",
+              "paid_workflow_run_id": os.environ["PAID_RUN_ID"],
+              "paid_workflow_run_url": os.environ["PAID_RUN_URL"],
+              "paid_head_sha": os.environ["PAID_RUN_SHA"],
+              "paid_artifact_id": int(os.environ["ARTIFACT_ID"]),
+              "paid_artifact_name": os.environ["ARTIFACT_NAME"],
+              "paid_artifact_digest": os.environ.get("ARTIFACT_DIGEST", ""),
+              "attestation_workflow_run_id": os.environ["ATTESTATION_RUN_ID"],
+              "attestation_workflow_run_url": os.environ["ATTESTATION_RUN_URL"],
+              "model_calls": calls,
+              "actual_cost_usd": cost,
+              "cost_cap_usd": 0.03,
+              "node_count": int(verdict.get("node_count") or 0),
+              "successful_models": verdict.get("successful_models", []),
+              "completion_mode": verdict["completion_mode"],
+              "quality_status": verdict["quality_status"],
+              "contract_heading_count": int(verdict.get("contract_heading_count") or 0),
+              "actual_model_company_audit": verdict["actual_model_company_audit"],
+              "external_tools_allowed": False,
+              "production_ref_moved": False,
+              "public_report_published": False,
+              "cross_task_history_used": False,
+              "independent_artifact_revalidation": True,
+          }
+          Path("v5-paid-acceptance-attestation.json").write_text(
+              json.dumps(attestation, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          Path("paid-acceptance-comment.md").write_text(
+              "## V5 bounded paid acceptance: PASS\n\n"
+              f"- Paid Run: `{attestation['paid_workflow_run_url']}`\n"
+              f"- Paid Artifact ID: `{attestation['paid_artifact_id']}`\n"
+              f"- Paid Artifact digest: `{attestation['paid_artifact_digest']}`\n"
+              f"- Model calls: `{calls}` / `4`\n"
+              f"- Actual cost: `${cost:.8f}` / `$0.03`\n"
+              f"- Nodes: `{attestation['node_count']}`\n"
+              f"- Companies: `{', '.join(companies)}`\n"
+              "- Completion: `full`\n"
+              "- Quality: `full_success`\n"
+              "- Exact contract: `PASS`\n"
+              "- Actual company audit: `PASS`\n"
+              "- External tools: `disabled`\n"
+              "- Public publication: `none`\n"
+              "- Production ref movement: `none`\n\n"
+              "This is acceptance evidence only. PR remains Draft until the full "
+              "constitutional release decision is recorded.\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Commit authoritative paid acceptance attestation
+        env:
+          PAID_RUN_ID: ${{ steps.resolve.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          cp v5-paid-acceptance-attestation.json .github/v5-paid-acceptance-attestation.json
+          git add .github/v5-paid-acceptance-attestation.json
+          git commit -m "test(v5): record paid acceptance attestation $PAID_RUN_ID"
+          git push origin HEAD:fix/v5-constitution-p0-publication-integrity
+
+      - name: Publish attestation to Draft PR
+        run: gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body-file paid-acceptance-comment.md
+
+      - name: Upload independent attestation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: v5-paid-acceptance-attestation-${{ github.run_id }}
+          path: |
+            paid-runs.json
+            paid-artifacts.json
+            paid-evidence/
+            v5-paid-acceptance-attestation.json
+            paid-acceptance-comment.md
+          if-no-files-found: warn
+          retention-days: 30
