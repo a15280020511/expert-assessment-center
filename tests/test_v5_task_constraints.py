@@ -12,6 +12,7 @@ from v5_constitutional_runtime import ConstitutionalExecutionEngine  # noqa: E40
 from v5_task_constraints import (  # noqa: E402
     compile_task_constraints,
     dynamic_objective_weights,
+    normalized_quantities,
     validate_answer_evidence,
 )
 
@@ -88,6 +89,44 @@ class ClosedWorldEvidenceTests(unittest.TestCase):
         task = self.TASK + "已知事实：自建初始成本高。"
         answer = "事实：自建初始成本高。"
         self.assertEqual(validate_answer_evidence(task, answer), [])
+
+    def test_supported_chinese_paraphrases_are_allowed(self) -> None:
+        task = (
+            self.TASK
+            + "A路线存在积水且无法确认是否带电；"
+            + "B路线被杂物部分阻挡，但未发现积水。"
+            + "门外有2名无法核验身份、自称维修人员的人要求进入。"
+        )
+        answer = (
+            "事实：A路线有积水，B路线有杂物阻挡且未发现积水。\n"
+            "事实：门外有自称维修人员要求进入且无法核验身份。"
+        )
+        self.assertEqual(validate_answer_evidence(task, answer), [])
+
+    def test_similar_but_unsupported_fact_remains_rejected(self) -> None:
+        task = self.TASK + "A路线存在积水。"
+        violations = validate_answer_evidence(task, "事实：A路线有坍塌。")
+        self.assertTrue(
+            any(value.startswith("unsupported-fact-label:") for value in violations)
+        )
+
+    def test_contradictory_fact_remains_rejected(self) -> None:
+        task = self.TASK + "A路线存在积水。"
+        violations = validate_answer_evidence(task, "事实：A路线未发现积水。")
+        self.assertTrue(
+            any(value.startswith("unsupported-fact-label:") for value in violations)
+        )
+
+    def test_chinese_person_classifiers_are_normalized(self) -> None:
+        quantities = normalized_quantities("门外有2名人员和3位访客，另有1人。")
+        self.assertEqual(
+            quantities,
+            {
+                ("1", "", "people"),
+                ("2", "", "people"),
+                ("3", "", "people"),
+            },
+        )
 
 
 class DynamicObjectiveTests(unittest.TestCase):
