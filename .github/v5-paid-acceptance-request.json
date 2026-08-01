@@ -1,5 +1,21 @@
 {
-  "schema_version": "v5-paid-acceptance-1",
-  "request_id": "constitution-p0-final-5-819075e3-20260801",
-  "purpose": "task-independent-low-cost-production-qualification"
+  "schema_version": "v5-paid-acceptance-2",
+  "request_id": "constitutional-final-receipt-20260802-v4",
+  "purpose": "task-independent-low-cost-production-qualification",
+  "target_sha": "fa2c68de906c9fdfb9208aafe6af201bbe2a06cd",
+  "quality_tier": "value",
+  "maximum_total_calls": 4,
+  "maximum_recovery_calls": 1,
+  "cost_cap_usd": 0.008,
+  "task": {
+    "question": "仅依据以下题面完成封闭世界决策：某组织必须在方案A和方案B中二选一。方案A一次性投入1200元、每月运营300元；方案B一次性投入300元、每月运营450元；评估期为24个月。题面给定并要求校验：盈亏平衡点为第6个月，方案A的24个月总成本为8400元，方案B为11100元，差额为2700元。不得调用外部工具、不得联网、不得引入题面外事实、价格、概率、SLA、年份或其他精确数量。比较两方案并给出选择和反转条件。只接受完整交付。",
+    "requirements": [
+      "严格依次使用四个Markdown二级标题：题面事实、计算与校验、推断与未知、结论与反转条件；每节不得为空",
+      "事实、计算、假设、未知和推断必须明确分开，不得把模型判断标记为题面事实",
+      "所有精确数量必须能够逐项追溯到题面给定数量或题面给定计算结果",
+      "明确校验总成本公式、盈亏平衡点、24个月总成本和差额",
+      "不得降级、不得部分交付、不得使用外部知识补全未知信息"
+    ],
+    "language": "zh-CN"
+  }
 }
