@@ -140,17 +140,44 @@ def _number(value: str) -> str:
 
 def normalized_quantities(text: str) -> set[tuple[str, str, str]]:
     aliases = {
-        "％": "%", "seconds": "second", "second": "second", "秒": "second",
-        "minutes": "minute", "minute": "minute", "分钟": "minute",
-        "hours": "hour", "hour": "hour", "小时": "hour",
-        "days": "day", "day": "day", "天": "day",
-        "weeks": "week", "week": "week", "周": "week",
-        "months": "month", "month": "month", "月": "month",
-        "years": "year", "year": "year", "年": "year",
-        "meters": "meter", "meter": "meter", "米": "meter",
-        "kilometers": "kilometer", "kilometer": "kilometer", "公里": "kilometer", "千米": "kilometer",
-        "公斤": "kg", "kg": "kg", "克": "gram", "人": "people", "people": "people",
-        "次": "times", "times": "times", "sla": "sla", "%": "%",
+        "％": "%",
+        "seconds": "second",
+        "second": "second",
+        "秒": "second",
+        "minutes": "minute",
+        "minute": "minute",
+        "分钟": "minute",
+        "hours": "hour",
+        "hour": "hour",
+        "小时": "hour",
+        "days": "day",
+        "day": "day",
+        "天": "day",
+        "weeks": "week",
+        "week": "week",
+        "周": "week",
+        "months": "month",
+        "month": "month",
+        "月": "month",
+        "years": "year",
+        "year": "year",
+        "年": "year",
+        "meters": "meter",
+        "meter": "meter",
+        "米": "meter",
+        "kilometers": "kilometer",
+        "kilometer": "kilometer",
+        "公里": "kilometer",
+        "千米": "kilometer",
+        "公斤": "kg",
+        "kg": "kg",
+        "克": "gram",
+        "人": "people",
+        "people": "people",
+        "次": "times",
+        "times": "times",
+        "sla": "sla",
+        "%": "%",
     }
     values: set[tuple[str, str, str]] = set()
     for match in _QUANTITY_RE.finditer(str(text or "")):
@@ -185,7 +212,9 @@ def validate_answer_evidence(
     policy = constraints or compile_task_constraints(task)
     if isinstance(policy, Mapping):
         external_facts_allowed = bool(policy.get("external_facts_allowed", True))
-        precise_allowed = bool(policy.get("unsupported_precise_quantities_allowed", True))
+        precise_allowed = bool(
+            policy.get("unsupported_precise_quantities_allowed", True)
+        )
         provenance_required = bool(policy.get("fact_provenance_required", False))
     else:
         external_facts_allowed = policy.external_facts_allowed
@@ -197,9 +226,10 @@ def validate_answer_evidence(
         introduced = sorted(normalized_quantities(answer) - normalized_quantities(task))
         if introduced:
             rendered = ",".join(
-                f"{lo}{('-' + hi) if hi else ''}:{unit}" for lo, hi, unit in introduced[:16]
+                f"{lo}{('-' + hi) if hi else ''}:{unit}"
+                for lo, hi, unit in introduced[:16]
             )
-            violations.append("unsupported-precise-quantity:" + rendered)
+            violations.append("closed-world-unsupported-quantity:" + rendered)
 
     if provenance_required or not external_facts_allowed:
         unsupported = [
@@ -209,7 +239,8 @@ def validate_answer_evidence(
         ]
         if unsupported:
             violations.append(
-                "unsupported-fact-label:" + " | ".join(value[:120] for value in unsupported[:8])
+                "unsupported-fact-label:"
+                + " | ".join(value[:120] for value in unsupported[:8])
             )
     return list(dict.fromkeys(violations))
 
@@ -217,16 +248,30 @@ def validate_answer_evidence(
 def dynamic_objective_weights(profile: Any, task: str) -> dict[str, float]:
     """Derive task-specific preselection weights; no quality tier uses a fixed tuple."""
     constraints = compile_task_constraints(task)
-    complexity = max(0.0, min(7.0, float(getattr(profile, "complexity_score", 0) or 0)))
-    requested_context = max(1.0, float(getattr(profile, "requested_context", 1) or 1))
+    complexity = max(
+        0.0,
+        min(7.0, float(getattr(profile, "complexity_score", 0) or 0)),
+    )
+    requested_context = max(
+        1.0,
+        float(getattr(profile, "requested_context", 1) or 1),
+    )
     high_stakes = 1.0 if bool(getattr(profile, "high_stakes", False)) else 0.0
     closed_world = 0.0 if constraints.external_facts_allowed else 1.0
     long_context = 1.0 if bool(getattr(profile, "long_context", False)) else 0.0
     raw = {
         "intelligence": 1.0 + complexity / 3.5 + 1.5 * high_stakes + closed_world,
         "task_fit": 1.0 + complexity / 7.0 + high_stakes + 0.5 * closed_world,
-        "value": 1.0 + max(0.0, 1.0 - complexity / 7.0) + 0.5 * (1.0 - high_stakes),
-        "context": 0.5 + long_context + min(2.0, requested_context / 65536.0),
+        "value": (
+            1.0
+            + max(0.0, 1.0 - complexity / 7.0)
+            + 0.5 * (1.0 - high_stakes)
+        ),
+        "context": (
+            0.5
+            + long_context
+            + min(2.0, requested_context / 65536.0)
+        ),
     }
     total = sum(raw.values())
     return {key: value / total for key, value in raw.items()}
