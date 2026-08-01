@@ -11,7 +11,7 @@ import model_market  # noqa: E402
 import v5_pipeline  # noqa: E402
 import v5_production_ticket  # noqa: E402
 from v5_model_company import (  # noqa: E402
-    DEFAULT_INTELLIGENCE_RANKING_LIMIT,
+    ABSOLUTE_INTELLIGENCE_RANKING_CEILING,
     MINIMUM_CANDIDATES_PER_WORK,
     candidate_company,
 )
@@ -51,14 +51,14 @@ def candidate(candidate_id, coverage_key, model):
     }
 
 
-class V5Top150HardeningTests(unittest.TestCase):
-    def test_run_config_accepts_top150(self):
+class V5AdaptiveMarketHardeningTests(unittest.TestCase):
+    def test_run_config_accepts_emergency_catalog_ceiling(self):
         args = SimpleNamespace(
             config=str(model_market.DEFAULT_CONFIG),
             task="测试任务",
             quality_tier=None,
             max_estimated_cost_usd=None,
-            ranking_limit=DEFAULT_INTELLIGENCE_RANKING_LIMIT,
+            ranking_limit=ABSOLUTE_INTELLIGENCE_RANKING_CEILING,
             max_completion_tokens=None,
             reasoning_effort=None,
             catalog_file=None,
@@ -67,7 +67,10 @@ class V5Top150HardeningTests(unittest.TestCase):
             require_live_catalog=False,
         )
         run = model_market.build_run_config(args)
-        self.assertEqual(run.ranking_limit, 150)
+        self.assertEqual(
+            run.ranking_limit,
+            ABSOLUTE_INTELLIGENCE_RANKING_CEILING,
+        )
 
     def test_catalog_model_id_resolves_company(self):
         self.assertEqual(
@@ -79,14 +82,16 @@ class V5Top150HardeningTests(unittest.TestCase):
             "alibaba",
         )
 
-    def test_pipeline_defaults_to_24_company_diverse_candidates(self):
+    def test_pipeline_has_no_fixed_per_work_business_default(self):
         args = v5_pipeline.build_parser().parse_args(["--task", "test"])
-        self.assertEqual(
-            args.maximum_candidates_per_work,
+        self.assertIsNone(args.maximum_candidates_per_work)
+        self.assertEqual(MINIMUM_CANDIDATES_PER_WORK, 2)
+        self.assertGreater(
+            v5_pipeline.ABSOLUTE_CANDIDATES_PER_WORK_CEILING,
             MINIMUM_CANDIDATES_PER_WORK,
         )
 
-    def test_production_ticket_explicitly_binds_top150_and_24(self):
+    def test_production_ticket_binds_only_emergency_ceilings(self):
         args = SimpleNamespace(
             maximum_total_calls=4,
             maximum_recovery_calls=1,
@@ -101,13 +106,22 @@ class V5Top150HardeningTests(unittest.TestCase):
         )
         ranking_index = command.index("--ranking-limit")
         candidates_index = command.index("--maximum-candidates-per-work")
-        self.assertEqual(command[ranking_index + 1], "150")
-        self.assertEqual(command[candidates_index + 1], "24")
+        self.assertEqual(
+            command[ranking_index + 1],
+            str(ABSOLUTE_INTELLIGENCE_RANKING_CEILING),
+        )
+        self.assertEqual(
+            command[candidates_index + 1],
+            str(v5_production_ticket.ABSOLUTE_CANDIDATES_PER_WORK_CEILING),
+        )
         runtime = v5_production_ticket._runtime(args)
         self.assertEqual(
             runtime.config.maximum_candidates_per_work,
-            MINIMUM_CANDIDATES_PER_WORK,
+            v5_production_ticket.ABSOLUTE_CANDIDATES_PER_WORK_CEILING,
         )
+        policy = v5_production_ticket._search_policy()
+        self.assertFalse(policy["fixed_ranking_width_used"])
+        self.assertFalse(policy["fixed_candidates_per_work_used"])
 
     def test_diagnostics_identify_company_shortage(self):
         bundle = {
