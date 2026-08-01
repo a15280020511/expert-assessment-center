@@ -75,7 +75,7 @@ jobs:
                   "--catalog-file", "tests/fixtures/models.json",
                   "--endpoint-file", "tests/fixtures/endpoints.json",
                   "--dry-run",
-                  "--maximum-total-calls", "8",
+                  "--maximum-total-calls", "16",
                   "--maximum-recovery-calls", "2",
                   "--cost-anomaly-usd", "0.25",
                   "--quality-tier", "value",
@@ -97,6 +97,7 @@ jobs:
               assert search["attempts"]
               assert optimization["solver_status"] in {"OPTIMAL", "FEASIBLE"}
               assert len(graph["nodes"]) <= dry["approved_budget"]["maximum_initial_calls"]
+              assert dry["approved_budget"]["maximum_initial_calls"] == 14
               companies = [node["parameter_profile"]["model_company"] for node in graph["nodes"]]
               assert len(companies) == len(set(companies))
               assert dry["model_company_policy"] == "task-global-all-different"
