@@ -6,6 +6,9 @@ on:
       - fix/v5-constitutional-completeness-dynamic
     paths:
       - .github/v5-constitutional-patch.ready
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -18,20 +21,27 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: fix/v5-constitutional-completeness-dynamic
           fetch-depth: 0
           persist-credentials: true
       - name: Verify and apply frozen source bundle
+        id: apply
         shell: bash
         run: |
           set -euo pipefail
-          test "$GITHUB_REF_NAME" = "fix/v5-constitutional-completeness-dynamic"
+          if [[ ! -f .github/v5-constitutional-patch.ready ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           cat .github/v5-constitutional-patch.part-* | base64 --decode > /tmp/v5-constitutional-patch.tar.xz
           test "$(sha256sum /tmp/v5-constitutional-patch.tar.xz | awk '{print $1}')" = "0b8be9624564a130087fa07528ee06703e484343345c7b7b9bfbfe17fa5461cd"
           tar -xJf /tmp/v5-constitutional-patch.tar.xz
           rm .github/v5-constitutional-patch.part-* .github/v5-constitutional-patch.ready
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
           python -m compileall -q open-model-market tests tools
+          echo "changed=true" >> "$GITHUB_OUTPUT"
       - name: Commit constitutional hardening
+        if: steps.apply.outputs.changed == 'true'
         shell: bash
         run: |
           set -euo pipefail
