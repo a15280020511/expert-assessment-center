@@ -114,10 +114,30 @@ jobs:
           test "$(jq -r '.status' open-model-market/legacy-cleanup-report.json)" = "PASS"
           test "$(jq -r '.v5_executor_production_reachable' open-model-market/legacy-cleanup-report.json)" = "false"
           test "$(jq -r '.status' open-model-market/constitutional-qualification-report.json)" = "PASS"
-          if grep -RInE --include='*.py' 'def install\(|\.install\(' open-model-market tests; then
-            echo "Legacy install hook remains" >&2
-            exit 1
-          fi
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          failures = []
+          for root in (Path("open-model-market"), Path("tests")):
+              for path in root.rglob("*.py"):
+                  tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+                  for node in ast.walk(tree):
+                      if (
+                          isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                          and node.name == "install"
+                          and node.col_offset == 0
+                      ):
+                          failures.append(f"{path}:{node.lineno}:top-level install definition")
+                      if (
+                          isinstance(node, ast.Call)
+                          and isinstance(node.func, ast.Attribute)
+                          and node.func.attr == "install"
+                      ):
+                          failures.append(f"{path}:{node.lineno}:install call")
+          if failures:
+              raise SystemExit("\n".join(failures))
+          PY
       - name: Run canonical Ruff and compile gates
         shell: bash
         run: |
