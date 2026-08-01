@@ -1,11 +1,15 @@
-"""Canonical model-company identity and hard diversity defaults for V5."""
+"""Canonical model-company identity and platform diversity boundaries for V5."""
 from __future__ import annotations
 
 from typing import Any, Mapping
 
 REQUIRE_DISTINCT_MODEL_COMPANIES = True
-MINIMUM_CANDIDATES_PER_WORK = 24
-DEFAULT_INTELLIGENCE_RANKING_LIMIT = 150
+# Two is the mathematical lower bound needed to exercise company diversity.
+# It is not a normal production pool width; production breadth is task-adaptive.
+MINIMUM_CANDIDATES_PER_WORK = 2
+ABSOLUTE_INTELLIGENCE_RANKING_CEILING = 150
+# Compatibility alias for callers that treat this value as a catalog ceiling.
+DEFAULT_INTELLIGENCE_RANKING_LIMIT = ABSOLUTE_INTELLIGENCE_RANKING_CEILING
 
 MODEL_COMPANY_ALIASES: Mapping[str, str] = {
     "01-ai": "01-ai",
