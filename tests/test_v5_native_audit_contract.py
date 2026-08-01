@@ -26,7 +26,9 @@ class V5NativeAuditContractTests(unittest.TestCase):
             )
 
     def _fixture(self, root: Path) -> None:
-        answer = "# 完整生产报告\n\n" + ("事实、假设、推断、风险、执行步骤和否决条件。" * 30)
+        answer = "# 完整生产报告\n\n" + (
+            "事实、假设、推断、风险、执行步骤和否决条件。" * 30
+        )
         self._write(
             root,
             "ticket-status.json",
@@ -98,10 +100,51 @@ class V5NativeAuditContractTests(unittest.TestCase):
             root,
             "v5-node-results.json",
             [
-                {"node_id": "node-a", "status": "success", "contract": {"required_fields_complete": True}},
-                {"node_id": "node-b", "status": "success_recovered", "contract": {"required_fields_complete": True}},
-                {"node_id": "node-final", "status": "success", "contract": {"required_fields_complete": True}},
+                {
+                    "node_id": "node-a",
+                    "status": "success",
+                    "contract": {"required_fields_complete": True},
+                },
+                {
+                    "node_id": "node-b",
+                    "status": "success_recovered",
+                    "contract": {"required_fields_complete": True},
+                },
+                {
+                    "node_id": "node-final",
+                    "status": "success",
+                    "contract": {"required_fields_complete": True},
+                },
             ],
+        )
+        self._write(
+            root,
+            "actual-model-company-audit.json",
+            {
+                "status": "PASS",
+                "policy": "recompute-from-actual-successful-node-models",
+                "successful_node_models": [
+                    {
+                        "node_id": "node-a",
+                        "model": "openai/model-a",
+                        "company": "openai",
+                    },
+                    {
+                        "node_id": "node-b",
+                        "model": "anthropic/model-b",
+                        "company": "anthropic",
+                    },
+                    {
+                        "node_id": "node-final",
+                        "model": "google/model-c",
+                        "company": "google",
+                    },
+                ],
+                "all_called_models": [],
+                "duplicate_successful_companies": {},
+                "same-node-retry_is_not_a_second_expert": True,
+                "cross_task_history_used": False,
+            },
         )
         self._write(
             root,
@@ -124,12 +167,18 @@ class V5NativeAuditContractTests(unittest.TestCase):
                     "approved_recovery_call_ceiling": 1,
                     "provider_actual_cost_usd": 0.09615135,
                     "substantive_provider_count": 2,
-                    "substantive_providers": ["Amazon Bedrock", "OpenAI"],
+                    "substantive_providers": [
+                        "Amazon Bedrock",
+                        "OpenAI",
+                    ],
                 }
             },
         )
         self._write(root, "expert-team-report.md", answer)
-        run_url = "https://github.com/a15280020511/expert-assessment-center/actions/runs/30619634773"
+        run_url = (
+            "https://github.com/a15280020511/expert-assessment-center/"
+            "actions/runs/30619634773"
+        )
         self._write(
             root,
             "report-comments/report-comment-001.md",
@@ -141,7 +190,9 @@ class V5NativeAuditContractTests(unittest.TestCase):
             "report-comments/report-comments-manifest.json",
             {
                 "version": 2,
-                "report_sha256": hashlib.sha256(answer.encode("utf-8")).hexdigest(),
+                "report_sha256": hashlib.sha256(
+                    answer.encode("utf-8")
+                ).hexdigest(),
                 "run_url": run_url,
                 "run_id": "30619634773",
                 "files": ["report-comment-001.md"],
@@ -166,6 +217,10 @@ class V5NativeAuditContractTests(unittest.TestCase):
             )
             self.assertEqual(3, result["checks"]["strict_node_count"])
             self.assertEqual(4, result["checks"]["model_calls"])
+            self.assertEqual(
+                "PASS",
+                result["checks"]["actual_model_company_audit_status"],
+            )
             self.assertAlmostEqual(
                 0.09615135,
                 result["checks"]["actual_cost_usd"],
@@ -175,11 +230,18 @@ class V5NativeAuditContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._fixture(root)
-            manifest_path = root / "report-comments/report-comments-manifest.json"
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_path = (
+                root / "report-comments/report-comments-manifest.json"
+            )
+            manifest = json.loads(
+                manifest_path.read_text(encoding="utf-8")
+            )
             manifest["run_url"] = ""
             manifest["run_id"] = "unknown"
-            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            manifest_path.write_text(
+                json.dumps(manifest),
+                encoding="utf-8",
+            )
             result = auditor.audit(
                 root,
                 execute_outcome="success",
@@ -198,20 +260,52 @@ class V5NativeAuditContractTests(unittest.TestCase):
             rows_path = root / "v5-node-results.json"
             rows = json.loads(rows_path.read_text(encoding="utf-8"))
             rows[0]["contract"]["required_fields_complete"] = False
-            rows_path.write_text(json.dumps(rows), encoding="utf-8")
+            rows_path.write_text(
+                json.dumps(rows),
+                encoding="utf-8",
+            )
             result = auditor.audit(
                 root,
                 execute_outcome="success",
                 publish_outcome="success",
             )
             self.assertNotEqual("PASS", result["status"])
-            self.assertEqual(1, result["checks"]["contract_incomplete_node_count"])
+            self.assertEqual(
+                1,
+                result["checks"]["contract_incomplete_node_count"],
+            )
+
+    def test_duplicate_actual_company_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._fixture(root)
+            path = root / "actual-model-company-audit.json"
+            value = json.loads(path.read_text(encoding="utf-8"))
+            value["status"] = "FAIL"
+            value["successful_node_models"][1]["company"] = "openai"
+            value["duplicate_successful_companies"] = {
+                "openai": ["node-a", "node-b"]
+            }
+            path.write_text(json.dumps(value), encoding="utf-8")
+            result = auditor.audit(
+                root,
+                execute_outcome="success",
+                publish_outcome="success",
+            )
+            self.assertEqual("FAIL", result["status"])
+            self.assertIn(
+                "actual successful model companies are not globally unique",
+                result["failures"],
+            )
 
     def test_obsolete_r8_runtime_identifier_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._fixture(root)
-            for filename in ("production-runtime.json", "expert-team-result.json"):
+            for filename in (
+                "production-runtime.json",
+                "expert-team-result.json",
+            ):
                 path = root / filename
                 value = json.loads(path.read_text(encoding="utf-8"))
                 value["runtime_version"] = "v5-r8"
@@ -223,14 +317,20 @@ class V5NativeAuditContractTests(unittest.TestCase):
             )
             self.assertEqual("FAIL", result["status"])
             self.assertTrue(
-                any("native runtime version" in reason for reason in result["failures"])
+                any(
+                    "native runtime version" in reason
+                    for reason in result["failures"]
+                )
             )
 
     def test_obsolete_r8_executor_identifier_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._fixture(root)
-            for filename in ("expert-team-result.json", "v5-execution-summary.json"):
+            for filename in (
+                "expert-team-result.json",
+                "v5-execution-summary.json",
+            ):
                 path = root / filename
                 value = json.loads(path.read_text(encoding="utf-8"))
                 value["executor"] = "v5-r8-fault-aware"
@@ -242,7 +342,10 @@ class V5NativeAuditContractTests(unittest.TestCase):
             )
             self.assertEqual("FAIL", result["status"])
             self.assertTrue(
-                any("native executor" in reason for reason in result["failures"])
+                any(
+                    "native executor" in reason
+                    for reason in result["failures"]
+                )
             )
 
 
