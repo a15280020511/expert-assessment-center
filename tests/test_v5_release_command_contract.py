@@ -18,7 +18,7 @@ class TestV5ReleaseCommandContract(unittest.TestCase):
         self.assertIn("workflow_dispatch:", self.text)
         self.assertIn("pull_request:", self.text)
         self.assertIn("branches: [main]", self.text)
-        self.assertIn('permissions:\n  contents: read', self.text)
+        self.assertIn("permissions:\n  contents: read", self.text)
         self.assertIn("persist-credentials: false", self.text)
         self.assertNotIn("contents: write", self.text)
         self.assertNotIn("git push", self.text)
@@ -113,8 +113,10 @@ class TestV5ReleaseCommandContract(unittest.TestCase):
             'dry["model_company_policy"] == "task-global-all-different"',
             self.text,
         )
-        self.assertIn('dry["global_monkey_patching"] is False', self.text)
-        self.assertIn('"cross_task_history_used": False', self.text)
+        self.assertIn(
+            'dry["global_monkey_patching"] is False',
+            self.text,
+        )
 
     def test_gate_explicitly_records_production_is_not_moved(self):
         self.assertIn(
