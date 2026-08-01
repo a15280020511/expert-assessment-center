@@ -252,6 +252,49 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Independently revalidate uploaded primary artifact
+        id: independent
+        if: always()
+        continue-on-error: true
+        env:
+          PRIMARY_ARTIFACT_ID: ${{ steps.ticket_artifact.outputs.artifact-id }}
+          PRIMARY_ARTIFACT_DIGEST: ${{ steps.ticket_artifact.outputs.artifact-digest }}
+          AUTHORITATIVE_EXECUTION_SHA: ${{ steps.source.outputs.execution_sha }}
+          MAXIMUM_TOTAL_CALLS: ${{ needs.admit-ticket.outputs.calls }}
+          MAXIMUM_COST_USD: ${{ needs.admit-ticket.outputs.cost_anomaly_usd }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIMARY_ARTIFACT_ID"
+          test -n "$PRIMARY_ARTIFACT_DIGEST"
+          maximum_cost="$MAXIMUM_COST_USD"
+          if [[ -z "$maximum_cost" ]]; then
+            maximum_cost="1000000000"
+          fi
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/$REPOSITORY/actions/artifacts/$PRIMARY_ARTIFACT_ID/zip" \
+            > uploaded-primary-artifact.zip
+          rm -rf independently-downloaded-primary
+          mkdir independently-downloaded-primary
+          unzip -q uploaded-primary-artifact.zip -d independently-downloaded-primary
+          set +e
+          python open-model-market/v5_independent_artifact_revalidation.py \
+            --artifact-dir independently-downloaded-primary \
+            --expected-sha "$AUTHORITATIVE_EXECUTION_SHA" \
+            --expected-run-id "${{ github.run_id }}" \
+            --maximum-calls "$MAXIMUM_TOTAL_CALLS" \
+            --maximum-cost-usd "$maximum_cost" \
+            --archive uploaded-primary-artifact.zip \
+            --expected-artifact-digest "$PRIMARY_ARTIFACT_DIGEST" \
+            --output independent-revalidation.json
+          revalidation_exit=$?
+          set -e
+          status="$(jq -r '.status // "FAIL"' independent-revalidation.json 2>/dev/null || printf 'FAIL')"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          test "$revalidation_exit" -eq 0
+          test "$status" = "PASS"
+
       - name: Publish report only after audit and artifact freeze
         id: publish
         if: >-
@@ -259,7 +302,9 @@ jobs:
           steps.prepare_report.outcome == 'success' &&
           steps.audit.outputs.status == 'PASS' &&
           steps.manifest.outcome == 'success' &&
-          steps.ticket_artifact.outcome == 'success'
+          steps.ticket_artifact.outcome == 'success' &&
+          steps.independent.outcome == 'success' &&
+          steps.independent.outputs.status == 'PASS'
         uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
         env:
           COMMENT_DIR: ticket-artifacts/report-comments
@@ -290,11 +335,16 @@ jobs:
           PRIMARY_ARTIFACT_URL: ${{ steps.ticket_artifact.outputs.artifact-url }}
           PRIMARY_ARTIFACT_DIGEST: ${{ steps.ticket_artifact.outputs.artifact-digest }}
         run: |
+          effective_audit_outcome="${{ steps.audit.outcome }}"
+          if [[ "${{ steps.independent.outcome }}" != "success" || \
+                "${{ steps.independent.outputs.status }}" != "PASS" ]]; then
+            effective_audit_outcome="independent-artifact-revalidation-failed"
+          fi
           python open-model-market/v5_final_status.py \
             --output-dir ticket-artifacts \
             --run-url "$RUN_URL" \
             --ticket-upload-outcome "${{ steps.ticket_artifact.outcome }}" \
-            --audit-outcome "${{ steps.audit.outcome }}" \
+            --audit-outcome "$effective_audit_outcome" \
             --manifest-outcome "${{ steps.manifest.outcome }}" \
             --artifact-id "$PRIMARY_ARTIFACT_ID" \
             --artifact-url "$PRIMARY_ARTIFACT_URL" \
@@ -320,6 +370,38 @@ jobs:
             --commit-sha "$AUTHORITATIVE_EXECUTION_SHA" \
             --final-status-file final-status.md \
             --output final-attestation.json
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          independent_path = Path("independent-revalidation.json")
+          if not independent_path.is_file():
+              raise SystemExit("independent artifact revalidation is missing")
+          independent = json.loads(independent_path.read_text(encoding="utf-8"))
+          if independent.get("schema_version") != "v5-independent-artifact-revalidation-3":
+              raise SystemExit("independent artifact revalidation schema is not current")
+          final_status = json.loads(
+              Path("ticket-artifacts/final-status.json").read_text(encoding="utf-8")
+          )
+          if final_status.get("status") in {"PASS", "DEGRADED"} and independent.get("status") != "PASS":
+              raise SystemExit("successful final status requires PASS independent revalidation")
+          attestation_path = Path("final-attestation.json")
+          attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
+          attestation["independent_artifact_revalidation"] = {
+              **independent,
+              "evidence_sha256": hashlib.sha256(independent_path.read_bytes()).hexdigest(),
+          }
+          attestation["evidence_chain"] = (
+              "frozen-business-evidence -> primary-artifact -> "
+              "independent-artifact-revalidation -> final-status -> "
+              "final-attestation-artifact"
+          )
+          attestation_path.write_text(
+              json.dumps(attestation, ensure_ascii=False, indent=2),
+              encoding="utf-8",
+          )
+          PY
 
       - name: Upload final attestation artifact
         id: proof_artifact
@@ -331,6 +413,7 @@ jobs:
             final-attestation.json
             final-status.md
             ticket-artifacts/final-status.json
+            independent-revalidation.json
             checked-out-production-sha.txt
           if-no-files-found: error
           retention-days: 14
@@ -368,6 +451,8 @@ jobs:
           test "${{ steps.audit.outputs.status }}" = "PASS"
           test "${{ steps.manifest.outcome }}" = "success"
           test "${{ steps.ticket_artifact.outcome }}" = "success"
+          test "${{ steps.independent.outcome }}" = "success"
+          test "${{ steps.independent.outputs.status }}" = "PASS"
           test "${{ steps.publish.outcome }}" = "success"
           test "${{ steps.final.outcome }}" = "success"
           test "${{ steps.attest.outcome }}" = "success"
