@@ -798,24 +798,44 @@ _HEADING_TRAILING_REQUIREMENT_RE = re.compile(
 )
 
 
+_NUMBERED_HEADING_PREFIX_RE = re.compile(
+    r"^\s*(\d{1,3})[）).、:：]\s*(.+?)\s*$"
+)
+
+
+def _trim_heading_candidate(value: str) -> str:
+    return _clean_heading(
+        _HEADING_TRAILING_REQUIREMENT_RE.split(str(value), maxsplit=1)[0]
+    )
+
+
 def _valid_heading_sequence(
     values: Sequence[str],
     expected: int,
 ) -> list[str]:
-    headings = [
-        _clean_heading(
-            _HEADING_TRAILING_REQUIREMENT_RE.split(str(value), maxsplit=1)[0]
-        )
-        for value in values
-    ]
+    headings = [_trim_heading_candidate(value) for value in values]
     headings = [value for value in headings if value]
     if len(headings) != expected:
         return []
+
+    sequentially_numbered: list[str] = []
+    for index, heading in enumerate(headings, start=1):
+        match = _NUMBERED_HEADING_PREFIX_RE.match(heading)
+        if not match or int(match.group(1)) != index:
+            sequentially_numbered = []
+            break
+        candidate = _trim_heading_candidate(match.group(2))
+        if not candidate:
+            sequentially_numbered = []
+            break
+        sequentially_numbered.append(candidate)
+    if len(sequentially_numbered) == expected:
+        headings = sequentially_numbered
+
     normalized = [_normalized_heading(value) for value in headings]
     if not all(normalized) or len(set(normalized)) != len(normalized):
         return []
     return headings
-
 
 def _inline_delimited_markdown_headings(task: str) -> list[str]:
     match = _INLINE_MARKDOWN_CONTRACT_RE.search(str(task or ""))
