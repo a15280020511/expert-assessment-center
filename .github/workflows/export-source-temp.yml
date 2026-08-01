@@ -1,30 +1,43 @@
-name: Export Source Temporary
+name: Apply Constitutional Patch Temporary
 
 on:
   push:
     branches:
       - fix/v5-constitutional-completeness-dynamic
-  pull_request:
-    branches:
-      - main
+    paths:
+      - .github/v5-constitutional-patch.b64
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  export-source:
+  apply-patch:
+    if: github.actor == github.repository_owner
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          persist-credentials: false
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: source-snapshot-${{ github.run_id }}
-          path: |
-            .
-            !.git/**
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 1
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Verify and apply frozen source bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "fix/v5-constitutional-completeness-dynamic"
+          base64 --decode .github/v5-constitutional-patch.b64 > /tmp/v5-constitutional-patch.tar.gz
+          test "$(sha256sum /tmp/v5-constitutional-patch.tar.gz | awk '{print $1}')" = "e1b4bbd3162d8b844dac6ad42a492b8e2cf51017e2b24c62e8bf08e53b0fb2ff"
+          tar -xzf /tmp/v5-constitutional-patch.tar.gz
+          rm .github/v5-constitutional-patch.b64
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          python -m compileall -q open-model-market tests tools
+      - name: Commit constitutional hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 1
+          git commit -m "fix(v5): enforce constitutional completeness and dynamic planning"
+          git push origin HEAD:fix/v5-constitutional-completeness-dynamic
