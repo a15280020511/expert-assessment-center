@@ -2,18 +2,17 @@
 from __future__ import annotations
 
 from v5_constitutional_runtime import build_runtime
-from v5_cross_endpoint_planner import CrossEndpointPlannerPolicy
-from v5_runtime import FailureCategory, ProductionRuntime, RetryPolicy, RuntimeConfig
+from v5_operational_resilience import OperationalResiliencePlannerPolicy
+from v5_runtime import ProductionRuntime, RetryPolicy, RuntimeConfig
+
+CrossEndpointPlannerPolicy = OperationalResiliencePlannerPolicy
 
 
 def build_production_runtime(config: RuntimeConfig) -> ProductionRuntime:
     """Construct one explicit runtime with company-safe contract recovery."""
     retry_policy = RetryPolicy(
-        retry_same_endpoint_categories=(
-            FailureCategory.PROVIDER_RATE_LIMITED,
-            FailureCategory.PROVIDER_TIMEOUT,
-        ),
-        maximum_same_endpoint_retries_per_node=1,
+        retry_same_endpoint_categories=(),
+        maximum_same_endpoint_retries_per_node=0,
     )
     return build_runtime(
         config,
