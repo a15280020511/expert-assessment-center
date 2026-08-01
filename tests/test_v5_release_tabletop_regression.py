@@ -28,15 +28,23 @@ class V5ReleaseConstitutionalRegressionTests(unittest.TestCase):
         required = (
             "task_specific_production_branching",
             "case_derived_compaction_applied",
+            "architecture_selection_policy",
+            "generic-semantic-matrix-only",
             "v5-adaptive-search.json",
             "explicit_output_contract",
             "model_company_policy",
             "global_monkey_patching",
-            "cross_task_history_used",
         )
         for fragment in required:
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, self.text)
+
+    def test_release_gate_remains_read_only(self) -> None:
+        self.assertIn("permissions:\n  contents: read", self.text)
+        self.assertIn("persist-credentials: false", self.text)
+        self.assertIn("test ! -e .release-authorized", self.text)
+        self.assertNotIn("git push", self.text)
+        self.assertNotIn("refs/heads/production", self.text)
 
 
 if __name__ == "__main__":
