@@ -1,0 +1,21 @@
+{
+  "schema_version": "v5-paid-acceptance-run-query-result-1",
+  "request_id": "constitutional-final-receipt-20260802-v4",
+  "request_commit_sha": "fa8f2e004b78f6421ad5d222551fc0d75829b5f9",
+  "query_branch": "acceptance/v5-constitutional-final-receipt-v4-20260802",
+  "runs": [
+    {
+      "id": 30710929788,
+      "run_number": 11,
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "head_branch": "acceptance/v5-constitutional-final-receipt-v4-20260802",
+      "head_sha": "fa8f2e004b78f6421ad5d222551fc0d75829b5f9",
+      "created_at": "2026-08-01T17:43:01Z",
+      "updated_at": "2026-08-01T17:43:11Z",
+      "html_url": "https://github.com/a15280020511/expert-assessment-center/actions/runs/30710929788"
+    }
+  ],
+  "run_count": 1
+}
