@@ -1,0 +1,151 @@
+name: One-Time Actions Merge Qualified Remediation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-time-actions-merge-qualified-remediation.yml"
+      - ".github/workflows/one-time-actions-constitutional-qualification.yml"
+      - "open-model-market/**"
+      - "tests/**"
+      - "tools/**"
+      - ".github/workflows/**"
+      - "README.md"
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  actions: read
+
+concurrency:
+  group: one-time-actions-merge-qualified-remediation
+  cancel-in-progress: false
+
+jobs:
+  merge-qualified-remediation:
+    if: >-
+      github.repository == 'a15280020511/expert-assessment-center' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/v5-constitutional-semantic-evidence-dynamic-20260801'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      TARGET_BRANCH: actions/v5-constitutional-remediation-20260801
+      TARGET_PR: "173"
+      BOOTSTRAP_PR: "172"
+      BASELINE_PRODUCTION_SHA: be9529ad2e38380954373c129250e6e24f8d3d11
+    steps:
+      - name: Checkout Actions-authored remediation branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: actions/v5-constitutional-remediation-20260801
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Wait for exact zero-cost qualification evidence
+        id: qualified
+        shell: bash
+        run: |
+          set -euo pipefail
+          report=open-model-market/constitutional-qualification-report.json
+          qualified=false
+          for attempt in $(seq 1 60); do
+            git fetch origin "$TARGET_BRANCH" --no-tags
+            git reset --hard "origin/$TARGET_BRANCH"
+            if [[ -s "$report" ]] && [[ "$(jq -r '.status' "$report")" == "PASS" ]]; then
+              source_sha="$(jq -er '.source_sha' "$report")"
+              current_sha="$(git rev-parse HEAD)"
+              production_observed="$(jq -er '.production_sha_observed' "$report")"
+              test "$production_observed" = "$BASELINE_PRODUCTION_SHA"
+              test "$(jq -r '.production_ref_moved' "$report")" = "false"
+              test "$(jq -r '.paid_model_calls' "$report")" = "0"
+              test "$(jq -r '.model_secrets_loaded' "$report")" = "false"
+              test "$(jq -r '.ruff' "$report")" = "PASS"
+              test "$(jq -r '.compileall' "$report")" = "PASS"
+              test "$(jq -r '.full_unit_tests.status' "$report")" = "PASS"
+              test "$(jq -r '.p0_regressions.status' "$report")" = "PASS"
+              test "$(jq -r '.p0_regressions.count' "$report")" = "26"
+              test "$(jq -r '.legacy_cleanup_status' "$report")" = "PASS"
+              git merge-base --is-ancestor "$source_sha" "$current_sha"
+              changed_after_source="$(git diff --name-only "$source_sha" "$current_sha")"
+              test "$changed_after_source" = "$report"
+              qualified=true
+              {
+                echo "source_sha=$source_sha"
+                echo "qualified_sha=$current_sha"
+              } >> "$GITHUB_OUTPUT"
+              break
+            fi
+            sleep 30
+          done
+          test "$qualified" = "true"
+
+      - name: Bind qualification to exact draft PR head
+        shell: bash
+        env:
+          QUALIFIED_SHA: ${{ steps.qualified.outputs.qualified_sha }}
+        run: |
+          set -euo pipefail
+          pr_json="$(gh api "/repos/$REPOSITORY/pulls/$TARGET_PR")"
+          test "$(jq -r '.state' <<<"$pr_json")" = "open"
+          test "$(jq -r '.head.ref' <<<"$pr_json")" = "$TARGET_BRANCH"
+          test "$(jq -r '.head.sha' <<<"$pr_json")" = "$QUALIFIED_SHA"
+          test "$(jq -r '.base.ref' <<<"$pr_json")" = "main"
+          production_sha="$(gh api "/repos/$REPOSITORY/git/ref/heads/production" --jq '.object.sha')"
+          test "$production_sha" = "$BASELINE_PRODUCTION_SHA"
+
+      - name: Mark qualified PR ready and merge exact SHA
+        id: merge
+        shell: bash
+        env:
+          QUALIFIED_SHA: ${{ steps.qualified.outputs.qualified_sha }}
+        run: |
+          set -euo pipefail
+          gh pr ready "$TARGET_PR" --repo "$REPOSITORY" || true
+          gh api \
+            --method PUT \
+            "/repos/$REPOSITORY/pulls/$TARGET_PR/merge" \
+            -f merge_method=squash \
+            -f sha="$QUALIFIED_SHA" \
+            -f commit_title='fix(v5): constitutional semantic evidence and dynamic remediation' \
+            -f commit_message='Actions-authored remediation; zero-cost constitutional qualification PASS; production ref unchanged.' \
+            > merge-result.json
+          test "$(jq -r '.merged' merge-result.json)" = "true"
+          merge_sha="$(jq -er '.sha' merge-result.json)"
+          main_sha="$(gh api "/repos/$REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          production_sha="$(gh api "/repos/$REPOSITORY/git/ref/heads/production" --jq '.object.sha')"
+          test "$main_sha" = "$merge_sha"
+          test "$production_sha" = "$BASELINE_PRODUCTION_SHA"
+          {
+            echo "merge_sha=$merge_sha"
+            echo "production_sha=$production_sha"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish immutable merge receipt
+        shell: bash
+        env:
+          QUALIFIED_SHA: ${{ steps.qualified.outputs.qualified_sha }}
+          SOURCE_SHA: ${{ steps.qualified.outputs.source_sha }}
+          MERGE_SHA: ${{ steps.merge.outputs.merge_sha }}
+          PRODUCTION_SHA: ${{ steps.merge.outputs.production_sha }}
+        run: |
+          set -euo pipefail
+          body=$(cat <<EOF
+          ## Constitutional remediation merged
+
+          - Actions source SHA: \`$SOURCE_SHA\`
+          - Qualified PR head SHA: \`$QUALIFIED_SHA\`
+          - Squash merge SHA on \`main\`: \`$MERGE_SHA\`
+          - \`production\` remains: \`$PRODUCTION_SHA\`
+          - Paid model calls in remediation qualification: \`0\`
+          - Qualification evidence: \`open-model-market/constitutional-qualification-report.json\`
+          - Legacy cleanup evidence: \`open-model-market/legacy-cleanup-report.json\`
+
+          Production promotion remains fail-closed pending a new request-driven paid acceptance and independent artifact revalidation.
+          EOF
+          )
+          gh pr comment "$TARGET_PR" --repo "$REPOSITORY" --body "$body"
+          gh pr close "$BOOTSTRAP_PR" --repo "$REPOSITORY" --comment "Actions bootstrap completed; final code merged from PR #$TARGET_PR. This bootstrap PR remains non-mergeable."
