@@ -291,6 +291,8 @@ class RuntimeAttempt:
     response_model: str | None
     response_provider: str | None
     failure: Mapping[str, Any] | None = None
+    raw_answer: str | None = None
+    answer_transformations: list[Mapping[str, Any]] = field(default_factory=list)
 
 
 @dataclass
