@@ -140,7 +140,13 @@ jobs:
             open-model-market/v5_constitutional_runtime.py \
             open-model-market/v5-closed-world-numeric-prompt-fix-evidence.json \
             tests/test_v5_v4_contract_isolation.py
-          test -z "$(git status --short | grep '^??' || true)"
+          unexpected_untracked="$(
+            git status --short \
+              | grep '^??' \
+              | grep -v '^?? numeric-prompt-validation-logs/' \
+              || true
+          )"
+          test -z "$unexpected_untracked"
           git commit -m \
             "fix(v5): operationalize closed-world numeric evidence"
           git push \
