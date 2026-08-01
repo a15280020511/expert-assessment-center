@@ -57,14 +57,6 @@ class TaskConstraintPolarityTests(unittest.TestCase):
 class ClosedWorldEvidenceTests(unittest.TestCase):
     TASK = "仅依据题面，不得调用外部工具，不得编造，给出完整结论。"
 
-    def test_real_production_wording_compiles_closed_world(self) -> None:
-        policy = compile_task_constraints(self.TASK)
-        self.assertFalse(policy.external_tools_allowed)
-        self.assertFalse(policy.external_facts_allowed)
-        self.assertFalse(policy.unsupported_precise_quantities_allowed)
-        self.assertTrue(policy.source_attribution_required)
-        self.assertTrue(policy.fact_provenance_required)
-
     def test_unsupported_precise_quantities_are_rejected(self) -> None:
         answer = "建议承诺99.9% SLA，在第3年完成迁移，未来3–5年持续扩展。"
         violations = validate_answer_evidence(self.TASK, answer)
@@ -85,11 +77,6 @@ class ClosedWorldEvidenceTests(unittest.TestCase):
             any(value.startswith("unsupported-fact-label:") for value in violations)
         )
 
-    def test_user_fact_label_is_allowed(self) -> None:
-        task = self.TASK + "已知事实：自建初始成本高。"
-        answer = "事实：自建初始成本高。"
-        self.assertEqual(validate_answer_evidence(task, answer), [])
-
     def test_supported_chinese_paraphrases_are_allowed(self) -> None:
         task = (
             self.TASK
@@ -101,6 +88,34 @@ class ClosedWorldEvidenceTests(unittest.TestCase):
             "事实：A路线有积水，B路线有杂物阻挡且未发现积水。\n"
             "事实：门外有自称维修人员要求进入且无法核验身份。"
         )
+        self.assertEqual(validate_answer_evidence(task, answer), [])
+
+    def test_chinese_person_classifiers_are_normalized(self) -> None:
+        quantities = normalized_quantities("门外有2名人员和3位访客，另有1人。")
+        self.assertEqual(
+            quantities,
+            {
+                ("1", "", "people"),
+                ("2", "", "people"),
+                ("3", "", "people"),
+            },
+        )
+
+
+class ClosedWorldEvidenceExtendedTests(unittest.TestCase):
+    TASK = ClosedWorldEvidenceTests.TASK
+
+    def test_real_production_wording_compiles_closed_world(self) -> None:
+        policy = compile_task_constraints(self.TASK)
+        self.assertFalse(policy.external_tools_allowed)
+        self.assertFalse(policy.external_facts_allowed)
+        self.assertFalse(policy.unsupported_precise_quantities_allowed)
+        self.assertTrue(policy.source_attribution_required)
+        self.assertTrue(policy.fact_provenance_required)
+
+    def test_user_fact_label_is_allowed(self) -> None:
+        task = self.TASK + "已知事实：自建初始成本高。"
+        answer = "事实：自建初始成本高。"
         self.assertEqual(validate_answer_evidence(task, answer), [])
 
     def test_similar_but_unsupported_fact_remains_rejected(self) -> None:
@@ -115,17 +130,6 @@ class ClosedWorldEvidenceTests(unittest.TestCase):
         violations = validate_answer_evidence(task, "事实：A路线未发现积水。")
         self.assertTrue(
             any(value.startswith("unsupported-fact-label:") for value in violations)
-        )
-
-    def test_chinese_person_classifiers_are_normalized(self) -> None:
-        quantities = normalized_quantities("门外有2名人员和3位访客，另有1人。")
-        self.assertEqual(
-            quantities,
-            {
-                ("1", "", "people"),
-                ("2", "", "people"),
-                ("3", "", "people"),
-            },
         )
 
 
