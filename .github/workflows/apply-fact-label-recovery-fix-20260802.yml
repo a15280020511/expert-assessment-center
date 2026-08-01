@@ -1,12 +1,9 @@
 name: Apply Fact Label Recovery Fix 2026-08-02
 
 on:
-  push:
-    branches:
-      - fix/v5-fact-label-recovery-reserve-20260802
-    paths:
-      - tools/apply_fact_label_recovery_fix_20260802.py
-      - .github/workflows/apply-fact-label-recovery-fix-20260802.yml
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
 
 permissions:
   contents: write
@@ -17,7 +14,9 @@ concurrency:
 
 jobs:
   apply:
-    if: github.actor != 'github-actions[bot]'
+    if: >-
+      github.actor == github.repository_owner &&
+      github.event.pull_request.head.ref == 'fix/v5-fact-label-recovery-reserve-20260802'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
