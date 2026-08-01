@@ -8,7 +8,7 @@ on:
       - ".github/v5-paid-acceptance-request.json"
 
 permissions:
-  contents: read
+  contents: write
   actions: read
 
 concurrency:
@@ -307,3 +307,122 @@ jobs:
             paid-acceptance-attestation.json
           if-no-files-found: error
           retention-days: 30
+
+  persist-paid-acceptance-receipt:
+    needs:
+      - paid-acceptance
+      - independently-recompute-paid-artifact
+    if: always() && github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      PAID_RUN_ID: ${{ github.run_id }}
+      REQUEST_BRANCH: ${{ github.ref_name }}
+      REQUEST_COMMIT_SHA: ${{ github.sha }}
+      PAID_JOB_RESULT: ${{ needs.paid-acceptance.result }}
+      INDEPENDENT_JOB_RESULT: ${{ needs.independently-recompute-paid-artifact.result }}
+    steps:
+      - name: Checkout acceptance branch for durable receipt
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: true
+          path: receipt-source
+
+      - name: Resolve current Run artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/$REPOSITORY/actions/runs/$PAID_RUN_ID/artifacts?per_page=100" \
+            > run-artifacts.json
+          attestation_id=$(jq -r --arg name "v5-paid-acceptance-attestation-$PAID_RUN_ID" '
+            [.artifacts[] | select(.name == $name and .expired == false)]
+            | if length == 1 then .[0].id else empty end
+          ' run-artifacts.json)
+          if [[ -n "$attestation_id" ]]; then
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/$REPOSITORY/actions/artifacts/$attestation_id/zip" \
+              > attestation.zip
+            rm -rf attestation-evidence
+            mkdir attestation-evidence
+            unzip -q attestation.zip -d attestation-evidence
+          fi
+
+      - name: Build and persist branch receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=receipt-source/.github/v5-paid-acceptance-request.json
+          request_id=$(jq -er '.request_id' "$request")
+          target_sha=$(jq -er '.target_sha' "$request")
+          mkdir -p receipt-source/.github/v5-paid-acceptance-receipts
+
+          paid_meta=$(jq -c --arg name "v5-paid-acceptance-$PAID_RUN_ID" '
+            [.artifacts[] | select(.name == $name and .expired == false)]
+            | if length == 1 then .[0] else null end
+          ' run-artifacts.json)
+          attestation_meta=$(jq -c --arg name "v5-paid-acceptance-attestation-$PAID_RUN_ID" '
+            [.artifacts[] | select(.name == $name and .expired == false)]
+            | if length == 1 then .[0] else null end
+          ' run-artifacts.json)
+
+          if [[ -s attestation-evidence/paid-acceptance-attestation.json ]]; then
+            independent=$(cat attestation-evidence/paid-acceptance-attestation.json)
+          else
+            independent='null'
+          fi
+
+          status=FAIL
+          if [[ "$PAID_JOB_RESULT" == success && "$INDEPENDENT_JOB_RESULT" == success ]] && \
+             [[ "$(jq -r '.status // empty' <<<"$independent")" == PASS ]]; then
+            status=PASS
+          fi
+
+          receipt="receipt-source/.github/v5-paid-acceptance-receipts/$request_id.json"
+          jq -n \
+            --arg status "$status" \
+            --arg request_id "$request_id" \
+            --arg request_branch "$REQUEST_BRANCH" \
+            --arg request_commit_sha "$REQUEST_COMMIT_SHA" \
+            --arg target_sha "$target_sha" \
+            --arg run_id "$PAID_RUN_ID" \
+            --arg paid_job_result "$PAID_JOB_RESULT" \
+            --arg independent_job_result "$INDEPENDENT_JOB_RESULT" \
+            --argjson paid_artifact "$paid_meta" \
+            --argjson attestation_artifact "$attestation_meta" \
+            --argjson independent_attestation "$independent" \
+            '{
+              schema_version: "v5-paid-acceptance-durable-receipt-1",
+              status: $status,
+              request_id: $request_id,
+              request_branch: $request_branch,
+              request_commit_sha: $request_commit_sha,
+              target_sha: $target_sha,
+              paid_workflow_run_id: $run_id,
+              paid_job_result: $paid_job_result,
+              independent_job_result: $independent_job_result,
+              paid_artifact: $paid_artifact,
+              independent_attestation_artifact: $attestation_artifact,
+              independent_attestation: $independent_attestation,
+              independently_recomputed_from_primitive_evidence: (
+                $independent_attestation != null and
+                ($independent_attestation.independently_recomputed_from_primitive_evidence == true)
+              ),
+              production_ref_moved: false,
+              public_report_published: false,
+              authoritative_qualification_receipt: true
+            }' > "$receipt"
+
+          git -C receipt-source config user.name "github-actions[bot]"
+          git -C receipt-source config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C receipt-source add ".github/v5-paid-acceptance-receipts/$request_id.json"
+          git -C receipt-source commit -m "audit(v5): persist paid acceptance receipt $request_id"
+          git -C receipt-source push origin "HEAD:refs/heads/$REQUEST_BRANCH"
+          cat "$receipt"
+          test "$status" = PASS
