@@ -219,10 +219,10 @@ class V5CriticalDeliveryReliabilityTests(unittest.TestCase):
         metadata = result["execution_graph"]["metadata"]
         rows = metadata["recovery_pool"]["node-selected"]
         models = [str(row["model"]) for row in rows]
-        self.assertEqual("anthropic/opus", models[0])
-        self.assertIn("z-ai/glm", models)
+        self.assertEqual("z-ai/glm", models[0])
         self.assertIn("qwen/qwen-plus", models)
         self.assertNotIn("qwen/qwen-small", models)
+        self.assertNotIn("anthropic/opus", models)
         policy_evidence = metadata["recovery_pool_policy"]
         self.assertTrue(
             policy_evidence["planning_estimated_budget_advisory_only"]
@@ -241,16 +241,20 @@ class V5CriticalDeliveryReliabilityTests(unittest.TestCase):
         )
         self.assertEqual(
             1,
+            policy_evidence["absolute_cost_cap_excluded_by_node"][
+                "node-selected"
+            ],
+        )
+        self.assertEqual(
+            0,
             policy_evidence[
                 "estimated_above_planning_budget_by_node"
             ]["node-selected"],
         )
-        retained = next(
-            row for row in rows if row["model"] == "anthropic/opus"
-        )
         self.assertTrue(
-            retained["estimated_cost_above_planning_remaining_budget"]
+            policy_evidence["absolute_cost_cap_enforced_at_planning"]
         )
+        self.assertEqual(2, policy_evidence["total_executable_recovery_options"])
 
 
     def test_v3_regression_live_ledger_can_admit_retained_recovery(self) -> None:
