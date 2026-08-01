@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 import traceback
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -20,6 +21,16 @@ from v5_general_task_planning import (  # noqa: E402
     compile_task_semantics,
 )
 from v5_planning_diagnostics import build_infeasibility_report  # noqa: E402
+
+
+def _serializable_limits(limits: Any) -> dict[str, Any]:
+    """Serialize GraphLimits without assuming a repository-specific method."""
+    if is_dataclass(limits):
+        return asdict(limits)
+    values = getattr(limits, "__dict__", None)
+    if isinstance(values, Mapping):
+        return dict(values)
+    raise TypeError("GraphLimits is not serializable by the diagnostic tool")
 
 
 def _work_candidate_summary(
@@ -211,7 +222,7 @@ def diagnose(task: str, output: Path) -> dict[str, Any]:
             profile=profile,
             resource_shape=shape,
         )
-        result["limits"] = limits.to_dict()
+        result["limits"] = _serializable_limits(limits)
 
         result["failed_stage"] = "endpoint-snapshot"
         endpoint_payloads = v5_pipeline._load_json(args.endpoint_file)
