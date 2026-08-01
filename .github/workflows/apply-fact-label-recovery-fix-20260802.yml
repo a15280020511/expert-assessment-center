@@ -33,11 +33,13 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-dev.txt
 
-      - name: Apply patch and remove temporary machinery
+      - name: Repair patch context, apply patch, and remove temporary machinery
         shell: bash
         run: |
           set -euo pipefail
+          python tools/fix_fact_label_recovery_patcher_20260802.py
           python tools/apply_fact_label_recovery_fix_20260802.py
+          rm tools/fix_fact_label_recovery_patcher_20260802.py
           rm tools/apply_fact_label_recovery_fix_20260802.py
           rm .github/workflows/apply-fact-label-recovery-fix-20260802.yml
 
