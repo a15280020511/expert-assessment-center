@@ -1,0 +1,122 @@
+name: One-Time Actions Constitutional Rebuild
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-time-actions-constitutional-rebuild.yml"
+      - "open-model-market/**"
+      - "tests/**"
+      - ".github/workflows/**"
+      - "README.md"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-time-actions-constitutional-rebuild
+  cancel-in-progress: false
+
+jobs:
+  rebuild:
+    if: >-
+      github.repository == 'a15280020511/expert-assessment-center' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/v5-constitutional-semantic-evidence-dynamic-20260801'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout current remediation source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-runtime.txt
+            requirements-dev.txt
+
+      - name: Rebuild all remediation changes from immutable baseline
+        env:
+          BASE_SHA: be9529ad2e38380954373c129250e6e24f8d3d11
+          TARGET_BRANCH: actions/v5-constitutional-remediation-20260801
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --binary "$BASE_SHA" HEAD -- \
+            . \
+            ':(exclude).github/workflows/one-time-actions-constitutional-rebuild.yml' \
+            > /tmp/constitutional-remediation.patch
+          test -s /tmp/constitutional-remediation.patch
+          git switch --detach "$BASE_SHA"
+          git switch -C "$TARGET_BRANCH"
+          git apply --index /tmp/constitutional-remediation.patch
+
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("open-model-market/v5_runtime.py")
+          source = path.read_text(encoding="utf-8")
+          old_import = "import v5_executor as legacy_executor\n"
+          if source.count(old_import) != 1:
+              raise SystemExit("unexpected legacy executor import count")
+          source = source.replace(old_import, "")
+
+          marker = 'STRICT_SUCCESS_STATUSES = {"success", "success_retried", "success_recovered"}\n'
+          if source.count(marker) != 1:
+              raise SystemExit("unexpected native runtime constant marker count")
+          native = '''STRICT_SUCCESS_STATUSES = {"success", "success_retried", "success_recovered"}\nFORBIDDEN_REQUEST_FIELDS = {\n    "tools",\n    "tool_choice",\n    "plugins",\n    "web_search",\n    "web_search_options",\n    "file_search",\n    "browser",\n    "code_interpreter",\n    "models",\n}\n'''
+          source = source.replace(marker, native)
+          old_reference = "legacy_executor.FORBIDDEN_FIELDS"
+          if source.count(old_reference) != 1:
+              raise SystemExit("unexpected legacy forbidden-field reference count")
+          source = source.replace(old_reference, "FORBIDDEN_REQUEST_FIELDS")
+          path.write_text(source, encoding="utf-8")
+
+          test_path = Path("tests/test_v5_capability_calibration.py")
+          test_source = test_path.read_text(encoding="utf-8")
+          needle = '        self.assertNotIn(".install()", recovery)\n'
+          addition = '''        self.assertNotIn(".install()", recovery)\n        native_runtime = (\n            ROOT / "open-model-market" / "v5_runtime.py"\n        ).read_text(encoding="utf-8")\n        self.assertNotIn("import v5_executor", native_runtime)\n        self.assertNotIn("legacy_executor", native_runtime)\n'''
+          if needle not in test_source:
+              raise SystemExit("runtime decoupling test insertion point missing")
+          test_path.write_text(
+              test_source.replace(needle, addition, 1),
+              encoding="utf-8",
+          )
+          PY
+
+          test ! -e .github/workflows/one-time-actions-constitutional-rebuild.yml
+          ! grep -q "import v5_executor" open-model-market/v5_runtime.py
+          ! grep -q "legacy_executor" open-model-market/v5_runtime.py
+          git diff --cached --check
+
+      - name: Install pinned validation dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+
+      - name: Validate rebuilt constitutional branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m ruff check .
+          python -m compileall -q open-model-market tests tools
+          python -m unittest discover -s tests -p 'test*.py' -v
+
+      - name: Commit and push Actions-authored branch
+        env:
+          TARGET_BRANCH: actions/v5-constitutional-remediation-20260801
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(v5): constitutional semantic evidence and dynamic remediation"
+          git push --force-with-lease origin "HEAD:refs/heads/$TARGET_BRANCH"
