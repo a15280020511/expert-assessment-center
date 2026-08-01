@@ -1,0 +1,284 @@
+name: One-Time Actions Constitutional Qualification V2
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-time-actions-constitutional-qualification-v2.yml"
+      - "tools/one_time_constitutional_cleanup.py"
+      - "tools/one_time_constitutional_cleanup_v2.py"
+      - "open-model-market/**"
+      - "tests/**"
+      - "tools/**"
+      - ".github/workflows/**"
+      - "README.md"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-time-actions-constitutional-qualification-v3
+  cancel-in-progress: true
+
+jobs:
+  qualify-native-runtime:
+    if: >-
+      github.repository == 'a15280020511/expert-assessment-center' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/v5-constitutional-semantic-evidence-dynamic-20260801'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TARGET_BRANCH: actions/v5-constitutional-remediation-20260801
+      TRANSFORM_SOURCE: fix/v5-constitutional-semantic-evidence-dynamic-20260801
+    steps:
+      - name: Checkout Actions-authored remediation branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: actions/v5-constitutional-remediation-20260801
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-runtime.txt
+            requirements-dev.txt
+
+      - name: Apply deterministic constitutional cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin "$TARGET_BRANCH"
+          git fetch origin "$TRANSFORM_SOURCE"
+          git show "origin/$TRANSFORM_SOURCE:tools/one_time_constitutional_cleanup.py" \
+            > tools/.one_time_constitutional_cleanup.py
+          git show "origin/$TRANSFORM_SOURCE:tools/one_time_constitutional_cleanup_v2.py" \
+            > tools/.one_time_constitutional_cleanup_v2.py
+          python tools/.one_time_constitutional_cleanup_v2.py
+          rm tools/.one_time_constitutional_cleanup.py
+          rm tools/.one_time_constitutional_cleanup_v2.py
+          test "$(jq -r '.status' open-model-market/legacy-cleanup-report.json)" = "PASS"
+          test "$(jq -r '.v5_executor_production_reachable' open-model-market/legacy-cleanup-report.json)" = "false"
+          test "$(jq -r '.install_definitions_remaining | length' open-model-market/legacy-cleanup-report.json)" = "0"
+          test "$(jq -r '.install_calls_remaining | length' open-model-market/legacy-cleanup-report.json)" = "0"
+          test "$(jq -r '.test_install_calls_remaining | length' open-model-market/legacy-cleanup-report.json)" = "0"
+          test ! -e open-model-market/v5_executor.py
+          test ! -e open-model-market/v5_r8_executor.py
+          test ! -e open-model-market/v5_production_hardening.py
+          grep -q 'constitutional_main()' open-model-market/v5_pipeline.py
+          git diff --check
+
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+
+      - name: Run static and full zero-cost validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p qualification-logs qualification-artifacts
+          python -m ruff check . --fix 2>&1 | tee qualification-logs/ruff-fix.log
+          python -m ruff check . 2>&1 | tee qualification-logs/ruff.log
+          python -m compileall -q open-model-market tests tools \
+            2>&1 | tee qualification-logs/compileall.log
+          python -m unittest discover -s tests -p 'test*.py' -v \
+            2>&1 | tee qualification-logs/unit-test.log
+          grep -Eq '^Ran [0-9]+ tests? in ' qualification-logs/unit-test.log
+          grep -q '^OK$' qualification-logs/unit-test.log
+          python tools/run_v5_p0_regressions.py \
+            2>&1 | tee qualification-logs/p0-regressions.log
+          grep -q 'REGISTERED TOTAL: 34' qualification-logs/p0-regressions.log
+          grep -q 'P0 REGRESSION RESULT: run=34, passed=34, failures=0, errors=0, skipped=0' \
+            qualification-logs/p0-regressions.log
+
+      - name: Run five-scenario constitutional matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          scenarios = {
+              "simple": (
+                  "比较方案A与方案B的成本并给出决策阈值。",
+                  8,
+                  1,
+              ),
+              "strict_contract": (
+                  "比较两个方案。严格使用以下4个Markdown二级标题，顺序不得改变，"
+                  "每项不得为空：\n1）已知条件\n2）计算与比较\n3）风险与反证\n4）结论与下一步",
+                  10,
+                  2,
+              ),
+              "complex": (
+                  "评估三个候选方案，分别完成定量分析、证据核验、情景推演、"
+                  "独立红队反证和最终综合决策，并说明实施条件。",
+                  16,
+                  2,
+              ),
+              "closed_world": (
+                  "仅依据题面，不得调用外部工具，不联网，不得编造。"
+                  "比较方案A与方案B，只接受完整交付。",
+                  8,
+                  1,
+              ),
+              "consumer_four_call": (
+                  "真实决策任务：福州小学夜班岗亭无法使用有线网络或室内Wi-Fi，"
+                  "移动4G/5G可用，每月需要100GB以上流量，长期月成本目标约20元，"
+                  "可接受一次性购买设备。比较手机热点与随身Wi-Fi。仅依据题面，"
+                  "不得调用外部工具、不联网、不编造套餐价格；事实、假设和推断分开；"
+                  "只接受完整交付，并给出可撤销的7天验证步骤。",
+                  4,
+                  1,
+              ),
+          }
+          root = Path("qualification-artifacts")
+          summary = {}
+          for name, (task, total, recovery) in scenarios.items():
+              output = root / name
+              completed = subprocess.run(
+                  [
+                      sys.executable,
+                      "open-model-market/v5_constitutional_pipeline.py",
+                      "--task", task,
+                      "--catalog-file", "tests/fixtures/models.json",
+                      "--endpoint-file", "tests/fixtures/endpoints.json",
+                      "--dry-run",
+                      "--maximum-total-calls", str(total),
+                      "--maximum-recovery-calls", str(recovery),
+                      "--cost-anomaly-usd", "0.25",
+                      "--quality-tier", "value",
+                      "--output-dir", str(output),
+                  ],
+                  capture_output=True,
+                  text=True,
+                  check=False,
+              )
+              if completed.returncode:
+                  raise SystemExit(completed.stdout + "\n" + completed.stderr)
+              semantics = json.loads((output / "task-interpretations.json").read_text())
+              constraints = json.loads((output / "task-constraints.json").read_text())
+              market = json.loads((output / "v5-model-endpoint-market.json").read_text())
+              optimization = json.loads((output / "v5-optimization.json").read_text())
+              graph = json.loads((output / "v5-execution-graph.json").read_text())
+              dry = json.loads((output / "v5-dry-run.json").read_text())
+              companies = [
+                  node["parameter_profile"]["model_company"]
+                  for node in graph["nodes"]
+              ]
+              assert len(companies) == len(set(companies))
+              assert optimization["solver_status"] in {"OPTIMAL", "FEASIBLE"}
+              assert constraints["external_tools_allowed"] is False
+              assert constraints["fail_closed"] is True
+              assert dry["task_constraints"] == constraints
+              assert dry["global_monkey_patching"] is False
+              assert dry["model_company_policy"] == "task-global-all-different"
+              assert market["fixed_preselection_weight_tuple_used"] is False
+              assert market["fixed_task_fit_weight_tuple_used"] is False
+              assert abs(sum(market["preselection_objective_weights"].values()) - 1.0) < 1e-9
+              assert abs(sum(market["task_fit_feature_weights"].values()) - 1.0) < 1e-9
+              signals = semantics["task_signals"]
+              assert signals["task_specific_production_branching"] is False
+              assert signals["case_derived_compaction_applied"] is False
+              summary[name] = {
+                  "node_count": len(graph["nodes"]),
+                  "companies": companies,
+                  "constraints": constraints,
+                  "objective_weights": market["preselection_objective_weights"],
+                  "task_fit_weights": market["task_fit_feature_weights"],
+                  "complexity_score": signals["complexity_score"],
+              }
+          assert summary["simple"]["objective_weights"] != summary["complex"]["objective_weights"]
+          assert summary["simple"]["task_fit_weights"] != summary["complex"]["task_fit_weights"]
+          assert summary["complex"]["complexity_score"] >= summary["simple"]["complexity_score"]
+          for name in ("closed_world", "consumer_four_call"):
+              constraints = summary[name]["constraints"]
+              assert constraints["external_facts_allowed"] is False
+              assert constraints["unsupported_precise_quantities_allowed"] is False
+              assert constraints["allow_degraded_success"] is False
+          assert summary["consumer_four_call"]["node_count"] <= 3
+          (root / "qualification-matrix-summary.json").write_text(
+              json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Freeze qualification evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          production_sha="$(git ls-remote origin refs/heads/production | awk '{print $1}')"
+          unit_tests="$(python - <<'PY'
+          import re
+          from pathlib import Path
+          values = re.findall(
+              r'^Ran (\d+) tests? in ',
+              Path('qualification-logs/unit-test.log').read_text(),
+              re.MULTILINE,
+          )
+          if not values:
+              raise SystemExit('unit test count missing')
+          print(values[-1])
+          PY
+          )"
+          jq -n \
+            --arg source_sha "$source_sha" \
+            --arg production_sha "$production_sha" \
+            --argjson unit_tests "$unit_tests" \
+            --slurpfile matrix qualification-artifacts/qualification-matrix-summary.json \
+            --slurpfile cleanup open-model-market/legacy-cleanup-report.json \
+            '{
+              schema_version: "v5-constitutional-qualification-3",
+              status: "PASS",
+              source_sha_before_evidence_commit: $source_sha,
+              production_sha_observed: $production_sha,
+              production_ref_moved: false,
+              paid_model_calls: 0,
+              model_secrets_loaded: false,
+              ruff: "PASS",
+              compileall: "PASS",
+              full_unit_tests: {status: "PASS", count: $unit_tests},
+              p0_regressions: {status: "PASS", count: 34},
+              constitutional_matrix: $matrix[0],
+              legacy_cleanup: $cleanup[0],
+              fail_closed: true
+            }' > open-model-market/constitutional-qualification-report.json
+          test "$(jq -r '.legacy_cleanup.status' open-model-market/constitutional-qualification-report.json)" = "PASS"
+          cat open-model-market/constitutional-qualification-report.json
+
+      - name: Commit exact qualified tree to remediation branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(v5): complete constitutional native-runtime remediation"
+          remote_target="$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+          git push \
+            --force-with-lease="refs/heads/$TARGET_BRANCH:$remote_target" \
+            origin "HEAD:refs/heads/$TARGET_BRANCH"
+
+      - name: Upload qualification diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: v5-constitutional-qualification-v2-${{ github.run_id }}
+          path: |
+            qualification-logs/
+            qualification-artifacts/
+            open-model-market/legacy-cleanup-report.json
+            open-model-market/constitutional-qualification-report.json
+          if-no-files-found: warn
+          retention-days: 30
