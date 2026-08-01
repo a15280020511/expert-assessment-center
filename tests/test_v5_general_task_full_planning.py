@@ -67,7 +67,7 @@ class V5GeneralTaskFullPlanningTests(unittest.TestCase):
         )
         return profile, resources, candidates, optimization
 
-    def test_wifi_task_has_a_feasible_low_cost_graph(self):
+    def test_wifi_task_has_feasible_dynamic_graph(self):
         task = (
             "比较手机流量和随身WiFi。A每月39元含60GB，超出5元每GB；B设备99元，"
             "每月20元含120GB。计算12个月和18个月总成本、盈亏平衡时间，并在80GB、"
@@ -75,18 +75,26 @@ class V5GeneralTaskFullPlanningTests(unittest.TestCase):
         )
         _, resources, _, optimization = self.plan(task)
         graph = ExecutionGraph.from_mapping(optimization["execution_graph"])
-        self.assertEqual(
-            resources["task_semantics"]["interpretations"][0]["strategy"],
+        interpretation = resources["task_semantics"]["interpretations"][0]
+        signals = resources["task_semantics"]["task_signals"]
+        self.assertNotEqual(
+            interpretation.get("strategy"),
             "cost_performance_compact_decision",
         )
-        self.assertLessEqual(len(graph.nodes), 2)
+        self.assertFalse(signals["case_derived_compaction_applied"])
         self.assertGreaterEqual(len(graph.nodes), 1)
-        self.assertLessEqual(optimization["selected_effective_cost_usd"], 0.25 / 1.35)
+        self.assertLessEqual(len(graph.nodes), 4)
+        self.assertLessEqual(
+            optimization["selected_effective_cost_usd"],
+            0.25 / 1.35,
+        )
         self.assertTrue(
-            resources["semantic_input_policy"]["semantic_compiler_injected_explicitly"]
+            resources["semantic_input_policy"][
+                "semantic_compiler_injected_explicitly"
+            ]
         )
 
-    def test_job_choice_task_has_a_feasible_low_cost_graph(self):
+    def test_job_choice_task_has_feasible_dynamic_graph(self):
         task = (
             "比较夜班保安与网约车。保安月收入4200元，网约车流水12000元、成本7800元。"
             "计算净收入、单位工时收入、三年收入，做悲观基准乐观情景、现金流风险分析，"
@@ -95,13 +103,20 @@ class V5GeneralTaskFullPlanningTests(unittest.TestCase):
         profile, resources, _, optimization = self.plan(task)
         graph = ExecutionGraph.from_mapping(optimization["execution_graph"])
         self.assertFalse(profile.high_stakes)
-        self.assertLessEqual(len(graph.nodes), 2)
+        self.assertGreaterEqual(len(graph.nodes), 1)
+        self.assertLessEqual(len(graph.nodes), 4)
         self.assertFalse(optimization["fallback_used"])
+        companies = [
+            node.parameter_profile["model_company"] for node in graph.nodes
+        ]
+        self.assertEqual(len(companies), len(set(companies)))
         self.assertTrue(
-            resources["semantic_input_policy"]["semantic_compiler_injected_explicitly"]
+            resources["semantic_input_policy"][
+                "semantic_compiler_injected_explicitly"
+            ]
         )
 
-    def test_diagnostic_reports_node_budget_shortage(self):
+    def test_diagnostic_reports_dynamic_node_budget_shortage(self):
         task = "比较两个套餐，计算12个月成本、盈亏平衡时间和敏感性。"
         _, _, candidates = self.candidate_bundle(task)
         report = build_infeasibility_report(
@@ -110,8 +125,10 @@ class V5GeneralTaskFullPlanningTests(unittest.TestCase):
             message="test",
         )
         self.assertEqual(report["code"], "BUDGET_INSUFFICIENT_NODES")
-        self.assertEqual(report["minimum_required_nodes"], 1)
+        self.assertGreaterEqual(report["minimum_required_nodes"], 1)
+        self.assertLessEqual(report["minimum_required_nodes"], 4)
         self.assertEqual(report["model_calls_performed"], 0)
+        self.assertFalse(report["cross_task_history_used"])
 
     def test_diagnostic_reports_cost_budget_shortage(self):
         task = "比较两个套餐，计算12个月成本、盈亏平衡时间和敏感性。"
@@ -127,8 +144,12 @@ class V5GeneralTaskFullPlanningTests(unittest.TestCase):
             message="test",
         )
         self.assertEqual(report["code"], "BUDGET_INSUFFICIENT_COST")
-        self.assertGreater(report["minimum_effective_expected_cost_usd"], 0)
+        self.assertGreater(
+            report["minimum_effective_expected_cost_usd"],
+            0,
+        )
         self.assertIn("planning_raw_budget_usd", report["ticket_limits"])
+        self.assertEqual(report["model_calls_performed"], 0)
 
 
 def explicit_suite() -> unittest.TestSuite:
