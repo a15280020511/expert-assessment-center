@@ -29,7 +29,7 @@ _QUANTITY_RE = re.compile(
     r"(?<![\w.])(\d+(?:\.\d+)?)\s*"
     r"(秒|分钟|小时|天|周|月|年|米|公里|千米|公斤|克|人|次|%|％|"
     r"seconds?|minutes?|hours?|days?|weeks?|months?|years?|meters?|"
-    r"kilometers?|kg|people|times?)\b?",
+    r"kilometers?|kg|people|times?)(?!\w)",
     re.IGNORECASE,
 )
 
