@@ -527,6 +527,7 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
                 max_budget_usd=max_budget_usd,
             )
         )
+        active_bundle: Mapping[str, Any] = filtered_bundle
         try:
             optimization = super().optimize_execution_graph(
                 filtered_bundle,
@@ -536,10 +537,28 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
             if delivery_policy["removed_candidate_count"] <= 0:
                 raise
             delivery_policy["fallback_used"] = True
+            active_bundle = candidate_bundle
             optimization = super().optimize_execution_graph(
                 candidate_bundle,
                 **kwargs,
             )
+        if (
+            not delivery_policy["fallback_used"]
+            and isinstance(candidate_bundle, dict)
+        ):
+            candidate_bundle["candidates"] = [
+                dict(row)
+                for row in filtered_bundle.get("candidates", [])
+                if isinstance(row, Mapping)
+            ]
+            candidate_bundle[
+                "candidate_count_after_critical_delivery"
+            ] = len(candidate_bundle["candidates"])
+            candidate_bundle["critical_delivery_pruned_count"] = int(
+                delivery_policy["removed_candidate_count"]
+            )
+            candidate_bundle["critical_delivery_policy"] = delivery_policy
+            active_bundle = candidate_bundle
         result = dict(optimization)
         result["critical_delivery_policy"] = delivery_policy
         graph = dict(result.get("execution_graph") or {})
@@ -549,5 +568,5 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
         result["execution_graph"] = graph
         return self.rebalance_recovery_pool(
             result,
-            candidate_bundle,
+            active_bundle,
         )
