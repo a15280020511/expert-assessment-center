@@ -66,7 +66,9 @@ _LINE_NUMBERED_ITEM_RE = re.compile(
     r"(?m)^\s*(\d{1,3})[）).、:]\s*(.+?)\s*$"
 )
 _INLINE_NUMBERED_ITEM_RE = re.compile(
-    r"(?:(?<=^)|(?<=[：:；;\n]))\s*(\d{1,3})[）).、]\s*([^；;\n]+)",
+    r"(?:(?<=^)|(?<=[：:；;\n])|(?<=\s))"
+    r"\s*(\d{1,3})[）).、]\s*(.+?)"
+    r"(?=(?:\s+\d{1,3}[）).、])|[；;\n]|$)",
     re.MULTILINE,
 )
 _TABLE_CUE_RE = re.compile(
@@ -553,12 +555,39 @@ def validate_markdown_contract(
     answer: str,
     contract: Mapping[str, Any],
 ) -> list[str]:
-    if not contract.get("explicit_markdown_contract"):
-        return []
-    required = [
-        str(value)
-        for value in contract.get("exact_markdown_headings", [])
-    ]
+    explicit = bool(contract.get("explicit_markdown_contract"))
+    if explicit:
+        required = [
+            str(value)
+            for value in contract.get("exact_markdown_headings", [])
+        ]
+        missing_prefix = "missing-exact-markdown-heading:"
+        duplicate_prefix = "duplicate-exact-markdown-heading:"
+        empty_prefix = "empty-exact-markdown-section:"
+        order_reason = "exact-markdown-heading-order-mismatch"
+        must_be_nonempty = bool(
+            contract.get("markdown_headings_must_be_nonempty")
+        )
+        order_required = bool(
+            contract.get("markdown_heading_order_required")
+        )
+    else:
+        if contract.get("machine_readable_required"):
+            return []
+        required = [
+            str(value).strip()
+            for value in contract.get("required_fields", [])
+            if str(value).strip()
+        ]
+        if not required:
+            return []
+        missing_prefix = "missing-required-markdown-heading:"
+        duplicate_prefix = "duplicate-required-markdown-heading:"
+        empty_prefix = "empty-required-markdown-section:"
+        order_reason = "required-markdown-heading-order-mismatch"
+        must_be_nonempty = True
+        order_required = True
+
     parsed = markdown_sections(answer)
     by_name: dict[str, list[tuple[int, str]]] = {}
     for index, (heading, body) in enumerate(parsed):
@@ -570,28 +599,19 @@ def validate_markdown_contract(
     for heading in required:
         matches = by_name.get(_normalized_heading(heading), [])
         if not matches:
-            violations.append(
-                "missing-exact-markdown-heading:" + heading
-            )
+            violations.append(missing_prefix + heading)
             continue
         if len(matches) > 1:
-            violations.append(
-                "duplicate-exact-markdown-heading:" + heading
-            )
+            violations.append(duplicate_prefix + heading)
         positions.append(matches[0][0])
-        if (
-            contract.get("markdown_headings_must_be_nonempty")
-            and not matches[0][1].strip()
-        ):
-            violations.append(
-                "empty-exact-markdown-section:" + heading
-            )
+        if must_be_nonempty and not matches[0][1].strip():
+            violations.append(empty_prefix + heading)
     if (
-        contract.get("markdown_heading_order_required")
+        order_required
         and len(positions) == len(required)
         and positions != sorted(positions)
     ):
-        violations.append("exact-markdown-heading-order-mismatch")
+        violations.append(order_reason)
     return violations
 
 
