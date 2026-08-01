@@ -606,6 +606,7 @@ def main(
     incumbent_value = -math.inf
     final_market: dict[str, Any] | None = None
     final_candidates: dict[str, Any] | None = None
+    last_candidates: dict[str, Any] | None = None
     final_snapshot: Any = None
     final_ranked: list[Any] = []
     final_endpoint_source = ""
@@ -655,6 +656,7 @@ def main(
                     maximum_per_group=per_work,
                 )
             )
+            last_candidates = candidate_graph
             optimization = (
                 runtime.planner_policy.optimize_execution_graph(
                     candidate_graph,
@@ -732,7 +734,9 @@ def main(
         or final_snapshot is None
     ):
         report = build_infeasibility_report(
-            final_candidates or {"candidates": []},
+            last_candidates
+            or final_candidates
+            or {"candidates": [], "interpretations": {}},
             limits,
             message=str(
                 last_error
