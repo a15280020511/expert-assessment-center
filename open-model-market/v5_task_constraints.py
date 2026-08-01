@@ -8,6 +8,7 @@ planning, node quality gates, final delivery, and evidence all use one meaning.
 from __future__ import annotations
 
 import re
+from difflib import SequenceMatcher
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Sequence
 
@@ -56,7 +57,7 @@ _SOURCE_REQUIRED_RE = re.compile(
 _QUANTITY_RE = re.compile(
     r"(?<![A-Za-z0-9_.])(?:第\s*)?(?P<lo>\d+(?:\.\d+)?)"
     r"(?:\s*(?:-|–|—|~|至|到)\s*(?P<hi>\d+(?:\.\d+)?))?"
-    r"\s*(?:个)?\s*(?P<unit>SLA|秒|分钟|小时|天|周|月|年|米|公里|千米|公斤|克|人|次|%|％|"
+    r"\s*(?:个)?\s*(?P<unit>SLA|秒|分钟|小时|天|周|月|年|米|公里|千米|公斤|克|人|名|位|次|%|％|"
     r"seconds?|minutes?|hours?|days?|weeks?|months?|years?|meters?|"
     r"kilometers?|kg|people|times?|元|块|人民币|rmb|cny|yuan|美元|美金|usd)"
     r"(?![A-Za-z0-9_])",
@@ -174,6 +175,8 @@ def normalized_quantities(text: str) -> set[tuple[str, str, str]]:
         "kg": "kg",
         "克": "gram",
         "人": "people",
+        "名": "people",
+        "位": "people",
         "people": "people",
         "次": "times",
         "times": "times",
@@ -232,20 +235,89 @@ def closed_world_numeric_prompt(
     )
 
 
+_EVIDENCE_FRAGMENT_RE = re.compile(
+    r"[。！？!?；;|\n]+|[，,、]+|(?:并且|而且|以及|且)|\b(?:and|but|while)\b",
+    re.IGNORECASE,
+)
+_NEGATION_UNKNOWN_RE = re.compile(
+    r"(?:无法|不能|未知|未核验|未确认|不可确认|unverified|unknown|cannot|can't)",
+    re.IGNORECASE,
+)
+_NEGATION_ABSENCE_RE = re.compile(
+    r"(?:未发现|没有|不存在|并无|not\s+found|does\s+not\s+exist|without)",
+    re.IGNORECASE,
+)
+_NEGATION_GENERIC_RE = re.compile(
+    r"(?:不得|禁止|严禁|不可|不应|未|非|no|not|never)",
+    re.IGNORECASE,
+)
+
+
 def _normalize_claim(value: str) -> str:
     value = re.sub(r"[（(][^）)]*[）)]", "", str(value or ""))
     value = re.sub(r"[`*_~#>\[\]{}]", "", value)
-    return re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "", value).casefold()
+    value = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "", value).casefold()
+    for source, target in (
+        ("存在", "有"),
+        ("人员", "人"),
+        ("人士", "人"),
+        ("被", ""),
+    ):
+        value = value.replace(source, target)
+    return value
+
+
+def _evidence_fragments(value: str, *, include_whole: bool) -> list[str]:
+    rendered = str(value or "").strip()
+    if not rendered:
+        return []
+    fragments: list[str] = [rendered] if include_whole else []
+    split = [
+        item.strip()
+        for item in _EVIDENCE_FRAGMENT_RE.split(rendered)
+        if item.strip()
+    ]
+    if split:
+        fragments.extend(split)
+    return list(dict.fromkeys(fragments))
+
+
+def _negation_polarity(value: str) -> str:
+    if _NEGATION_UNKNOWN_RE.search(value):
+        return "unknown"
+    if _NEGATION_ABSENCE_RE.search(value):
+        return "absence"
+    if _NEGATION_GENERIC_RE.search(value):
+        return "negative"
+    return "positive"
 
 
 def _claim_supported(claim: str, task: str) -> bool:
-    normalized = _normalize_claim(claim)
-    source = _normalize_claim(task)
-    if not normalized or normalized in source:
-        return True
-    tokens = set(re.findall(r"[A-Za-z]{3,}|[\u4e00-\u9fff]{2,}", claim.casefold()))
-    source_tokens = set(re.findall(r"[A-Za-z]{3,}|[\u4e00-\u9fff]{2,}", task.casefold()))
-    return len(tokens) >= 3 and len(tokens.intersection(source_tokens)) / len(tokens) >= 0.8
+    source_fragments = _evidence_fragments(task, include_whole=True)
+    source_rows = [
+        (_normalize_claim(fragment), _negation_polarity(fragment))
+        for fragment in source_fragments
+    ]
+    for fragment in _evidence_fragments(claim, include_whole=False):
+        normalized = _normalize_claim(fragment)
+        if not normalized:
+            continue
+        polarity = _negation_polarity(fragment)
+        if any(
+            normalized in source and polarity == source_polarity
+            for source, source_polarity in source_rows
+            if source
+        ):
+            continue
+        supported = any(
+            polarity == source_polarity
+            and SequenceMatcher(None, normalized, source).ratio() >= 0.72
+            for source, source_polarity in source_rows
+            if source
+        )
+        if not supported:
+            return False
+    return True
 
 
 def validate_answer_evidence(
