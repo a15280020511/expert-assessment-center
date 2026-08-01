@@ -11,7 +11,7 @@ import os
 from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
-import v5_executor as executor
+import v5_execution_primitives as executor
 import v5_planner as planner
 from execution_graph import SelectedNode
 
@@ -45,8 +45,7 @@ _VISIBLE_FLOOR_BY_FUNCTION = {
 _ORIGINAL_ESTIMATED_COST = planner._estimated_cost
 _ORIGINAL_CANDIDATE_FOR = planner._candidate_for
 _ORIGINAL_BUILD_NODE_PAYLOAD = executor.build_node_payload
-_ORIGINAL_EXTRACT_ANSWER = executor._extract_answer
-_INSTALLED = False
+_ORIGINAL_EXTRACT_ANSWER = executor.extract_answer
 
 
 def _clamp(value: float) -> float:
@@ -450,21 +449,3 @@ def robust_extract_answer(response: Mapping[str, Any]) -> str:
         if parts:
             return "\n".join(parts).strip()
     return ""
-
-
-def install() -> None:
-    """Compatibility installer for non-production callers; no history is used."""
-    global _INSTALLED
-    global _ORIGINAL_CANDIDATE_FOR
-    global _ORIGINAL_BUILD_NODE_PAYLOAD
-    global _ORIGINAL_EXTRACT_ANSWER
-    if _INSTALLED:
-        return
-    _ORIGINAL_CANDIDATE_FOR = planner._candidate_for
-    _ORIGINAL_BUILD_NODE_PAYLOAD = executor.build_node_payload
-    _ORIGINAL_EXTRACT_ANSWER = executor._extract_answer
-    _INSTALLED = True
-    planner._estimated_cost = conservative_estimated_cost
-    planner._candidate_for = hardened_candidate_for
-    executor.build_node_payload = hardened_build_node_payload
-    executor._extract_answer = robust_extract_answer

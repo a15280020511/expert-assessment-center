@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Run one explicit V5 production runtime and freeze one evidence bundle.
-
-Planning, execution and evidence normalization receive the same immutable
-RuntimeConfig. Search breadth is task-adaptive inside explicit platform safety
-ceilings. Failures close the run without invoking an alternate runtime.
-"""
+"""Run one explicit constitutional V5 production ticket and freeze evidence."""
 from __future__ import annotations
 
 import argparse
@@ -14,11 +9,12 @@ import traceback
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-import v5_pipeline
+import v5_constitutional_pipeline as v5_pipeline
 from v5_evidence_bundle import ApprovedRun, EvidenceBundleBuilder, EvidenceInputs
 from v5_model_company import DEFAULT_INTELLIGENCE_RANKING_LIMIT
 from v5_recovery_runtime import build_production_runtime
 from v5_runtime import ProductionRuntime, RuntimeConfig
+from v5_task_constraints import compile_task_constraints
 
 RUNTIME_VERSION = "v5-native-runtime-1"
 ABSOLUTE_MAX_MODEL_CALLS = 16
@@ -41,7 +37,6 @@ def _write(path: Path, value: Any) -> None:
 
 
 def _canonical_user_task(output: Path, fallback: str) -> tuple[str, str]:
-    """Return only user-authored task fields from the immutable ticket."""
     packet = _load(output / "ticket.json", {})
     task = packet.get("task") if isinstance(packet, Mapping) else None
     if not isinstance(task, Mapping):
@@ -52,15 +47,9 @@ def _canonical_user_task(output: Path, fallback: str) -> tuple[str, str]:
     sections = [question]
     requirements = task.get("requirements")
     if isinstance(requirements, list):
-        cleaned = [
-            str(item).strip()
-            for item in requirements
-            if str(item).strip()
-        ]
+        cleaned = [str(item).strip() for item in requirements if str(item).strip()]
         if cleaned:
-            sections.append(
-                "执行要求：\n" + "\n".join(f"- {item}" for item in cleaned)
-            )
+            sections.append("执行要求：\n" + "\n".join(f"- {item}" for item in cleaned))
     language = str(task.get("language") or "").strip()
     if language:
         sections.append(f"输出语言：{language}")
@@ -76,11 +65,7 @@ def _attempt_rows(node_results: Any) -> list[Mapping[str, Any]]:
             continue
         attempts = node.get("attempts", [])
         if isinstance(attempts, list):
-            rows.extend(
-                attempt
-                for attempt in attempts
-                if isinstance(attempt, Mapping)
-            )
+            rows.extend(attempt for attempt in attempts if isinstance(attempt, Mapping))
     return rows
 
 
@@ -88,11 +73,11 @@ def _search_policy() -> dict[str, Any]:
     return {
         "policy": "task-shape-feasibility-marginal-value",
         "ranking_emergency_ceiling": DEFAULT_INTELLIGENCE_RANKING_LIMIT,
-        "candidate_emergency_ceiling_per_work": (
-            ABSOLUTE_CANDIDATES_PER_WORK_CEILING
-        ),
+        "candidate_emergency_ceiling_per_work": ABSOLUTE_CANDIDATES_PER_WORK_CEILING,
         "fixed_ranking_width_used": False,
         "fixed_candidates_per_work_used": False,
+        "fixed_preselection_weight_tuple_used": False,
+        "preselection_weights": "derived-from-current-task",
         "cross_task_history_used": False,
     }
 
@@ -109,11 +94,10 @@ def _write_runtime_evidence(
         {
             "runtime_version": RUNTIME_VERSION,
             "entrypoint": "v5_production_ticket.py",
+            "pipeline": "v5_constitutional_pipeline.py",
             "runtime_constructor": "v5_recovery_runtime.build_production_runtime",
-            "recovery_policy": (
-                "cross-endpoint-company-safe-contract-aware"
-            ),
-            "model_company_policy": "task-global-all-different",
+            "recovery_policy": "cross-endpoint-company-safe-contract-aware",
+            "model_company_policy": "task-global-all-calls-all-different-across-nodes",
             "adaptive_search": _search_policy(),
             "global_monkey_patching": False,
             "maximum_model_calls": total_calls,
@@ -136,9 +120,8 @@ def _normalize_evidence(
     anomaly_budget: float | None,
     require_report: bool,
 ) -> dict[str, Any]:
-    inputs = EvidenceInputs.from_directory(output)
     builder = EvidenceBundleBuilder(
-        inputs,
+        EvidenceInputs.from_directory(output),
         ApprovedRun(
             total_calls=total_calls,
             recovery_calls=recovery_calls,
@@ -148,34 +131,13 @@ def _normalize_evidence(
     return builder.write(output, require_report=require_report)
 
 
-def _normalize(
-    output: Path,
-    *,
-    total_calls: int,
-    recovery_calls: int,
-    anomaly_budget: float | None,
-) -> dict[str, Any]:
-    return _normalize_evidence(
-        output,
-        total_calls=total_calls,
-        recovery_calls=recovery_calls,
-        anomaly_budget=anomaly_budget,
-        require_report=True,
-    )
-
-
 def _retryable_provider_failure(output: Path) -> bool:
-    rows = _load(output / "v5-node-results.json", [])
-    attempts = _attempt_rows(rows)
+    attempts = _attempt_rows(_load(output / "v5-node-results.json", []))
     if not attempts:
         return False
     saw_failure = False
     for attempt in attempts:
-        failure = (
-            attempt.get("failure")
-            if isinstance(attempt.get("failure"), Mapping)
-            else None
-        )
+        failure = attempt.get("failure") if isinstance(attempt.get("failure"), Mapping) else None
         if failure is None:
             if str(attempt.get("status") or "") == "passed":
                 return False
@@ -188,7 +150,7 @@ def _retryable_provider_failure(output: Path) -> bool:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Execute the explicit V5 native production ticket runtime"
+        description="Execute the explicit constitutional V5 production runtime"
     )
     parser.add_argument("--task", required=True)
     parser.add_argument("--output-dir", default="ticket-artifacts")
@@ -205,19 +167,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _runtime(args: argparse.Namespace) -> ProductionRuntime:
-    config = RuntimeConfig(
-        total_call_limit=args.maximum_total_calls,
-        recovery_call_limit=args.maximum_recovery_calls,
-        cost_anomaly_usd=args.cost_anomaly_usd,
-        quality_tier=args.quality_tier,
-        tools_allowed=False,
-        live_catalog_required=args.require_live_catalog,
-        provider_lock_required=True,
-        maximum_candidates_per_work=(
-            ABSOLUTE_CANDIDATES_PER_WORK_CEILING
-        ),
+    return build_production_runtime(
+        RuntimeConfig(
+            total_call_limit=args.maximum_total_calls,
+            recovery_call_limit=args.maximum_recovery_calls,
+            cost_anomaly_usd=args.cost_anomaly_usd,
+            quality_tier=args.quality_tier,
+            tools_allowed=False,
+            live_catalog_required=args.require_live_catalog,
+            provider_lock_required=True,
+            maximum_candidates_per_work=ABSOLUTE_CANDIDATES_PER_WORK_CEILING,
+        )
     )
-    return build_production_runtime(config)
 
 
 def _pipeline_command(
@@ -226,27 +187,17 @@ def _pipeline_command(
     task: str,
 ) -> list[str]:
     command = [
-        "--task",
-        task,
-        "--output-dir",
-        str(output),
-        "--quality-tier",
-        args.quality_tier,
-        "--ranking-limit",
-        str(DEFAULT_INTELLIGENCE_RANKING_LIMIT),
-        "--maximum-total-calls",
-        str(args.maximum_total_calls),
-        "--maximum-recovery-calls",
-        str(args.maximum_recovery_calls),
-        "--maximum-candidates-per-work",
-        str(ABSOLUTE_CANDIDATES_PER_WORK_CEILING),
-        "--solver-timeout-seconds",
-        "20",
+        "--task", task,
+        "--output-dir", str(output),
+        "--quality-tier", args.quality_tier,
+        "--ranking-limit", str(DEFAULT_INTELLIGENCE_RANKING_LIMIT),
+        "--maximum-total-calls", str(args.maximum_total_calls),
+        "--maximum-recovery-calls", str(args.maximum_recovery_calls),
+        "--maximum-candidates-per-work", str(ABSOLUTE_CANDIDATES_PER_WORK_CEILING),
+        "--solver-timeout-seconds", "20",
     ]
     if args.cost_anomaly_usd is not None:
-        command.extend(
-            ["--cost-anomaly-usd", str(args.cost_anomaly_usd)]
-        )
+        command.extend(["--cost-anomaly-usd", str(args.cost_anomaly_usd)])
     if args.require_live_catalog:
         command.append("--require-live-catalog")
     return command
@@ -259,29 +210,35 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not 4 <= args.maximum_total_calls <= ABSOLUTE_MAX_MODEL_CALLS:
         raise ValueError("maximum-total-calls must be between 4 and 16")
     if not 0 <= args.maximum_recovery_calls < args.maximum_total_calls:
-        raise ValueError(
-            "maximum-recovery-calls must be non-negative and below total calls"
-        )
-    runtime = _runtime(args)
+        raise ValueError("maximum-recovery-calls must be non-negative and below total calls")
+
     canonical_task, task_source = _canonical_user_task(output, args.task)
     if not canonical_task:
         raise ValueError("canonical user task is empty")
+    constraints = compile_task_constraints(canonical_task)
+    runtime = _runtime(args)
     _write(
         output / "planning-task.json",
         {
-            "schema_version": "v5-planning-task-2",
+            "schema_version": "v5-planning-task-3",
             "source": task_source,
-            "sha256": hashlib.sha256(
-                canonical_task.encode("utf-8")
-            ).hexdigest(),
+            "sha256": hashlib.sha256(canonical_task.encode("utf-8")).hexdigest(),
             "characters": len(canonical_task),
             "delegation_notice_included": False,
             "execution_constraints_supplied_by_runtime": True,
+            "task_constraints": constraints.to_dict(),
             "cross_endpoint_contract_recovery": True,
             "task_global_model_company_uniqueness": True,
             "adaptive_search": _search_policy(),
         },
     )
+    _write_runtime_evidence(
+        output,
+        total_calls=args.maximum_total_calls,
+        recovery_calls=args.maximum_recovery_calls,
+        anomaly_budget=args.cost_anomaly_usd,
+    )
+
     try:
         code = int(
             v5_pipeline.main(
@@ -291,16 +248,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if code != 0:
             raise RuntimeError(f"V5 pipeline returned {code}")
-        envelope = _normalize(
+        envelope = _normalize_evidence(
             output,
             total_calls=args.maximum_total_calls,
             recovery_calls=args.maximum_recovery_calls,
             anomaly_budget=args.cost_anomaly_usd,
+            require_report=True,
         )
         if envelope.get("status") != "success":
-            raise RuntimeError(
-                "V5 production result did not pass the delivery gate"
-            )
+            raise RuntimeError("V5 production result did not pass the delivery gate")
         print(
             json.dumps(
                 {
@@ -310,13 +266,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "actual_cost_usd": envelope["actual_cost_usd"],
                     "node_count": envelope["node_count"],
                     "approved_total_calls": args.maximum_total_calls,
-                    "model_company_policy": (
-                        "task-global-all-different"
-                    ),
+                    "model_company_policy": "task-global-all-calls-all-different-across-nodes",
                     "adaptive_search": _search_policy(),
-                    "evidence_input_sha256": envelope[
-                        "evidence_input_sha256"
-                    ],
+                    "evidence_input_sha256": envelope["evidence_input_sha256"],
                 },
                 ensure_ascii=False,
             )
@@ -361,6 +313,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "global_monkey_patching": False,
                 "task_global_model_company_uniqueness": True,
                 "adaptive_search": _search_policy(),
+                "task_constraints": constraints.to_dict(),
                 "cross_task_history_used": False,
             },
         )

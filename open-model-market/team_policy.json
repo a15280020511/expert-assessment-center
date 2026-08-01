@@ -1,10 +1,76 @@
 {
-  "pattern": "three-experts-plus-one-judge",
-  "seats": [
-    {"key": "core", "function": "核心主研席", "mission": "建立问题框架，识别关键变量，完成主分析、必要计算和初步结论。"},
-    {"key": "cross", "function": "交叉验证席", "mission": "从相邻专业或不同方法独立验证主问题，补足遗漏变量、数据要求和替代方案。"},
-    {"key": "red", "function": "独立反证席", "mission": "主动寻找反例、失败条件、证据缺口、隐藏假设和最坏情景，不以多数意见为准。"}
+  "schema_version": "v5-team-policy-2",
+  "pattern": "task-derived-dynamic-execution-graph",
+  "constitution": {
+    "task_independent": true,
+    "scenario_specific_production_branches_forbidden": true,
+    "all_computable_decisions_dynamic": true,
+    "dynamic_variables": [
+      "task interpretation breadth",
+      "atomic work graph",
+      "node count",
+      "professional capabilities",
+      "roles",
+      "models",
+      "model companies",
+      "provider endpoints",
+      "reasoning depth",
+      "prompt modules",
+      "output contracts",
+      "candidate search width",
+      "recovery allocation",
+      "quality thresholds",
+      "objective weights",
+      "delivery coverage"
+    ],
+    "platform_safety_limits_are_not_solver_preferences": true,
+    "fixed_model_score_weight_tuples_forbidden": true,
+    "fixed_role_or_seat_count_forbidden": true,
+    "fixed_interpretation_count_forbidden": true,
+    "same_company_across_distinct_nodes_forbidden": true,
+    "all_actual_calls_in_company_audit": true,
+    "failed_calls_in_company_audit": true,
+    "external_tools_allowed": false,
+    "provider_fallback_allowed": false,
+    "cross_task_history_allowed": false,
+    "explicit_user_denial_overrides_permission": true,
+    "degraded_delivery_default": "denied",
+    "fact_truth_must_not_be_inferred_from_structure": true,
+    "unsupported_precise_quantities_fail_closed": true,
+    "structured_task_constraints_required": true,
+    "checked_out_execution_sha_is_authoritative": true,
+    "complete_audit_before_publication": true,
+    "independent_acceptance_recomputes_from_primitive_evidence": true,
+    "fail_closed": true
+  },
+  "capability_vocabulary": [
+    {
+      "key": "primary_analysis",
+      "description": "建立问题框架、识别关键变量、完成必要分析与计算。",
+      "binding_seat": false
+    },
+    {
+      "key": "independent_verification",
+      "description": "使用不同方法或相邻专业独立验证关键结论。",
+      "binding_seat": false
+    },
+    {
+      "key": "adversarial_reasoning",
+      "description": "寻找反例、失败条件、证据缺口、隐藏假设和最坏情景。",
+      "binding_seat": false
+    },
+    {
+      "key": "synthesis",
+      "description": "按任务输出合同综合可交付结论。",
+      "binding_seat": false
+    }
   ],
+  "capability_vocabulary_policy": {
+    "templates_are_nonbinding": true,
+    "solver_may_select_zero_one_or_multiple_instances": true,
+    "solver_may_create_other_task_derived_capabilities": true,
+    "templates_must_not_determine_node_count": true
+  },
   "keywords": {
     "international_relations": ["外交", "国际关系", "地缘政治", "国务卿", "外长", "制裁", "乌克兰", "俄罗斯", "北约", "geopolit", "foreign policy", "foreign minister", "secretary of state", "sanction"],
     "legal": ["法律", "法规", "诉讼", "合同", "判例", "合规", "监管", "legal", "law", "regulation", "contract", "compliance"],
@@ -32,19 +98,25 @@
     "creative": ["creative", "writing", "story", "style", "design"],
     "general": ["general", "reasoning", "analysis"]
   },
-  "professions": {
-    "international_relations": {"core": "国际关系与外交战略专家", "cross": "地区安全与政策核验专家", "red": "地缘政治反证与升级风险审计专家", "judge": "国际战略与证据质量裁决官"},
-    "legal": {"core": "法律分析与规则适用专家", "cross": "证据、程序与合规核验专家", "red": "法律风险与反方论证审计专家", "judge": "法律方案与风险裁决官"},
-    "medical": {"core": "临床证据与医疗决策专家", "cross": "研究方法与诊疗证据核验专家", "red": "医疗安全、不良结果与偏差审计专家", "judge": "医疗证据与风险裁决官"},
-    "security": {"core": "安全架构与威胁分析专家", "cross": "检测、验证与响应工程专家", "red": "对抗测试与失效模式审计专家", "judge": "安全方案与残余风险裁决官"},
-    "supply_chain": {"core": "供应链与运营优化专家", "cross": "库存、物流与履约验证专家", "red": "供应中断与极端情景审计专家", "judge": "供应链决策与韧性评审官"},
-    "public_policy": {"core": "公共政策设计与影响评估专家", "cross": "财政、社会与执行效果核验专家", "red": "政策副作用与利益冲突审计专家", "judge": "公共政策证据与实施裁决官"},
-    "coding": {"core": "软件架构与系统工程专家", "cross": "软件可靠性、测试与运维工程专家", "red": "软件安全与失效模式审计专家", "judge": "技术方案与系统决策评审官"},
-    "math": {"core": "运筹、统计与仿真建模专家", "cross": "敏感性分析与模型验证专家", "red": "定量假设与极端情景审计专家", "judge": "定量决策与模型评审官"},
-    "research": {"core": "研究设计与证据综合专家", "cross": "资料核验与方法学专家", "red": "证据偏差与反证审计专家", "judge": "证据决策与研究质量评审官"},
-    "business": {"core": "商业战略与经营分析专家", "cross": "财务建模与市场验证专家", "red": "投资风险与竞争战略红队专家", "judge": "商业投资与经营决策评审官"},
-    "creative": {"core": "创意策略与内容设计专家", "cross": "受众体验与传播效果专家", "red": "品牌风险与可执行性审查专家", "judge": "创意方案与传播决策评审官"},
-    "general": {"core": "问题领域主分析专家", "cross": "交叉验证与方法补充专家", "red": "反证、风险与边界条件审计专家", "judge": "综合决策与质量评审官"}
+  "professional_capability_vocabulary": {
+    "international_relations": ["geopolitical_analysis", "policy_verification", "escalation_risk", "evidence_synthesis"],
+    "legal": ["rule_application", "evidence_and_procedure", "counterargument", "risk_synthesis"],
+    "medical": ["clinical_evidence", "research_methodology", "safety_and_bias", "risk_synthesis"],
+    "security": ["threat_analysis", "detection_and_response", "adversarial_testing", "residual_risk"],
+    "supply_chain": ["operations_optimization", "inventory_and_logistics", "disruption_analysis", "resilience_synthesis"],
+    "public_policy": ["impact_evaluation", "implementation_analysis", "adverse_effects", "evidence_synthesis"],
+    "coding": ["software_architecture", "reliability_testing", "security_failure_modes", "technical_synthesis"],
+    "math": ["quantitative_modeling", "sensitivity_validation", "assumption_stress_test", "model_synthesis"],
+    "research": ["research_design", "methodology_verification", "bias_and_counterevidence", "evidence_synthesis"],
+    "business": ["strategy_analysis", "financial_and_market_validation", "competitive_risk", "decision_synthesis"],
+    "creative": ["creative_strategy", "audience_experience", "brand_and_execution_risk", "communication_synthesis"],
+    "general": ["primary_analysis", "independent_verification", "adversarial_reasoning", "synthesis"]
+  },
+  "professional_capability_policy": {
+    "titles_are_not_fixed_roles": true,
+    "capabilities_are_selected_and_weighted_by_task_matrix": true,
+    "solver_may_combine_or_split_capabilities": true,
+    "domain_vocabulary_does_not_create_nodes": true
   },
   "high_stakes": ["medical", "clinical", "diagnosis", "treatment", "legal advice", "lawsuit", "criminal", "cybersecurity", "military", "war", "regulatory compliance", "public safety", "医疗", "临床", "诊断", "治疗", "法律意见", "诉讼", "刑事", "网络安全", "军事", "战争", "监管合规", "公共安全", "制裁", "外交危机"],
   "long_context": ["document", "report", "contract", "repository", "codebase", "full text", "文档", "报告", "合同", "全文", "代码库", "整个仓库"],

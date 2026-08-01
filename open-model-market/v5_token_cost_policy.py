@@ -12,7 +12,6 @@ from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
 import v5_cost_reliability_hardening as cost
-import v5_planner as planner
 
 P95_TOKEN_USAGE_MULTIPLIER = cost.COST_UNCERTAINTY_MULTIPLIER
 STRUCTURED_P95_TOKEN_USAGE_MULTIPLIER = 1.22
@@ -135,16 +134,3 @@ def usage_audited_candidate_for(*args: Any, **kwargs: Any) -> Any:
         }
     )
     return replace(candidate, parameter_profile=profile)
-
-
-def install() -> None:
-    """Install after the original R8 cost and payload hardening."""
-    global _INSTALLED
-    global _ORIGINAL_HARDENED_CANDIDATE_FOR
-    cost.install()
-    if _INSTALLED:
-        return
-    _ORIGINAL_HARDENED_CANDIDATE_FOR = planner._candidate_for
-    planner._estimated_cost = p95_usage_estimated_cost
-    planner._candidate_for = usage_audited_candidate_for
-    _INSTALLED = True

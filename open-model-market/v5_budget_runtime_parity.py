@@ -105,17 +105,3 @@ def risk_budgeted_optimize_execution_graph(
     result["budget_preflight_parity"] = parity
     result["adaptive_ratio_iterations"] = iterations
     return result
-
-
-def install() -> None:
-    """Compatibility installer for old diagnostic paths."""
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    value_optimizer.optimize_execution_graph = (
-        risk_budgeted_optimize_execution_graph
-    )
-    planner.optimize_execution_graph = (
-        risk_budgeted_optimize_execution_graph
-    )
-    _INSTALLED = True

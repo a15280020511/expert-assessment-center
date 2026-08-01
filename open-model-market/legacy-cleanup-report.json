@@ -1,0 +1,181 @@
+{
+  "cross_task_history_allowed": false,
+  "deleted_modules": [
+    "v5_empty_output_recovery",
+    "v5_executor",
+    "v5_production_hardening",
+    "v5_r8_executor",
+    "v5_r8_gate_wiring",
+    "v5_r8_policy",
+    "v5_r8_provider_policy",
+    "v5_r8_retry_policy",
+    "v5_rejection_audit_policy",
+    "v5_resilient_executor",
+    "v5_stage_d_provider_compat",
+    "v5_total_call_cap"
+  ],
+  "deleted_tests": [
+    "test_v5_capability_calibration",
+    "test_v5_empty_output_recovery",
+    "test_v5_explicit_runtime",
+    "test_v5_extreme_chaos_stability",
+    "test_v5_planner_executor",
+    "test_v5_production_hardening",
+    "test_v5_quality_status_integrity",
+    "test_v5_r8_gate_wiring",
+    "test_v5_r8_provider_policy",
+    "test_v5_stage_d_provider_compat",
+    "test_v5_token_cost_policy"
+  ],
+  "failures": [],
+  "global_monkey_patching_allowed": false,
+  "install_calls_remaining": {},
+  "install_definitions_remaining": {},
+  "legacy_cli_delegates_to_constitutional_pipeline": true,
+  "legacy_imports_remaining": {},
+  "production_reachable_module_count": 50,
+  "production_reachable_modules": [
+    "artifact_manifest",
+    "atomic_work_graph",
+    "execution_graph",
+    "execution_graph_validator",
+    "issue_ticket",
+    "issue_ticket_hardened",
+    "model_market",
+    "openrouter_api",
+    "resource_matrix",
+    "task_resource_artifacts",
+    "task_semantic_compiler",
+    "v5_admission_lock",
+    "v5_assignment_search_calibration",
+    "v5_benchmark",
+    "v5_budget_runtime_parity",
+    "v5_candidate_diversity",
+    "v5_capability_calibration",
+    "v5_company_diversity",
+    "v5_constitutional_pipeline",
+    "v5_constitutional_runtime",
+    "v5_cost_reliability_hardening",
+    "v5_cross_endpoint_planner",
+    "v5_dynamic_configuration",
+    "v5_dynamic_prompt_delivery",
+    "v5_endpoint_catalog",
+    "v5_evidence_bundle",
+    "v5_execution_auditor",
+    "v5_execution_auditor_integrity",
+    "v5_execution_primitives",
+    "v5_final_attestation",
+    "v5_final_status",
+    "v5_general_task_planning",
+    "v5_global_company_calibration",
+    "v5_independent_artifact_revalidation",
+    "v5_issue_ticket",
+    "v5_model_company",
+    "v5_output_contract_delivery",
+    "v5_pipeline",
+    "v5_planner",
+    "v5_planning_diagnostics",
+    "v5_planning_runtime",
+    "v5_production_ticket",
+    "v5_quality_status_integrity",
+    "v5_recovery_runtime",
+    "v5_runtime",
+    "v5_task_constraints",
+    "v5_task_delivery_contract",
+    "v5_token_cost_policy",
+    "v5_truncation_budget_policy",
+    "v5_value_optimizer"
+  ],
+  "removed_install_functions": {
+    "v5_budget_runtime_parity": [
+      "install"
+    ],
+    "v5_candidate_diversity": [
+      "install"
+    ],
+    "v5_capability_calibration": [
+      "install"
+    ],
+    "v5_cost_reliability_hardening": [
+      "install"
+    ],
+    "v5_dynamic_configuration": [
+      "install"
+    ],
+    "v5_dynamic_prompt_delivery": [
+      "install"
+    ],
+    "v5_empty_output_recovery": [
+      "install"
+    ],
+    "v5_general_task_planning": [
+      "install"
+    ],
+    "v5_output_contract_delivery": [
+      "install"
+    ],
+    "v5_production_hardening": [
+      "install"
+    ],
+    "v5_quality_status_integrity": [
+      "_patch_loaded_callers",
+      "install",
+      "integrity_execute_v5_graph"
+    ],
+    "v5_r8_executor": [
+      "install"
+    ],
+    "v5_r8_gate_wiring": [
+      "install"
+    ],
+    "v5_r8_policy": [
+      "install"
+    ],
+    "v5_r8_provider_policy": [
+      "install"
+    ],
+    "v5_r8_retry_policy": [
+      "install"
+    ],
+    "v5_rejection_audit_policy": [
+      "install"
+    ],
+    "v5_resilient_executor": [
+      "install"
+    ],
+    "v5_stage_d_provider_compat": [
+      "install"
+    ],
+    "v5_token_cost_policy": [
+      "install"
+    ],
+    "v5_total_call_cap": [
+      "install"
+    ],
+    "v5_truncation_budget_policy": [
+      "install"
+    ]
+  },
+  "removed_install_test_methods": {
+    "tests/test_v5_candidate_diversity.py": [
+      "test_compatibility_install_is_no_op"
+    ],
+    "tests/test_v5_capability_calibration.py": [
+      "test_compatibility_installers_are_no_ops"
+    ],
+    "tests/test_v5_explicit_runtime.py": [
+      "test_compatibility_install_never_mutates_executor"
+    ],
+    "tests/test_v5_tabletop_production_semantics.py": [
+      "test_deprecated_install_is_a_noop"
+    ],
+    "tests/test_v5_token_cost_policy.py": [
+      "test_compatibility_install_does_not_modify_formal_planner"
+    ]
+  },
+  "schema_version": "v5-legacy-cleanup-report-3",
+  "status": "PASS",
+  "test_install_calls_remaining": {},
+  "test_install_statements_replaced": 3,
+  "v5_executor_production_reachable": false
+}

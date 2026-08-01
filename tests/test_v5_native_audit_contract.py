@@ -117,32 +117,93 @@ class V5NativeAuditContractTests(unittest.TestCase):
                 },
             ],
         )
+        constraints = {
+            "schema_version": "v5-task-constraints-1",
+            "degradation_authorization": "default_denied",
+            "allow_degraded_success": False,
+            "external_tools_allowed": False,
+            "external_facts_allowed": True,
+            "unsupported_precise_quantities_allowed": True,
+            "source_attribution_required": False,
+            "fact_provenance_required": False,
+            "fail_closed": True,
+            "matched_prohibitions": [],
+            "matched_permissions": [],
+            "policy": "explicit-deny-overrides-allow-default-deny",
+        }
+        self._write(root, "task-constraints.json", constraints)
+        self._write(
+            root,
+            "evidence-integrity.json",
+            {
+                "schema_version": "v5-evidence-integrity-1",
+                "status": "PASS",
+                "constraints": constraints,
+                "violations": [],
+                "fact_truth_not_inferred_from_structure": True,
+                "upstream_model_claims_are_not_promoted_to_user_facts": True,
+            },
+        )
+        successful = [
+            {
+                "node_id": "node-a",
+                "model": "openai/model-a",
+                "company": "openai",
+            },
+            {
+                "node_id": "node-b",
+                "model": "anthropic/model-b",
+                "company": "anthropic",
+            },
+            {
+                "node_id": "node-final",
+                "model": "google/model-c",
+                "company": "google",
+            },
+        ]
+        called = [
+            {
+                "node_id": "node-a",
+                "attempt_kind": "initial",
+                "model": "openai/model-a",
+                "company": "openai",
+                "status": "passed",
+            },
+            {
+                "node_id": "node-b",
+                "attempt_kind": "initial",
+                "model": "anthropic/model-b",
+                "company": "anthropic",
+                "status": "call_failed",
+            },
+            {
+                "node_id": "node-b",
+                "attempt_kind": "recovery",
+                "model": "anthropic/model-b",
+                "company": "anthropic",
+                "status": "passed",
+            },
+            {
+                "node_id": "node-final",
+                "attempt_kind": "initial",
+                "model": "google/model-c",
+                "company": "google",
+                "status": "passed",
+            },
+        ]
         self._write(
             root,
             "actual-model-company-audit.json",
             {
                 "status": "PASS",
-                "policy": "recompute-from-actual-successful-node-models",
-                "successful_node_models": [
-                    {
-                        "node_id": "node-a",
-                        "model": "openai/model-a",
-                        "company": "openai",
-                    },
-                    {
-                        "node_id": "node-b",
-                        "model": "anthropic/model-b",
-                        "company": "anthropic",
-                    },
-                    {
-                        "node_id": "node-final",
-                        "model": "google/model-c",
-                        "company": "google",
-                    },
-                ],
-                "all_called_models": [],
+                "policy": "recompute-from-all-actual-called-models",
+                "successful_node_models": successful,
+                "all_called_models": called,
+                "duplicate_called_companies_across_nodes": {},
                 "duplicate_successful_companies": {},
-                "same-node-retry_is_not_a_second_expert": True,
+                "unresolved_called_companies": [],
+                "same_node_retry_is_not_a_second_expert": True,
+                "failed_calls_are_included": True,
                 "cross_task_history_used": False,
             },
         )
@@ -221,6 +282,11 @@ class V5NativeAuditContractTests(unittest.TestCase):
                 "PASS",
                 result["checks"]["actual_model_company_audit_status"],
             )
+            self.assertEqual(
+                4,
+                result["checks"]["actual_called_model_count"],
+            )
+            self.assertTrue(result["checks"]["failed_calls_are_included"])
             self.assertAlmostEqual(
                 0.09615135,
                 result["checks"]["actual_cost_usd"],
@@ -282,7 +348,15 @@ class V5NativeAuditContractTests(unittest.TestCase):
             path = root / "actual-model-company-audit.json"
             value = json.loads(path.read_text(encoding="utf-8"))
             value["status"] = "FAIL"
+            for row in value["all_called_models"]:
+                if row["node_id"] == "node-b":
+                    row["company"] = "openai"
+                    row["model"] = "openai/model-b"
             value["successful_node_models"][1]["company"] = "openai"
+            value["successful_node_models"][1]["model"] = "openai/model-b"
+            value["duplicate_called_companies_across_nodes"] = {
+                "openai": ["node-a", "node-b"]
+            }
             value["duplicate_successful_companies"] = {
                 "openai": ["node-a", "node-b"]
             }
@@ -294,7 +368,7 @@ class V5NativeAuditContractTests(unittest.TestCase):
             )
             self.assertEqual("FAIL", result["status"])
             self.assertIn(
-                "actual successful model companies are not globally unique",
+                "a model company was reused across different nodes",
                 result["failures"],
             )
 

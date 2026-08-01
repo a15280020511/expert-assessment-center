@@ -43,7 +43,21 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: production
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Enforce frozen production control plane
+        shell: bash
+        run: |
+          set -euo pipefail
+          checked="$(git rev-parse HEAD)"
+          production="$(git ls-remote origin refs/heads/production | awk '{print $1}')"
+          main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          test -n "$production"
+          test -n "$main"
+          test "$checked" = "$production"
+          test "$main" = "$production"
+          printf '%s\n' "$checked" > checked-out-production-sha.txt
 
       - name: Acquire serialized zero-call admission
         id: lock
@@ -91,6 +105,7 @@ jobs:
           path: |
             ticket-artifacts/
             admission-status.md
+            checked-out-production-sha.txt
           if-no-files-found: error
           retention-days: 14
 
@@ -133,7 +148,23 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: production
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Resolve authoritative execution source
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          checked="$(git rev-parse HEAD)"
+          production="$(git ls-remote origin refs/heads/production | awk '{print $1}')"
+          main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          test -n "$production"
+          test -n "$main"
+          test "$checked" = "$production"
+          test "$main" = "$production"
+          echo "execution_sha=$checked" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$checked" > checked-out-production-sha.txt
 
       - name: Download admitted ticket
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
@@ -178,8 +209,8 @@ jobs:
           fi
           python open-model-market/v5_production_ticket.py "${args[@]}"
 
-      - name: Prepare public report comments
-        id: publish
+      - name: Prepare report publication package
+        id: prepare_report
         continue-on-error: true
         run: |
           python open-model-market/publish_report.py \
@@ -187,40 +218,22 @@ jobs:
             --comments-dir ticket-artifacts/report-comments \
             --run-url "$RUN_URL"
 
-      - name: Publish report comments
-        if: steps.publish.outcome == 'success'
-        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
-        env:
-          COMMENT_DIR: ticket-artifacts/report-comments
-        with:
-          script: |
-            const fs = require('fs');
-            const path = require('path');
-            const files = fs.readdirSync(process.env.COMMENT_DIR)
-              .filter(name => /^report-comment-\d+\.md$/.test(name))
-              .sort();
-            for (const name of files) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: fs.readFileSync(path.join(process.env.COMMENT_DIR, name), 'utf8')
-              });
-            }
-
-      - name: Audit native V5 execution
+      - name: Audit complete native V5 evidence before publication
         id: audit
         continue-on-error: true
         run: |
           python open-model-market/v5_execution_auditor_integrity.py \
             --output-dir ticket-artifacts \
             --execute-outcome "${{ steps.execute.outcome }}" \
-            --publish-outcome "${{ steps.publish.outcome }}"
+            --publish-outcome "${{ steps.prepare_report.outcome }}"
 
-      - name: Refresh primary artifact manifest
+      - name: Freeze primary artifact manifest after audit
         id: manifest
         continue-on-error: true
+        env:
+          AUTHORITATIVE_EXECUTION_SHA: ${{ steps.source.outputs.execution_sha }}
         run: |
+          test "$(git rev-parse HEAD)" = "$AUTHORITATIVE_EXECUTION_SHA"
           python - <<'PY'
           import sys
           from pathlib import Path
@@ -238,6 +251,36 @@ jobs:
           path: ticket-artifacts/
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish report only after audit and artifact freeze
+        id: publish
+        if: >-
+          steps.execute.outcome == 'success' &&
+          steps.prepare_report.outcome == 'success' &&
+          steps.audit.outputs.status == 'PASS' &&
+          steps.manifest.outcome == 'success' &&
+          steps.ticket_artifact.outcome == 'success'
+        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
+        env:
+          COMMENT_DIR: ticket-artifacts/report-comments
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const files = fs.readdirSync(process.env.COMMENT_DIR)
+              .filter(name => /^report-comment-\d+\.md$/.test(name))
+              .sort();
+            if (files.length === 0) {
+              throw new Error('No audited report comments found');
+            }
+            for (const name of files) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: fs.readFileSync(path.join(process.env.COMMENT_DIR, name), 'utf8')
+              });
+            }
 
       - name: Render authoritative V5 final status
         id: final
@@ -265,6 +308,7 @@ jobs:
           PRIMARY_ARTIFACT_ID: ${{ steps.ticket_artifact.outputs.artifact-id }}
           PRIMARY_ARTIFACT_URL: ${{ steps.ticket_artifact.outputs.artifact-url }}
           PRIMARY_ARTIFACT_DIGEST: ${{ steps.ticket_artifact.outputs.artifact-digest }}
+          AUTHORITATIVE_EXECUTION_SHA: ${{ steps.source.outputs.execution_sha }}
         run: |
           python open-model-market/v5_final_attestation.py \
             --output-dir ticket-artifacts \
@@ -273,7 +317,7 @@ jobs:
             --primary-artifact-url "$PRIMARY_ARTIFACT_URL" \
             --audit-status "${{ steps.final.outputs.status }}" \
             --run-id "${{ github.run_id }}" \
-            --commit-sha "${{ github.sha }}" \
+            --commit-sha "$AUTHORITATIVE_EXECUTION_SHA" \
             --final-status-file final-status.md \
             --output final-attestation.json
 
@@ -287,6 +331,7 @@ jobs:
             final-attestation.json
             final-status.md
             ticket-artifacts/final-status.json
+            checked-out-production-sha.txt
           if-no-files-found: error
           retention-days: 14
 
@@ -317,9 +362,13 @@ jobs:
       - name: Verify authoritative V5 final outcome
         if: always()
         run: |
-          test "${{ steps.ticket_artifact.outcome }}" = "success"
+          test "${{ steps.execute.outcome }}" = "success"
+          test "${{ steps.prepare_report.outcome }}" = "success"
           test "${{ steps.audit.outcome }}" = "success"
+          test "${{ steps.audit.outputs.status }}" = "PASS"
           test "${{ steps.manifest.outcome }}" = "success"
+          test "${{ steps.ticket_artifact.outcome }}" = "success"
+          test "${{ steps.publish.outcome }}" = "success"
           test "${{ steps.final.outcome }}" = "success"
           test "${{ steps.attest.outcome }}" = "success"
           test "${{ steps.proof_artifact.outcome }}" = "success"

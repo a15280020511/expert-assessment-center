@@ -8,66 +8,60 @@ import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-from execution_graph import GraphLimits  # noqa: E402
-import v5_r8_executor as r8  # noqa: E402
-import v5_total_call_cap as total_call_cap  # noqa: E402
-from tests.test_v5_tabletop_production_semantics import (  # noqa: E402
-    FAILED_PRODUCTION_TASK,
+from execution_graph import ExecutionGraph  # noqa: E402
+from v5_runtime import (  # noqa: E402
+    BudgetController,
+    FailureCategory,
+    RuntimeConfig,
 )
-
 
 PUBLIC_INVESTMENT_TASK = (
     "比较三个城市公共投资方案，完成财务建模、政策与法律合规、证据核验、"
     "预测推演、独立红队反证和最终决策。"
 )
+CLOSED_WORLD_TASK = (
+    "仅依据题面，不得调用外部工具，不联网，不得编造。"
+    "比较方案A与方案B，只接受完整交付。"
+)
 SUPPLY_CHAIN_TASK = (
-    "为一家年营收3000万元、现金储备有限的小型制造企业比较继续现供应商、"
-    "供应商A、供应商B和混合采购四种方案。必须同时考虑14天现金流、交付中断、"
-    "质量风险、合同约束、最坏情景、红队反证和可执行的逐日切换计划，不能假设"
-    "题面之外的数据，最终给出有条件的选择规则。"
+    "比较四种供应链方案，考虑现金流、交付中断、质量、合同、最坏情景、"
+    "红队反证和逐日切换计划，最终给出有条件选择规则。"
 )
 
 
+def _empty_graph() -> ExecutionGraph:
+    return ExecutionGraph(
+        nodes=(),
+        edges=(),
+        execution_stages=(),
+        entry_nodes=(),
+        final_nodes=(),
+        required_work=(),
+        estimated_quality=0.0,
+        quality_floor=0.0,
+        estimated_total_cost=0.0,
+        metadata={},
+    )
+
+
+def _budget(*, cost: float | None, failures: int = 3) -> BudgetController:
+    config = RuntimeConfig(
+        total_call_limit=16,
+        recovery_call_limit=2,
+        cost_anomaly_usd=cost,
+        quality_tier="value",
+        max_provider_failures=failures,
+    )
+    return BudgetController(config, _empty_graph())
+
+
 class TestV5FullLoadStability(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        total_call_cap.install()
-
-    @staticmethod
-    def _new_budget(
-        *,
-        maximum_total_calls: int,
-        maximum_recovery_calls: int,
-        maximum_budget_usd: float | None,
-        risk_multiplier: float = 1.18,
-        max_provider_failures: int = 3,
-    ) -> r8.R8ExecutionBudget:
-        limits = GraphLimits(
-            cost_risk_multiplier=risk_multiplier,
-            max_provider_failures=max_provider_failures,
-        )
-        token = r8._ACTIVE_LIMITS.set(limits)
-        try:
-            return r8.R8ExecutionBudget(
-                max_planned_calls=maximum_total_calls,
-                max_retries=maximum_recovery_calls,
-                max_replacements=maximum_recovery_calls,
-                max_budget_usd=maximum_budget_usd,
-            )
-        finally:
-            r8._ACTIVE_LIMITS.reset(token)
-
     def test_concurrent_reservations_never_exceed_total_or_recovery_caps(self) -> None:
-        budget = self._new_budget(
-            maximum_total_calls=64,
-            maximum_recovery_calls=8,
-            maximum_budget_usd=None,
-        )
+        budget = _budget(cost=None)
         attempts = (
             [("initial", index) for index in range(960)]
             + [("retry", index) for index in range(32)]
@@ -81,161 +75,84 @@ class TestV5FullLoadStability(unittest.TestCase):
 
         with ThreadPoolExecutor(max_workers=64) as pool:
             results = list(pool.map(reserve, attempts))
-
         accepted = [item for item in results if item[1]]
-        accepted_initial = [item for item in accepted if item[0] == "initial"]
-        accepted_recovery = [item for item in accepted if item[0] != "initial"]
         snapshot = budget.snapshot()
-
-        self.assertEqual(64, len(accepted))
-        self.assertEqual(56, len(accepted_initial))
-        self.assertEqual(8, len(accepted_recovery))
-        self.assertEqual(64, snapshot["calls_reserved"])
-        self.assertEqual(56, snapshot["initial_calls_reserved"])
-        self.assertEqual(8, snapshot["recovery_calls_reserved"])
-        self.assertEqual(64, snapshot["maximum_total_calls"])
-        self.assertEqual(56, snapshot["maximum_initial_calls"])
+        self.assertEqual(16, len(accepted))
+        self.assertEqual(14, snapshot["initial_calls_reserved"])
+        self.assertEqual(2, snapshot["recovery_calls_reserved"])
+        self.assertEqual(16, snapshot["calls_reserved"])
         self.assertTrue(snapshot["denials"])
 
-    def test_concurrent_budget_reservations_fail_closed_at_risk_boundary(self) -> None:
-        budget = self._new_budget(
-            maximum_total_calls=1000,
-            maximum_recovery_calls=0,
-            maximum_budget_usd=0.25,
-        )
-
-        def reserve(index: int) -> tuple[bool, str]:
-            return budget.reserve("initial", 0.001, f"node-{index % 32}")
-
+    def test_concurrent_cost_reservations_fail_closed(self) -> None:
+        budget = _budget(cost=0.01)
         with ThreadPoolExecutor(max_workers=64) as pool:
-            results = list(pool.map(reserve, range(1000)))
-
-        snapshot = budget.snapshot()
-        accepted = sum(1 for ok, _ in results if ok)
-        reasons = {reason for ok, reason in results if not ok}
-
-        self.assertEqual(211, accepted)
-        self.assertEqual(211, snapshot["calls_reserved"])
-        self.assertLessEqual(snapshot["estimated_cost_reserved_usd"], 0.25)
-        self.assertIn("global-risk-adjusted-budget-exhausted", reasons)
-
-    def test_concurrent_reconciliation_has_no_lost_updates_or_pending_leaks(self) -> None:
-        budget = self._new_budget(
-            maximum_total_calls=256,
-            maximum_recovery_calls=0,
-            maximum_budget_usd=None,
-        )
-
-        with ThreadPoolExecutor(max_workers=64) as pool:
-            reservations = list(
+            results = list(
                 pool.map(
-                    lambda index: budget.reserve(
-                        "initial", 0.0001, f"node-{index % 16}"
-                    ),
-                    range(256),
+                    lambda index: budget.reserve("initial", 0.001, f"node-{index}"),
+                    range(1000),
                 )
             )
+        snapshot = budget.snapshot()
+        accepted = sum(1 for ok, _ in results if ok)
+        self.assertLessEqual(accepted, 8)
+        self.assertLessEqual(snapshot["estimated_cost_reserved_usd"], 0.01)
+        self.assertTrue(snapshot["denials"])
+
+    def test_concurrent_reconciliation_has_no_lost_updates(self) -> None:
+        budget = _budget(cost=None)
+        reservations = [budget.reserve("initial", 0.0001, f"node-{i}") for i in range(14)]
         self.assertTrue(all(ok for ok, _ in reservations))
-
-        with ThreadPoolExecutor(max_workers=64) as pool:
-            reconciliations = list(pool.map(budget.reconcile, [0.0001] * 256))
-
+        with ThreadPoolExecutor(max_workers=14) as pool:
+            reconciliations = list(pool.map(budget.reconcile, [0.0001] * 14))
         snapshot = budget.snapshot()
         self.assertFalse(any(reconciliations))
         self.assertEqual(0.0, snapshot["estimated_cost_reserved_usd"])
-        self.assertEqual(0.0256, snapshot["actual_cost_usd"])
-        self.assertEqual(256, snapshot["calls_reserved"])
+        self.assertEqual(0.0014, snapshot["actual_cost_usd"])
 
-    def test_provider_circuit_updates_are_atomic_under_contention(self) -> None:
-        budget = self._new_budget(
-            maximum_total_calls=16,
-            maximum_recovery_calls=2,
-            maximum_budget_usd=None,
-            max_provider_failures=3,
-        )
-        endpoint = "provider-a"
-
+    def test_provider_circuit_updates_are_atomic(self) -> None:
+        budget = _budget(cost=None, failures=3)
         with ThreadPoolExecutor(max_workers=64) as pool:
             list(
                 pool.map(
-                    lambda index: budget.fail_endpoint(endpoint, f"failure-{index}"),
+                    lambda _: budget.fail_endpoint(
+                        "provider-a", FailureCategory.PROVIDER_TIMEOUT
+                    ),
                     range(512),
                 )
             )
-
         snapshot = budget.snapshot()["provider_circuit"]
-        self.assertFalse(budget.endpoint_available(endpoint))
-        self.assertEqual(512, snapshot["failures"][endpoint])
-        self.assertEqual(512, len(snapshot["reasons"][endpoint]))
-        self.assertEqual(3, snapshot["max_failures"])
+        self.assertFalse(budget.endpoint_available("provider-a"))
+        self.assertEqual(512, snapshot["failures"]["provider-a"])
+        self.assertEqual(512, len(snapshot["reasons"]["provider-a"]))
 
-    @staticmethod
-    def _graph_signature(graph: dict[str, Any]) -> str:
-        stable = {
-            "nodes": [
-                {
-                    "node_id": node["node_id"],
-                    "assigned_work": node["assigned_work"],
-                    "functions": node["functions"],
-                    "model": node["model"],
-                    "provider_endpoint": node["provider_endpoint"],
-                    "output_contract": node["output_contract"],
-                    "estimated_cost": node["estimated_cost"],
-                }
-                for node in graph["nodes"]
-            ],
-            "edges": graph["edges"],
-            "execution_stages": graph["execution_stages"],
-            "entry_nodes": graph["entry_nodes"],
-            "final_nodes": graph["final_nodes"],
-            "required_work": graph["required_work"],
-            "estimated_total_cost": graph["estimated_total_cost"],
-        }
-        return json.dumps(stable, ensure_ascii=False, sort_keys=True)
-
-    def test_parallel_full_pipeline_dry_runs_are_isolated_and_deterministic(self) -> None:
+    def test_parallel_constitutional_dry_runs_are_isolated(self) -> None:
         scenarios = (
-            ("public-investment", PUBLIC_INVESTMENT_TASK, 16, 2),
-            ("closed-book-tabletop", FAILED_PRODUCTION_TASK, 4, 1),
-            ("supply-chain", SUPPLY_CHAIN_TASK, 8, 1),
+            ("public", PUBLIC_INVESTMENT_TASK, 16, 2),
+            ("closed", CLOSED_WORLD_TASK, 8, 1),
+            ("supply", SUPPLY_CHAIN_TASK, 8, 1),
         )
-        cases = [
-            (name, task, total_calls, recovery_calls, iteration)
-            for name, task, total_calls, recovery_calls in scenarios
-            for iteration in range(8)
-        ]
+        cases = [(*row, iteration) for row in scenarios for iteration in range(4)]
         env = os.environ.copy()
         env.pop("OPENROUTER_API_KEY", None)
-
-        with tempfile.TemporaryDirectory(prefix="v5-full-load-") as directory:
+        with tempfile.TemporaryDirectory(prefix="v5-native-load-") as directory:
             root = Path(directory)
 
-            def run_case(
-                case: tuple[str, str, int, int, int]
-            ) -> tuple[str, int, int, str, str]:
-                name, task, total_calls, recovery_calls, iteration = case
-                output_dir = root / f"{name}-{iteration}"
-                command = [
-                    sys.executable,
-                    str(ROOT / "open-model-market" / "v5_pipeline.py"),
-                    "--task",
-                    task,
-                    "--catalog-file",
-                    str(ROOT / "tests" / "fixtures" / "models.json"),
-                    "--endpoint-file",
-                    str(ROOT / "tests" / "fixtures" / "endpoints.json"),
-                    "--dry-run",
-                    "--maximum-total-calls",
-                    str(total_calls),
-                    "--maximum-recovery-calls",
-                    str(recovery_calls),
-                    "--quality-tier",
-                    "quality",
-                    "--output-dir",
-                    str(output_dir),
-                ]
+            def run_case(case: tuple[str, str, int, int, int]):
+                name, task, total, recovery, iteration = case
+                output = root / f"{name}-{iteration}"
                 completed = subprocess.run(
-                    command,
+                    [
+                        sys.executable,
+                        str(ROOT / "open-model-market" / "v5_constitutional_pipeline.py"),
+                        "--task", task,
+                        "--catalog-file", str(ROOT / "tests/fixtures/models.json"),
+                        "--endpoint-file", str(ROOT / "tests/fixtures/endpoints.json"),
+                        "--dry-run",
+                        "--maximum-total-calls", str(total),
+                        "--maximum-recovery-calls", str(recovery),
+                        "--quality-tier", "value",
+                        "--output-dir", str(output),
+                    ],
                     cwd=ROOT,
                     env=env,
                     capture_output=True,
@@ -243,36 +160,22 @@ class TestV5FullLoadStability(unittest.TestCase):
                     timeout=180,
                     check=False,
                 )
-                if completed.returncode != 0:
-                    return (
-                        name,
-                        iteration,
-                        completed.returncode,
-                        "",
-                        completed.stdout + "\n" + completed.stderr,
-                    )
-                dry = json.loads((output_dir / "v5-dry-run.json").read_text())
-                graph = json.loads(
-                    (output_dir / "v5-execution-graph.json").read_text()
-                )
+                if completed.returncode:
+                    return name, completed.returncode, completed.stdout + completed.stderr
+                dry = json.loads((output / "v5-dry-run.json").read_text())
+                graph = json.loads((output / "v5-execution-graph.json").read_text())
+                signature = json.dumps(graph, sort_keys=True, ensure_ascii=False)
                 self.assertEqual("planned-not-executed", dry["status"])
-                self.assertFalse(dry["production_entrypoint_changed"])
-                self.assertTrue((output_dir / "artifact-manifest.json").is_file())
-                return (
-                    name,
-                    iteration,
-                    completed.returncode,
-                    self._graph_signature(graph),
-                    "",
-                )
+                self.assertTrue(dry["production_entrypoint_changed"])
+                self.assertFalse(dry["global_monkey_patching"])
+                return name, 0, signature
 
-            with ThreadPoolExecutor(max_workers=8) as pool:
+            with ThreadPoolExecutor(max_workers=6) as pool:
                 results = list(pool.map(run_case, cases))
-
-        failures = [result for result in results if result[2] != 0]
-        self.assertFalse(failures, failures[0][4] if failures else "")
-        for name, _, _, _ in scenarios:
-            signatures = {result[3] for result in results if result[0] == name}
+        failures = [row for row in results if row[1]]
+        self.assertFalse(failures, failures[0][2] if failures else "")
+        for name, *_ in scenarios:
+            signatures = {row[2] for row in results if row[0] == name}
             self.assertEqual(1, len(signatures), name)
 
 

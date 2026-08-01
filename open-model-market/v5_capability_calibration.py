@@ -437,8 +437,3 @@ def generate_calibrated_candidate_graph(
             "interpretations": calibration_by_interpretation,
         },
     }
-
-
-def install() -> None:
-    """Deprecated compatibility no-op; use PlannerPolicy explicitly."""
-    return None

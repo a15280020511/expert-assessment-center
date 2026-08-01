@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
-import v5_planner as planner
 
 _INSTALLED = False
 _ORIGINAL_CANDIDATE_FOR: Any = None
@@ -200,13 +199,3 @@ def parameter_audit_catalog() -> list[dict[str, str]]:
         {"parameter": parameter, "classification": classification, "basis": basis}
         for parameter, classification, basis in rows
     ]
-
-
-def install() -> None:
-    global _INSTALLED
-    global _ORIGINAL_CANDIDATE_FOR
-    if _INSTALLED:
-        return
-    _ORIGINAL_CANDIDATE_FOR = planner._candidate_for
-    planner._candidate_for = dynamic_candidate_for
-    _INSTALLED = True

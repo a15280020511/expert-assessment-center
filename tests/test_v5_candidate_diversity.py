@@ -59,10 +59,6 @@ class TestV5CandidateDiversity(unittest.TestCase):
         self.assertEqual(len(kept), 2)
         self.assertEqual(len({row.model for row in kept}), 2)
 
-    def test_compatibility_install_is_no_op(self):
-        original = v5_planner.pareto_prune
-        diversity.install()
-        self.assertIs(v5_planner.pareto_prune, original)
 
     def test_formal_runtime_composes_diversity_explicitly(self):
         policy = PlannerPolicy(RuntimeConfig(

@@ -21,7 +21,6 @@ from typing import Any, Callable, Mapping, Sequence
 
 import v5_cost_reliability_hardening as cost_hardening
 import v5_dynamic_prompt_delivery as dynamic_prompt
-import v5_executor as legacy_executor
 import v5_output_contract_delivery as output_contract
 import v5_task_delivery_contract as task_delivery_contract
 import v5_quality_status_integrity as quality_integrity
@@ -33,6 +32,17 @@ from v5_planning_runtime import PlannerPolicy
 RUNTIME_VERSION = "v5-native-runtime-1"
 MIN_DEGRADED_WORK_COVERAGE = 2.0 / 3.0
 STRICT_SUCCESS_STATUSES = {"success", "success_retried", "success_recovered"}
+FORBIDDEN_REQUEST_FIELDS = {
+    "tools",
+    "tool_choice",
+    "plugins",
+    "web_search",
+    "web_search_options",
+    "file_search",
+    "browser",
+    "code_interpreter",
+    "models",
+}
 
 
 class FailureCategory(str, Enum):
@@ -451,7 +461,7 @@ class PromptPolicy:
             raise RuntimeError("provider.only must contain exactly one endpoint provider")
         if provider.get("allow_fallbacks") is not False:
             raise RuntimeError("provider fallbacks must be disabled")
-        forbidden = sorted(legacy_executor.FORBIDDEN_FIELDS.intersection(payload))
+        forbidden = sorted(FORBIDDEN_REQUEST_FIELDS.intersection(payload))
         if forbidden:
             raise RuntimeError(f"forbidden request fields: {forbidden}")
         return payload
@@ -1063,7 +1073,7 @@ class ExecutionEngine:
             root / "v5-request-audit.json",
             {
                 "status": "PASS" if all(
-                    not legacy_executor.FORBIDDEN_FIELDS.intersection(request)
+                    not FORBIDDEN_REQUEST_FIELDS.intersection(request)
                     for request in requests
                 ) else "FAIL",
                 "request_count": len(requests),

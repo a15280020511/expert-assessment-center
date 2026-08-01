@@ -10,15 +10,112 @@ import resource_matrix  # noqa: E402
 import v5_general_task_planning  # noqa: E402
 import v5_value_optimizer  # noqa: E402
 from execution_graph import ExecutionGraph, GraphLimits  # noqa: E402
-from tests.test_v5_planner_executor import TestV5PlannerExecutor  # noqa: E402
 from v5_model_company import canonical_model_company  # noqa: E402
 from v5_planning_diagnostics import build_infeasibility_report  # noqa: E402
+
+
+class _PlanningFixture:
+    @staticmethod
+    def models():
+        def model(
+            model_id,
+            description,
+            rank,
+            prompt,
+            completion,
+            supported=("reasoning", "structured_outputs"),
+        ):
+            return SimpleNamespace(
+                id=model_id,
+                name=model_id,
+                description=description,
+                author=model_id.split("/", 1)[0],
+                context_length=131072,
+                max_completion_tokens=16000,
+                prompt_price_per_million=prompt,
+                completion_price_per_million=completion,
+                supported_parameters=list(supported),
+                input_modalities=["text"],
+                output_modalities=["text"],
+                reasoning={"enabled": "reasoning" in supported},
+                ranks={"intelligence-high-to-low": rank},
+                components={},
+            )
+
+        return [
+            model(
+                "alpha/prime",
+                "advanced reasoning mathematics research evidence business coding",
+                1,
+                8.0,
+                24.0,
+            ),
+            model(
+                "beta/value",
+                "business finance economics investment strategy analysis research",
+                3,
+                2.0,
+                6.0,
+            ),
+            model(
+                "kappa/risk",
+                "legal compliance security safety audit risk adversarial review",
+                4,
+                3.5,
+                10.0,
+            ),
+            model(
+                "theta/code",
+                "software coding implementation engineering security repository",
+                5,
+                4.0,
+                12.0,
+            ),
+            model(
+                "delta/research",
+                "long context research evidence policy documents reasoning",
+                6,
+                3.0,
+                9.0,
+            ),
+            model(
+                "gamma/general",
+                "general analysis reasoning decision writing assistant",
+                8,
+                0.5,
+                1.5,
+                ("reasoning",),
+            ),
+        ]
+
+    @classmethod
+    def endpoints(cls):
+        payloads = {}
+        for index, model in enumerate(cls.models()):
+            payloads[model.id] = {
+                "data": {
+                    "endpoints": [
+                        {
+                            "tag": f"provider-{index}",
+                            "context_length": model.context_length,
+                            "max_completion_tokens": model.max_completion_tokens,
+                            "pricing": {
+                                "prompt": model.prompt_price_per_million,
+                                "completion": model.completion_price_per_million,
+                            },
+                            "supported_parameters": model.supported_parameters,
+                            "uptime": 0.99 - index * 0.005,
+                        }
+                    ]
+                }
+            }
+        return payloads
 
 
 class V5GeneralTaskFullPlanningTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.fixture = TestV5PlannerExecutor()
+        cls.fixture = _PlanningFixture()
 
     @staticmethod
     def run_config(task: str):
