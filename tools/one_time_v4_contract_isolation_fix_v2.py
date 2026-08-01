@@ -86,6 +86,22 @@ def replace_nested_class_method(
     path.write_text("".join(lines), encoding="utf-8")
 
 
+def repair_generated_test_task(module) -> None:
+    path = module.TESTS / "test_v5_v4_contract_isolation.py"
+    source = path.read_text(encoding="utf-8")
+    start = source.index("TASK = (")
+    end = source.index("\n\n\ndef node", start)
+    block = '''TASK = (
+    "仅依据题面。方案A一次性投入1200元、每月300元；"
+    "方案B一次性投入300元、每月450元；评估期24个月。\\n"
+    "执行要求：\\n"
+    "- 严格依次使用四个Markdown二级标题：题面事实、计算与校验、"
+    "推断与未知、结论与反转条件；每节不得为空\\n"
+    "- 不得调用外部工具，不得引入题面外精确数量。"
+)'''
+    path.write_text(source[:start] + block + source[end:], encoding="utf-8")
+
+
 def main() -> int:
     module = load_transformer()
     module.patch_constraints = lambda: patch_constraints(module)
@@ -98,7 +114,9 @@ def main() -> int:
         original_replace(path, name, replacement)
 
     module.replace_top_level_function = replace_function
-    return module.main()
+    result = module.main()
+    repair_generated_test_task(module)
+    return result
 
 
 if __name__ == "__main__":
