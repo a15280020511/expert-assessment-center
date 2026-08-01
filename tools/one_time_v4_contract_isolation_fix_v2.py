@@ -23,9 +23,10 @@ def load_transformer():
 def patch_constraints(module) -> None:
     path = module.MARKET / "v5_task_constraints.py"
     source = path.read_text(encoding="utf-8")
-    old_units = "|次|times|sla)\\b"
+    old_units = '    r"kilometers?|kg|people|times?)(?![A-Za-z0-9_])",\n'
     new_units = (
-        "|次|times|sla|元|块|人民币|rmb|cny|yuan|美元|美金|usd)\\b"
+        '    r"kilometers?|kg|people|times?|元|块|人民币|rmb|cny|yuan|美元|美金|usd)"\n'
+        '    r"(?![A-Za-z0-9_])",\n'
     )
     if source.count(old_units) != 1:
         raise RuntimeError(
