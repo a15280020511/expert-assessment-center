@@ -31,6 +31,10 @@ TRAILING_REQUIREMENT_TASK = (
     "严格依次使用四个Markdown二级标题：题面事实、计算与校验、"
     "推断与未知、结论与反转条件；每节不得为空；不得调用外部工具。"
 )
+NUMBERED_TRAILING_REQUIREMENT_TASK = (
+    TASK
+    + "不得出现任何其他Markdown二级标题，每个指定标题下必须有非空正文。"
+)
 TRAILING_REQUIREMENT_HEADINGS = [
     "题面事实",
     "计算与校验",
@@ -86,6 +90,19 @@ class V5ExplicitMarkdownContractRevalidationTests(unittest.TestCase):
             TRAILING_REQUIREMENT_HEADINGS,
         )
         self.assertEqual(contract["task_explicit_delivery_section_count"], 4)
+
+    def test_numbered_list_with_trailing_requirements_strips_enumerators(self) -> None:
+        contract = contract_policy.extract_explicit_markdown_contract(
+            NUMBERED_TRAILING_REQUIREMENT_TASK
+        )
+        self.assertEqual(contract["exact_markdown_headings"], HEADINGS)
+        self.assertEqual(contract["task_explicit_delivery_section_count"], 8)
+        synthesis = compiler._output_contract(
+            NUMBERED_TRAILING_REQUIREMENT_TASK,
+            {"synthesis": 1.0},
+            False,
+        )
+        self.assertEqual(synthesis["required_fields"], HEADINGS)
 
     def test_synthesis_contract_replaces_internal_generic_headings(self) -> None:
         contract = compiler._output_contract(TASK, {"synthesis": 1.0}, False)
