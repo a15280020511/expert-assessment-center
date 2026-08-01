@@ -741,11 +741,13 @@ _CHINESE_INTEGER_DIGITS = {
     "九": 9,
 }
 _INLINE_MARKDOWN_CONTRACT_RE = re.compile(
-    r"(?:严格|必须|务必|请)?\s*(?:依次|严格依次|按照顺序)?\s*"
-    r"(?:使用|采用|按照|保留)\s*"
+    r"(?:最终(?:输出|报告|交付)\s*)?"
+    r"(?:必须|务必|应当|请)?\s*(?:严格\s*)?"
+    r"(?:依次|严格依次|按照顺序|按顺序)?\s*"
+    r"(?:使用|采用|按照|保留)\s*(?:以下|下列|following)?\s*"
     r"(?P<count>\d{1,3}|[零〇一二两三四五六七八九十百]{1,4})\s*个?\s*"
     r"(?:Markdown\s*)?(?:二级标题|H2|level[- ]2\s+headings?)"
-    r"[^：:\n]{0,80}[：:]\s*(?P<headings>[^；;。\n]+)",
+    r"[^：:\n]{0,100}[：:]\s*(?P<headings>[^\n]+)",
     re.IGNORECASE,
 )
 _FINAL_FORMAT_LINE_RE = re.compile(
@@ -789,6 +791,20 @@ def _chinese_integer(value: str) -> int | None:
     return None
 
 
+def _valid_heading_sequence(
+    values: Sequence[str],
+    expected: int,
+) -> list[str]:
+    headings = [_clean_heading(value) for value in values]
+    headings = [value for value in headings if value]
+    if len(headings) != expected:
+        return []
+    normalized = [_normalized_heading(value) for value in headings]
+    if not all(normalized) or len(set(normalized)) != len(normalized):
+        return []
+    return headings
+
+
 def _inline_delimited_markdown_headings(task: str) -> list[str]:
     match = _INLINE_MARKDOWN_CONTRACT_RE.search(str(task or ""))
     if not match:
@@ -797,14 +813,21 @@ def _inline_delimited_markdown_headings(task: str) -> list[str]:
     if expected is None or expected < 2 or expected > 128:
         return []
     raw = match.group("headings").strip()
-    for delimiter in ("、", "，", ","):
-        values = [_clean_heading(value) for value in raw.split(delimiter)]
-        values = [value for value in values if value]
-        if len(values) != expected:
-            continue
-        normalized = [_normalized_heading(value) for value in values]
-        if all(normalized) and len(set(normalized)) == len(normalized):
-            return values
+
+    numbered = [
+        sequence
+        for sequence in _numbered_sequences(raw)
+        if len(sequence) == expected
+    ]
+    if numbered:
+        valid = _valid_heading_sequence(numbered[0], expected)
+        if valid:
+            return valid
+
+    for delimiter in ("；", ";", "、", "，", ","):
+        valid = _valid_heading_sequence(raw.split(delimiter), expected)
+        if valid:
+            return valid
     return []
 
 
