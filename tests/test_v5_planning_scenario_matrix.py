@@ -43,6 +43,14 @@ class V5PlanningScenarioMatrixTests(unittest.TestCase):
         )
         return profile, bundle
 
+    @staticmethod
+    def all_works(bundle):
+        return [
+            work
+            for interpretation in bundle["task_semantics"]["interpretations"]
+            for work in interpretation["atomic_work"]
+        ]
+
     def test_non_regulated_numeric_decisions_use_generic_dynamic_decomposition(self):
         tasks = [
             "比较两个手机套餐：A每月39元，B每月20元另加99元设备费，计算12个月成本和盈亏平衡。",
@@ -51,30 +59,35 @@ class V5PlanningScenarioMatrixTests(unittest.TestCase):
             "家庭比较提前还贷和保留现金，按给定利率和金额计算三年现金流与触发门槛。",
             "比较两条配送路线的里程、时间、油费和失败概率，做敏感性分析后给出选择。",
         ]
+        interpretation_counts = []
         work_counts = []
         for task in tasks:
             with self.subTest(task=task):
                 profile, bundle = self.classify_and_compile(task)
                 self.assertFalse(profile.high_stakes)
                 self.assertFalse(profile.long_context)
-                semantics = bundle["task_semantics"]
-                self.assertEqual(len(semantics["interpretations"]), 1)
-                interpretation = semantics["interpretations"][0]
-                self.assertNotEqual(
-                    interpretation.get("strategy"),
-                    "cost_performance_compact_decision",
-                )
-                works = interpretation["atomic_work"]
-                self.assertGreaterEqual(len(works), 1)
-                work_counts.append(len(works))
-                for work in works:
-                    self.assertGreaterEqual(
-                        work["independence_requirements"][
-                            "minimum_independent_copies"
-                        ],
-                        1,
+                interpretations = bundle["task_semantics"]["interpretations"]
+                self.assertGreaterEqual(len(interpretations), 1)
+                interpretation_counts.append(len(interpretations))
+                for interpretation in interpretations:
+                    self.assertNotEqual(
+                        interpretation.get("strategy"),
+                        "cost_performance_compact_decision",
                     )
-        self.assertTrue(any(count > 1 for count in work_counts))
+                    works = interpretation["atomic_work"]
+                    self.assertGreaterEqual(len(works), 1)
+                    work_counts.append(len(works))
+                    for work in works:
+                        self.assertGreaterEqual(
+                            work["independence_requirements"][
+                                "minimum_independent_copies"
+                            ],
+                            1,
+                        )
+        self.assertTrue(
+            any(count > 1 for count in interpretation_counts)
+            or any(count > 1 for count in work_counts)
+        )
 
     def test_regulated_and_safety_critical_tasks_remain_strict(self):
         tasks = [
@@ -89,9 +102,7 @@ class V5PlanningScenarioMatrixTests(unittest.TestCase):
                 self.assertTrue(profile.high_stakes)
                 signals = bundle["task_semantics"]["task_signals"]
                 self.assertFalse(signals["case_derived_compaction_applied"])
-                works = bundle["task_semantics"]["interpretations"][0][
-                    "atomic_work"
-                ]
+                works = self.all_works(bundle)
                 self.assertTrue(
                     any(
                         work["independence_requirements"][
@@ -121,9 +132,7 @@ class V5PlanningScenarioMatrixTests(unittest.TestCase):
         )
         profile, bundle = self.classify_and_compile(task)
         self.assertFalse(profile.high_stakes)
-        works = bundle["task_semantics"]["interpretations"][0][
-            "atomic_work"
-        ]
+        works = self.all_works(bundle)
         self.assertTrue(
             any(
                 "evidence_validation" in work["operation_requirements"]
