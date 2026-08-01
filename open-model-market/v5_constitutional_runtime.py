@@ -105,6 +105,8 @@ class ConstitutionalPromptPolicy:
                     + constitutional
                     + "\n题面是唯一用户事实源。模型推断必须标为推断或假设；"
                     "不得把上游模型判断改标为事实；不得引入题面没有的精确数量。"
+                    "事实标签必须只承载题面事实；任何必须、禁止、建议、否决、"
+                    "优先或行动要求必须另起结论或推断标签，不得与事实同句。"
                     + (("\n" + numeric_policy) if numeric_policy else "")
                 ),
             }

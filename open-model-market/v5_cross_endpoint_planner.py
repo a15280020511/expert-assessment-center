@@ -376,6 +376,7 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
 
         eligible_by_node: dict[str, list[dict[str, Any]]] = {}
         budget_excluded_by_node: dict[str, int] = {}
+        absolute_cost_cap_excluded_by_node: dict[str, int] = {}
         estimated_above_planning_budget_by_node: dict[str, int] = {}
         for selected in selected_rows:
             node_id = str(selected.get("candidate_id") or "")
@@ -399,6 +400,29 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
                 != str(selected.get("provider_endpoint") or "")
                 and candidate_company(row) not in selected_companies
             ]
+            absolute_cost_cap_excluded_by_node[node_id] = (
+                0
+                if cost_cap <= 0.0
+                else sum(
+                    1
+                    for row in alternatives
+                    if max(
+                        0.0,
+                        float(row.get("estimated_cost", 0.0) or 0.0),
+                    )
+                    > cost_cap + 1e-12
+                )
+            )
+            if cost_cap > 0.0:
+                alternatives = [
+                    row
+                    for row in alternatives
+                    if max(
+                        0.0,
+                        float(row.get("estimated_cost", 0.0) or 0.0),
+                    )
+                    <= cost_cap + 1e-12
+                ]
             estimated_above_planning_budget_by_node[node_id] = (
                 0
                 if remaining_recovery_budget is None
@@ -412,11 +436,11 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
                     > remaining_recovery_budget + 1e-12
                 )
             )
-            # Planning-time estimated remaining budget is advisory only. Initial
-            # calls are reconciled against provider-billed actual cost, so
-            # permanently deleting candidates here can strand a failed node even
-            # when the live ledger has ample budget. Runtime BudgetController is
-            # the authoritative admission gate for every retry/replacement.
+            # The absolute anomaly guard is a hard admission boundary, so a
+            # candidate whose own estimate exceeds it can never execute. The
+            # estimated remaining budget is different: initial calls reconcile
+            # against provider-billed actual cost, so candidates within the
+            # absolute cap remain available for the live ledger to admit.
             budget_excluded_by_node[node_id] = 0
             critical_delivery = node_id in critical_node_ids
             alternatives.sort(
@@ -443,6 +467,7 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
                     float(row.get("estimated_cost", 0.0) or 0.0),
                 )
                 payload["planning_budget_advisory_only"] = True
+                payload["absolute_cost_cap_feasible"] = True
                 payload[
                     "estimated_cost_above_planning_remaining_budget"
                 ] = bool(
@@ -494,6 +519,15 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
             if not progress:
                 break
 
+        total_recovery_options = sum(
+            len(rows) for rows in recovery_pool.values()
+        )
+        if int(self.config.recovery_call_limit) > 0 and total_recovery_options <= 0:
+            raise V5PlanningError(
+                "Recovery reserve is not executable under the absolute cost "
+                "anomaly guard."
+            )
+
         metadata = dict(graph.get("metadata") or {})
         metadata["recovery_pool"] = recovery_pool
         metadata["recovery_pool_policy"] = {
@@ -521,6 +555,11 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
                 else round(remaining_recovery_budget, 8)
             ),
             "budget_excluded_by_node": budget_excluded_by_node,
+            "absolute_cost_cap_excluded_by_node": (
+                absolute_cost_cap_excluded_by_node
+            ),
+            "absolute_cost_cap_enforced_at_planning": True,
+            "total_executable_recovery_options": total_recovery_options,
             "estimated_above_planning_budget_by_node": (
                 estimated_above_planning_budget_by_node
             ),

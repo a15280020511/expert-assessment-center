@@ -9,6 +9,20 @@ from typing import Any, Mapping, Sequence
 from v5_task_constraints import TaskConstraints, normalized_quantities
 
 _H2_RE = re.compile(r"^\s{0,3}##\s+(.+?)\s*#*\s*$")
+_FACT_LABEL_LINE_RE = re.compile(
+    r"^(?P<prefix>\s*(?:[-*+]\s*)?)"
+    r"(?P<label>(?:事实|已知事实|fact)(?:[（(][^）)]*[）)])?\s*[:：])"
+    r"\s*(?P<body>.+?)\s*$",
+    re.IGNORECASE,
+)
+_NORMATIVE_TAIL_RE = re.compile(
+    r"^(?P<fact>.+?)(?P<separator>[，,；;。]\s*)"
+    r"(?P<norm>(?:必须|务必|应当|应该|禁止|不得|不可|不能|"
+    r"需(?:要)?|建议|优先|否决|拒绝|应|可(?:以)?|"
+    r"must\b|should\b|must\s+not\b|do\s+not\b|"
+    r"recommend\b|reject\b|deny\b).+)$",
+    re.IGNORECASE,
+)
 
 
 def _heading_key(value: str) -> str:
@@ -98,35 +112,81 @@ def _canonicalize_h2(
     return normalized, audit
 
 
+def _split_mixed_fact_labels(answer: str) -> tuple[str, list[dict[str, Any]]]:
+    """Separate factual propositions from normative tails without rewriting text."""
+    rows: list[str] = []
+    evidence: list[dict[str, Any]] = []
+    for line_number, line in enumerate(str(answer or "").splitlines(), start=1):
+        match = _FACT_LABEL_LINE_RE.match(line)
+        if not match:
+            rows.append(line)
+            continue
+        body = match.group("body").strip()
+        tail = _NORMATIVE_TAIL_RE.match(body)
+        if not tail:
+            rows.append(line)
+            continue
+        fact = tail.group("fact").strip().rstrip("，,；;。 ")
+        normative = tail.group("norm").strip()
+        if not fact or not normative:
+            rows.append(line)
+            continue
+        prefix = match.group("prefix")
+        label = match.group("label")
+        fact_line = f"{prefix}{label}{fact}。"
+        conclusion_line = f"{prefix}结论：{normative}"
+        rows.extend((fact_line, conclusion_line))
+        evidence.append(
+            {
+                "line_number": line_number,
+                "original": line,
+                "fact_line": fact_line,
+                "conclusion_line": conclusion_line,
+            }
+        )
+    suffix = "\n" if str(answer or "").endswith("\n") else ""
+    return "\n".join(rows) + suffix, evidence
+
+
 def normalize_answer(
     task: str,
     answer: str,
     output_contract: Mapping[str, Any],
     constraints: TaskConstraints,
 ) -> tuple[str, dict[str, Any]]:
-    """Remove unsupported numeric lines and canonically reorder complete H2 blocks.
+    """Deterministically normalize label purity, quantities, and H2 order.
 
-    This function never invents text. It may delete the smallest physical lines
-    containing unsupported exact quantities and may move already complete,
-    uniquely named H2 sections into the compiled contract order.
+    This function never invents substantive text. It may insert an audited
+    structural ``结论：`` label when a fact-labelled line already contains a
+    normative tail, delete the smallest physical lines containing unsupported
+    exact quantities, and move complete uniquely named H2 sections into the
+    compiled contract order.
     """
     original = str(answer or "")
     audit: dict[str, Any] = {
-        "schema_version": "v5-deterministic-answer-normalization-1",
-        "policy": "delete-unsupported-quantity-lines-and-reorder-complete-h2-only",
+        "schema_version": "v5-deterministic-answer-normalization-2",
+        "policy": (
+            "split-mixed-fact-normative-labels-delete-unsupported-quantity-lines-"
+            "and-reorder-complete-h2-only"
+        ),
         "applied": False,
         "original_answer_sha256": sha256(original.encode("utf-8")).hexdigest(),
         "normalized_answer_sha256": sha256(original.encode("utf-8")).hexdigest(),
         "allowed_quantities": [],
         "removed_lines": [],
         "unsupported_quantities_removed": [],
+        "mixed_fact_labels_split": [],
+        "structural_labels_inserted": 0,
+        "substantive_text_invented": False,
         "h2_reordered": False,
         "original_h2_order": [],
         "normalized_h2_order": [],
         "h2_reorder_blocked_reason": None,
         "text_invented": False,
     }
-    working = original
+    working, mixed_fact_labels = _split_mixed_fact_labels(original)
+    audit["mixed_fact_labels_split"] = mixed_fact_labels
+    audit["structural_labels_inserted"] = len(mixed_fact_labels)
     if not constraints.unsupported_precise_quantities_allowed:
         allowed = normalized_quantities(task)
         audit["allowed_quantities"] = sorted(_quantity_token(value) for value in allowed)
