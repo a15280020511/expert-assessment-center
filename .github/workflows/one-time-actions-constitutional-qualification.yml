@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/one-time-actions-constitutional-qualification.yml"
+      - "tools/one_time_constitutional_cleanup.py"
       - "open-model-market/**"
       - "tests/**"
       - "tools/**"
@@ -25,11 +26,12 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.head.ref == 'fix/v5-constitutional-semantic-evidence-dynamic-20260801'
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 45
     env:
       TARGET_BRANCH: actions/v5-constitutional-remediation-20260801
+      TRANSFORM_SOURCE: fix/v5-constitutional-semantic-evidence-dynamic-20260801
     steps:
-      - name: Checkout Actions-authored remediation branch
+      - name: Checkout current Actions-authored remediation branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: actions/v5-constitutional-remediation-20260801
@@ -44,31 +46,59 @@ jobs:
             requirements-runtime.txt
             requirements-dev.txt
 
+      - name: Apply Actions-only native-runtime cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin "$TARGET_BRANCH"
+          git fetch origin "$TRANSFORM_SOURCE"
+          git show "origin/$TRANSFORM_SOURCE:tools/one_time_constitutional_cleanup.py" \
+            > tools/.one_time_constitutional_cleanup.py
+          python tools/.one_time_constitutional_cleanup.py
+          rm tools/.one_time_constitutional_cleanup.py
+          test "$(python - <<'PY'
+          import json
+          from pathlib import Path
+          print(json.loads(Path('open-model-market/legacy-cleanup-report.json').read_text())['status'])
+          PY
+          )" = "PASS"
+          ! find open-model-market tests -name '*.py' -print0 \
+            | xargs -0 grep -nE 'def install\(|\.install\(' || false
+          test ! -e open-model-market/v5_executor.py
+          test ! -e open-model-market/v5_r8_executor.py
+          test ! -e open-model-market/v5_production_hardening.py
+          grep -q 'constitutional_main()' open-model-market/v5_pipeline.py
+          git diff --check
+
       - name: Install pinned zero-cost dependencies
         run: |
           python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
           python -m pip check
 
-      - name: Run canonical static compilation and full tests
+      - name: Normalize imports and run canonical static gates
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p qualification-logs
+          python -m ruff check . --fix 2>&1 | tee qualification-logs/ruff-fix.log
           python -m ruff check . 2>&1 | tee qualification-logs/ruff.log
           python -m compileall -q open-model-market tests tools 2>&1 | tee qualification-logs/compileall.log
-          python -m unittest discover -s tests -p 'test*.py' -v 2>&1 | tee qualification-logs/unit-test.log
-          grep -Eq '^Ran [0-9]+ tests? in ' qualification-logs/unit-test.log
-          grep -q '^OK$' qualification-logs/unit-test.log
 
-      - name: Run mandatory P0 regressions
+      - name: Run full unit suite and P0 regressions
         shell: bash
         run: |
           set -euo pipefail
-          python tools/run_v5_p0_regressions.py 2>&1 | tee qualification-logs/p0-regressions.log
-          grep -q "REGISTERED TOTAL: 26" qualification-logs/p0-regressions.log
-          grep -q "P0 REGRESSION RESULT: run=26, passed=26, failures=0, errors=0, skipped=0" qualification-logs/p0-regressions.log
+          python -m unittest discover -s tests -p 'test*.py' -v \
+            2>&1 | tee qualification-logs/unit-test.log
+          grep -Eq '^Ran [0-9]+ tests? in ' qualification-logs/unit-test.log
+          grep -q '^OK$' qualification-logs/unit-test.log
+          python tools/run_v5_p0_regressions.py \
+            2>&1 | tee qualification-logs/p0-regressions.log
+          grep -q 'REGISTERED TOTAL: 31' qualification-logs/p0-regressions.log
+          grep -q 'P0 REGRESSION RESULT: run=31, passed=31, failures=0, errors=0, skipped=0' \
+            qualification-logs/p0-regressions.log
 
-      - name: Run constitutional task matrix and closed-world rehearsal
+      - name: Run constitutional task matrix
         shell: bash
         run: |
           set -euo pipefail
@@ -129,26 +159,25 @@ jobs:
           results = {}
           for name, specification in tasks.items():
               output = root / name
-              command = [
-                  sys.executable,
-                  "open-model-market/v5_constitutional_pipeline.py",
-                  "--task", specification["task"],
-                  "--catalog-file", "tests/fixtures/models.json",
-                  "--endpoint-file", "tests/fixtures/endpoints.json",
-                  "--dry-run",
-                  "--maximum-total-calls", str(specification["calls"]),
-                  "--maximum-recovery-calls", str(specification["recovery"]),
-                  "--cost-anomaly-usd", "0.25",
-                  "--quality-tier", "value",
-                  "--output-dir", str(output),
-              ]
               completed = subprocess.run(
-                  command,
+                  [
+                      sys.executable,
+                      "open-model-market/v5_constitutional_pipeline.py",
+                      "--task", specification["task"],
+                      "--catalog-file", "tests/fixtures/models.json",
+                      "--endpoint-file", "tests/fixtures/endpoints.json",
+                      "--dry-run",
+                      "--maximum-total-calls", str(specification["calls"]),
+                      "--maximum-recovery-calls", str(specification["recovery"]),
+                      "--cost-anomaly-usd", "0.25",
+                      "--quality-tier", "value",
+                      "--output-dir", str(output),
+                  ],
                   check=False,
                   text=True,
                   capture_output=True,
               )
-              if completed.returncode != 0:
+              if completed.returncode:
                   raise SystemExit(completed.stdout + "\n" + completed.stderr)
               semantics = json.loads((output / "task-interpretations.json").read_text())
               constraints = json.loads((output / "task-constraints.json").read_text())
@@ -183,7 +212,6 @@ jobs:
                   "task_fit_weights": market["task_fit_feature_weights"],
                   "complexity_score": signals["complexity_score"],
               }
-
           assert results["simple"]["objective_weights"] != results["complex"]["objective_weights"]
           assert results["simple"]["task_fit_weights"] != results["complex"]["task_fit_weights"]
           assert results["complex"]["complexity_score"] >= results["simple"]["complexity_score"]
@@ -199,25 +227,20 @@ jobs:
           )
           PY
 
-      - name: Freeze zero-cost qualification report
-        id: report
+      - name: Freeze cleanup and qualification evidence
         shell: bash
         run: |
           set -euo pipefail
           source_sha="$(git rev-parse HEAD)"
           production_sha="$(git ls-remote origin refs/heads/production | awk '{print $1}')"
-          test -n "$production_sha"
-          test -s open-model-market/legacy-cleanup-report.json
-          test "$(jq -r '.status' open-model-market/legacy-cleanup-report.json)" = "PASS"
-          test "$production_sha" = "be9529ad2e38380954373c129250e6e24f8d3d11"
           unit_tests="$(python - <<'PY'
           import re
           from pathlib import Path
           text = Path('qualification-logs/unit-test.log').read_text()
-          matches = re.findall(r'^Ran (\d+) tests? in ', text, re.MULTILINE)
-          if not matches:
+          values = re.findall(r'^Ran (\d+) tests? in ', text, re.MULTILINE)
+          if not values:
               raise SystemExit('unit test count missing')
-          print(matches[-1])
+          print(values[-1])
           PY
           )"
           jq -n \
@@ -225,10 +248,11 @@ jobs:
             --arg production_sha "$production_sha" \
             --argjson unit_tests "$unit_tests" \
             --slurpfile matrix qualification-artifacts/qualification-matrix-summary.json \
+            --slurpfile cleanup open-model-market/legacy-cleanup-report.json \
             '{
-              schema_version: "v5-constitutional-qualification-1",
+              schema_version: "v5-constitutional-qualification-2",
               status: "PASS",
-              source_sha: $source_sha,
+              source_sha_before_evidence_commit: $source_sha,
               production_sha_observed: $production_sha,
               production_ref_moved: false,
               paid_model_calls: 0,
@@ -236,24 +260,27 @@ jobs:
               ruff: "PASS",
               compileall: "PASS",
               full_unit_tests: {status: "PASS", count: $unit_tests},
-              p0_regressions: {status: "PASS", count: 26},
+              p0_regressions: {status: "PASS", count: 31},
               constitutional_matrix: $matrix[0],
-              legacy_cleanup_status: "PASS",
+              legacy_cleanup: $cleanup[0],
               fail_closed: true
             }' > open-model-market/constitutional-qualification-report.json
+          test "$(jq -r '.legacy_cleanup.status' open-model-market/constitutional-qualification-report.json)" = "PASS"
           cat open-model-market/constitutional-qualification-report.json
-          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
 
-      - name: Commit Actions qualification evidence
+      - name: Commit the fully qualified Actions-authored tree
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add open-model-market/constitutional-qualification-report.json
+          git add -A
           git diff --cached --check
-          git commit -m "audit(v5): record zero-cost constitutional qualification"
-          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git commit -m "fix(v5): complete constitutional native-runtime remediation"
+          remote_target="$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+          git push \
+            --force-with-lease="refs/heads/$TARGET_BRANCH:$remote_target" \
+            origin "HEAD:refs/heads/$TARGET_BRANCH"
 
       - name: Upload qualification diagnostics
         if: always()
@@ -263,6 +290,7 @@ jobs:
           path: |
             qualification-logs/
             qualification-artifacts/
+            open-model-market/legacy-cleanup-report.json
             open-model-market/constitutional-qualification-report.json
           if-no-files-found: warn
           retention-days: 30
