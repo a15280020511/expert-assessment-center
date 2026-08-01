@@ -18,7 +18,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       REPOSITORY: ${{ github.repository }}
-      TARGET_SHA: 6d1fdb7f1359bdc1ff1994c2a0f994e3951e5c90
+      TARGET_SHA: d7fe114cc29ab6736325972d462aac1ad56ff841
       BRANCH: bootstrap/v5-deterministic-answer-normalization-20260802
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
