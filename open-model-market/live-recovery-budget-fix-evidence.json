@@ -1,0 +1,20 @@
+{
+  "schema_version": "v5-live-recovery-budget-fix-1",
+  "status": "PASS",
+  "planning_estimated_budget_advisory_only": true,
+  "runtime_budget_controller_authoritative": true,
+  "recovery_candidates_retained_for_live_ledger_admission": true,
+  "v3_regression_run_id": "30710187845",
+  "v3_actual_initial_cost_usd": 0.00074024,
+  "v3_planning_estimated_initial_cost_usd": 0.005797,
+  "v3_cost_cap_usd": 0.008,
+  "p0_expected_total": 38,
+  "source_baseline_sha": "c5aa7eae08618644e8bd13e4acb4c868d10115bf",
+  "full_unit_test_count": 266,
+  "p0_regression_count": 38,
+  "targeted_recovery_tests": "PASS",
+  "ruff": "PASS",
+  "compileall": "PASS",
+  "paid_model_calls": 0,
+  "production_ref_moved": false
+}

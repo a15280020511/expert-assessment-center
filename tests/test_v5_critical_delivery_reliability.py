@@ -8,8 +8,9 @@ ROOT = Path(__file__).resolve().parents[1]
 MARKET = ROOT / "open-model-market"
 sys.path.insert(0, str(MARKET))
 
+from execution_graph import ExecutionGraph  # noqa: E402
 from v5_cross_endpoint_planner import CrossEndpointPlannerPolicy  # noqa: E402
-from v5_runtime import RuntimeConfig  # noqa: E402
+from v5_runtime import BudgetController, RuntimeConfig  # noqa: E402
 
 
 def candidate(
@@ -136,7 +137,7 @@ class V5CriticalDeliveryReliabilityTests(unittest.TestCase):
         )
         self.assertFalse(evidence["fallback_used"])
 
-    def test_critical_recovery_uses_best_budget_feasible_company_row(self) -> None:
+    def test_critical_recovery_retains_rows_for_live_budget_admission(self) -> None:
         policy = CrossEndpointPlannerPolicy(self.config())
         final = "work-final"
         selected = candidate(
@@ -179,7 +180,7 @@ class V5CriticalDeliveryReliabilityTests(unittest.TestCase):
             quality=0.78,
             failure=0.019,
         )
-        over_budget = candidate(
+        above_planning_advisory = candidate(
             "node-over-budget",
             "anthropic/opus",
             "anthropic",
@@ -210,33 +211,164 @@ class V5CriticalDeliveryReliabilityTests(unittest.TestCase):
                 cheap_alibaba,
                 reliable_alibaba,
                 reliable_glm,
-                over_budget,
+                above_planning_advisory,
             ]
         }
 
         result = policy.rebalance_recovery_pool(optimization, bundle)
         metadata = result["execution_graph"]["metadata"]
         rows = metadata["recovery_pool"]["node-selected"]
-        self.assertEqual("z-ai/glm", rows[0]["model"])
-        self.assertEqual("qwen/qwen-plus", rows[1]["model"])
-        self.assertNotIn(
-            "qwen/qwen-small",
-            [str(row["model"]) for row in rows],
-        )
-        self.assertNotIn(
-            "anthropic/opus",
-            [str(row["model"]) for row in rows],
-        )
+        models = [str(row["model"]) for row in rows]
+        self.assertEqual("anthropic/opus", models[0])
+        self.assertIn("z-ai/glm", models)
+        self.assertIn("qwen/qwen-plus", models)
+        self.assertNotIn("qwen/qwen-small", models)
         policy_evidence = metadata["recovery_pool_policy"]
-        self.assertTrue(policy_evidence["critical_delivery_utility_first"])
+        self.assertTrue(
+            policy_evidence["planning_estimated_budget_advisory_only"]
+        )
+        self.assertTrue(
+            policy_evidence["runtime_budget_controller_authoritative"]
+        )
+        self.assertTrue(
+            policy_evidence[
+                "recovery_candidates_retained_for_live_ledger_admission"
+            ]
+        )
         self.assertEqual(
-            0.025,
-            policy_evidence["remaining_recovery_budget_usd"],
+            0,
+            policy_evidence["budget_excluded_by_node"]["node-selected"],
         )
         self.assertEqual(
             1,
-            policy_evidence["budget_excluded_by_node"]["node-selected"],
+            policy_evidence[
+                "estimated_above_planning_budget_by_node"
+            ]["node-selected"],
         )
+        retained = next(
+            row for row in rows if row["model"] == "anthropic/opus"
+        )
+        self.assertTrue(
+            retained["estimated_cost_above_planning_remaining_budget"]
+        )
+
+
+    def test_v3_regression_live_ledger_can_admit_retained_recovery(self) -> None:
+        config = RuntimeConfig(
+            total_call_limit=4,
+            recovery_call_limit=1,
+            cost_anomaly_usd=0.008,
+            quality_tier="value",
+            tools_allowed=False,
+            provider_lock_required=True,
+        )
+        policy = CrossEndpointPlannerPolicy(config)
+        selected_rows = [
+            candidate(
+                "node-qwen",
+                "qwen/qwen3.5-9b",
+                "siliconflow/fp8",
+                work_id="work-qwen",
+                functions=("analysis",),
+                cost=0.0017,
+                quality=0.70,
+                failure=0.03,
+            ),
+            candidate(
+                "node-deepseek",
+                "deepseek/deepseek-v4-flash",
+                "deepinfra/fp4",
+                work_id="work-final",
+                functions=("synthesis",),
+                cost=0.0022,
+                quality=0.76,
+                failure=0.02,
+            ),
+            candidate(
+                "node-openai",
+                "openai/gpt-oss-120b",
+                "groq/fp8",
+                work_id="work-openai",
+                functions=("analysis",),
+                cost=0.001897,
+                quality=0.74,
+                failure=0.02,
+            ),
+        ]
+        recovery = candidate(
+            "node-mistral-recovery",
+            "mistralai/mistral-small",
+            "mistral",
+            work_id="work-qwen",
+            functions=("analysis",),
+            cost=0.003,
+            quality=0.72,
+            failure=0.02,
+        )
+        optimization = {
+            "selected_initial_cost_usd": 0.005797,
+            "execution_graph": {
+                "nodes": [
+                    {**row, "node_id": row["candidate_id"]}
+                    for row in selected_rows
+                ],
+                "final_nodes": ["node-deepseek"],
+                "metadata": {
+                    "interpretation_id": "interpretation-critical"
+                },
+            },
+        }
+        bundle = {"candidates": [*selected_rows, recovery]}
+
+        result = policy.rebalance_recovery_pool(optimization, bundle)
+        pool = result["execution_graph"]["metadata"]["recovery_pool"]
+        self.assertEqual(
+            "mistralai/mistral-small",
+            pool["node-qwen"][0]["model"],
+        )
+        evidence = result["recovery_pool_policy"]
+        self.assertEqual(
+            1,
+            evidence["estimated_above_planning_budget_by_node"][
+                "node-qwen"
+            ],
+        )
+        self.assertEqual(
+            0,
+            evidence["budget_excluded_by_node"]["node-qwen"],
+        )
+
+        empty_graph = ExecutionGraph(
+            nodes=(),
+            edges=(),
+            execution_stages=(),
+            entry_nodes=(),
+            final_nodes=(),
+            required_work=(),
+            estimated_quality=0.0,
+            quality_floor=0.0,
+            estimated_total_cost=0.0,
+            metadata={},
+        )
+        budget = BudgetController(config, empty_graph)
+        for estimated, actual, node_id in (
+            (0.0017, 0.0, "node-qwen"),
+            (0.0022, 0.00047194, "node-deepseek"),
+            (0.001897, 0.0002683, "node-openai"),
+        ):
+            allowed, reason = budget.reserve("initial", estimated, node_id)
+            self.assertTrue(allowed, reason)
+            self.assertFalse(budget.reconcile(actual))
+        allowed, reason = budget.reserve(
+            "replacement",
+            recovery["estimated_cost"],
+            "node-qwen",
+        )
+        self.assertTrue(allowed, reason)
+        snapshot = budget.snapshot()
+        self.assertEqual(4, snapshot["calls_reserved"])
+        self.assertEqual(1, snapshot["recovery_calls_reserved"])
+        self.assertEqual(0.00074024, snapshot["actual_cost_usd"])
 
     def test_global_recovery_company_allocation_prioritizes_final_node(self) -> None:
         policy = CrossEndpointPlannerPolicy(self.config())
