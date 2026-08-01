@@ -1,0 +1,56 @@
+name: V5 Read-Only Paid Run Query V5
+
+on:
+  push:
+    branches:
+      - "acceptance/v5-constitutional-final-receipt-v5-20260802"
+    paths:
+      - ".github/workflows/v5-read-only-run-query-v5.yml"
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  query:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      REQUEST_BRANCH: acceptance/v5-constitutional-final-receipt-v5-20260802
+      REQUEST_SHA: 625fc977fb86b83c3908a62ae9dd0fdc0a86d3ae
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ env.REQUEST_BRANCH }}
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Query exact paid workflow run
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/$REPOSITORY/actions/workflows/v5-one-time-paid-acceptance.yml/runs?branch=$REQUEST_BRANCH&event=push&per_page=100" \
+            > runs.json
+          jq -e --arg sha "$REQUEST_SHA" '
+            [.workflow_runs[] | select(.head_sha == $sha)]
+            | if length == 1 then .[0] else error("expected exactly one paid run") end
+            | {
+                request_commit_sha: .head_sha,
+                paid_workflow_run_id: (.id | tostring),
+                status: .status,
+                conclusion: .conclusion,
+                run_attempt: .run_attempt,
+                created_at: .created_at,
+                updated_at: .updated_at,
+                html_url: .html_url
+              }
+          ' runs.json > .github/v5-paid-acceptance-run-query-v5.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/v5-paid-acceptance-run-query-v5.json
+          git commit -m "audit(v5): record exact paid run status"
+          git push origin "HEAD:refs/heads/$REQUEST_BRANCH"
+          cat .github/v5-paid-acceptance-run-query-v5.json
