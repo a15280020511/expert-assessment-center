@@ -160,22 +160,23 @@ jobs:
                           assert poisson_binomial_tail([higher] * node_count, recovery) >= tail - 1e-12
                       cases += 1
 
-          uptime_values = (0, 0.5, 1, 50, 89, 90, 95, 99, 100)
-          previous = -1.0
-          for value in uptime_values:
-              profile = calibrate_endpoint_operational_profile({
-                  "status": 0,
-                  "uptime_last_1d": value,
-                  "uptime_last_30m": value,
-                  "uptime_last_5m": value,
-              })
-              reliability = profile["operational_reliability"]
-              assert 0.0 <= reliability <= 0.995
-              normalized_value = value / 100.0 if value > 1 else float(value)
-              if normalized_value >= 0.90:
-                  assert reliability + 1e-12 >= previous
+          for uptime_values in (
+              (0.0, 0.5, 0.89, 0.90, 0.95, 0.99, 1.0),
+              (0, 50, 89, 90, 95, 99, 100),
+          ):
+              previous = -1.0
+              for value in uptime_values:
+                  profile = calibrate_endpoint_operational_profile({
+                      "status": 0,
+                      "uptime_last_1d": value,
+                      "uptime_last_30m": value,
+                      "uptime_last_5m": value,
+                  })
+                  reliability = profile["operational_reliability"]
+                  assert 0.0 <= reliability <= 0.995
+                  assert reliability + 1e-12 >= previous, (value, previous, reliability)
                   previous = reliability
-              cases += 1
+                  cases += 1
 
           for probabilities in itertools.product((0.0, 0.02, 0.05, 0.10), repeat=4):
               tails = [poisson_binomial_tail(probabilities, recovery) for recovery in range(5)]
