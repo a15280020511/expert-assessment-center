@@ -1,0 +1,146 @@
+name: One-Time Actions V4 Contract Isolation Fix V2
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-time-actions-v4-contract-isolation-v2.yml"
+      - "tools/one_time_v4_contract_isolation_fix.py"
+      - "tools/one_time_v4_contract_isolation_fix_v2.py"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-time-actions-v4-contract-isolation-v2
+  cancel-in-progress: true
+
+jobs:
+  build-qualified-fix:
+    if: >-
+      github.repository == 'a15280020511/expert-assessment-center' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'bootstrap/v5-final-contract-isolation-v4-20260802'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      BASE_SHA: fa2c68de906c9fdfb9208aafe6af201bbe2a06cd
+      TARGET_BRANCH: actions/v5-final-contract-isolation-v4-20260802
+      BOOTSTRAP_BRANCH: bootstrap/v5-final-contract-isolation-v4-20260802
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: fa2c68de906c9fdfb9208aafe6af201bbe2a06cd
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-runtime.txt
+            requirements-dev.txt
+      - name: Apply deterministic V4 transformer
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git fetch origin "$BOOTSTRAP_BRANCH"
+          git show "origin/$BOOTSTRAP_BRANCH:tools/one_time_v4_contract_isolation_fix.py" \
+            > tools/.one_time_v4_contract_isolation_fix.py
+          git show "origin/$BOOTSTRAP_BRANCH:tools/one_time_v4_contract_isolation_fix_v2.py" \
+            > tools/.one_time_v4_contract_isolation_fix_v2.py
+          python tools/.one_time_v4_contract_isolation_fix_v2.py
+          rm tools/.one_time_v4_contract_isolation_fix.py
+          rm tools/.one_time_v4_contract_isolation_fix_v2.py
+          git diff --check
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+      - name: Run static and V4 targeted gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p v4-validation-logs
+          python -m ruff check . --fix 2>&1 | tee v4-validation-logs/ruff-fix.log
+          python -m ruff check . 2>&1 | tee v4-validation-logs/ruff.log
+          python -m compileall -q open-model-market tests tools \
+            2>&1 | tee v4-validation-logs/compileall.log
+          python -m unittest \
+            tests.test_v5_v4_contract_isolation \
+            tests.test_v5_final_contract_runtime_isolation \
+            tests.test_v5_explicit_contract_pipeline_integrity \
+            tests.test_v5_explicit_task_delivery_contract \
+            tests.test_v5_constitutional_runtime \
+            -v 2>&1 | tee v4-validation-logs/targeted-tests.log
+      - name: Run full unit suite and 45 native P0 regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p 'test*.py' -v \
+            2>&1 | tee v4-validation-logs/unit-test.log
+          grep -Eq '^Ran [0-9]+ tests? in ' v4-validation-logs/unit-test.log
+          grep -q '^OK$' v4-validation-logs/unit-test.log
+          python tools/run_v5_p0_regressions.py \
+            2>&1 | tee v4-validation-logs/p0-regressions.log
+          grep -q 'REGISTERED V5V4ContractIsolationTests: 7' v4-validation-logs/p0-regressions.log
+          grep -q 'REGISTERED TOTAL: 45' v4-validation-logs/p0-regressions.log
+          grep -q 'P0 REGRESSION RESULT: run=45, passed=45, failures=0, errors=0, skipped=0' \
+            v4-validation-logs/p0-regressions.log
+      - name: Freeze qualification evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          unit_tests="$(python - <<'PY'
+          import re
+          from pathlib import Path
+          values = re.findall(r'^Ran (\d+) tests? in ', Path('v4-validation-logs/unit-test.log').read_text(), re.MULTILINE)
+          if not values:
+              raise SystemExit('unit test count missing')
+          print(values[-1])
+          PY
+          )"
+          python - <<PY
+          import json
+          from pathlib import Path
+          path = Path('open-model-market/v4-contract-isolation-fix-evidence.json')
+          value = json.loads(path.read_text())
+          value.update({
+              'status': 'PASS',
+              'source_baseline_sha': '$BASE_SHA',
+              'full_unit_test_count': int('$unit_tests'),
+              'p0_regression_count': 45,
+              'targeted_contract_tests': 'PASS',
+              'ruff': 'PASS',
+              'compileall': 'PASS',
+              'paid_model_calls': 0,
+              'production_ref_moved': False,
+          })
+          path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n')
+          PY
+          cat open-model-market/v4-contract-isolation-fix-evidence.json
+      - name: Commit exact qualified code tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf v4-validation-logs
+          git switch -C "$TARGET_BRANCH"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(v5): isolate final contract and audit node evidence"
+          remote_target="$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+          if [[ -n "$remote_target" ]]; then
+            git push --force-with-lease="refs/heads/$TARGET_BRANCH:$remote_target" origin "HEAD:refs/heads/$TARGET_BRANCH"
+          else
+            git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          fi
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: v5-v4-contract-isolation-v2-${{ github.run_id }}
+          path: v4-validation-logs/
+          if-no-files-found: warn
+          retention-days: 14
