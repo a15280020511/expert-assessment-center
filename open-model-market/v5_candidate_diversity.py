@@ -17,8 +17,3 @@ def diversity_preserving_pareto_prune(
         candidates,
         maximum_per_group=maximum_per_group,
     )
-
-
-def install() -> None:
-    """Deprecated compatibility no-op; use the function explicitly."""
-    return None

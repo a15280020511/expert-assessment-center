@@ -11,13 +11,12 @@ import json
 import os
 from typing import Any, Mapping
 
-import v5_executor
+import v5_execution_primitives as primitives
 import v5_task_delivery_contract as task_delivery_contract
 from execution_graph import SelectedNode
 
-_INSTALLED = False
-_ORIGINAL_SYSTEM_PROMPT = v5_executor._system_prompt
-_ORIGINAL_QUALITY_GATE = v5_executor.quality_gate
+_ORIGINAL_SYSTEM_PROMPT = primitives.system_prompt
+_ORIGINAL_QUALITY_GATE = primitives.quality_gate
 COMPACT_MODE_ENV = "V5_COMPACT_OUTPUT_CONTRACT"
 CONTRACT_METADATA_KEYS = (
     "machine_readable_required",
@@ -148,7 +147,7 @@ def _delivery_rule(node: SelectedNode) -> str:
 def contract_aware_system_prompt(node: SelectedNode) -> str:
     modules = list(node.prompt_profile.get("modules", []))
     rules = "".join(
-        v5_executor.PROMPT_MODULES.get(
+        primitives.PROMPT_MODULES.get(
             str(name), f"执行提示模块：{name}。"
         )
         for name in modules
@@ -220,13 +219,3 @@ def contract_aware_quality_gate(
         passed = False
         score = min(float(score), 0.35)
     return passed, score, reasons
-
-
-def install() -> None:
-    """Install contract-aware prompt and quality gate for formal V5 paths."""
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _INSTALLED = True
-    v5_executor._system_prompt = contract_aware_system_prompt
-    v5_executor.quality_gate = contract_aware_quality_gate

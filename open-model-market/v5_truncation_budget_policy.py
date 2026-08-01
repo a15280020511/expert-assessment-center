@@ -147,15 +147,3 @@ def estimated_completion_usage(work: Mapping[str, Any], endpoint_max: int) -> in
         token_cost.MIN_ESTIMATED_COMPLETION_USAGE_TOKENS,
         min(allowance, usage),
     )
-
-
-def install() -> None:
-    """Install after the base cost and token policies exactly once."""
-    global _INSTALLED
-    cost.install()
-    token_cost.install()
-    if _INSTALLED:
-        return
-    cost.completion_envelope = completion_envelope
-    token_cost.estimated_completion_usage = estimated_completion_usage
-    _INSTALLED = True

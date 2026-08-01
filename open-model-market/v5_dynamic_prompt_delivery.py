@@ -1,11 +1,9 @@
 """Deliver the computed professional role without weakening output contracts."""
 from __future__ import annotations
 
-import v5_executor as executor
 import v5_output_contract_delivery as contracts
 from execution_graph import SelectedNode
 
-_INSTALLED = False
 
 
 def dynamic_system_prompt(node: SelectedNode) -> str:
@@ -23,11 +21,3 @@ def dynamic_system_prompt(node: SelectedNode) -> str:
         "该角色只定义分析视角，不授予任何外部工具、数据源或额外权限。"
     )
     return evidence + base
-
-
-def install() -> None:
-    """Install after the contract layer and remain deterministic across call order."""
-    global _INSTALLED
-    contracts.install()
-    executor._system_prompt = dynamic_system_prompt
-    _INSTALLED = True

@@ -161,8 +161,3 @@ def compile_task_semantics(
     result["architecture"] = "task-independent-semantic-compilation"
     result["task_signals"] = signals
     return result
-
-
-def install() -> None:
-    """Deprecated compatibility no-op; global monkey patching is forbidden."""
-    return None

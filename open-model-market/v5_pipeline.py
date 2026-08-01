@@ -852,4 +852,6 @@ def main(
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from v5_constitutional_pipeline import main as constitutional_main
+
+    raise SystemExit(constitutional_main())

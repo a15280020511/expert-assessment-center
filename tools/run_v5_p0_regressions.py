@@ -19,8 +19,12 @@ SPECS = (
     (TESTS / "test_v5_general_task_planning.py", "V5GeneralTaskPlanningTests", 6),
     (TESTS / "test_v5_planning_scenario_matrix.py", "V5PlanningScenarioMatrixTests", 4),
     (TESTS / "test_v5_general_task_full_planning.py", "V5GeneralTaskFullPlanningTests", 4),
-    (TESTS / "test_v5_quality_status_integrity.py", "V5QualityStatusIntegrityTests", 6),
-    (TESTS / "test_v5_empty_output_recovery.py", "V5EmptyOutputRecoveryTests", 6),
+    (TESTS / "test_v5_constitutional_runtime.py", "V5ConstitutionalRuntimeTests", 6),
+    (TESTS / "test_v5_task_constraints.py", "TaskConstraintPolarityTests", 3),
+    (TESTS / "test_v5_task_constraints.py", "ClosedWorldEvidenceTests", 5),
+    (TESTS / "test_v5_task_constraints.py", "DynamicObjectiveTests", 1),
+    (TESTS / "test_v5_task_constraints.py", "ActualCompanyAuditTests", 2),
+    (TESTS / "test_v5_independent_artifact_revalidation.py", "IndependentArtifactRevalidationTests", 3),
 )
 
 

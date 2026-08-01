@@ -8,7 +8,6 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-import model_market  # noqa: E402
 import resource_matrix  # noqa: E402
 import v5_general_task_planning  # noqa: E402
 import v5_task_delivery_contract as contracts  # noqa: E402
@@ -102,10 +101,6 @@ class V5ConstitutionalSemanticsTests(unittest.TestCase):
         self.assertEqual(headings, contract["exact_markdown_headings"])
         self.assertEqual(14, contract["task_explicit_delivery_section_count"])
 
-    def test_deprecated_install_is_a_noop(self) -> None:
-        before = model_market.classify_task
-        self.assertIsNone(v5_general_task_planning.install())
-        self.assertIs(before, model_market.classify_task)
 
 
 if __name__ == "__main__":
