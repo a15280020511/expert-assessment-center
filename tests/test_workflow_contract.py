@@ -96,16 +96,17 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("model-performance-state", self.text)
         self.assertNotIn("MODEL_HISTORY_PATH", self.text)
 
-    def test_promotion_and_rollback_are_same_runtime_ref_operations(self):
+    def test_promotion_is_read_only_until_constitutional_acceptance(self):
         self.assertIn("workflow_dispatch:", self.promotion)
-        self.assertIn("options:\n          - promote\n          - rollback", self.promotion)
-        self.assertIn("group: v5-production-release", self.promotion)
-        self.assertIn("git merge-base --is-ancestor", self.promotion)
-        self.assertIn("--force-with-lease", self.promotion)
-        self.assertIn("refs/heads/production", self.promotion)
-        self.assertIn("python -m unittest discover", self.promotion)
-        self.assertIn("--dry-run", self.promotion)
-        self.assertIn("--maximum-total-calls 4", self.promotion)
+        self.assertIn("permissions:\n  contents: read", self.promotion)
+        self.assertIn("group: v5-production-qualification", self.promotion)
+        self.assertIn("task-independent constitutional matrix", self.promotion)
+        self.assertIn("v5-adaptive-search.json", self.promotion)
+        self.assertIn("task_specific_production_branching", self.promotion)
+        self.assertIn("case_derived_compaction_applied", self.promotion)
+        self.assertIn("test ! -e .release-authorized", self.promotion)
+        self.assertNotIn("git push", self.promotion)
+        self.assertNotIn("refs/heads/production", self.promotion)
         self.assertNotIn("OPENROUTER_API_KEY", self.promotion)
 
 
