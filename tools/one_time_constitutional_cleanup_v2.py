@@ -7,7 +7,10 @@ and never committed to the qualified remediation branch.
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.util
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -317,6 +320,56 @@ def _normalize_text_file_endings(root: Path) -> None:
             path.write_text(text.rstrip() + "\n", encoding="utf-8")
 
 
+def _prepare_actions_commit_boundary(root: Path) -> None:
+    """Keep control-plane YAML and temporary qualification output out of the push.
+
+    GitHub's installation token can write repository contents but cannot update
+    workflow files. The exact validated workflow delta is therefore frozen into
+    the diagnostic Artifact for a separate, digest-bound control-plane update.
+    """
+    artifact_root = root / "qualification-artifacts"
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    patch_path = artifact_root / "validated-workflows.patch"
+    patch = subprocess.run(
+        ["git", "diff", "--binary", "--", ".github/workflows"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    ).stdout
+    patch_path.write_bytes(patch)
+    changed = subprocess.run(
+        ["git", "diff", "--name-only", "--", ".github/workflows"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    manifest = {
+        "schema_version": "v5-validated-workflow-patch-1",
+        "changed_paths": changed,
+        "patch_sha256": hashlib.sha256(patch).hexdigest(),
+        "patch_size": len(patch),
+        "validation_boundary": (
+            "same-worktree-before-static-unit-p0-and-scenario-qualification"
+        ),
+    }
+    (artifact_root / "validated-workflows-manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    for relative in changed:
+        subprocess.run(
+            ["git", "update-index", "--skip-worktree", "--", relative],
+            cwd=root,
+            check=True,
+        )
+    exclude = root / ".git" / "info" / "exclude"
+    existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+    additions = "\n/qualification-logs/\n/qualification-artifacts/\n"
+    if "/qualification-logs/" not in existing:
+        exclude.write_text(existing.rstrip() + additions, encoding="utf-8")
+
+
 def main() -> int:
     module = _load_transformer()
     module.EXPLICIT_LEGACY_MODULES.add("v5_rejection_audit_policy")
@@ -340,8 +393,6 @@ def main() -> int:
 
     report_path = module.MARKET / "legacy-cleanup-report.json"
     if report_path.is_file() and removed_methods:
-        import json
-
         report = json.loads(report_path.read_text(encoding="utf-8"))
         report["removed_install_test_methods"] = removed_methods
         report_path.write_text(
@@ -349,6 +400,7 @@ def main() -> int:
             encoding="utf-8",
         )
     _normalize_text_file_endings(module.ROOT)
+    _prepare_actions_commit_boundary(module.ROOT)
     return result
 
 
