@@ -5,11 +5,11 @@ import math
 from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
-import v5_capability_calibration as capability_calibration
 import v5_candidate_diversity as candidate_diversity
 import v5_company_diversity as company_diversity
 import v5_cost_reliability_hardening as cost_policy
 import v5_dynamic_configuration as dynamic_configuration
+import v5_global_company_calibration as capability_calibration
 import v5_planner as base_planner
 import v5_token_cost_policy as token_policy
 import v5_truncation_budget_policy as truncation_policy
@@ -74,6 +74,12 @@ class PlannerPolicy:
             "require_distinct_model_companies": self.require_distinct_model_companies,
             "model_company_identity": "canonicalized-direct-model-author-prefix",
             "candidate_breadth_policy": "supplied-by-current-task-adaptive-search",
+            "capability_pool_policy": (
+                "evidence-backed-global-company-assignment-calibration"
+            ),
+            "capability_scores_modified": False,
+            "task_demands_modified": False,
+            "proxy_floor_lowered": False,
             "fixed_candidate_floor_used": False,
             "company_shortage_policy": "expand-pool-then-fail-closed",
             "cross_task_history_used": False,
@@ -226,6 +232,12 @@ class PlannerPolicy:
             "candidate_pool_emergency_ceiling_per_work": int(
                 self.config.maximum_candidates_per_work
             ),
+            "capability_pool_policy": (
+                "evidence-backed-global-company-assignment-calibration"
+            ),
+            "capability_scores_modified": False,
+            "task_demands_modified": False,
+            "proxy_floor_lowered": False,
             "fixed_candidate_floor_used": False,
             "company_shortage_policy": "expand-pool-then-fail-closed",
         }
