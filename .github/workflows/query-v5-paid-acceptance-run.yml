@@ -1,0 +1,55 @@
+name: Query V5 Paid Acceptance Run
+
+on:
+  push:
+    branches:
+      - "acceptance/**"
+    paths:
+      - ".github/v5-paid-acceptance-run-query.json"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  query-run:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      QUERY_BRANCH: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Resolve exact paid acceptance Run
+        shell: bash
+        run: |
+          set -euo pipefail
+          request_id=$(jq -er '.request_id' .github/v5-paid-acceptance-run-query.json)
+          head_sha=$(jq -er '.request_commit_sha' .github/v5-paid-acceptance-run-query.json)
+          gh api -H "Accept: application/vnd.github+json" \
+            "/repos/$REPOSITORY/actions/runs?head_sha=$head_sha&per_page=100" > runs.json
+          jq --arg request_id "$request_id" --arg head_sha "$head_sha" --arg branch "$QUERY_BRANCH" '
+            {
+              schema_version: "v5-paid-acceptance-run-query-result-1",
+              request_id: $request_id,
+              request_commit_sha: $head_sha,
+              query_branch: $branch,
+              runs: [
+                .workflow_runs[]
+                | select(.name == "V5 One-Time Paid Acceptance" and .event == "push" and .head_sha == $head_sha)
+                | {id, run_number, status, conclusion, event, head_branch, head_sha, created_at, updated_at, html_url}
+              ]
+            }
+            | .run_count = (.runs | length)
+          ' runs.json > .github/v5-paid-acceptance-run-query-result.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/v5-paid-acceptance-run-query-result.json
+          git commit -m "audit(v5): record paid acceptance Run query $request_id"
+          git push origin "HEAD:refs/heads/$QUERY_BRANCH"
