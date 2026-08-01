@@ -16,7 +16,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: one-time-actions-constitutional-qualification
+  group: one-time-actions-constitutional-qualification-v2
   cancel-in-progress: true
 
 jobs:
