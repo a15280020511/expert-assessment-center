@@ -1,0 +1,37 @@
+{
+  "schema_version": "v5-paid-acceptance-durable-receipt-1",
+  "status": "FAIL",
+  "request_id": "constitutional-final-receipt-20260802-v2",
+  "request_branch": "acceptance/v5-constitutional-final-receipt-20260802",
+  "request_commit_sha": "6b22124923174990063177d3d97271e2c6d5169e",
+  "target_sha": "c5aa7eae08618644e8bd13e4acb4c868d10115bf",
+  "paid_workflow_run_id": "30709945702",
+  "paid_job_result": "failure",
+  "independent_job_result": "skipped",
+  "paid_artifact": {
+    "id": 8821568174,
+    "node_id": "MDg6QXJ0aWZhY3Q4ODIxNTY4MTc0",
+    "name": "v5-paid-acceptance-30709945702",
+    "size_in_bytes": 25471,
+    "url": "https://api.github.com/repos/a15280020511/expert-assessment-center/actions/artifacts/8821568174",
+    "archive_download_url": "https://api.github.com/repos/a15280020511/expert-assessment-center/actions/artifacts/8821568174/zip",
+    "expired": false,
+    "digest": "sha256:a354b088b0105238bdcd59821635a083de0b9fdd34b74d005e28471c2806df39",
+    "created_at": "2026-08-01T17:19:22Z",
+    "updated_at": "2026-08-01T17:19:22Z",
+    "expires_at": "2026-08-31T17:19:22Z",
+    "workflow_run": {
+      "id": 30709945702,
+      "repository_id": 1316227495,
+      "head_repository_id": 1316227495,
+      "head_branch": "acceptance/v5-constitutional-final-receipt-20260802",
+      "head_sha": "6b22124923174990063177d3d97271e2c6d5169e"
+    }
+  },
+  "independent_attestation_artifact": null,
+  "independent_attestation": null,
+  "independently_recomputed_from_primitive_evidence": false,
+  "production_ref_moved": false,
+  "public_report_published": false,
+  "authoritative_qualification_receipt": true
+}
