@@ -14,7 +14,11 @@ from v5_task_constraints import (
     compile_task_constraints,
     validate_answer_evidence,
 )
-from v5_task_delivery_contract import validate_answer_contract
+from v5_task_delivery_contract import (
+    apply_explicit_contract,
+    explicit_contract_kind,
+    validate_answer_contract,
+)
 
 FORBIDDEN_REQUEST_FIELDS = {
     "tools",
@@ -185,9 +189,51 @@ def _actual_cost_from_nodes(nodes: list[Any]) -> float:
     return round(total, 8)
 
 
+_EXPLICIT_CONTRACT_KEYS = (
+    "explicit_user_contract",
+    "exact_top_level_fields",
+    "forbid_extra_top_level_fields",
+    "all_required_fields_nonempty",
+    "nested_exact_fields",
+    "nested_values_must_be_objects",
+    "explicit_markdown_contract",
+    "exact_markdown_headings",
+    "markdown_heading_level",
+    "markdown_headings_must_be_nonempty",
+    "markdown_heading_order_required",
+    "explicit_table_contract",
+    "exact_table_columns",
+    "table_columns_must_be_nonempty",
+    "table_column_order_required",
+    "required_fields",
+    "machine_readable_required",
+)
+
+
+def _explicit_contract_projection(contract: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: contract[key]
+        for key in _EXPLICIT_CONTRACT_KEYS
+        if key in contract
+    }
+
+
+def _recompiled_task_contract(task: str) -> dict[str, Any]:
+    return apply_explicit_contract(
+        task,
+        {"synthesis": 1.0},
+        {
+            "required_fields": [],
+            "machine_readable_required": False,
+            "must_separate_fact_assumption_inference": True,
+        },
+    )
+
+
 def _final_contract_violations(
     graph: Mapping[str, Any],
     report: str,
+    task: str = "",
 ) -> list[str]:
     final_ids = {
         str(value)
@@ -197,7 +243,17 @@ def _final_contract_violations(
     nodes = graph.get("nodes", [])
     if not isinstance(nodes, list) or not final_ids:
         return ["final graph contract evidence is missing"]
+
     violations: list[str] = []
+    task_contract = _recompiled_task_contract(task)
+    task_kind = explicit_contract_kind(task_contract)
+    if task_kind != "generic":
+        task_violations = validate_answer_contract(report, task_contract)
+        violations.extend(
+            f"task-recompiled-final-report-contract:{value}"
+            for value in task_violations
+        )
+
     matched = 0
     for node in nodes:
         if not isinstance(node, Mapping):
@@ -210,6 +266,20 @@ def _final_contract_violations(
         if not isinstance(contract, Mapping):
             violations.append("final node output contract is missing")
             continue
+
+        graph_kind = explicit_contract_kind(contract)
+        if task_kind != "generic":
+            if graph_kind != task_kind:
+                violations.append(
+                    f"final-graph-contract-kind-mismatch:{task_kind}:{graph_kind}"
+                )
+            if _explicit_contract_projection(contract) != _explicit_contract_projection(
+                task_contract
+            ):
+                violations.append(
+                    "final-graph-contract-differs-from-task-recompilation"
+                )
+
         node_violations = validate_answer_contract(
             report,
             contract,
@@ -294,6 +364,7 @@ def recompute(
     report_contract_violations = _final_contract_violations(
         graph if isinstance(graph, Mapping) else {},
         report,
+        task,
     )
     failures.extend(report_contract_violations)
 
@@ -447,7 +518,7 @@ def recompute(
             )
 
     return {
-        "schema_version": "v5-independent-artifact-revalidation-2",
+        "schema_version": "v5-independent-artifact-revalidation-3",
         "status": "PASS" if not failures else "FAIL",
         "expected_run_id": str(expected_run_id),
         "artifact_run_id": manifest["run_id"],
