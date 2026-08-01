@@ -76,8 +76,9 @@ class PlannerPolicy:
             "candidate_breadth_policy": (
                 "minimum-assignment-slots-plus-current-adaptive-search-width"
             ),
+            "candidate_breadth_revision": 4,
             "capability_pool_policy": (
-                "evidence-backed-assignment-and-cost-performance-calibration"
+                "evidence-backed-global-company-assignment-calibration"
             ),
             "capability_scores_modified": False,
             "task_demands_modified": False,
@@ -306,8 +307,9 @@ class PlannerPolicy:
             "candidate_breadth_policy": (
                 "minimum-assignment-slots-plus-current-adaptive-search-width"
             ),
+            "candidate_breadth_revision": 4,
             "capability_pool_policy": (
-                "evidence-backed-assignment-and-cost-performance-calibration"
+                "evidence-backed-global-company-assignment-calibration"
             ),
             "capability_scores_modified": False,
             "task_demands_modified": False,
