@@ -4,14 +4,16 @@ on:
   pull_request:
     paths:
       - "open-model-market/team_policy.json"
-      - "open-model-market/v5_pipeline.py"
+      - "open-model-market/v5_constitutional_pipeline.py"
+      - "open-model-market/v5_task_constraints.py"
       - "tests/test_v5_consumer_decision_budget.py"
       - ".github/workflows/v5-consumer-decision-validate.yml"
   push:
     branches: [main]
     paths:
       - "open-model-market/team_policy.json"
-      - "open-model-market/v5_pipeline.py"
+      - "open-model-market/v5_constitutional_pipeline.py"
+      - "open-model-market/v5_task_constraints.py"
       - "tests/test_v5_consumer_decision_budget.py"
       - ".github/workflows/v5-consumer-decision-validate.yml"
 
@@ -37,11 +39,11 @@ jobs:
         run: python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
       - name: Run consumer decision regression tests
         run: python -m unittest tests.test_v5_consumer_decision_budget -v
-      - name: Run exact four-call zero-cost planning rehearsal
+      - name: Run exact four-call zero-cost constitutional rehearsal
         shell: bash
         run: |
-          TASK='真实决策任务：用户在福州市担任小学夜班保安，独自在岗亭值班；岗亭无法申请学校有线网络或室内Wi-Fi，但移动4G/5G流量可用；每月流量需求约100GB以上；希望长期月成本尽量控制在20元人民币左右，可以接受一次性购买随身Wi-Fi设备。请比较方案A：继续使用手机热点，与方案B：购买并使用随身Wi-Fi。仅依据题面已知条件分析，不调用外部工具、不联网、不编造具体套餐价格。必须给出：1）关键假设与未知信息；2）一次性成本和月成本的比较公式及盈亏平衡阈值；3）稳定性、信号、电池、发热、携带、维护和故障风险；4）什么条件下选A、什么条件下选B；5）明确推荐；6）一个低成本、可撤销的7天验证步骤。事实、假设和推断必须分开。'
-          python open-model-market/v5_pipeline.py \
+          TASK='真实决策任务：用户在福州市担任小学夜班保安，独自在岗亭值班；岗亭无法申请学校有线网络或室内Wi-Fi，但移动4G/5G流量可用；每月流量需求约100GB以上；希望长期月成本尽量控制在20元人民币左右，可以接受一次性购买随身Wi-Fi设备。请比较方案A：继续使用手机热点，与方案B：购买并使用随身Wi-Fi。仅依据题面已知条件分析，不调用外部工具、不联网、不编造具体套餐价格。必须给出：1）关键假设与未知信息；2）一次性成本和月成本的比较公式及盈亏平衡阈值；3）稳定性、信号、电池、发热、携带、维护和故障风险；4）什么条件下选A、什么条件下选B；5）明确推荐；6）一个低成本、可撤销的7天验证步骤。事实、假设和推断必须分开。只接受完整交付。'
+          python open-model-market/v5_constitutional_pipeline.py \
             --task "$TASK" \
             --catalog-file tests/fixtures/models.json \
             --endpoint-file tests/fixtures/endpoints.json \
@@ -62,10 +64,13 @@ jobs:
           optimization = json.loads((root / "v5-optimization.json").read_text())
           graph = json.loads((root / "v5-execution-graph.json").read_text())
           dry = json.loads((root / "v5-dry-run.json").read_text())
+          constraints = json.loads((root / "task-constraints.json").read_text())
+          market = json.loads((root / "v5-model-endpoint-market.json").read_text())
 
           signals = semantics["task_signals"]
           assert signals["active_domains"] == ["business"]
           assert signals["high_stakes"] is False
+          assert signals["task_specific_production_branching"] is False
           assert optimization["solver_status"] in {"OPTIMAL", "FEASIBLE"}
           assert len(graph["nodes"]) <= 3
           assert len(dry["requests"]) == len(graph["nodes"])
@@ -75,4 +80,12 @@ jobs:
           assert dry["approved_budget"]["maximum_recovery_calls"] == 1
           assert dry["global_monkey_patching"] is False
           assert dry["legacy_runtime_present"] is False
+          assert dry["task_constraints"] == constraints
+          assert constraints["external_tools_allowed"] is False
+          assert constraints["external_facts_allowed"] is False
+          assert constraints["unsupported_precise_quantities_allowed"] is False
+          assert constraints["allow_degraded_success"] is False
+          assert constraints["fail_closed"] is True
+          assert market["fixed_preselection_weight_tuple_used"] is False
+          assert market["fixed_task_fit_weight_tuple_used"] is False
           PY
