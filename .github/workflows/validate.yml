@@ -64,6 +64,7 @@ jobs:
             open-model-market/v5_constitutional_pipeline.py
             open-model-market/v5_task_constraints.py
             open-model-market/v5_constitutional_runtime.py
+            open-model-market/v5_deterministic_answer_normalization.py
             open-model-market/v5_execution_primitives.py
             open-model-market/v5_runtime.py
             open-model-market/v5_production_ticket.py
@@ -84,6 +85,8 @@ jobs:
             open-model-market/constitutional-qualification-report.json
             open-model-market/live-recovery-budget-fix-evidence.json
             open-model-market/v4-contract-isolation-fix-evidence.json
+            open-model-market/v5-closed-world-numeric-prompt-fix-evidence.json
+            open-model-market/v5-deterministic-answer-normalization-fix-evidence.json
             tests/test_v5_task_constraints.py
             tests/test_v5_dynamic_model_fit.py
             tests/test_v5_general_task_planning.py
@@ -93,6 +96,7 @@ jobs:
             tests/test_v5_independent_artifact_revalidation.py
             tests/test_v5_critical_delivery_reliability.py
             tests/test_v5_v4_contract_isolation.py
+            tests/test_v5_deterministic_answer_normalization.py
             tests/test_v5_full_load_stability.py
             tools/run_v5_p0_regressions.py
           )
@@ -125,6 +129,15 @@ jobs:
           test "$(jq -r '.final_contract_inline_chinese_count_supported' open-model-market/v4-contract-isolation-fix-evidence.json)" = "true"
           test "$(jq -r '.internal_task_final_format_projection_enabled' open-model-market/v4-contract-isolation-fix-evidence.json)" = "true"
           test "$(jq -r '.p0_regression_count' open-model-market/v4-contract-isolation-fix-evidence.json)" = "45"
+          test "$(jq -r '.status' open-model-market/v5-closed-world-numeric-prompt-fix-evidence.json)" = "PASS"
+          test "$(jq -r '.allowed_quantities_derived_from_task' open-model-market/v5-closed-world-numeric-prompt-fix-evidence.json)" = "true"
+          test "$(jq -r '.p0_regression_count' open-model-market/v5-closed-world-numeric-prompt-fix-evidence.json)" = "45"
+          test "$(jq -r '.status' open-model-market/v5-deterministic-answer-normalization-fix-evidence.json)" = "PASS"
+          test "$(jq -r '.normalization_is_model_free' open-model-market/v5-deterministic-answer-normalization-fix-evidence.json)" = "true"
+          test "$(jq -r '.normalization_is_task_generic' open-model-market/v5-deterministic-answer-normalization-fix-evidence.json)" = "true"
+          test "$(jq -r '.raw_provider_answer_preserved' open-model-market/v5-deterministic-answer-normalization-fix-evidence.json)" = "true"
+          test "$(jq -r '.text_invented' open-model-market/v5-deterministic-answer-normalization-fix-evidence.json)" = "false"
+          test "$(jq -r '.p0_regression_count' open-model-market/v5-deterministic-answer-normalization-fix-evidence.json)" = "50"
           python - <<'PY'
           import ast
           from pathlib import Path
@@ -182,8 +195,9 @@ jobs:
           grep -q "REGISTERED IndependentArtifactRevalidationTests: 3" validation-logs/p0-regressions.log
           grep -q "REGISTERED V5CriticalDeliveryReliabilityTests: 4" validation-logs/p0-regressions.log
           grep -q "REGISTERED V5V4ContractIsolationTests: 7" validation-logs/p0-regressions.log
-          grep -q "REGISTERED TOTAL: 45" validation-logs/p0-regressions.log
-          grep -q "P0 REGRESSION RESULT: run=45, passed=45, failures=0, errors=0, skipped=0" \
+          grep -q "REGISTERED V5DeterministicAnswerNormalizationTests: 5" validation-logs/p0-regressions.log
+          grep -q "REGISTERED TOTAL: 50" validation-logs/p0-regressions.log
+          grep -q "P0 REGRESSION RESULT: run=50, passed=50, failures=0, errors=0, skipped=0" \
             validation-logs/p0-regressions.log
       - name: Run deterministic constitutional V5 end-to-end dry-run
         shell: bash

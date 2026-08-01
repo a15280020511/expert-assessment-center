@@ -9,6 +9,7 @@ from typing import Any, Callable, Mapping, Sequence
 import v5_cost_reliability_hardening as cost_hardening
 import v5_dynamic_prompt_delivery as dynamic_prompt
 import v5_task_delivery_contract as delivery_contract
+from v5_deterministic_answer_normalization import normalize_answer
 from execution_graph import GraphLimits, SelectedNode
 from v5_model_company import canonical_model_company
 from v5_runtime import (
@@ -127,6 +128,79 @@ class ConstitutionalPromptPolicy:
 class ConstitutionalExecutionEngine(ExecutionEngine):
     """Make semantic, contract, evidence, and company validity success conditions."""
 
+    def _normalize_attempt(
+        self,
+        node: SelectedNode,
+        original_task: str,
+        attempt: RuntimeAttempt,
+        constraints: TaskConstraints,
+    ) -> bool:
+        if not attempt.answer:
+            return False
+        original_answer = attempt.answer
+        normalized, audit = normalize_answer(
+            original_task,
+            original_answer,
+            node.output_contract,
+            constraints,
+        )
+        if not audit.get("applied"):
+            return False
+
+        attempt.raw_answer = original_answer
+        attempt.answer = normalized
+        attempt.answer_transformations.append(audit)
+
+        failure_category = ""
+        if isinstance(attempt.failure, Mapping):
+            failure_category = str(attempt.failure.get("category") or "")
+        repairable = attempt.status == "passed" or failure_category == (
+            FailureCategory.QUALITY_GATE_FAILED.value
+        )
+        if not repairable:
+            return False
+
+        quality_passed, quality_score, quality_reasons = (
+            self.quality_policy.evaluate(node, {}, normalized)
+        )
+        contract_violations = delivery_contract.validate_answer_contract(
+            normalized,
+            node.output_contract,
+            node.parameter_profile,
+        )
+        evidence_violations = validate_answer_evidence(
+            original_task,
+            normalized,
+            constraints,
+        )
+        violations = list(
+            dict.fromkeys(
+                [*quality_reasons, *contract_violations, *evidence_violations]
+            )
+        )
+        if not quality_passed or violations:
+            attempt.gate_reasons = violations
+            if attempt.status == "passed":
+                attempt.status = "quality_gate_failed"
+                attempt.failure = ExecutionFailure(
+                    category=FailureCategory.QUALITY_GATE_FAILED,
+                    retryable=False,
+                    model=node.model,
+                    provider_endpoint=node.provider_endpoint,
+                    request_sent=True,
+                    response_received=True,
+                    usage_received=bool(attempt.usage),
+                    actual_cost_usd=self._actual_cost({"usage": attempt.usage}),
+                    message=";".join(violations),
+                ).to_dict()
+            return False
+
+        attempt.status = "passed"
+        attempt.quality_score = quality_score
+        attempt.gate_reasons = []
+        attempt.failure = None
+        return True
+
     def _attempt(
         self,
         node: SelectedNode,
@@ -157,6 +231,9 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
             return attempt
 
         constraints = compile_task_constraints(original_task)
+        if self._normalize_attempt(node, original_task, attempt, constraints):
+            return attempt
+
         contract_violations = delivery_contract.validate_answer_contract(
             attempt.answer,
             node.output_contract,
@@ -192,6 +269,7 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
             message=";".join(violations),
         ).to_dict()
         return attempt
+
 
     @staticmethod
     def _actual_company_audit(
