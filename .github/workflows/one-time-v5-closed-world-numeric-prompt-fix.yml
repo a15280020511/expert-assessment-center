@@ -1,0 +1,156 @@
+name: One-Time V5 Closed-World Numeric Prompt Fix
+
+on:
+  push:
+    branches:
+      - "bootstrap/v5-closed-world-numeric-prompt-20260802"
+    paths:
+      - "tools/one_time_v5_closed_world_numeric_prompt_fix.py"
+      - ".github/workflows/one-time-v5-closed-world-numeric-prompt-fix.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-time-v5-closed-world-numeric-prompt-fix
+  cancel-in-progress: true
+
+jobs:
+  build-qualified-fix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      BASE_SHA: c992b5e095a2ac3a78188e6dc11dcbb077d3cb85
+      TARGET_BRANCH: fix/v5-closed-world-numeric-prompt-20260802
+      BOOTSTRAP_BRANCH: bootstrap/v5-closed-world-numeric-prompt-20260802
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ env.BASE_SHA }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-runtime.txt
+            requirements-dev.txt
+
+      - name: Apply deterministic numeric prompt transformer
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git fetch origin "$BOOTSTRAP_BRANCH" "$TARGET_BRANCH"
+          git show \
+            "origin/$BOOTSTRAP_BRANCH:tools/one_time_v5_closed_world_numeric_prompt_fix.py" \
+            > tools/.one_time_v5_closed_world_numeric_prompt_fix.py
+          python tools/.one_time_v5_closed_world_numeric_prompt_fix.py
+          rm tools/.one_time_v5_closed_world_numeric_prompt_fix.py
+          git diff --check
+
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+
+      - name: Run static and targeted V5 gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p numeric-prompt-validation-logs
+          python -m ruff check . \
+            2>&1 | tee numeric-prompt-validation-logs/ruff.log
+          python -m compileall -q open-model-market tests tools \
+            2>&1 | tee numeric-prompt-validation-logs/compileall.log
+          python -m unittest \
+            tests.test_v5_v4_contract_isolation \
+            tests.test_v5_task_constraints \
+            tests.test_v5_constitutional_runtime \
+            -v 2>&1 | tee numeric-prompt-validation-logs/targeted-tests.log
+          grep -q '^OK$' numeric-prompt-validation-logs/targeted-tests.log
+
+      - name: Run full unit suite and 45 native P0 regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p 'test*.py' -v \
+            2>&1 | tee numeric-prompt-validation-logs/full-unit.log
+          grep -q '^Ran 273 tests in ' numeric-prompt-validation-logs/full-unit.log
+          grep -q '^OK$' numeric-prompt-validation-logs/full-unit.log
+          python tools/run_v5_p0_regressions.py \
+            2>&1 | tee numeric-prompt-validation-logs/p0.log
+          grep -q 'REGISTERED V5V4ContractIsolationTests: 7' \
+            numeric-prompt-validation-logs/p0.log
+          grep -q 'REGISTERED TOTAL: 45' numeric-prompt-validation-logs/p0.log
+          grep -q \
+            'P0 REGRESSION RESULT: run=45, passed=45, failures=0, errors=0, skipped=0' \
+            numeric-prompt-validation-logs/p0.log
+
+      - name: Freeze zero-cost qualification evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > open-model-market/v5-closed-world-numeric-prompt-fix-evidence.json <<'JSON'
+          {
+            "schema_version": "v5-closed-world-numeric-prompt-fix-1",
+            "status": "PASS",
+            "source_paid_run_id": "30713073803",
+            "source_paid_artifact_id": 8822576440,
+            "source_paid_artifact_digest": "sha256:76e1d43f130dd8172109498f4a4dbd04be5809f7c8ee931eca9e63bf11c57dd5",
+            "allowed_quantities_derived_from_task": true,
+            "arithmetic_intermediate_quantities_forbidden": true,
+            "hypothetical_numeric_scenarios_forbidden": true,
+            "source_number_preserving_direct_equations_required": true,
+            "qualitative_reversal_conditions_required_without_task_threshold": true,
+            "v5_failure_quantities_remain_rejected": [
+              "5:month",
+              "12:month",
+              "150:yuan",
+              "2550:yuan",
+              "3000:yuan",
+              "7200:yuan",
+              "10800:yuan"
+            ],
+            "full_unit_test_count": 273,
+            "p0_regression_count": 45,
+            "paid_model_calls": 0,
+            "production_ref_moved": false
+          }
+          JSON
+          python -m json.tool \
+            open-model-market/v5-closed-world-numeric-prompt-fix-evidence.json \
+            >/dev/null
+          git diff --check
+
+      - name: Commit exact qualified code tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          changed="$(git status --short)"
+          printf '%s\n' "$changed"
+          test -n "$changed"
+          git switch -C "$TARGET_BRANCH"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            open-model-market/v5_task_constraints.py \
+            open-model-market/v5_constitutional_runtime.py \
+            open-model-market/v5-closed-world-numeric-prompt-fix-evidence.json \
+            tests/test_v5_v4_contract_isolation.py
+          test -z "$(git status --short | grep '^??' || true)"
+          git commit -m \
+            "fix(v5): operationalize closed-world numeric evidence"
+          git push \
+            --force-with-lease="refs/heads/$TARGET_BRANCH:$BASE_SHA" \
+            origin "HEAD:refs/heads/$TARGET_BRANCH"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: v5-closed-world-numeric-prompt-fix-${{ github.run_id }}
+          path: numeric-prompt-validation-logs/
+          if-no-files-found: warn
+          retention-days: 14
