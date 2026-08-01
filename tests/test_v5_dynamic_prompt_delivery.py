@@ -52,7 +52,8 @@ class TestV5DynamicPromptDelivery(unittest.TestCase):
         self.assertIn("角色依据领域：business, legal", prompt)
         self.assertIn("不授予任何外部工具", prompt)
         self.assertIn("禁止调用", prompt)
-        self.assertIn("最终响应必须直接交付以下内容", prompt)
+        self.assertIn("本节点响应必须直接交付以下内容", prompt)
+        self.assertIn("本节点是内部工作节点", prompt)
         self.assertIn("禁止复述输出契约", prompt)
 
     def test_missing_role_preserves_contract_aware_prompt(self):
