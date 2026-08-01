@@ -1,0 +1,6 @@
+{
+  "schema_version": "v5-paid-acceptance-attest-1",
+  "request_id": "constitution-p0-generic-attestation-20260801",
+  "paid_workflow": "v5-one-time-paid-acceptance.yml",
+  "expected_cost_cap_usd": 0.03
+}
