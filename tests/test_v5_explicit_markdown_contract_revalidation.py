@@ -74,6 +74,7 @@ class V5ExplicitMarkdownContractRevalidationTests(unittest.TestCase):
         contract = contract_policy.extract_explicit_markdown_contract(TASK)
         self.assertTrue(contract["explicit_markdown_contract"])
         self.assertEqual(contract["exact_markdown_headings"], HEADINGS)
+        self.assertEqual(contract["task_explicit_delivery_section_count"], 8)
         self.assertTrue(contract["markdown_heading_order_required"])
 
     def test_trailing_requirements_are_not_absorbed_into_last_heading(self) -> None:
@@ -84,6 +85,7 @@ class V5ExplicitMarkdownContractRevalidationTests(unittest.TestCase):
             contract["exact_markdown_headings"],
             TRAILING_REQUIREMENT_HEADINGS,
         )
+        self.assertEqual(contract["task_explicit_delivery_section_count"], 4)
 
     def test_synthesis_contract_replaces_internal_generic_headings(self) -> None:
         contract = compiler._output_contract(TASK, {"synthesis": 1.0}, False)
