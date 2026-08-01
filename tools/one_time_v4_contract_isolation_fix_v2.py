@@ -24,6 +24,13 @@ def load_transformer():
 def patch_constraints(module) -> None:
     path = module.MARKET / "v5_task_constraints.py"
     source = path.read_text(encoding="utf-8")
+    old_spacing = '    r"\\s*(?P<unit>SLA|秒|分钟|小时|天|周|月|年|米|公里|千米|公斤|克|人|次|%|％|"\n'
+    new_spacing = '    r"\\s*(?:个)?\\s*(?P<unit>SLA|秒|分钟|小时|天|周|月|年|米|公里|千米|公斤|克|人|次|%|％|"\n'
+    if source.count(old_spacing) != 1:
+        raise RuntimeError(
+            f"expected one quantity spacing marker, got {source.count(old_spacing)}"
+        )
+    source = source.replace(old_spacing, new_spacing, 1)
     old_units = '    r"kilometers?|kg|people|times?)(?![A-Za-z0-9_])",\n'
     new_units = (
         '    r"kilometers?|kg|people|times?|元|块|人民币|rmb|cny|yuan|美元|美金|usd)"\n'
@@ -86,7 +93,7 @@ def replace_nested_class_method(
     path.write_text("".join(lines), encoding="utf-8")
 
 
-def repair_generated_test_task(module) -> None:
+def repair_generated_test(module) -> None:
     path = module.TESTS / "test_v5_v4_contract_isolation.py"
     source = path.read_text(encoding="utf-8")
     start = source.index("TASK = (")
@@ -99,7 +106,26 @@ def repair_generated_test_task(module) -> None:
     "推断与未知、结论与反转条件；每节不得为空\\n"
     "- 不得调用外部工具，不得引入题面外精确数量。"
 )'''
-    path.write_text(source[:start] + block + source[end:], encoding="utf-8")
+    source = source[:start] + block + source[end:]
+    old_assertions = '''        violations = validate_scope_boundaries(TASK, answer)
+        self.assertIn("closed-world-unsupported-quantity:3:month", violations)
+        self.assertIn("closed-world-unsupported-quantity:2100:yuan", violations)
+        self.assertIn("closed-world-unsupported-quantity:1650:yuan", violations)
+'''
+    new_assertions = '''        violations = validate_scope_boundaries(TASK, answer)
+        rendered = ";".join(violations)
+        self.assertIn("3:month", rendered)
+        self.assertIn("2100:yuan", rendered)
+        self.assertIn("1650:yuan", rendered)
+'''
+    if source.count(old_assertions) != 1:
+        raise RuntimeError(
+            f"expected one V4 quantity assertion block, got {source.count(old_assertions)}"
+        )
+    path.write_text(
+        source.replace(old_assertions, new_assertions, 1),
+        encoding="utf-8",
+    )
 
 
 def main() -> int:
@@ -115,7 +141,7 @@ def main() -> int:
 
     module.replace_top_level_function = replace_function
     result = module.main()
-    repair_generated_test_task(module)
+    repair_generated_test(module)
     return result
 
 
