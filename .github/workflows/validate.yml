@@ -83,6 +83,7 @@ jobs:
             open-model-market/legacy-cleanup-report.json
             open-model-market/constitutional-qualification-report.json
             open-model-market/live-recovery-budget-fix-evidence.json
+            open-model-market/v4-contract-isolation-fix-evidence.json
             tests/test_v5_task_constraints.py
             tests/test_v5_dynamic_model_fit.py
             tests/test_v5_general_task_planning.py
@@ -91,6 +92,7 @@ jobs:
             tests/test_v5_constitutional_runtime.py
             tests/test_v5_independent_artifact_revalidation.py
             tests/test_v5_critical_delivery_reliability.py
+            tests/test_v5_v4_contract_isolation.py
             tests/test_v5_full_load_stability.py
             tools/run_v5_p0_regressions.py
           )
@@ -119,6 +121,10 @@ jobs:
           test "$(jq -r '.status' open-model-market/live-recovery-budget-fix-evidence.json)" = "PASS"
           test "$(jq -r '.runtime_budget_controller_authoritative' open-model-market/live-recovery-budget-fix-evidence.json)" = "true"
           test "$(jq -r '.p0_regression_count' open-model-market/live-recovery-budget-fix-evidence.json)" = "38"
+          test "$(jq -r '.status' open-model-market/v4-contract-isolation-fix-evidence.json)" = "PASS"
+          test "$(jq -r '.final_contract_inline_chinese_count_supported' open-model-market/v4-contract-isolation-fix-evidence.json)" = "true"
+          test "$(jq -r '.internal_task_final_format_projection_enabled' open-model-market/v4-contract-isolation-fix-evidence.json)" = "true"
+          test "$(jq -r '.p0_regression_count' open-model-market/v4-contract-isolation-fix-evidence.json)" = "45"
           python - <<'PY'
           import ast
           from pathlib import Path
@@ -175,8 +181,9 @@ jobs:
           grep -q "REGISTERED ActualCompanyAuditTests: 2" validation-logs/p0-regressions.log
           grep -q "REGISTERED IndependentArtifactRevalidationTests: 3" validation-logs/p0-regressions.log
           grep -q "REGISTERED V5CriticalDeliveryReliabilityTests: 4" validation-logs/p0-regressions.log
-          grep -q "REGISTERED TOTAL: 38" validation-logs/p0-regressions.log
-          grep -q "P0 REGRESSION RESULT: run=38, passed=38, failures=0, errors=0, skipped=0" \
+          grep -q "REGISTERED V5V4ContractIsolationTests: 7" validation-logs/p0-regressions.log
+          grep -q "REGISTERED TOTAL: 45" validation-logs/p0-regressions.log
+          grep -q "P0 REGRESSION RESULT: run=45, passed=45, failures=0, errors=0, skipped=0" \
             validation-logs/p0-regressions.log
       - name: Run deterministic constitutional V5 end-to-end dry-run
         shell: bash
