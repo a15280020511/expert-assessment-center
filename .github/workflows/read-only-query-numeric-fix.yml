@@ -18,7 +18,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       REPOSITORY: ${{ github.repository }}
-      TARGET_SHA: 92952c5d946f76e1d346f4fac41902a5ec8fc140
+      TARGET_SHA: e77553a6b5a0d34153e7029b73563dc4fbf18506
       BRANCH: bootstrap/v5-closed-world-numeric-prompt-20260802
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
