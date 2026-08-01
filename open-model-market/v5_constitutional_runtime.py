@@ -1,7 +1,6 @@
 """Constitutional execution policy layered on the explicit native V5 runtime."""
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -14,9 +13,7 @@ from v5_runtime import (
     ExecutionEngine,
     ExecutionFailure,
     FailureCategory,
-    OutputPolicy,
     ProductionRuntime,
-    QualityGatePolicy,
     RecoveryPolicy,
     RetryPolicy,
     RuntimeAttempt,
@@ -84,14 +81,16 @@ def _normalized_quantities(text: str) -> set[tuple[str, str]]:
 
 
 def validate_scope_boundaries(task: str, answer: str) -> list[str]:
-    """Reject new precise quantities when the user explicitly imposes closed world."""
+    """Reject new precise quantities when the user imposes a closed world."""
     if not _CLOSED_WORLD_RE.search(str(task or "")):
         return []
     allowed = _normalized_quantities(task)
     introduced = sorted(_normalized_quantities(answer) - allowed)
     if not introduced:
         return []
-    rendered = ",".join(f"{number}:{unit}" for number, unit in introduced[:12])
+    rendered = ",".join(
+        f"{number}:{unit}" for number, unit in introduced[:12]
+    )
     return ["closed-world-unsupported-quantity:" + rendered]
 
 
@@ -106,7 +105,10 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
         original_task: str,
         upstream: Sequence[Mapping[str, Any]],
         run: Any,
-        call_fn: Callable[[Any, Mapping[str, Any]], tuple[Mapping[str, Any], float]],
+        call_fn: Callable[
+            [Any, Mapping[str, Any]],
+            tuple[Mapping[str, Any], float],
+        ],
         budget: BudgetController,
         attempt_index: int,
     ) -> RuntimeAttempt | None:
@@ -129,13 +131,20 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
             node.output_contract,
             node.parameter_profile,
         )
-        scope_violations = validate_scope_boundaries(original_task, attempt.answer)
-        violations = list(dict.fromkeys([*contract_violations, *scope_violations]))
+        scope_violations = validate_scope_boundaries(
+            original_task,
+            attempt.answer,
+        )
+        violations = list(
+            dict.fromkeys([*contract_violations, *scope_violations])
+        )
         if not violations:
             return attempt
 
         attempt.status = "quality_gate_failed"
-        attempt.gate_reasons = list(dict.fromkeys([*attempt.gate_reasons, *violations]))
+        attempt.gate_reasons = list(
+            dict.fromkeys([*attempt.gate_reasons, *violations])
+        )
         attempt.failure = ExecutionFailure(
             category=FailureCategory.QUALITY_GATE_FAILED,
             retryable=False,
@@ -150,14 +159,20 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
         return attempt
 
     @staticmethod
-    def _actual_company_audit(result: Mapping[str, Any]) -> dict[str, Any]:
+    def _actual_company_audit(
+        result: Mapping[str, Any],
+    ) -> dict[str, Any]:
         successful: list[dict[str, str]] = []
         called: list[dict[str, str]] = []
         for node in result.get("node_results", []):
             if not isinstance(node, Mapping):
                 continue
             node_id = str(node.get("node_id") or "")
-            resolved = str(node.get("resolved_model") or node.get("selected_model") or "")
+            resolved = str(
+                node.get("resolved_model")
+                or node.get("selected_model")
+                or ""
+            )
             status = str(node.get("status") or "")
             if status.startswith("success") and resolved:
                 successful.append(
@@ -170,12 +185,18 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
             for attempt in node.get("attempts", []):
                 if not isinstance(attempt, Mapping):
                     continue
-                model = str(attempt.get("response_model") or attempt.get("model") or "")
+                model = str(
+                    attempt.get("response_model")
+                    or attempt.get("model")
+                    or ""
+                )
                 if model:
                     called.append(
                         {
                             "node_id": node_id,
-                            "attempt_kind": str(attempt.get("attempt_kind") or ""),
+                            "attempt_kind": str(
+                                attempt.get("attempt_kind") or ""
+                            ),
                             "model": model,
                             "company": canonical_model_company(model),
                             "status": str(attempt.get("status") or ""),
@@ -211,7 +232,11 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
             self._write_json(root / "actual-model-company-audit.json", audit)
             self._write_json(
                 root / "v5-execution-summary.json",
-                {key: value for key, value in result.items() if key != "node_results"},
+                {
+                    key: value
+                    for key, value in result.items()
+                    if key != "node_results"
+                },
             )
 
         if audit["status"] != "PASS":
@@ -219,28 +244,41 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
             result["completion_mode"] = "none"
             result["quality_status"] = "failed"
             result["final_answer"] = None
-            result["stop_reason"] = "actual-model-company-uniqueness-violation"
+            result["stop_reason"] = (
+                "actual-model-company-uniqueness-violation"
+            )
             if output_dir is not None:
                 root = Path(output_dir)
                 self._write_json(
                     root / "v5-execution-summary.json",
-                    {key: value for key, value in result.items() if key != "node_results"},
+                    {
+                        key: value
+                        for key, value in result.items()
+                        if key != "node_results"
+                    },
                 )
                 (root / "v5-final-report.md").write_text(
-                    "# V5 execution failed\n\nActual successful model companies were not unique.\n",
+                    "# V5 execution failed\n\n"
+                    "Actual successful model companies were not unique.\n",
                     encoding="utf-8",
                 )
-            raise RuntimeError("actual successful model companies are not unique")
+            raise RuntimeError(
+                "actual successful model companies are not unique"
+            )
         return result
 
 
 def harden_runtime(runtime: ProductionRuntime) -> ProductionRuntime:
-    """Replace only the explicitly owned engine; no module globals are patched."""
+    """Replace the owned engine without patching module globals."""
     runtime.recovery_policy = RecoveryPolicy(
-        replace_categories=tuple(dict.fromkeys([
-            *runtime.recovery_policy.replace_categories,
-            FailureCategory.QUALITY_GATE_FAILED,
-        ]))
+        replace_categories=tuple(
+            dict.fromkeys(
+                [
+                    *runtime.recovery_policy.replace_categories,
+                    FailureCategory.QUALITY_GATE_FAILED,
+                ]
+            )
+        )
     )
     runtime.execution_engine = ConstitutionalExecutionEngine(
         runtime.config,
