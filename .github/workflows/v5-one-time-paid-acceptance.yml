@@ -1,0 +1,189 @@
+name: V5 One-Time Paid Acceptance
+
+on:
+  push:
+    branches:
+      - "fix/v5-constitution-p0-publication-integrity"
+    paths:
+      - ".github/v5-paid-acceptance-request.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v5-one-time-paid-acceptance
+  cancel-in-progress: false
+
+jobs:
+  paid-generic-acceptance:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      ACCEPTANCE_COST_CAP_USD: "0.03"
+      ACCEPTANCE_TOTAL_CALLS: "4"
+      ACCEPTANCE_RECOVERY_CALLS: "1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-runtime.txt
+            requirements-dev.txt
+
+      - name: Validate one-time request contract
+        run: |
+          set -euo pipefail
+          jq -e '
+            type == "object" and
+            (keys | sort) == ["purpose", "request_id", "schema_version"] and
+            .schema_version == "v5-paid-acceptance-1" and
+            .purpose == "task-independent-low-cost-production-qualification" and
+            (.request_id | test("^[a-z0-9][a-z0-9._-]{0,63}$"))
+          ' .github/v5-paid-acceptance-request.json >/dev/null
+
+      - name: Install pinned validation dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+
+      - name: Re-run zero-cost release gates
+        run: |
+          set -euo pipefail
+          python -m ruff check .
+          python -m compileall -q open-model-market tests tools
+          python -m unittest discover -s tests -p 'test*.py' -v
+
+      - name: Verify inference secret without disclosure
+        run: |
+          set -euo pipefail
+          test -n "${OPENROUTER_API_KEY:-}"
+          test "${#OPENROUTER_API_KEY}" -ge 20
+
+      - name: Execute bounded generic live acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf paid-acceptance-artifacts
+          task=$(cat <<'TASK'
+          比较方案A“自建内部工单系统”和方案B“采用托管SaaS工单系统”。分别完成成本结构与选择阈值分析、实施与运营风险反证，并形成综合决策。不得调用外部工具。严格使用以下4个Markdown二级标题，顺序不得改变，每项不得为空：
+          1）已知条件、假设与未知项
+          2）成本结构、公式与选择阈值
+          3）实施风险、运营风险与反证
+          4）综合结论、适用条件与下一步
+          TASK
+          )
+          python open-model-market/v5_pipeline.py \
+            --task "$task" \
+            --require-live-catalog \
+            --maximum-total-calls "$ACCEPTANCE_TOTAL_CALLS" \
+            --maximum-recovery-calls "$ACCEPTANCE_RECOVERY_CALLS" \
+            --cost-anomaly-usd "$ACCEPTANCE_COST_CAP_USD" \
+            --quality-tier value \
+            --output-dir paid-acceptance-artifacts
+
+      - name: Verify live acceptance evidence
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          root = Path("paid-acceptance-artifacts")
+          result = json.loads((root / "v5-result.json").read_text())
+          summary = json.loads((root / "v5-execution-summary.json").read_text())
+          audit = json.loads((root / "actual-model-company-audit.json").read_text())
+          graph = json.loads((root / "v5-execution-graph.json").read_text())
+          search = json.loads((root / "v5-adaptive-search.json").read_text())
+          nodes = json.loads((root / "v5-node-results.json").read_text())
+          report = (root / "v5-final-report.md").read_text()
+
+          assert result["status"] == "success", result
+          assert result["completion_mode"] == "full", result
+          assert result["quality_status"] == "full_success", result
+          assert summary["status"] == "success", summary
+          assert summary["completion_mode"] == "full", summary
+          assert audit["status"] == "PASS", audit
+          assert audit["policy"] == "recompute-from-actual-successful-node-models"
+          assert not audit["duplicate_successful_companies"]
+          assert len(audit["successful_node_models"]) == len(graph["nodes"])
+          companies = [row["company"] for row in audit["successful_node_models"]]
+          assert len(companies) == len(set(companies)), companies
+          called_by_company = {}
+          for row in audit["all_called_models"]:
+              called_by_company.setdefault(row["company"], set()).add(row["node_id"])
+          assert not {
+              company: sorted(node_ids)
+              for company, node_ids in called_by_company.items()
+              if len(node_ids) > 1
+          }, called_by_company
+          assert all(str(row.get("status", "")).startswith("success") for row in nodes)
+          assert all(
+              row.get("contract", {}).get("required_fields_complete") is True
+              for row in nodes
+          )
+          budget = summary["execution_budget"]
+          calls = int(budget["calls_reserved"])
+          actual_cost = float(summary.get("actual_cost_usd") or budget.get("actual_cost_usd") or 0.0)
+          assert 1 <= calls <= int(os.environ["ACCEPTANCE_TOTAL_CALLS"])
+          assert 0.0 <= actual_cost <= float(os.environ["ACCEPTANCE_COST_CAP_USD"])
+          assert search["policy"] == "task-shape-feasibility-marginal-value"
+          assert search["attempts"]
+          expected = [
+              "已知条件、假设与未知项",
+              "成本结构、公式与选择阈值",
+              "实施风险、运营风险与反证",
+              "综合结论、适用条件与下一步",
+          ]
+          actual = re.findall(r"(?m)^##\s+(.+?)\s*$", report)
+          normalized = [value.strip().strip("#").strip() for value in actual]
+          positions = [normalized.index(value) for value in expected]
+          assert positions == sorted(positions), normalized
+          verdict = {
+              "schema_version": "v5-paid-acceptance-verdict-1",
+              "status": "PASS",
+              "head_sha": os.environ["HEAD_SHA"],
+              "workflow_run_id": os.environ["RUN_ID"],
+              "workflow_run_url": os.environ["RUN_URL"],
+              "task_class": "generic-two-option-business-decision",
+              "model_calls": calls,
+              "actual_cost_usd": actual_cost,
+              "cost_cap_usd": float(os.environ["ACCEPTANCE_COST_CAP_USD"]),
+              "node_count": len(graph["nodes"]),
+              "successful_models": audit["successful_node_models"],
+              "actual_model_company_audit": audit["status"],
+              "completion_mode": result["completion_mode"],
+              "quality_status": result["quality_status"],
+              "contract_heading_count": len(expected),
+              "external_tools_allowed": False,
+              "production_ref_moved": False,
+              "public_report_published": False,
+              "cross_task_history_used": False,
+          }
+          (root / "paid-acceptance-verdict.json").write_text(
+              json.dumps(verdict, ensure_ascii=False, indent=2) + "\n"
+          )
+          print(json.dumps(verdict, ensure_ascii=False))
+          PY
+
+      - name: Upload paid acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: v5-paid-acceptance-${{ github.run_id }}
+          path: paid-acceptance-artifacts/
+          if-no-files-found: warn
+          retention-days: 30
