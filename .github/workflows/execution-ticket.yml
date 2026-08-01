@@ -45,6 +45,13 @@ jobs:
           ref: production
           persist-credentials: false
 
+      - name: Verify production control-plane parity
+        run: |
+          set -euo pipefail
+          execution_sha="$(git rev-parse HEAD)"
+          test "$execution_sha" = "$GITHUB_SHA"
+          echo "V5_EXECUTION_COMMIT_SHA=$execution_sha" >> "$GITHUB_ENV"
+
       - name: Acquire serialized zero-call admission
         id: lock
         run: python open-model-market/v5_admission_lock.py
@@ -135,6 +142,13 @@ jobs:
           ref: production
           persist-credentials: false
 
+      - name: Verify production control-plane parity
+        run: |
+          set -euo pipefail
+          execution_sha="$(git rev-parse HEAD)"
+          test "$execution_sha" = "$GITHUB_SHA"
+          echo "V5_EXECUTION_COMMIT_SHA=$execution_sha" >> "$GITHUB_ENV"
+
       - name: Download admitted ticket
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
@@ -179,34 +193,13 @@ jobs:
           python open-model-market/v5_production_ticket.py "${args[@]}"
 
       - name: Prepare public report comments
-        id: publish
+        id: prepare_publish
         continue-on-error: true
         run: |
           python open-model-market/publish_report.py \
             --output-dir ticket-artifacts \
             --comments-dir ticket-artifacts/report-comments \
             --run-url "$RUN_URL"
-
-      - name: Publish report comments
-        if: steps.publish.outcome == 'success'
-        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
-        env:
-          COMMENT_DIR: ticket-artifacts/report-comments
-        with:
-          script: |
-            const fs = require('fs');
-            const path = require('path');
-            const files = fs.readdirSync(process.env.COMMENT_DIR)
-              .filter(name => /^report-comment-\d+\.md$/.test(name))
-              .sort();
-            for (const name of files) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: fs.readFileSync(path.join(process.env.COMMENT_DIR, name), 'utf8')
-              });
-            }
 
       - name: Audit native V5 execution
         id: audit
@@ -215,7 +208,7 @@ jobs:
           python open-model-market/v5_execution_auditor_integrity.py \
             --output-dir ticket-artifacts \
             --execute-outcome "${{ steps.execute.outcome }}" \
-            --publish-outcome "${{ steps.publish.outcome }}"
+            --publish-outcome "${{ steps.prepare_publish.outcome }}"
 
       - name: Refresh primary artifact manifest
         id: manifest
@@ -258,6 +251,33 @@ jobs:
             --artifact-digest "$PRIMARY_ARTIFACT_DIGEST" \
             | tee final-status.md
 
+      - name: Publish audited report comments
+        id: publish
+        if: >-
+          steps.final.outputs.status == 'PASS' &&
+          steps.prepare_publish.outcome == 'success'
+        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
+        env:
+          COMMENT_DIR: ticket-artifacts/report-comments
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const files = fs.readdirSync(process.env.COMMENT_DIR)
+              .filter(name => /^report-comment-\d+\.md$/.test(name))
+              .sort();
+            if (files.length === 0) {
+              throw new Error('audited PASS run has no report comment files');
+            }
+            for (const name of files) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: fs.readFileSync(path.join(process.env.COMMENT_DIR, name), 'utf8')
+              });
+            }
+
       - name: Generate post-upload final attestation
         id: attest
         if: always()
@@ -275,6 +295,7 @@ jobs:
             --run-id "${{ github.run_id }}" \
             --commit-sha "${{ github.sha }}" \
             --final-status-file final-status.md \
+            --publication-outcome "${{ steps.publish.outcome }}" \
             --output final-attestation.json
 
       - name: Upload final attestation artifact
@@ -321,6 +342,7 @@ jobs:
           test "${{ steps.audit.outcome }}" = "success"
           test "${{ steps.manifest.outcome }}" = "success"
           test "${{ steps.final.outcome }}" = "success"
+          test "${{ steps.publish.outcome }}" = "success"
           test "${{ steps.attest.outcome }}" = "success"
           test "${{ steps.proof_artifact.outcome }}" = "success"
           test "${{ steps.final.outputs.status }}" = "PASS"
