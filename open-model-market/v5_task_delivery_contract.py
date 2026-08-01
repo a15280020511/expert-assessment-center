@@ -1,6 +1,6 @@
 """Deterministic extraction and validation of explicit user delivery contracts.
 
-The extractor is format-driven rather than topic-driven.  It recognizes exact
+The extractor is format-driven rather than topic-driven. It recognizes exact
 JSON keys, ordered Markdown H2 sections, Markdown tables, and combinations of
 those formats only when the user states the constraint explicitly.
 """
@@ -48,6 +48,8 @@ _MARKDOWN_CUE_RE = re.compile(
     r"(?:Markdown\s*)?(?:二级标题|H2|level[- ]2\s+headings?)"
     r"|(?:以下|下列)\s*\d{0,3}\s*个?[^。\n]{0,60}"
     r"(?:Markdown\s*)?(?:二级标题|H2)"
+    r"|(?:每一项|每项|各项)[^。\n]{0,100}"
+    r"(?:Markdown\s*)?(?:二级标题|H2)"
     r"|(?:each\s+(?:item|section)|all\s+sections?)[^.;\n]{0,100}"
     r"(?:level[- ]2\s+headings?|H2)"
     r"|(?:use|follow|preserve)[^.;\n]{0,100}"
@@ -60,8 +62,12 @@ _MARKDOWN_COUNT_RE = re.compile(
     r"(?:Markdown\s*)?(?:二级标题|H2|level[- ]2)",
     re.IGNORECASE,
 )
-_NUMBERED_ITEM_RE = re.compile(
+_LINE_NUMBERED_ITEM_RE = re.compile(
     r"(?m)^\s*(\d{1,3})[）).、:]\s*(.+?)\s*$"
+)
+_INLINE_NUMBERED_ITEM_RE = re.compile(
+    r"(?:(?<=^)|(?<=[：:；;\n]))\s*(\d{1,3})[）).、]\s*([^；;\n]+)",
+    re.MULTILINE,
 )
 _TABLE_CUE_RE = re.compile(
     r"(?:严格|必须|请|use|include|provide)[^。;\n]{0,100}"
@@ -140,7 +146,9 @@ def contract_integrity_profile(
         "output_contract_integrity_sha256": contract_digest(contract),
         "output_contract_kind": kind,
         "explicit_output_contract_expected": kind != "generic",
-        "output_contract_source_work_ids": sorted({str(value) for value in source_work_ids}),
+        "output_contract_source_work_ids": sorted(
+            {str(value) for value in source_work_ids}
+        ),
     }
 
 
@@ -148,8 +156,12 @@ def validate_contract_integrity(
     contract: Mapping[str, Any],
     parameter_profile: Mapping[str, Any],
 ) -> list[str]:
-    required = bool(parameter_profile.get("output_contract_integrity_required"))
-    expected_digest = str(parameter_profile.get("output_contract_integrity_sha256") or "")
+    required = bool(
+        parameter_profile.get("output_contract_integrity_required")
+    )
+    expected_digest = str(
+        parameter_profile.get("output_contract_integrity_sha256") or ""
+    )
     if not required and not expected_digest:
         return []
     if not expected_digest:
@@ -159,21 +171,41 @@ def validate_contract_integrity(
     expected_kind = str(parameter_profile.get("output_contract_kind") or "")
     actual_kind = explicit_contract_kind(contract)
     if expected_kind and expected_kind != actual_kind:
-        violations.append(f"output-contract-kind-mismatch:{expected_kind}:{actual_kind}")
-    if parameter_profile.get("explicit_output_contract_expected") and actual_kind == "generic":
+        violations.append(
+            f"output-contract-kind-mismatch:{expected_kind}:{actual_kind}"
+        )
+    if (
+        parameter_profile.get("explicit_output_contract_expected")
+        and actual_kind == "generic"
+    ):
         violations.append("explicit-output-contract-metadata-stripped")
     if contract_digest(contract) != expected_digest:
         violations.append("output-contract-integrity-sha256-mismatch")
 
-    required_fields = [str(value) for value in contract.get("required_fields", [])]
+    required_fields = [
+        str(value) for value in contract.get("required_fields", [])
+    ]
     if actual_kind == "exact-json":
-        exact = [str(value) for value in contract.get("exact_top_level_fields", [])]
+        exact = [
+            str(value)
+            for value in contract.get("exact_top_level_fields", [])
+        ]
         if required_fields != exact:
-            violations.append("exact-json-required-field-order-or-content-mismatch")
-    elif actual_kind in {"exact-markdown", "exact-mixed"} and contract.get("explicit_markdown_contract"):
-        exact = [str(value) for value in contract.get("exact_markdown_headings", [])]
+            violations.append(
+                "exact-json-required-field-order-or-content-mismatch"
+            )
+    elif (
+        actual_kind in {"exact-markdown", "exact-mixed"}
+        and contract.get("explicit_markdown_contract")
+    ):
+        exact = [
+            str(value)
+            for value in contract.get("exact_markdown_headings", [])
+        ]
         if required_fields != exact:
-            violations.append("exact-markdown-required-heading-order-or-content-mismatch")
+            violations.append(
+                "exact-markdown-required-heading-order-or-content-mismatch"
+            )
     return list(dict.fromkeys(violations))
 
 
@@ -196,7 +228,11 @@ def extract_explicit_contract(task: str) -> dict[str, Any]:
             field = match.group(1)
             if field not in top_level_fields:
                 continue
-            keys = [value for value in _unique_identifiers(match.group(2)) if value != field]
+            keys = [
+                value
+                for value in _unique_identifiers(match.group(2))
+                if value != field
+            ]
             if len(keys) >= 2:
                 nested_exact_fields[field] = keys
                 clause = match.group(0).casefold()
@@ -211,7 +247,10 @@ def extract_explicit_contract(task: str) -> dict[str, Any]:
             start = int(start_text)
             end = int(end_text)
             if 0 <= start <= end and end - start <= 366:
-                nested_exact_fields[field] = [f"{prefix_a}{index}" for index in range(start, end + 1)]
+                nested_exact_fields[field] = [
+                    f"{prefix_a}{index}"
+                    for index in range(start, end + 1)
+                ]
 
     return {
         "explicit_user_contract": True,
@@ -219,19 +258,28 @@ def extract_explicit_contract(task: str) -> dict[str, Any]:
         "forbid_extra_top_level_fields": True,
         "all_required_fields_nonempty": True,
         "nested_exact_fields": nested_exact_fields,
-        "nested_values_must_be_objects": sorted(set(nested_values_must_be_objects)),
+        "nested_values_must_be_objects": sorted(
+            set(nested_values_must_be_objects)
+        ),
         "contract_extraction_policy": "explicit-format-text-only",
     }
 
 
-def _numbered_sequences(text: str) -> list[list[str]]:
+def _clean_heading(value: str) -> str:
+    heading = re.sub(r"[。；;]+$", "", str(value).strip())
+    heading = re.sub(r"\s+", " ", heading)
+    return heading
+
+
+def _sequential_headings(
+    matches: Sequence[re.Match[str]],
+) -> list[list[str]]:
     sequences: list[list[str]] = []
     current: list[str] = []
     expected = 1
-    for match in _NUMBERED_ITEM_RE.finditer(text):
+    for match in matches:
         index = int(match.group(1))
-        heading = re.sub(r"[。；;]+$", "", match.group(2).strip())
-        heading = re.sub(r"\s+", " ", heading)
+        heading = _clean_heading(match.group(2))
         if index == 1:
             if len(current) >= 2:
                 sequences.append(current)
@@ -253,16 +301,56 @@ def _numbered_sequences(text: str) -> list[list[str]]:
     return sequences
 
 
+def _numbered_sequences(text: str) -> list[list[str]]:
+    line_sequences = _sequential_headings(
+        list(_LINE_NUMBERED_ITEM_RE.finditer(text))
+    )
+    inline_sequences = _sequential_headings(
+        list(_INLINE_NUMBERED_ITEM_RE.finditer(text))
+    )
+    unique: list[list[str]] = []
+    seen: set[tuple[str, ...]] = set()
+    for sequence in [*line_sequences, *inline_sequences]:
+        key = tuple(sequence)
+        if key and key not in seen:
+            unique.append(sequence)
+            seen.add(key)
+    return unique
+
+
 def extract_explicit_markdown_contract(task: str) -> dict[str, Any]:
     text = str(task or "")
     cue = _MARKDOWN_CUE_RE.search(text)
     if not cue:
         return {}
-    sequences = _numbered_sequences(text)
+
+    start_positions = [
+        position
+        for marker in (
+            "必须分别给出",
+            "必须给出",
+            "严格使用以下",
+            "请按照下列",
+            "must separately provide",
+            "must provide",
+            "use the following",
+        )
+        if (position := text.casefold().find(marker.casefold())) >= 0
+    ]
+    segment = text[min(start_positions):] if start_positions else text
+    segment_cue = _MARKDOWN_CUE_RE.search(segment)
+    if segment_cue and segment_cue.start() > 0:
+        segment = segment[: segment_cue.start()]
+
+    sequences = _numbered_sequences(segment)
     if not sequences:
         return {}
     expected_count_match = _MARKDOWN_COUNT_RE.search(text)
-    expected_count = int(expected_count_match.group(1)) if expected_count_match else None
+    expected_count = (
+        int(expected_count_match.group(1))
+        if expected_count_match
+        else None
+    )
     if expected_count:
         exact = [row for row in sequences if len(row) == expected_count]
         headings = max(exact, key=len) if exact else max(sequences, key=len)
@@ -272,7 +360,10 @@ def extract_explicit_markdown_contract(task: str) -> dict[str, Any]:
         headings = max(sequences, key=len)
 
     normalized = [_normalized_heading(value) for value in headings]
-    if any(not value for value in normalized) or len(set(normalized)) != len(normalized):
+    if (
+        any(not value for value in normalized)
+        or len(set(normalized)) != len(normalized)
+    ):
         return {}
     return {
         "explicit_markdown_contract": True,
@@ -294,12 +385,18 @@ def extract_explicit_table_contract(task: str) -> dict[str, Any]:
     text = str(task or "")
     if not _TABLE_CUE_RE.search(text):
         return {}
-    rows = [_pipe_cells(match.group(0)) for match in _PIPE_ROW_RE.finditer(text)]
+    rows = [
+        _pipe_cells(match.group(0))
+        for match in _PIPE_ROW_RE.finditer(text)
+    ]
     for index in range(len(rows) - 1):
         header, separator = rows[index], rows[index + 1]
         if len(header) < 2 or len(header) != len(separator):
             continue
-        if all(_SEPARATOR_CELL_RE.match(cell.replace(" ", "")) for cell in separator):
+        if all(
+            _SEPARATOR_CELL_RE.match(cell.replace(" ", ""))
+            for cell in separator
+        ):
             return {
                 "explicit_table_contract": True,
                 "exact_table_columns": header,
@@ -337,38 +434,61 @@ def apply_explicit_contract(
     result.update(explicit_markdown)
     result.update(explicit_table)
     if explicit_json:
-        result["required_fields"] = list(explicit_json["exact_top_level_fields"])
+        result["required_fields"] = list(
+            explicit_json["exact_top_level_fields"]
+        )
         result["machine_readable_required"] = True
     elif explicit_markdown:
-        result["required_fields"] = list(explicit_markdown["exact_markdown_headings"])
+        result["required_fields"] = list(
+            explicit_markdown["exact_markdown_headings"]
+        )
         result["machine_readable_required"] = False
     return result
 
 
-def validate_parsed_contract(parsed: Any, contract: Mapping[str, Any]) -> list[str]:
+def validate_parsed_contract(
+    parsed: Any,
+    contract: Mapping[str, Any],
+) -> list[str]:
     if not contract.get("explicit_user_contract"):
         return []
     if not isinstance(parsed, Mapping):
         return ["explicit-contract-requires-json-object"]
 
     violations: list[str] = []
-    required = [str(value) for value in contract.get("exact_top_level_fields", [])]
+    required = [
+        str(value)
+        for value in contract.get("exact_top_level_fields", [])
+    ]
     keys = [str(value) for value in parsed.keys()]
     missing = [field for field in required if field not in parsed]
     if missing:
-        violations.append("missing-exact-top-level-keys:" + ",".join(missing))
+        violations.append(
+            "missing-exact-top-level-keys:" + ",".join(missing)
+        )
     if contract.get("forbid_extra_top_level_fields"):
         extras = sorted(set(keys) - set(required))
         if extras:
-            violations.append("unexpected-top-level-keys:" + ",".join(extras))
+            violations.append(
+                "unexpected-top-level-keys:" + ",".join(extras)
+            )
     if contract.get("all_required_fields_nonempty"):
-        empty = [field for field in required if field in parsed and not _nonempty(parsed[field])]
+        empty = [
+            field
+            for field in required
+            if field in parsed and not _nonempty(parsed[field])
+        ]
         if empty:
-            violations.append("empty-required-fields:" + ",".join(empty))
+            violations.append(
+                "empty-required-fields:" + ",".join(empty)
+            )
 
     nested = contract.get("nested_exact_fields", {})
     nested = nested if isinstance(nested, Mapping) else {}
-    object_fields = {str(value) for value in contract.get("nested_values_must_be_objects", [])}
+    object_fields = {
+        str(value)
+        for value in contract.get("nested_values_must_be_objects", [])
+    }
     for field, expected_values in nested.items():
         expected = [str(value) for value in expected_values]
         value = parsed.get(field)
@@ -379,16 +499,33 @@ def validate_parsed_contract(parsed: Any, contract: Mapping[str, Any]) -> list[s
         nested_missing = [key for key in expected if key not in value]
         nested_extra = sorted(set(actual) - set(expected))
         if nested_missing:
-            violations.append(f"missing-nested-keys:{field}:" + ",".join(nested_missing))
+            violations.append(
+                f"missing-nested-keys:{field}:" + ",".join(nested_missing)
+            )
         if nested_extra:
-            violations.append(f"unexpected-nested-keys:{field}:" + ",".join(nested_extra))
-        empty_nested = [key for key in expected if key in value and not _nonempty(value[key])]
+            violations.append(
+                f"unexpected-nested-keys:{field}:" + ",".join(nested_extra)
+            )
+        empty_nested = [
+            key
+            for key in expected
+            if key in value and not _nonempty(value[key])
+        ]
         if empty_nested:
-            violations.append(f"empty-nested-values:{field}:" + ",".join(empty_nested))
+            violations.append(
+                f"empty-nested-values:{field}:" + ",".join(empty_nested)
+            )
         if field in object_fields:
-            non_objects = [key for key in expected if key in value and not isinstance(value[key], Mapping)]
+            non_objects = [
+                key
+                for key in expected
+                if key in value and not isinstance(value[key], Mapping)
+            ]
             if non_objects:
-                violations.append(f"nested-values-not-objects:{field}:" + ",".join(non_objects))
+                violations.append(
+                    f"nested-values-not-objects:{field}:"
+                    + ",".join(non_objects)
+                )
     return violations
 
 
@@ -396,59 +533,103 @@ def markdown_sections(answer: str) -> list[tuple[str, str]]:
     sections: list[tuple[str, list[str]]] = []
     current: list[str] | None = None
     for line in str(answer or "").splitlines():
-        match = re.match(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$", line)
+        match = re.match(
+            r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$",
+            line,
+        )
         if match and len(match.group(1)) == 2:
             sections.append((match.group(2).strip(), []))
             current = sections[-1][1]
             continue
         if current is not None:
             current.append(line)
-    return [(heading, "\n".join(lines).strip()) for heading, lines in sections]
+    return [
+        (heading, "\n".join(lines).strip())
+        for heading, lines in sections
+    ]
 
 
-def validate_markdown_contract(answer: str, contract: Mapping[str, Any]) -> list[str]:
+def validate_markdown_contract(
+    answer: str,
+    contract: Mapping[str, Any],
+) -> list[str]:
     if not contract.get("explicit_markdown_contract"):
         return []
-    required = [str(value) for value in contract.get("exact_markdown_headings", [])]
+    required = [
+        str(value)
+        for value in contract.get("exact_markdown_headings", [])
+    ]
     parsed = markdown_sections(answer)
     by_name: dict[str, list[tuple[int, str]]] = {}
     for index, (heading, body) in enumerate(parsed):
-        by_name.setdefault(_normalized_heading(heading), []).append((index, body))
+        by_name.setdefault(_normalized_heading(heading), []).append(
+            (index, body)
+        )
     violations: list[str] = []
     positions: list[int] = []
     for heading in required:
         matches = by_name.get(_normalized_heading(heading), [])
         if not matches:
-            violations.append("missing-exact-markdown-heading:" + heading)
+            violations.append(
+                "missing-exact-markdown-heading:" + heading
+            )
             continue
         if len(matches) > 1:
-            violations.append("duplicate-exact-markdown-heading:" + heading)
+            violations.append(
+                "duplicate-exact-markdown-heading:" + heading
+            )
         positions.append(matches[0][0])
-        if contract.get("markdown_headings_must_be_nonempty") and not matches[0][1].strip():
-            violations.append("empty-exact-markdown-section:" + heading)
-    if contract.get("markdown_heading_order_required") and len(positions) == len(required) and positions != sorted(positions):
+        if (
+            contract.get("markdown_headings_must_be_nonempty")
+            and not matches[0][1].strip()
+        ):
+            violations.append(
+                "empty-exact-markdown-section:" + heading
+            )
+    if (
+        contract.get("markdown_heading_order_required")
+        and len(positions) == len(required)
+        and positions != sorted(positions)
+    ):
         violations.append("exact-markdown-heading-order-mismatch")
     return violations
 
 
-def validate_table_contract(answer: str, contract: Mapping[str, Any]) -> list[str]:
+def validate_table_contract(
+    answer: str,
+    contract: Mapping[str, Any],
+) -> list[str]:
     if not contract.get("explicit_table_contract"):
         return []
-    required = [str(value) for value in contract.get("exact_table_columns", [])]
-    rows = [_pipe_cells(match.group(0)) for match in _PIPE_ROW_RE.finditer(str(answer or ""))]
+    required = [
+        str(value)
+        for value in contract.get("exact_table_columns", [])
+    ]
+    rows = [
+        _pipe_cells(match.group(0))
+        for match in _PIPE_ROW_RE.finditer(str(answer or ""))
+    ]
     headers: list[list[str]] = []
     for index in range(len(rows) - 1):
         if len(rows[index]) == len(rows[index + 1]) and all(
-            _SEPARATOR_CELL_RE.match(cell.replace(" ", "")) for cell in rows[index + 1]
+            _SEPARATOR_CELL_RE.match(cell.replace(" ", ""))
+            for cell in rows[index + 1]
         ):
             headers.append(rows[index])
     if not headers:
         return ["missing-explicit-markdown-table"]
-    normalized_required = [_normalized_heading(value) for value in required]
+    normalized_required = [
+        _normalized_heading(value) for value in required
+    ]
     for header in headers:
-        normalized_header = [_normalized_heading(value) for value in header]
+        normalized_header = [
+            _normalized_heading(value) for value in header
+        ]
         if normalized_header == normalized_required:
-            if contract.get("table_columns_must_be_nonempty") and any(not value for value in header):
+            if (
+                contract.get("table_columns_must_be_nonempty")
+                and any(not value for value in header)
+            ):
                 return ["empty-explicit-table-column"]
             return []
     return ["exact-table-column-order-or-content-mismatch"]
@@ -464,23 +645,37 @@ def validate_answer_contract(
         parsed = json.loads(str(answer or ""))
     except json.JSONDecodeError:
         parsed = None
-    return list(dict.fromkeys([
-        *validate_contract_integrity(contract, parameter_profile or {}),
-        *validate_parsed_contract(parsed, contract),
-        *validate_markdown_contract(answer, contract),
-        *validate_table_contract(answer, contract),
-    ]))
+    return list(
+        dict.fromkeys(
+            [
+                *validate_contract_integrity(
+                    contract,
+                    parameter_profile or {},
+                ),
+                *validate_parsed_contract(parsed, contract),
+                *validate_markdown_contract(answer, contract),
+                *validate_table_contract(answer, contract),
+            ]
+        )
+    )
 
 
 def delivery_rule(contract: Mapping[str, Any]) -> str:
     parts: list[str] = []
     if contract.get("explicit_user_contract"):
-        fields = [str(value) for value in contract.get("exact_top_level_fields", [])]
-        parts.extend([
-            "这是用户明确指定的最终JSON交付契约，优先级高于通用综合字段。",
-            "JSON顶层必须严格且仅包含这些键：" + json.dumps(fields, ensure_ascii=False) + "；不得增加、删除或改名。",
-            "所有必填字段必须非空。",
-        ])
+        fields = [
+            str(value)
+            for value in contract.get("exact_top_level_fields", [])
+        ]
+        parts.extend(
+            [
+                "这是用户明确指定的最终JSON交付契约，优先级高于通用综合字段。",
+                "JSON顶层必须严格且仅包含这些键："
+                + json.dumps(fields, ensure_ascii=False)
+                + "；不得增加、删除或改名。",
+                "所有必填字段必须非空。",
+            ]
+        )
         nested = contract.get("nested_exact_fields", {})
         if isinstance(nested, Mapping):
             for field, keys in nested.items():
@@ -490,14 +685,20 @@ def delivery_rule(contract: Mapping[str, Any]) -> str:
                     + "。"
                 )
     if contract.get("explicit_markdown_contract"):
-        headings = [str(value) for value in contract.get("exact_markdown_headings", [])]
+        headings = [
+            str(value)
+            for value in contract.get("exact_markdown_headings", [])
+        ]
         parts.append(
             "必须按顺序使用且仅以Markdown二级标题承载以下独立章节："
             + json.dumps(headings, ensure_ascii=False)
             + "。每个章节正文必须非空。"
         )
     if contract.get("explicit_table_contract"):
-        columns = [str(value) for value in contract.get("exact_table_columns", [])]
+        columns = [
+            str(value)
+            for value in contract.get("exact_table_columns", [])
+        ]
         parts.append(
             "必须提供Markdown表格，列名及顺序严格为："
             + json.dumps(columns, ensure_ascii=False)
