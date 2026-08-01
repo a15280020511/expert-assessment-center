@@ -2,6 +2,7 @@
 """Compatibility wrapper for the V4 contract-isolation transformer."""
 from __future__ import annotations
 
+import ast
 import importlib.util
 import sys
 from pathlib import Path
@@ -55,9 +56,48 @@ def patch_constraints(module) -> None:
     path.write_text(source.replace(old_alias, new_alias, 1), encoding="utf-8")
 
 
+def replace_nested_class_method(
+    path: Path,
+    name: str,
+    replacement: str,
+) -> None:
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    matches: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    for top_level in tree.body:
+        if not isinstance(top_level, ast.ClassDef):
+            continue
+        for node in top_level.body:
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == name
+            ):
+                matches.append(node)
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"expected one class method {name} in {path}, got {len(matches)}"
+        )
+    node = matches[0]
+    start_line = node.lineno
+    if node.decorator_list:
+        start_line = min(value.lineno for value in node.decorator_list)
+    lines = source.splitlines(keepends=True)
+    lines[start_line - 1 : node.end_lineno] = [replacement.rstrip() + "\n\n"]
+    path.write_text("".join(lines), encoding="utf-8")
+
+
 def main() -> int:
     module = load_transformer()
     module.patch_constraints = lambda: patch_constraints(module)
+    original_replace = module.replace_top_level_function
+
+    def replace_function(path: Path, name: str, replacement: str) -> None:
+        if name == "_actual_company_audit":
+            replace_nested_class_method(path, name, replacement)
+            return
+        original_replace(path, name, replacement)
+
+    module.replace_top_level_function = replace_function
     return module.main()
 
 
