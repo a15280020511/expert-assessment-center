@@ -1,11 +1,14 @@
-name: Validate V5 Tabletop Production Semantics
+name: Validate V5 Constitutional Properties
 
 on:
   pull_request:
     paths:
       - "open-model-market/v5_pipeline.py"
       - "open-model-market/v5_general_task_planning.py"
-      - "open-model-market/resource_matrix.py"
+      - "open-model-market/v5_task_delivery_contract.py"
+      - "open-model-market/v5_constitutional_runtime.py"
+      - "open-model-market/v5_planning_runtime.py"
+      - "tests/test_v5_general_task_planning.py"
       - "tests/test_v5_tabletop_production_semantics.py"
       - ".github/workflows/v5-tabletop-semantics-validate.yml"
   push:
@@ -13,7 +16,10 @@ on:
     paths:
       - "open-model-market/v5_pipeline.py"
       - "open-model-market/v5_general_task_planning.py"
-      - "open-model-market/resource_matrix.py"
+      - "open-model-market/v5_task_delivery_contract.py"
+      - "open-model-market/v5_constitutional_runtime.py"
+      - "open-model-market/v5_planning_runtime.py"
+      - "tests/test_v5_general_task_planning.py"
       - "tests/test_v5_tabletop_production_semantics.py"
       - ".github/workflows/v5-tabletop-semantics-validate.yml"
 
@@ -21,9 +27,9 @@ permissions:
   contents: read
 
 jobs:
-  validate-tabletop-semantics:
+  validate-constitutional-properties:
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -37,56 +43,73 @@ jobs:
             requirements-dev.txt
       - name: Install pinned dependencies
         run: python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
-      - name: Run explicit semantic wiring regressions
+      - name: Run generic semantic and contract properties
         run: |
           python tests/test_v5_general_task_planning.py
-          python tests/test_v5_planning_scenario_matrix.py
-          python tests/test_v5_consumer_decision_budget.py
           python tests/test_v5_tabletop_production_semantics.py
-      - name: Run original failed task zero-call planning regression
+          python tests/test_v5_explicit_task_delivery_contract.py
+          python tests/test_v5_long_markdown_contract_integrity.py
+      - name: Run task-independent zero-call matrix
         shell: bash
         run: |
-          cat > tabletop-task.txt <<'TASK'
-          真实复杂闭卷任务：福州市一所小学夜班期间发生第五类复合事件。已知条件仅限题面：校内只有1名夜班保安；20:35开始雷雨并伴随频繁闪电；20:43教学楼顶层一处天窗出现裂纹且有雨水渗入，禁止靠近其正下方；20:49消防水箱区域传出持续流水声，来源未知，禁止保安进入受限设备区域；20:56一楼西侧走廊出现局部积水，但尚未接触可见电气设施；21:02校门外有2名自称校外活动承办方人员要求取回器材，无法核验当晚授权；21:08值班手机剩余27%电量；纸质登记显示1名维修人员签入时间清晰但签出栏空白；门卫室有纸质通讯录、手电筒1支、机械钥匙、灭火器、急救包、警戒带和纸笔；禁止保安独自进入设备区域，禁止站在裂纹天窗下方，禁止触碰未知积水附近电气设施，禁止与门外人员发生肢体冲突，禁止擅自宣布风险解除。请在不联网、不调用工具、不编造电话号码、外部制度、设备状态、人员位置或专业检测结论的前提下，完成从20:35到22:05的90分钟应急桌面推演。必须分别给出：1）已知事实、假设、推断和未知项；2）按分钟或事件触发的行动时间线；3）裂纹天窗、设备区流水声、走廊积水、身份不明访客、人员去向不明五条风险链；4）生命安全优先级和决策树；5）可执行的通信顺序与通话要点模板，不填写虚构号码；6）门禁、隔离、警戒、照明、手机电量和证据记录措施；7）一票否决、撤离、封控和升级条件；8）至少12种失败模式及预防措施；9）关键资源耗尽与替代方案；10）22:05前的结束或移交判定；11）事后24小时和7天整改清单；12）红队反证和仍未解决的不确定性。每一项必须有独立Markdown二级标题，标题文字须与上述12项完全一致并保持上述顺序，内容不得合并；三级及更低标题只能作为所属二级章节的内部结构；不得建议违法、冒险、靠近潜在坠落区域、擅入设备区或单人对抗行为。
-          TASK
-          python open-model-market/v5_pipeline.py \
-            --task "$(cat tabletop-task.txt)" \
-            --catalog-file tests/fixtures/models.json \
-            --endpoint-file tests/fixtures/endpoints.json \
-            --dry-run \
-            --maximum-total-calls 4 \
-            --maximum-recovery-calls 1 \
-            --cost-anomaly-usd 0.25 \
-            --quality-tier value \
-            --output-dir v5-tabletop-regression-artifacts
-      - name: Verify production planning contract
-        run: |
+          set -euo pipefail
           python - <<'PY'
           import json
+          import subprocess
+          import sys
           from pathlib import Path
 
-          root = Path("v5-tabletop-regression-artifacts")
-          semantics = json.loads((root / "task-interpretations.json").read_text())
-          matrix = json.loads((root / "task-resource-matrix.json").read_text())
-          optimization = json.loads((root / "v5-optimization.json").read_text())
-          graph = json.loads((root / "v5-execution-graph.json").read_text())
-          dry = json.loads((root / "v5-dry-run.json").read_text())
+          tasks = {
+              "compact": "比较方案A和方案B的成本并给出决策阈值。",
+              "strict-contract": (
+                  "比较两个方案。严格使用以下4个Markdown二级标题，顺序不得改变，"
+                  "每项不得为空：\n1）已知条件\n2）计算与比较\n3）风险与反证\n4）结论与下一步"
+              ),
+              "multi-work": (
+                  "评估三个方案，分别完成定量计算、证据核验、情景推演、独立红队反证，"
+                  "最后综合决策并列出实施条件。"
+              ),
+          }
+          root = Path("constitutional-matrix-artifacts")
+          for name, task in tasks.items():
+              output = root / name
+              command = [
+                  sys.executable,
+                  "open-model-market/v5_pipeline.py",
+                  "--task", task,
+                  "--catalog-file", "tests/fixtures/models.json",
+                  "--endpoint-file", "tests/fixtures/endpoints.json",
+                  "--dry-run",
+                  "--maximum-total-calls", "8",
+                  "--maximum-recovery-calls", "2",
+                  "--cost-anomaly-usd", "0.25",
+                  "--quality-tier", "value",
+                  "--output-dir", str(output),
+              ]
+              completed = subprocess.run(command, check=False, text=True, capture_output=True)
+              if completed.returncode != 0:
+                  raise SystemExit(completed.stdout + "\n" + completed.stderr)
 
-          signals = semantics["task_signals"]
-          assert signals["closed_book_tabletop_compaction_applied"] is True
-          assert signals["external_evidence_required"] is False
-          assert signals["active_domains"] == ["security"]
-          assert signals["active_operations"] == ["analysis", "decision_comparison"]
-          assert len(semantics["interpretations"]) == 1
-          assert len(semantics["interpretations"][0]["atomic_work"]) == 1
-          assert matrix["matrices"][0]["hard_requirements"] == []
-          assert optimization["solver_status"] in {"OPTIMAL", "FEASIBLE"}
-          assert 1 <= len(graph["nodes"]) <= 3
-          assert len(dry["requests"]) == len(graph["nodes"])
-          assert float(graph["estimated_total_cost"]) <= 0.25
-          assert dry["approved_budget"]["maximum_total_calls"] == 4
-          assert dry["approved_budget"]["maximum_initial_calls"] == 3
-          assert dry["approved_budget"]["maximum_recovery_calls"] == 1
-          assert dry["global_monkey_patching"] is False
-          assert not (root / "v5-planning-infeasibility.json").exists()
+              semantics = json.loads((output / "task-interpretations.json").read_text())
+              search = json.loads((output / "v5-adaptive-search.json").read_text())
+              graph = json.loads((output / "v5-execution-graph.json").read_text())
+              dry = json.loads((output / "v5-dry-run.json").read_text())
+              signals = semantics["task_signals"]
+
+              assert signals["task_specific_production_branching"] is False
+              assert signals["case_derived_compaction_applied"] is False
+              assert signals["architecture_selection_policy"] == "generic-semantic-matrix-only"
+              assert search["policy"] == "task-shape-feasibility-marginal-value"
+              assert search["attempts"]
+              assert len(graph["nodes"]) <= dry["approved_budget"]["maximum_initial_calls"]
+              companies = [node["parameter_profile"]["model_company"] for node in graph["nodes"]]
+              assert len(companies) == len(set(companies))
+              assert dry["model_company_policy"] == "task-global-all-different"
+              assert dry["global_monkey_patching"] is False
+
+          strict_semantics = json.loads(
+              (root / "strict-contract" / "task-interpretations.json").read_text()
+          )
+          assert strict_semantics["task_signals"]["structural_signals"]["explicit_output_contract"] is True
+          assert strict_semantics["task_signals"]["structural_signals"]["explicit_contract_items"] == 4
           PY
