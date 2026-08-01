@@ -129,13 +129,18 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-runtime.txt
+      - name: Install pinned runtime dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
+          python -m pip check
       - name: Exhaustive recovery-tail and uptime calibration properties
         run: |
           set -euo pipefail
           mkdir -p audit-logs
           PYTHONPATH=open-model-market python - <<'PY' | tee audit-logs/properties.log
           import itertools
-          import math
           from v5_operational_resilience import (
               calibrate_endpoint_operational_profile,
               poisson_binomial_tail,
