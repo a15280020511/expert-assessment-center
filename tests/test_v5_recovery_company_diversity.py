@@ -80,12 +80,48 @@ class V5RecoveryCompanyDiversityTests(unittest.TestCase):
             "candidates": [
                 {**selected_nodes[0], "coverage_keys": ["w1#0"]},
                 {**selected_nodes[1], "coverage_keys": ["w2#0"]},
-                alternative("w1-openai", "w1", "openai/gpt-b", "p2", 0.001),
-                alternative("w1-google", "w1", "google/gemini-a", "p2", 0.002),
-                alternative("w1-mistral", "w1", "mistralai/mistral-a", "p3", 0.003),
-                alternative("w2-google", "w2", "google/gemini-b", "p2", 0.001),
-                alternative("w2-zhipu", "w2", "z-ai/glm-a", "p3", 0.002),
-                alternative("w2-mistral", "w2", "mistralai/mistral-b", "p4", 0.003),
+                alternative(
+                    "w1-openai",
+                    "w1",
+                    "openai/gpt-b",
+                    "p2",
+                    0.001,
+                ),
+                alternative(
+                    "w1-google",
+                    "w1",
+                    "google/gemini-a",
+                    "p2",
+                    0.002,
+                ),
+                alternative(
+                    "w1-mistral",
+                    "w1",
+                    "mistralai/mistral-a",
+                    "p3",
+                    0.003,
+                ),
+                alternative(
+                    "w2-google",
+                    "w2",
+                    "google/gemini-b",
+                    "p2",
+                    0.001,
+                ),
+                alternative(
+                    "w2-zhipu",
+                    "w2",
+                    "z-ai/glm-a",
+                    "p3",
+                    0.002,
+                ),
+                alternative(
+                    "w2-mistral",
+                    "w2",
+                    "mistralai/mistral-b",
+                    "p4",
+                    0.003,
+                ),
             ]
         }
 
@@ -113,17 +149,19 @@ class V5RecoveryCompanyDiversityTests(unittest.TestCase):
         )
         self.assertNotIn("openai", recovery_companies)
         self.assertNotIn("anthropic", recovery_companies)
+        policy_evidence = metadata["recovery_pool_policy"]
         self.assertTrue(
-            metadata["recovery_pool_policy"][
-                "recovery_companies_globally_unique"
-            ]
+            policy_evidence["recovery_companies_globally_unique"]
         )
         self.assertEqual(
             sorted(set(recovery_companies)),
-            metadata["recovery_pool_policy"][
-                "reserved_recovery_companies"
-            ],
+            policy_evidence["reserved_recovery_companies"],
         )
+        self.assertEqual(
+            policy_evidence["source"],
+            "current-run-frozen-candidate-graph",
+        )
+        self.assertFalse(policy_evidence["cross_task_history_used"])
 
     def test_recovery_preserves_independent_copy_coverage_key(self):
         policy = CrossEndpointPlannerPolicy(
@@ -178,12 +216,24 @@ class V5RecoveryCompanyDiversityTests(unittest.TestCase):
         pool = result["execution_graph"]["metadata"][
             "recovery_pool"
         ]["selected-copy-1"]
-        self.assertEqual([row["candidate_id"] for row in pool], ["right-copy"])
-        self.assertEqual(pool[0]["coverage_keys"], ["work-independent#1"])
+        self.assertEqual(
+            [row["candidate_id"] for row in pool],
+            ["right-copy"],
+        )
+        self.assertEqual(
+            pool[0]["coverage_keys"],
+            ["work-independent#1"],
+        )
+        policy_evidence = result["recovery_pool_policy"]
+        self.assertEqual(
+            policy_evidence["source"],
+            "current-run-frozen-candidate-graph",
+        )
         self.assertTrue(
-            result["recovery_pool_policy"][
-                "exact_coverage_keys_required"
-            ]
+            policy_evidence["candidate_options_do_not_reserve_paid_calls"]
+        )
+        self.assertTrue(
+            policy_evidence["actual_recovery_calls_remain_budget_limited"]
         )
 
     def test_zero_recovery_budget_produces_empty_pool(self):
