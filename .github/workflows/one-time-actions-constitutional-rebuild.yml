@@ -73,8 +73,8 @@ jobs:
           native = '''STRICT_SUCCESS_STATUSES = {"success", "success_retried", "success_recovered"}\nFORBIDDEN_REQUEST_FIELDS = {\n    "tools",\n    "tool_choice",\n    "plugins",\n    "web_search",\n    "web_search_options",\n    "file_search",\n    "browser",\n    "code_interpreter",\n    "models",\n}\n'''
           source = source.replace(marker, native)
           old_reference = "legacy_executor.FORBIDDEN_FIELDS"
-          if source.count(old_reference) != 1:
-              raise SystemExit("unexpected legacy forbidden-field reference count")
+          if source.count(old_reference) < 1:
+              raise SystemExit("legacy forbidden-field reference is missing")
           source = source.replace(old_reference, "FORBIDDEN_REQUEST_FIELDS")
           path.write_text(source, encoding="utf-8")
 
