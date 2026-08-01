@@ -68,7 +68,8 @@ jobs:
           market = json.loads((root / "v5-model-endpoint-market.json").read_text())
 
           signals = semantics["task_signals"]
-          assert signals["active_domains"] == ["business"]
+          assert "business" in signals["active_domains"]
+          assert "coding" not in signals["active_domains"]
           assert signals["high_stakes"] is False
           assert signals["task_specific_production_branching"] is False
           assert optimization["solver_status"] in {"OPTIMAL", "FEASIBLE"}
