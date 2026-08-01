@@ -41,7 +41,6 @@ class OpenRouterRequestError(RuntimeError):
         self.response_received = bool(response_received)
 
 
-
 def headers(api_key: Optional[str]) -> Dict[str, str]:
     result = {"Accept": "application/json", "Content-Type": "application/json"}
     if api_key:
@@ -162,7 +161,7 @@ def _request_with_hard_deadline(
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 results.put(("ok", _decode_response(response, url)))
-        except BaseException as exc:  # forwarded to the caller thread
+        except Exception as exc:
             results.put(("error", exc))
 
     thread = threading.Thread(
