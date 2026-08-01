@@ -1,0 +1,72 @@
+name: Apply Hard Deadline Visible Recovery 2026-08-02
+
+on:
+  push:
+    branches:
+      - fix/v5-hard-deadline-visible-recovery-20260802
+    paths:
+      - tools/apply_hard_deadline_visible_recovery_fix_20260802.py
+      - .github/workflows/apply-hard-deadline-visible-recovery-20260802.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-hard-deadline-visible-recovery-20260802
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out patch branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: fix/v5-hard-deadline-visible-recovery-20260802
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Apply patch and remove temporary machinery
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/apply_hard_deadline_visible_recovery_fix_20260802.py
+          rm tools/apply_hard_deadline_visible_recovery_fix_20260802.py
+          rm .github/workflows/apply-hard-deadline-visible-recovery-20260802.yml
+
+      - name: Verify deadline and recovery suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m ruff check \
+            open-model-market/openrouter_api.py \
+            open-model-market/v5_runtime.py \
+            tests/test_openrouter_hard_deadline.py \
+            tests/test_v5_reasoning_saturation_recovery.py
+          python -m compileall -q open-model-market tests
+          python -m unittest \
+            tests.test_openrouter_hard_deadline \
+            tests.test_v5_reasoning_saturation_recovery \
+            tests.test_v5_reasoning_visible_output_budget \
+            tests.test_v5_cross_endpoint_recovery \
+            tests.test_v5_full_load_stability -v
+
+      - name: Commit source-only fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(runtime): enforce hard deadlines and visible recovery"
+          git push origin HEAD:fix/v5-hard-deadline-visible-recovery-20260802
