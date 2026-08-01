@@ -81,6 +81,15 @@ def _rewrite_native_p0_runner(module) -> None:
     path.write_text(source[:start] + suite + source[end:], encoding="utf-8")
 
 
+def _normalize_text_file_endings(root: Path) -> None:
+    for pattern in ("*.py", "*.yml", "*.yaml", "*.json", "*.md"):
+        for path in root.rglob(pattern):
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8")
+            path.write_text(text.rstrip() + "\n", encoding="utf-8")
+
+
 def main() -> int:
     module = _load_transformer()
     module.EXPLICIT_LEGACY_MODULES.add("v5_rejection_audit_policy")
@@ -109,6 +118,7 @@ def main() -> int:
             json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+    _normalize_text_file_endings(module.ROOT)
     return result
 
 
