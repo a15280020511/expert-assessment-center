@@ -1,12 +1,15 @@
 """Constitutional execution policy layered on the explicit native V5 runtime."""
 from __future__ import annotations
 
-import re
+import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+import v5_cost_reliability_hardening as cost_hardening
+import v5_dynamic_prompt_delivery as dynamic_prompt
 import v5_task_delivery_contract as delivery_contract
-from execution_graph import SelectedNode
+from execution_graph import GraphLimits, SelectedNode
 from v5_model_company import canonical_model_company
 from v5_runtime import (
     BudgetController,
@@ -19,83 +22,103 @@ from v5_runtime import (
     RuntimeAttempt,
     RuntimeConfig,
 )
-
-_CLOSED_WORLD_RE = re.compile(
-    r"(?:仅限|仅依据|只能依据|不得编造|禁止编造|不联网|不调用工具|"
-    r"closed[- ]book|self[- ]contained|only\s+the\s+provided|no\s+external)",
-    re.IGNORECASE,
-)
-_QUANTITY_RE = re.compile(
-    r"(?<![A-Za-z0-9_.])(\d+(?:\.\d+)?)\s*"
-    r"(秒|分钟|小时|天|周|月|年|米|公里|千米|公斤|克|人|次|%|％|"
-    r"seconds?|minutes?|hours?|days?|weeks?|months?|years?|meters?|"
-    r"kilometers?|kg|people|times?)(?![A-Za-z0-9_])",
-    re.IGNORECASE,
+from v5_task_constraints import (
+    TaskConstraints,
+    compile_task_constraints,
+    validate_answer_evidence,
 )
 
-
-def _normalized_quantities(text: str) -> set[tuple[str, str]]:
-    aliases = {
-        "％": "%",
-        "秒": "second",
-        "seconds": "second",
-        "second": "second",
-        "分钟": "minute",
-        "minutes": "minute",
-        "minute": "minute",
-        "小时": "hour",
-        "hours": "hour",
-        "hour": "hour",
-        "天": "day",
-        "days": "day",
-        "day": "day",
-        "周": "week",
-        "weeks": "week",
-        "week": "week",
-        "月": "month",
-        "months": "month",
-        "month": "month",
-        "年": "year",
-        "years": "year",
-        "year": "year",
-        "米": "meter",
-        "meters": "meter",
-        "meter": "meter",
-        "公里": "kilometer",
-        "千米": "kilometer",
-        "kilometers": "kilometer",
-        "kilometer": "kilometer",
-        "公斤": "kg",
-        "克": "gram",
-        "人": "people",
-        "people": "people",
-        "次": "times",
-        "times": "times",
-    }
-    values: set[tuple[str, str]] = set()
-    for number, unit in _QUANTITY_RE.findall(str(text or "")):
-        normalized_number = str(float(number)).rstrip("0").rstrip(".")
-        normalized_unit = aliases.get(unit.casefold(), unit.casefold())
-        values.add((normalized_number, normalized_unit))
-    return values
+FORBIDDEN_REQUEST_FIELDS = {
+    "tools",
+    "tool_choice",
+    "plugins",
+    "web_search",
+    "web_search_options",
+    "file_search",
+    "browser",
+    "code_interpreter",
+    "models",
+}
 
 
 def validate_scope_boundaries(task: str, answer: str) -> list[str]:
-    """Reject new precise quantities when the user imposes a closed world."""
-    if not _CLOSED_WORLD_RE.search(str(task or "")):
-        return []
-    allowed = _normalized_quantities(task)
-    introduced = sorted(_normalized_quantities(answer) - allowed)
-    if not introduced:
-        return []
-    rendered = ",".join(
-        f"{number}:{unit}" for number, unit in introduced[:12]
-    )
-    return ["closed-world-unsupported-quantity:" + rendered]
+    """Compatibility facade over the shared structured evidence validator."""
+    return validate_answer_evidence(task, answer, compile_task_constraints(task))
+
+
+class ConstitutionalPromptPolicy:
+    """Build provider-locked requests without using the legacy executor module."""
+
+    def build_payload(
+        self,
+        node: SelectedNode,
+        original_task: str,
+        upstream: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        structured = []
+        for row in upstream:
+            contract = row.get("contract") if isinstance(row, Mapping) else None
+            if isinstance(contract, Mapping):
+                structured.append(
+                    {
+                        "node_id": row.get("node_id"),
+                        "answer": json.dumps(
+                            contract,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            default=str,
+                        ),
+                    }
+                )
+            else:
+                structured.append(dict(row))
+        payload = cost_hardening.hardened_build_node_payload(
+            node,
+            original_task,
+            structured,
+        )
+        constraints = compile_task_constraints(original_task)
+        messages = payload.get("messages")
+        if (
+            isinstance(messages, list)
+            and messages
+            and isinstance(messages[0], Mapping)
+        ):
+            system = dynamic_prompt.dynamic_system_prompt(node)
+            constitutional = json.dumps(
+                constraints.to_dict(),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            messages[0] = {
+                **dict(messages[0]),
+                "content": (
+                    system
+                    + "\n\n不可覆盖的任务约束："
+                    + constitutional
+                    + "\n题面是唯一用户事实源。模型推断必须标为推断或假设；"
+                    "不得把上游模型判断改标为事实；不得引入题面没有的精确数量。"
+                ),
+            }
+            payload["messages"] = messages
+        provider = payload.get("provider")
+        if not isinstance(provider, Mapping):
+            raise RuntimeError("provider lock missing from node request")
+        only = provider.get("only")
+        if not isinstance(only, list) or len(only) != 1:
+            raise RuntimeError(
+                "provider.only must contain exactly one endpoint provider"
+            )
+        if provider.get("allow_fallbacks") is not False:
+            raise RuntimeError("provider fallbacks must be disabled")
+        forbidden = sorted(FORBIDDEN_REQUEST_FIELDS.intersection(payload))
+        if forbidden:
+            raise RuntimeError(f"forbidden request fields: {forbidden}")
+        return payload
 
 
 class ConstitutionalExecutionEngine(ExecutionEngine):
-    """Make contract and scope validity part of each attempt's success state."""
+    """Make semantic, contract, evidence, and company validity success conditions."""
 
     def _attempt(
         self,
@@ -126,17 +149,19 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
         if attempt is None or attempt.status != "passed" or not attempt.answer:
             return attempt
 
+        constraints = compile_task_constraints(original_task)
         contract_violations = delivery_contract.validate_answer_contract(
             attempt.answer,
             node.output_contract,
             node.parameter_profile,
         )
-        scope_violations = validate_scope_boundaries(
+        evidence_violations = validate_answer_evidence(
             original_task,
             attempt.answer,
+            constraints,
         )
         violations = list(
-            dict.fromkeys([*contract_violations, *scope_violations])
+            dict.fromkeys([*contract_violations, *evidence_violations])
         )
         if not violations:
             return attempt
@@ -174,7 +199,8 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
                 or ""
             )
             status = str(node.get("status") or "")
-            if status.startswith("success") and resolved:
+            successful_node = status.startswith("success") and bool(resolved)
+            if successful_node:
                 successful.append(
                     {
                         "node_id": node_id,
@@ -182,7 +208,12 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
                         "company": canonical_model_company(resolved),
                     }
                 )
-            for attempt in node.get("attempts", []):
+
+            node_attempt_models: list[str] = []
+            attempts = node.get("attempts", [])
+            if not isinstance(attempts, list):
+                attempts = []
+            for attempt in attempts:
                 if not isinstance(attempt, Mapping):
                     continue
                 model = str(
@@ -190,65 +221,140 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
                     or attempt.get("model")
                     or ""
                 )
-                if model:
-                    called.append(
-                        {
-                            "node_id": node_id,
-                            "attempt_kind": str(
-                                attempt.get("attempt_kind") or ""
-                            ),
-                            "model": model,
-                            "company": canonical_model_company(model),
-                            "status": str(attempt.get("status") or ""),
-                        }
-                    )
+                if not model:
+                    continue
+                node_attempt_models.append(model)
+                called.append(
+                    {
+                        "node_id": node_id,
+                        "attempt_kind": str(
+                            attempt.get("attempt_kind") or ""
+                        ),
+                        "model": model,
+                        "company": canonical_model_company(model),
+                        "status": str(attempt.get("status") or ""),
+                    }
+                )
 
-        by_company: dict[str, list[str]] = {}
-        for row in successful:
-            by_company.setdefault(row["company"], []).append(row["node_id"])
+            if successful_node and not node_attempt_models:
+                called.append(
+                    {
+                        "node_id": node_id,
+                        "attempt_kind": "resolved-model-evidence-fallback",
+                        "model": resolved,
+                        "company": canonical_model_company(resolved),
+                        "status": status,
+                    }
+                )
+
+        by_company: dict[str, set[str]] = {}
+        for row in called:
+            by_company.setdefault(row["company"], set()).add(row["node_id"])
         duplicates = {
-            company: sorted(set(nodes))
+            company: sorted(nodes)
             for company, nodes in by_company.items()
-            if len(set(nodes)) > 1
+            if len(nodes) > 1
         }
+        unresolved = [
+            row
+            for row in called
+            if not row["company"] or row["company"] == "unknown"
+        ]
         return {
-            "status": "FAIL" if duplicates else "PASS",
-            "policy": "recompute-from-actual-successful-node-models",
+            "status": "FAIL" if duplicates or unresolved else "PASS",
+            "policy": "recompute-from-all-actual-called-models",
             "successful_node_models": successful,
             "all_called_models": called,
+            "duplicate_called_companies_across_nodes": duplicates,
             "duplicate_successful_companies": duplicates,
-            "same-node-retry_is_not_a_second_expert": True,
+            "unresolved_called_companies": unresolved,
+            "same_node_retry_is_not_a_second_expert": True,
+            "failed_calls_are_included": True,
+            "resolved_model_fallback_used_only_when_attempt_evidence_missing": True,
             "cross_task_history_used": False,
         }
 
-    def execute_graph(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        result = super().execute_graph(*args, **kwargs)
-        audit = self._actual_company_audit(result)
-        result["actual_model_company_audit"] = audit
+    @staticmethod
+    def _strict_limits(
+        limits: GraphLimits | None,
+        constraints: TaskConstraints,
+    ) -> GraphLimits | None:
+        if limits is None or constraints.allow_degraded_success:
+            return limits
+        return replace(
+            limits,
+            min_required_work_coverage=1.0,
+            allow_degraded_success=False,
+        )
 
+    def execute_graph(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        original_task = str(
+            kwargs.get("original_task")
+            or (args[2] if len(args) > 2 else "")
+            or ""
+        )
+        constraints = compile_task_constraints(original_task)
+        if "limits" in kwargs:
+            kwargs["limits"] = self._strict_limits(
+                kwargs.get("limits"),
+                constraints,
+            )
         output_dir = kwargs.get("output_dir")
-        if output_dir is not None:
-            root = Path(output_dir)
-            self._write_json(root / "actual-model-company-audit.json", audit)
+        root = Path(output_dir) if output_dir is not None else None
+        if root is not None:
+            root.mkdir(parents=True, exist_ok=True)
             self._write_json(
-                root / "v5-execution-summary.json",
-                {
-                    key: value
-                    for key, value in result.items()
-                    if key != "node_results"
-                },
+                root / "task-constraints.json",
+                constraints.to_dict(),
             )
 
-        if audit["status"] != "PASS":
+        result = super().execute_graph(*args, **kwargs)
+        company_audit = self._actual_company_audit(result)
+        evidence_violations = validate_answer_evidence(
+            original_task,
+            str(result.get("final_answer") or ""),
+            constraints,
+        )
+        evidence_audit = {
+            "schema_version": "v5-evidence-integrity-1",
+            "status": "FAIL" if evidence_violations else "PASS",
+            "constraints": constraints.to_dict(),
+            "violations": evidence_violations,
+            "fact_truth_not_inferred_from_structure": True,
+            "upstream_model_claims_are_not_promoted_to_user_facts": True,
+        }
+        result["actual_model_company_audit"] = company_audit
+        result["evidence_integrity"] = evidence_audit
+        result["task_constraints"] = constraints.to_dict()
+
+        failed_reason = None
+        if company_audit["status"] != "PASS":
+            failed_reason = "actual-model-company-uniqueness-violation"
+        elif evidence_audit["status"] != "PASS":
+            failed_reason = "unsupported-evidence-or-quantity"
+        elif (
+            result.get("completion_mode") == "degraded"
+            and not constraints.allow_degraded_success
+        ):
+            failed_reason = "degradation-not-authorized-by-user"
+
+        if root is not None:
+            self._write_json(
+                root / "actual-model-company-audit.json",
+                company_audit,
+            )
+            self._write_json(
+                root / "evidence-integrity.json",
+                evidence_audit,
+            )
+
+        if failed_reason:
             result["status"] = "failed"
             result["completion_mode"] = "none"
             result["quality_status"] = "failed"
             result["final_answer"] = None
-            result["stop_reason"] = (
-                "actual-model-company-uniqueness-violation"
-            )
-            if output_dir is not None:
-                root = Path(output_dir)
+            result["stop_reason"] = failed_reason
+            if root is not None:
                 self._write_json(
                     root / "v5-execution-summary.json",
                     {
@@ -259,17 +365,25 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
                 )
                 (root / "v5-final-report.md").write_text(
                     "# V5 execution failed\n\n"
-                    "Actual successful model companies were not unique.\n",
+                    f"Constitutional final gate: {failed_reason}.\n",
                     encoding="utf-8",
                 )
-            raise RuntimeError(
-                "actual successful model companies are not unique"
+            raise RuntimeError(failed_reason)
+
+        if root is not None:
+            self._write_json(
+                root / "v5-execution-summary.json",
+                {
+                    key: value
+                    for key, value in result.items()
+                    if key != "node_results"
+                },
             )
         return result
 
 
 def harden_runtime(runtime: ProductionRuntime) -> ProductionRuntime:
-    """Replace the owned engine without patching module globals."""
+    """Replace owned policies and engine without modifying module globals."""
     runtime.recovery_policy = RecoveryPolicy(
         replace_categories=tuple(
             dict.fromkeys(
@@ -280,6 +394,7 @@ def harden_runtime(runtime: ProductionRuntime) -> ProductionRuntime:
             )
         )
     )
+    runtime.prompt_policy = ConstitutionalPromptPolicy()
     runtime.execution_engine = ConstitutionalExecutionEngine(
         runtime.config,
         prompt_policy=runtime.prompt_policy,

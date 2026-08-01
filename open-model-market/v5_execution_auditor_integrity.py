@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit native V5 production execution with node-level quality integrity."""
+"""Audit native V5 execution with semantic, evidence, and company integrity."""
 from __future__ import annotations
 
 import argparse
@@ -22,6 +22,13 @@ PLANNING_FAILURE_PREFIXES = (
     "CAPABILITY_",
     "CANDIDATE_GENERATION_",
     "PLANNING_",
+)
+_OBSOLETE_COMPANY_FAILURE_PREFIXES = (
+    "actual successful model-company audit is missing or failed",
+    "actual model-company audit did not recompute from resolved models",
+    "actual successful model-company evidence does not cover every node:",
+    "actual successful model companies are not globally unique",
+    "actual successful model company identity is unresolved",
 )
 
 
@@ -71,14 +78,18 @@ def _node_quality(root: Path) -> dict[str, Any]:
         if status in STRICT_SUCCESS_STATUSES and contract_complete:
             strict.append(node_id)
         elif status in DEGRADED_SUCCESS_STATUSES or status.startswith("success"):
-            attempts = row.get("attempts", [])
             gate_failures = []
+            attempts = row.get("attempts", [])
             if isinstance(attempts, list):
                 for attempt in attempts:
                     if not isinstance(attempt, Mapping):
                         continue
                     reasons = attempt.get("gate_reasons", [])
-                    reasons = [str(value) for value in reasons] if isinstance(reasons, list) else []
+                    reasons = (
+                        [str(value) for value in reasons]
+                        if isinstance(reasons, list)
+                        else []
+                    )
                     if str(attempt.get("status") or "") == "quality_gate_failed" or reasons:
                         gate_failures.append(
                             {
@@ -116,7 +127,6 @@ def _apply_native_contract(
     result: dict[str, Any],
     planning_failure: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Replace obsolete R8-name checks with the formal native contract."""
     envelope = _load(root / "expert-team-result.json", {})
     envelope = envelope if isinstance(envelope, Mapping) else {}
     summary = _load(root / "v5-execution-summary.json", {})
@@ -131,7 +141,6 @@ def _apply_native_contract(
     runtime_versions.discard("")
     executor = str(summary.get("executor") or envelope.get("executor") or "")
     failures = list(result.get("failures") or [])
-
     runtime_valid = runtime_versions == {NATIVE_RUNTIME_VERSION}
     if runtime_valid:
         failures = [reason for reason in failures if reason != LEGACY_RUNTIME_FAILURE]
@@ -151,11 +160,6 @@ def _apply_native_contract(
         )
     else:
         failures = [reason for reason in failures if reason != LEGACY_EXECUTOR_FAILURE]
-        failures = [
-            reason
-            for reason in failures
-            if not reason.startswith("native executor evidence is missing or inconsistent:")
-        ]
 
     checks = dict(result.get("checks") or {})
     checks.update(
@@ -185,25 +189,17 @@ def _normalize_planning_failure(
     result: dict[str, Any],
     planning: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Collapse expected downstream absences into one truthful root failure."""
-    manifest = _load(
-        root / "report-comments" / "report-comments-manifest.json", {}
-    )
+    manifest = _load(root / "report-comments" / "report-comments-manifest.json", {})
     manifest = manifest if isinstance(manifest, Mapping) else {}
     publication_status = str(manifest.get("publication_status") or "missing")
-    planning_report_present = bool(planning.get("infeasibility_report_present"))
-    calls = int(planning.get("model_calls_performed") or 0)
-    fallback_used = bool(planning.get("fallback_used"))
     evidence_valid = (
-        planning_report_present
-        and calls == 0
-        and not fallback_used
+        bool(planning.get("infeasibility_report_present"))
+        and int(planning.get("model_calls_performed") or 0) == 0
+        and not bool(planning.get("fallback_used"))
         and publication_status == "skipped_failed_execution"
     )
     code = str(planning.get("code") or "PLANNING_FAILED")
     message = str(planning.get("message") or "planning failed")
-    root_failure = f"planning failed before model calls: {code}: {message}"
-
     checks = dict(result.get("checks") or {})
     checks.update(
         {
@@ -211,28 +207,24 @@ def _normalize_planning_failure(
             "planning_failure_evidence_valid": evidence_valid,
             "downstream_execution_stages_applicable": False,
             "report_publication_status": publication_status,
-            "model_calls": calls,
+            "model_calls": int(planning.get("model_calls_performed") or 0),
         }
     )
-    stage_status = dict(result.get("stage_status") or {})
-    stage_status.update(
-        {
-            "runtime": "FAIL_CLOSED_PRE_EXECUTION",
-            "requests": "NOT_APPLICABLE",
-            "graph": "INFEASIBLE",
-            "report": (
-                "SKIPPED_FAILED_EXECUTION"
-                if publication_status == "skipped_failed_execution"
-                else "FAIL"
-            ),
-        }
-    )
-    failures = [root_failure]
-    if not evidence_valid:
-        failures.append("planning failure evidence chain is incomplete or inconsistent")
     result["checks"] = checks
-    result["stage_status"] = stage_status
-    result["failures"] = failures
+    result["stage_status"] = {
+        **dict(result.get("stage_status") or {}),
+        "runtime": "FAIL_CLOSED_PRE_EXECUTION",
+        "requests": "NOT_APPLICABLE",
+        "graph": "INFEASIBLE",
+        "report": (
+            "SKIPPED_FAILED_EXECUTION"
+            if publication_status == "skipped_failed_execution"
+            else "FAIL"
+        ),
+    }
+    result["failures"] = [
+        f"planning failed before model calls: {code}: {message}"
+    ] + ([] if evidence_valid else ["planning failure evidence chain is incomplete or inconsistent"])
     result["degradations"] = []
     result["status"] = "FAIL"
     result["primary_failure"] = {
@@ -244,7 +236,67 @@ def _normalize_planning_failure(
     return result
 
 
-def audit(root: Path, *, execute_outcome: str, publish_outcome: str) -> dict[str, Any]:
+def _constitutional_evidence(root: Path) -> dict[str, Any]:
+    constraints = _load(root / "task-constraints.json", {})
+    constraints = constraints if isinstance(constraints, Mapping) else {}
+    evidence = _load(root / "evidence-integrity.json", {})
+    evidence = evidence if isinstance(evidence, Mapping) else {}
+    company = _load(root / "actual-model-company-audit.json", {})
+    company = company if isinstance(company, Mapping) else {}
+
+    called = company.get("all_called_models", [])
+    called = called if isinstance(called, list) else []
+    duplicate_called = company.get("duplicate_called_companies_across_nodes", {})
+    duplicate_called = duplicate_called if isinstance(duplicate_called, Mapping) else {}
+    unresolved = company.get("unresolved_called_companies", [])
+    unresolved = unresolved if isinstance(unresolved, list) else []
+
+    failures: list[str] = []
+    if constraints.get("schema_version") != "v5-task-constraints-1":
+        failures.append("structured task constraints are missing")
+    if constraints.get("fail_closed") is not True:
+        failures.append("task constraints are not fail-closed")
+    if constraints.get("external_tools_allowed") is not False:
+        failures.append("expert external-tool prohibition is not explicit")
+    if evidence.get("status") != "PASS":
+        failures.append("semantic evidence integrity gate is missing or failed")
+    if evidence.get("fact_truth_not_inferred_from_structure") is not True:
+        failures.append("fact truth is still inferred from structural completeness")
+    if company.get("status") != "PASS":
+        failures.append("all-call model-company audit is missing or failed")
+    if company.get("policy") != "recompute-from-all-actual-called-models":
+        failures.append("company audit does not include every actual call")
+    if company.get("failed_calls_are_included") is not True:
+        failures.append("failed model calls are excluded from company uniqueness")
+    if not called:
+        failures.append("all-called-model evidence is empty")
+    if duplicate_called:
+        failures.append("a model company was reused across different nodes")
+    if unresolved:
+        failures.append("one or more actual called companies are unresolved")
+
+    return {
+        "failures": failures,
+        "checks": {
+            "task_constraints": dict(constraints),
+            "evidence_integrity_status": evidence.get("status"),
+            "evidence_violations": evidence.get("violations", []),
+            "actual_model_company_audit_status": company.get("status"),
+            "actual_model_company_audit_policy": company.get("policy"),
+            "actual_called_model_count": len(called),
+            "duplicate_called_companies_across_nodes": dict(duplicate_called),
+            "unresolved_called_companies": unresolved,
+            "failed_calls_are_included": company.get("failed_calls_are_included"),
+        },
+    }
+
+
+def audit(
+    root: Path,
+    *,
+    execute_outcome: str,
+    publish_outcome: str,
+) -> dict[str, Any]:
     planning = _planning_failure(root)
     result = base.audit(
         root,
@@ -257,55 +309,59 @@ def audit(root: Path, *, execute_outcome: str, publish_outcome: str) -> dict[str
 
     summary = _load(root / "v5-execution-summary.json", {})
     summary = summary if isinstance(summary, Mapping) else {}
-    evidence = _node_quality(root)
-    failures = list(result.get("failures") or [])
+    node_evidence = _node_quality(root)
+    constitutional = _constitutional_evidence(root)
+    failures = [
+        reason
+        for reason in list(result.get("failures") or [])
+        if not reason.startswith(_OBSOLETE_COMPANY_FAILURE_PREFIXES)
+    ]
+    failures.extend(constitutional["failures"])
     degradations = list(result.get("degradations") or [])
     completion_mode = str(summary.get("completion_mode") or "")
     quality_status = str(summary.get("quality_status") or "")
     integrity = summary.get("quality_integrity", {})
     integrity = integrity if isinstance(integrity, Mapping) else {}
 
-    if evidence["contract_incomplete_node_ids"]:
+    if node_evidence["contract_incomplete_node_ids"]:
         degradations.append(
             "one or more usable nodes did not satisfy the deterministic output contract"
         )
-
-    if evidence["failed_node_ids"]:
+    if node_evidence["failed_node_ids"]:
         failures.append(
             "node-level execution failures are present: "
-            + ", ".join(evidence["failed_node_ids"])
+            + ", ".join(node_evidence["failed_node_ids"])
         )
-
-    if evidence["degraded_nodes"]:
+    if node_evidence["degraded_nodes"]:
         if completion_mode != "degraded" or quality_status != "degraded_success":
-            failures.append(
-                "degraded node output was incorrectly represented as full success"
-            )
+            failures.append("degraded node output was incorrectly represented as full success")
         else:
             degradations.append(
                 "one or more nodes delivered usable output after failing a quality gate"
             )
         if integrity.get("status") != "DEGRADED":
             failures.append("run-level quality integrity evidence is missing or inconsistent")
-    elif evidence["all_nodes_strict"]:
+    elif node_evidence["all_nodes_strict"]:
         if completion_mode == "full" and quality_status != "full_success":
             failures.append("strict full completion is missing full_success quality status")
         if completion_mode == "full" and integrity.get("status") not in {"PASS", None}:
             failures.append("strict node success conflicts with run-level quality integrity")
-
-    if quality_status == "full_success" and evidence["degraded_nodes"]:
+    if quality_status == "full_success" and node_evidence["degraded_nodes"]:
         failures.append("full_success is forbidden when a node is success_degraded")
 
     checks = dict(result.get("checks") or {})
+    checks.update(constitutional["checks"])
     checks.update(
         {
             "quality_status": quality_status,
             "quality_integrity_status": integrity.get("status"),
-            "strict_node_count": len(evidence["strict_node_ids"]),
-            "degraded_node_count": len(evidence["degraded_nodes"]),
-            "failed_node_count": len(evidence["failed_node_ids"]),
-            "contract_incomplete_node_count": len(evidence["contract_incomplete_node_ids"]),
-            "node_quality_evidence": evidence,
+            "strict_node_count": len(node_evidence["strict_node_ids"]),
+            "degraded_node_count": len(node_evidence["degraded_nodes"]),
+            "failed_node_count": len(node_evidence["failed_node_ids"]),
+            "contract_incomplete_node_count": len(
+                node_evidence["contract_incomplete_node_ids"]
+            ),
+            "node_quality_evidence": node_evidence,
         }
     )
     result["checks"] = checks
@@ -329,20 +385,16 @@ def audit(root: Path, *, execute_outcome: str, publish_outcome: str) -> dict[str
         result["primary_failure"] = {
             "code": "DEGRADED_SUCCESS",
             "stage": "quality-integrity",
-            "message": result["degradations"][0] if result["degradations"] else "bounded degradation",
+            "message": result["degradations"][0],
             "retryable": False,
         }
-    elif result["failures"]:
-        primary = result.get("primary_failure")
-        primary = dict(primary) if isinstance(primary, Mapping) else {}
-        if primary.get("message") in {LEGACY_RUNTIME_FAILURE, LEGACY_EXECUTOR_FAILURE, ""}:
-            primary = {
-                "code": "V5_PRODUCTION_AUDIT_FAILED",
-                "stage": "v5-production-audit",
-                "message": result["failures"][0],
-                "retryable": False,
-            }
-        result["primary_failure"] = primary
+    else:
+        result["primary_failure"] = {
+            "code": "V5_PRODUCTION_AUDIT_FAILED",
+            "stage": "v5-production-audit",
+            "message": result["failures"][0],
+            "retryable": False,
+        }
     return result
 
 

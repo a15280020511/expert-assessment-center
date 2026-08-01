@@ -3,8 +3,9 @@ name: Validate V5 Constitutional Properties
 on:
   pull_request:
     paths:
-      - "open-model-market/v5_pipeline.py"
+      - "open-model-market/v5_constitutional_pipeline.py"
       - "open-model-market/v5_general_task_planning.py"
+      - "open-model-market/v5_task_constraints.py"
       - "open-model-market/v5_task_delivery_contract.py"
       - "open-model-market/v5_constitutional_runtime.py"
       - "open-model-market/v5_planning_runtime.py"
@@ -15,8 +16,9 @@ on:
   push:
     branches: [main]
     paths:
-      - "open-model-market/v5_pipeline.py"
+      - "open-model-market/v5_constitutional_pipeline.py"
       - "open-model-market/v5_general_task_planning.py"
+      - "open-model-market/v5_task_constraints.py"
       - "open-model-market/v5_task_delivery_contract.py"
       - "open-model-market/v5_constitutional_runtime.py"
       - "open-model-market/v5_planning_runtime.py"
@@ -51,6 +53,8 @@ jobs:
           python tests/test_v5_tabletop_production_semantics.py
           python tests/test_v5_explicit_task_delivery_contract.py
           python tests/test_v5_long_markdown_contract_integrity.py
+          python tests/test_v5_task_constraints.py
+          python tests/test_v5_dynamic_model_fit.py
       - name: Run task-independent zero-call matrix
         shell: bash
         run: |
@@ -71,13 +75,18 @@ jobs:
                   "评估三个方案，分别完成定量计算、证据核验、情景推演、独立红队反证，"
                   "最后综合决策并列出实施条件。"
               ),
+              "closed-world": (
+                  "仅依据题面，不得调用外部工具，不联网，不得编造。"
+                  "比较方案A和方案B，只接受完整交付。"
+              ),
           }
           root = Path("constitutional-matrix-artifacts")
+          weights = {}
           for name, task in tasks.items():
               output = root / name
               command = [
                   sys.executable,
-                  "open-model-market/v5_pipeline.py",
+                  "open-model-market/v5_constitutional_pipeline.py",
                   "--task", task,
                   "--catalog-file", "tests/fixtures/models.json",
                   "--endpoint-file", "tests/fixtures/endpoints.json",
@@ -126,6 +135,12 @@ jobs:
                   (output / "v5-execution-graph.json").read_text()
               )
               dry = json.loads((output / "v5-dry-run.json").read_text())
+              constraints = json.loads(
+                  (output / "task-constraints.json").read_text()
+              )
+              market = json.loads(
+                  (output / "v5-model-endpoint-market.json").read_text()
+              )
               signals = semantics["task_signals"]
 
               assert signals["task_specific_production_branching"] is False
@@ -134,6 +149,7 @@ jobs:
                   signals["architecture_selection_policy"]
                   == "generic-semantic-matrix-only"
               )
+              assert signals["dynamic_interpretation_limit"] >= 1
               assert (
                   search["policy"]
                   == "task-shape-feasibility-marginal-value"
@@ -148,14 +164,15 @@ jobs:
                   for node in graph["nodes"]
               ]
               assert len(companies) == len(set(companies))
-              assert (
-                  dry["approved_budget"]["maximum_initial_calls"] == 14
-              )
-              assert (
-                  dry["model_company_policy"]
-                  == "task-global-all-different"
-              )
+              assert dry["approved_budget"]["maximum_initial_calls"] == 14
+              assert dry["model_company_policy"] == "task-global-all-different"
               assert dry["global_monkey_patching"] is False
+              assert dry["task_constraints"] == constraints
+              assert constraints["external_tools_allowed"] is False
+              assert constraints["fail_closed"] is True
+              assert market["fixed_preselection_weight_tuple_used"] is False
+              assert market["fixed_task_fit_weight_tuple_used"] is False
+              weights[name] = market["preselection_objective_weights"]
 
           strict_semantics = json.loads(
               (
@@ -163,6 +180,9 @@ jobs:
                   / "strict-contract"
                   / "task-interpretations.json"
               ).read_text()
+          )
+          closed_world = json.loads(
+              (root / "closed-world" / "task-constraints.json").read_text()
           )
           assert (
               strict_semantics["task_signals"]["structural_signals"]
@@ -174,6 +194,10 @@ jobs:
               ["explicit_contract_items"]
               == 4
           )
+          assert weights["compact"] != weights["multi-work"]
+          assert closed_world["external_facts_allowed"] is False
+          assert closed_world["unsupported_precise_quantities_allowed"] is False
+          assert closed_world["allow_degraded_success"] is False
           PY
       - name: Upload constitutional diagnostics
         if: always()
