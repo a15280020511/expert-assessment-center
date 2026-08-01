@@ -1,0 +1,224 @@
+name: One-Time Actions Finalize Constitutional Evidence
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-time-actions-finalize-constitutional-evidence.yml"
+      - ".github/workflows/one-time-actions-constitutional-cleanup.yml"
+      - "open-model-market/**"
+      - "tests/**"
+      - ".github/workflows/**"
+      - "README.md"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-time-actions-constitutional-cleanup
+  cancel-in-progress: false
+
+jobs:
+  finalize-evidence:
+    if: >-
+      github.repository == 'a15280020511/expert-assessment-center' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/v5-constitutional-semantic-evidence-dynamic-20260801'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      TARGET_BRANCH: actions/v5-constitutional-remediation-20260801
+    steps:
+      - name: Checkout Actions-authored remediation branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: actions/v5-constitutional-remediation-20260801
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-runtime.txt
+            requirements-dev.txt
+
+      - name: Generate permanent constitutional cleanup evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin "$TARGET_BRANCH"
+          python - <<'PY'
+          from __future__ import annotations
+
+          import ast
+          import json
+          from pathlib import Path
+
+          root = Path("open-model-market")
+          modules = {
+              path.stem: path
+              for path in root.glob("*.py")
+              if path.name != "__init__.py"
+          }
+          dependencies: dict[str, set[str]] = {name: set() for name in modules}
+          install_definitions: dict[str, list[int]] = {}
+          install_calls: dict[str, list[int]] = {}
+          for name, path in modules.items():
+              tree = ast.parse(path.read_text(encoding="utf-8"))
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Import):
+                      for alias in node.names:
+                          local = alias.name.split(".", 1)[0]
+                          if local in modules:
+                              dependencies[name].add(local)
+                  elif isinstance(node, ast.ImportFrom) and node.module:
+                      local = node.module.split(".", 1)[0]
+                      if local in modules:
+                          dependencies[name].add(local)
+                  elif (
+                      isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                      and node.name == "install"
+                      and node.col_offset == 0
+                  ):
+                      install_definitions.setdefault(name, []).append(node.lineno)
+                  elif (
+                      isinstance(node, ast.Call)
+                      and isinstance(node.func, ast.Attribute)
+                      and node.func.attr == "install"
+                  ):
+                      install_calls.setdefault(name, []).append(node.lineno)
+
+          roots = {
+              "v5_production_ticket",
+              "v5_constitutional_pipeline",
+              "v5_constitutional_runtime",
+              "v5_recovery_runtime",
+              "v5_execution_auditor_integrity",
+              "v5_independent_artifact_revalidation",
+              "artifact_manifest",
+              "v5_final_status",
+              "v5_final_attestation",
+              "v5_issue_ticket",
+              "v5_admission_lock",
+          }
+          reachable = set(roots)
+          pending = list(roots)
+          while pending:
+              current = pending.pop()
+              for dependency in dependencies.get(current, set()):
+                  if dependency not in reachable:
+                      reachable.add(dependency)
+                      pending.append(dependency)
+
+          prohibited_existing = sorted(
+              name
+              for name in modules
+              if name.startswith("v5_r8_")
+              or name in {
+                  "v5_production_hardening",
+                  "v5_resilient_executor",
+                  "v5_stage_d_provider_compat",
+              }
+          )
+          test_install_calls: dict[str, list[int]] = {}
+          for path in Path("tests").glob("test*.py"):
+              tree = ast.parse(path.read_text(encoding="utf-8"))
+              for node in ast.walk(tree):
+                  if (
+                      isinstance(node, ast.Call)
+                      and isinstance(node.func, ast.Attribute)
+                      and node.func.attr == "install"
+                  ):
+                      test_install_calls.setdefault(str(path), []).append(node.lineno)
+
+          runtime_text = (root / "v5_runtime.py").read_text(encoding="utf-8")
+          pipeline_text = (root / "v5_pipeline.py").read_text(encoding="utf-8")
+          required_files = [
+              root / "v5_task_constraints.py",
+              root / "v5_constitutional_pipeline.py",
+              root / "v5_constitutional_runtime.py",
+              root / "v5_independent_artifact_revalidation.py",
+              Path("tests/test_v5_task_constraints.py"),
+              Path("tests/test_v5_dynamic_model_fit.py"),
+              Path("tests/test_v5_independent_artifact_revalidation.py"),
+          ]
+          bootstrap_files = sorted(
+              str(path)
+              for path in Path(".github/workflows").glob("one-time-actions-*.yml")
+          )
+          failures = []
+          if install_definitions:
+              failures.append("install function definitions remain")
+          if install_calls:
+              failures.append("install calls remain in production modules")
+          if test_install_calls:
+              failures.append("install calls remain in tests")
+          if prohibited_existing:
+              failures.append("prohibited legacy modules remain")
+          if "import v5_executor" in runtime_text or "legacy_executor" in runtime_text:
+              failures.append("native runtime still depends on legacy executor")
+          if "constitutional_main()" not in pipeline_text:
+              failures.append("legacy CLI does not delegate to constitutional pipeline")
+          missing_required = [str(path) for path in required_files if not path.is_file()]
+          if missing_required:
+              failures.append("required constitutional files are missing")
+          if bootstrap_files:
+              failures.append("one-time bootstrap workflows leaked into final branch")
+
+          report = {
+              "schema_version": "v5-legacy-cleanup-report-2",
+              "status": "PASS" if not failures else "FAIL",
+              "production_roots": sorted(roots),
+              "production_reachable_modules": sorted(reachable),
+              "production_reachable_module_count": len(reachable),
+              "install_definitions": install_definitions,
+              "install_calls": install_calls,
+              "test_install_calls": test_install_calls,
+              "prohibited_legacy_modules_existing": prohibited_existing,
+              "native_runtime_imports_legacy_executor": (
+                  "import v5_executor" in runtime_text or "legacy_executor" in runtime_text
+              ),
+              "legacy_cli_delegates_to_constitutional_pipeline": (
+                  "constitutional_main()" in pipeline_text
+              ),
+              "required_files_missing": missing_required,
+              "bootstrap_workflows_in_final_branch": bootstrap_files,
+              "global_monkey_patching_allowed": False,
+              "cross_task_history_allowed": False,
+              "failures": failures,
+          }
+          output = root / "legacy-cleanup-report.json"
+          output.write_text(
+              json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(output.read_text(encoding="utf-8"))
+          if failures:
+              raise SystemExit("; ".join(failures))
+          PY
+
+      - name: Install pinned validation dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+
+      - name: Validate final Actions-authored tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m ruff check .
+          python -m compileall -q open-model-market tests tools
+          python -m unittest discover -s tests -p 'test*.py' -v
+
+      - name: Commit permanent cleanup evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add open-model-market/legacy-cleanup-report.json
+          git diff --cached --check
+          git commit -m "audit(v5): record constitutional legacy cleanup evidence"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
