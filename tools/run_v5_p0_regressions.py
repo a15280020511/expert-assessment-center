@@ -26,6 +26,7 @@ SPECS = (
     (TESTS / "test_v5_task_constraints.py", "ActualCompanyAuditTests", 2),
     (TESTS / "test_v5_independent_artifact_revalidation.py", "IndependentArtifactRevalidationTests", 3),
     (TESTS / "test_v5_critical_delivery_reliability.py", "V5CriticalDeliveryReliabilityTests", 4),
+    (TESTS / "test_v5_v4_contract_isolation.py", "V5V4ContractIsolationTests", 7),
 )
 
 

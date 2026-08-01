@@ -56,9 +56,10 @@ _SOURCE_REQUIRED_RE = re.compile(
 _QUANTITY_RE = re.compile(
     r"(?<![A-Za-z0-9_.])(?:第\s*)?(?P<lo>\d+(?:\.\d+)?)"
     r"(?:\s*(?:-|–|—|~|至|到)\s*(?P<hi>\d+(?:\.\d+)?))?"
-    r"\s*(?P<unit>SLA|秒|分钟|小时|天|周|月|年|米|公里|千米|公斤|克|人|次|%|％|"
+    r"\s*(?:个)?\s*(?P<unit>SLA|秒|分钟|小时|天|周|月|年|米|公里|千米|公斤|克|人|次|%|％|"
     r"seconds?|minutes?|hours?|days?|weeks?|months?|years?|meters?|"
-    r"kilometers?|kg|people|times?)(?![A-Za-z0-9_])",
+    r"kilometers?|kg|people|times?|元|块|人民币|rmb|cny|yuan|美元|美金|usd)"
+    r"(?![A-Za-z0-9_])",
     re.IGNORECASE,
 )
 _FACT_LINE_RE = re.compile(
@@ -177,6 +178,15 @@ def normalized_quantities(text: str) -> set[tuple[str, str, str]]:
         "次": "times",
         "times": "times",
         "sla": "sla",
+        "元": "yuan",
+        "块": "yuan",
+        "人民币": "yuan",
+        "rmb": "yuan",
+        "cny": "yuan",
+        "yuan": "yuan",
+        "美元": "usd",
+        "美金": "usd",
+        "usd": "usd",
         "%": "%",
     }
     values: set[tuple[str, str, str]] = set()

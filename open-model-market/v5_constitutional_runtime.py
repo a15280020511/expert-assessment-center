@@ -72,9 +72,13 @@ class ConstitutionalPromptPolicy:
                 )
             else:
                 structured.append(dict(row))
+        node_task = delivery_contract.project_task_for_node(
+            original_task,
+            node.output_contract,
+        )
         payload = cost_hardening.hardened_build_node_payload(
             node,
-            original_task,
+            node_task,
             structured,
         )
         constraints = compile_task_constraints(original_task)
@@ -146,7 +150,7 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
             budget,
             attempt_index,
         )
-        if attempt is None or attempt.status != "passed" or not attempt.answer:
+        if attempt is None or not attempt.answer:
             return attempt
 
         constraints = compile_task_constraints(original_task)
@@ -166,10 +170,13 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
         if not violations:
             return attempt
 
-        attempt.status = "quality_gate_failed"
         attempt.gate_reasons = list(
             dict.fromkeys([*attempt.gate_reasons, *violations])
         )
+        if attempt.status != "passed":
+            return attempt
+
+        attempt.status = "quality_gate_failed"
         attempt.failure = ExecutionFailure(
             category=FailureCategory.QUALITY_GATE_FAILED,
             retryable=False,
@@ -187,8 +194,15 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
     def _actual_company_audit(
         result: Mapping[str, Any],
     ) -> dict[str, Any]:
-        successful: list[dict[str, str]] = []
+        strict_successful: list[dict[str, str]] = []
+        degraded: list[dict[str, str]] = []
+        resolved_nodes: list[dict[str, str]] = []
         called: list[dict[str, str]] = []
+        strict_statuses = {
+            "success",
+            "success_retried",
+            "success_recovered",
+        }
         for node in result.get("node_results", []):
             if not isinstance(node, Mapping):
                 continue
@@ -199,15 +213,19 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
                 or ""
             )
             status = str(node.get("status") or "")
-            successful_node = status.startswith("success") and bool(resolved)
-            if successful_node:
-                successful.append(
-                    {
-                        "node_id": node_id,
-                        "model": resolved,
-                        "company": canonical_model_company(resolved),
-                    }
-                )
+            resolved_node = status.startswith("success") and bool(resolved)
+            row = {
+                "node_id": node_id,
+                "model": resolved,
+                "company": canonical_model_company(resolved),
+                "status": status,
+            }
+            if resolved_node:
+                resolved_nodes.append(row)
+            if status in strict_statuses and resolved:
+                strict_successful.append(row)
+            elif status.startswith("success_degraded") and resolved:
+                degraded.append(row)
 
             node_attempt_models: list[str] = []
             attempts = node.get("attempts", [])
@@ -236,7 +254,7 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
                     }
                 )
 
-            if successful_node and not node_attempt_models:
+            if resolved_node and not node_attempt_models:
                 called.append(
                     {
                         "node_id": node_id,
@@ -263,16 +281,21 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
         return {
             "status": "FAIL" if duplicates or unresolved else "PASS",
             "policy": "recompute-from-all-actual-called-models",
-            "successful_node_models": successful,
+            "successful_node_models": strict_successful,
+            "strict_successful_node_models": strict_successful,
+            "degraded_node_models": degraded,
+            "resolved_node_models": resolved_nodes,
             "all_called_models": called,
             "duplicate_called_companies_across_nodes": duplicates,
             "duplicate_successful_companies": duplicates,
             "unresolved_called_companies": unresolved,
             "same_node_retry_is_not_a_second_expert": True,
             "failed_calls_are_included": True,
+            "degraded_nodes_are_not_labeled_strict_success": True,
             "resolved_model_fallback_used_only_when_attempt_evidence_missing": True,
             "cross_task_history_used": False,
         }
+
 
     @staticmethod
     def _strict_limits(
