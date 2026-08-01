@@ -73,11 +73,17 @@ class ConstitutionalPromptPolicy:
             else:
                 structured.append(dict(row))
         payload = cost_hardening.hardened_build_node_payload(
-            node, original_task, structured
+            node,
+            original_task,
+            structured,
         )
         constraints = compile_task_constraints(original_task)
         messages = payload.get("messages")
-        if isinstance(messages, list) and messages and isinstance(messages[0], Mapping):
+        if (
+            isinstance(messages, list)
+            and messages
+            and isinstance(messages[0], Mapping)
+        ):
             system = dynamic_prompt.dynamic_system_prompt(node)
             constitutional = json.dumps(
                 constraints.to_dict(),
@@ -193,7 +199,8 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
                 or ""
             )
             status = str(node.get("status") or "")
-            if status.startswith("success") and resolved:
+            successful_node = status.startswith("success") and bool(resolved)
+            if successful_node:
                 successful.append(
                     {
                         "node_id": node_id,
@@ -201,7 +208,12 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
                         "company": canonical_model_company(resolved),
                     }
                 )
-            for attempt in node.get("attempts", []):
+
+            node_attempt_models: list[str] = []
+            attempts = node.get("attempts", [])
+            if not isinstance(attempts, list):
+                attempts = []
+            for attempt in attempts:
                 if not isinstance(attempt, Mapping):
                     continue
                 model = str(
@@ -209,18 +221,31 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
                     or attempt.get("model")
                     or ""
                 )
-                if model:
-                    called.append(
-                        {
-                            "node_id": node_id,
-                            "attempt_kind": str(
-                                attempt.get("attempt_kind") or ""
-                            ),
-                            "model": model,
-                            "company": canonical_model_company(model),
-                            "status": str(attempt.get("status") or ""),
-                        }
-                    )
+                if not model:
+                    continue
+                node_attempt_models.append(model)
+                called.append(
+                    {
+                        "node_id": node_id,
+                        "attempt_kind": str(
+                            attempt.get("attempt_kind") or ""
+                        ),
+                        "model": model,
+                        "company": canonical_model_company(model),
+                        "status": str(attempt.get("status") or ""),
+                    }
+                )
+
+            if successful_node and not node_attempt_models:
+                called.append(
+                    {
+                        "node_id": node_id,
+                        "attempt_kind": "resolved-model-evidence-fallback",
+                        "model": resolved,
+                        "company": canonical_model_company(resolved),
+                        "status": status,
+                    }
+                )
 
         by_company: dict[str, set[str]] = {}
         for row in called:
@@ -231,7 +256,9 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
             if len(nodes) > 1
         }
         unresolved = [
-            row for row in called if not row["company"] or row["company"] == "unknown"
+            row
+            for row in called
+            if not row["company"] or row["company"] == "unknown"
         ]
         return {
             "status": "FAIL" if duplicates or unresolved else "PASS",
@@ -239,9 +266,11 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
             "successful_node_models": successful,
             "all_called_models": called,
             "duplicate_called_companies_across_nodes": duplicates,
+            "duplicate_successful_companies": duplicates,
             "unresolved_called_companies": unresolved,
             "same_node_retry_is_not_a_second_expert": True,
             "failed_calls_are_included": True,
+            "resolved_model_fallback_used_only_when_attempt_evidence_missing": True,
             "cross_task_history_used": False,
         }
 
@@ -266,12 +295,18 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
         )
         constraints = compile_task_constraints(original_task)
         if "limits" in kwargs:
-            kwargs["limits"] = self._strict_limits(kwargs.get("limits"), constraints)
+            kwargs["limits"] = self._strict_limits(
+                kwargs.get("limits"),
+                constraints,
+            )
         output_dir = kwargs.get("output_dir")
         root = Path(output_dir) if output_dir is not None else None
         if root is not None:
             root.mkdir(parents=True, exist_ok=True)
-            self._write_json(root / "task-constraints.json", constraints.to_dict())
+            self._write_json(
+                root / "task-constraints.json",
+                constraints.to_dict(),
+            )
 
         result = super().execute_graph(*args, **kwargs)
         company_audit = self._actual_company_audit(result)
@@ -304,8 +339,14 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
             failed_reason = "degradation-not-authorized-by-user"
 
         if root is not None:
-            self._write_json(root / "actual-model-company-audit.json", company_audit)
-            self._write_json(root / "evidence-integrity.json", evidence_audit)
+            self._write_json(
+                root / "actual-model-company-audit.json",
+                company_audit,
+            )
+            self._write_json(
+                root / "evidence-integrity.json",
+                evidence_audit,
+            )
 
         if failed_reason:
             result["status"] = "failed"
@@ -316,7 +357,11 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
             if root is not None:
                 self._write_json(
                     root / "v5-execution-summary.json",
-                    {key: value for key, value in result.items() if key != "node_results"},
+                    {
+                        key: value
+                        for key, value in result.items()
+                        if key != "node_results"
+                    },
                 )
                 (root / "v5-final-report.md").write_text(
                     "# V5 execution failed\n\n"
@@ -328,7 +373,11 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
         if root is not None:
             self._write_json(
                 root / "v5-execution-summary.json",
-                {key: value for key, value in result.items() if key != "node_results"},
+                {
+                    key: value
+                    for key, value in result.items()
+                    if key != "node_results"
+                },
             )
         return result
 
