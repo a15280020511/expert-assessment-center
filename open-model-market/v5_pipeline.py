@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """End-to-end constitutional V5 planning and execution.
 
-All business choices are derived from the current task/resource matrix and the
-current catalog snapshot.  Fixed values are used only as platform safety
-ceilings, never as the ordinary task architecture.
+Business choices are derived from the current task/resource matrix and the
+current catalog snapshot. Fixed values are platform safety ceilings only.
 """
 from __future__ import annotations
 
@@ -31,16 +30,15 @@ from v5_model_company import (
     DEFAULT_INTELLIGENCE_RANKING_LIMIT,
     candidate_company,
 )
-from v5_planning_diagnostics import (
-    build_candidate_generation_failure_report,
-    build_infeasibility_report,
-)
+from v5_planning_diagnostics import build_infeasibility_report
+from v5_recovery_runtime import build_production_runtime
 from v5_runtime import ProductionRuntime, RuntimeConfig
 
 ABSOLUTE_CANDIDATES_PER_WORK_CEILING = 64
 _DEGRADED_AUTHORIZATION_RE = re.compile(
     r"(?:允许|接受|可以)(?:部分|降级|不完整)(?:结果|交付)|"
-    r"(?:partial|degraded|incomplete)\s+(?:result|delivery)\s+(?:is\s+)?(?:allowed|acceptable)",
+    r"(?:partial|degraded|incomplete)\s+(?:result|delivery)\s+"
+    r"(?:is\s+)?(?:allowed|acceptable)",
     re.IGNORECASE,
 )
 
@@ -61,28 +59,46 @@ def _write_json(path: Path, value: Any) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Compile and execute the standalone constitutional V5 expert DAG."
+        description=(
+            "Compile and execute the standalone constitutional V5 expert DAG."
+        )
     )
     parser.add_argument("--task", help="Task text. Can also use EXPERT_TASK.")
     parser.add_argument("--config", default=str(market.DEFAULT_CONFIG))
     parser.add_argument("--output-dir", default="v5-artifacts")
-    parser.add_argument("--quality-tier", choices=["budget", "value", "quality"])
+    parser.add_argument(
+        "--quality-tier",
+        choices=["budget", "value", "quality"],
+    )
     parser.add_argument(
         "--ranking-limit",
         type=int,
-        help="Emergency catalog search ceiling; the task-adaptive search may stop earlier.",
+        help=(
+            "Emergency catalog search ceiling; adaptive search may stop earlier."
+        ),
     )
     parser.add_argument("--max-estimated-cost-usd")
     parser.add_argument("--max-completion-tokens", type=int)
-    parser.add_argument("--reasoning-effort", choices=["low", "medium", "high"])
-    parser.add_argument("--catalog-file", help="Deterministic catalog fixture for tests.")
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=["low", "medium", "high"],
+    )
+    parser.add_argument(
+        "--catalog-file",
+        help="Deterministic catalog fixture for tests.",
+    )
     parser.add_argument("--require-live-catalog", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--endpoint-file", help="Deterministic model endpoint fixture keyed by model ID.")
+    parser.add_argument(
+        "--endpoint-file",
+        help="Deterministic model endpoint fixture keyed by model ID.",
+    )
     parser.add_argument(
         "--maximum-candidates-per-work",
         type=int,
-        help="Emergency per-work candidate ceiling; initial breadth is computed per task.",
+        help=(
+            "Emergency per-work candidate ceiling; initial breadth is task-derived."
+        ),
     )
     parser.add_argument("--maximum-total-calls", type=int, default=16)
     parser.add_argument("--maximum-recovery-calls", type=int, default=2)
@@ -91,13 +107,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--quality-tolerance-pct",
         type=float,
         default=2.0,
-        help="Compatibility option retained for the current optimizer interface.",
+        help="Compatibility option retained for the optimizer interface.",
     )
-    parser.add_argument("--solver-timeout-seconds", type=float, default=20.0)
+    parser.add_argument(
+        "--solver-timeout-seconds",
+        type=float,
+        default=20.0,
+    )
     return parser
 
 
-def _rank_v5_models(models: Mapping[str, Any], profile: Any, run: Any) -> list[Any]:
+def _rank_v5_models(
+    models: Mapping[str, Any],
+    profile: Any,
+    run: Any,
+) -> list[Any]:
     """Build a deduplicated multi-channel pool before CP-SAT optimization."""
     eligible: list[Any] = []
     for model in models.values():
@@ -111,13 +135,21 @@ def _rank_v5_models(models: Mapping[str, Any], profile: Any, run: Any) -> list[A
             continue
         if market._expired(getattr(model, "expiration_date", None)):
             continue
-        if int(getattr(model, "context_length", 0) or 0) < int(profile.requested_context):
+        if int(getattr(model, "context_length", 0) or 0) < int(
+            profile.requested_context
+        ):
             continue
         if int(getattr(model, "max_completion_tokens", 0) or 0) <= 0:
             continue
-        if getattr(model, "input_modalities", None) and "text" not in model.input_modalities:
+        if (
+            getattr(model, "input_modalities", None)
+            and "text" not in model.input_modalities
+        ):
             continue
-        if getattr(model, "output_modalities", None) and "text" not in model.output_modalities:
+        if (
+            getattr(model, "output_modalities", None)
+            and "text" not in model.output_modalities
+        ):
             continue
         if (
             getattr(model, "prompt_price_per_million", None) is None
@@ -125,13 +157,17 @@ def _rank_v5_models(models: Mapping[str, Any], profile: Any, run: Any) -> list[A
         ):
             continue
         intelligence_rank = int(
-            (getattr(model, "ranks", {}) or {}).get("intelligence-high-to-low", 10_000)
+            (getattr(model, "ranks", {}) or {}).get(
+                "intelligence-high-to-low",
+                10_000,
+            )
         )
         fit, reasons = market._task_fit(model, profile)
         price = float(model.blended_price_per_million or math.inf)
         context_ratio = min(
             1.0,
-            int(model.context_length) / max(1, int(profile.requested_context) * 4),
+            int(model.context_length)
+            / max(1, int(profile.requested_context) * 4),
         )
         intelligence = 1.0 / max(1, intelligence_rank)
         value = intelligence / max(0.25, price)
@@ -159,8 +195,21 @@ def _rank_v5_models(models: Mapping[str, Any], profile: Any, run: Any) -> list[A
 
     limit = max(2, int(run.ranking_limit))
     channels = [
-        sorted(eligible, key=lambda row: (int(row.components["intelligence_rank"]), row.id)),
-        sorted(eligible, key=lambda row: (-float(row.components["task_fit"]), -float(row.score), row.id)),
+        sorted(
+            eligible,
+            key=lambda row: (
+                int(row.components["intelligence_rank"]),
+                row.id,
+            ),
+        ),
+        sorted(
+            eligible,
+            key=lambda row: (
+                -float(row.components["task_fit"]),
+                -float(row.score),
+                row.id,
+            ),
+        ),
         sorted(
             eligible,
             key=lambda row: (
@@ -177,12 +226,21 @@ def _rank_v5_models(models: Mapping[str, Any], profile: Any, run: Any) -> list[A
                 row.id,
             ),
         ),
-        sorted(eligible, key=lambda row: (-float(row.components["context_fit"]), -float(row.score), row.id)),
+        sorted(
+            eligible,
+            key=lambda row: (
+                -float(row.components["context_fit"]),
+                -float(row.score),
+                row.id,
+            ),
+        ),
     ]
     selected: list[Any] = []
     seen: set[str] = set()
     index = 0
-    while len(selected) < limit and any(index < len(channel) for channel in channels):
+    while len(selected) < limit and any(
+        index < len(channel) for channel in channels
+    ):
         for channel in channels:
             if index >= len(channel):
                 continue
@@ -197,9 +255,13 @@ def _rank_v5_models(models: Mapping[str, Any], profile: Any, run: Any) -> list[A
     return selected
 
 
-def _runtime_from_args(args: argparse.Namespace, run: Any) -> ProductionRuntime:
+def _runtime_from_args(
+    args: argparse.Namespace,
+    run: Any,
+) -> ProductionRuntime:
     candidate_ceiling = int(
-        args.maximum_candidates_per_work or ABSOLUTE_CANDIDATES_PER_WORK_CEILING
+        args.maximum_candidates_per_work
+        or ABSOLUTE_CANDIDATES_PER_WORK_CEILING
     )
     if not 2 <= candidate_ceiling <= ABSOLUTE_CANDIDATES_PER_WORK_CEILING:
         raise ValueError(
@@ -215,9 +277,12 @@ def _runtime_from_args(args: argparse.Namespace, run: Any) -> ProductionRuntime:
         live_catalog_required=bool(args.require_live_catalog),
         provider_lock_required=True,
         maximum_candidates_per_work=candidate_ceiling,
-        solver_timeout_seconds=max(1.0, float(args.solver_timeout_seconds)),
+        solver_timeout_seconds=max(
+            1.0,
+            float(args.solver_timeout_seconds),
+        ),
     )
-    return ProductionRuntime(config)
+    return build_production_runtime(config)
 
 
 def _validated_budget(
@@ -242,12 +307,22 @@ def _validated_budget(
     )
 
 
-def _resource_shape(resources: Mapping[str, Any]) -> dict[str, int | bool]:
+def _resource_shape(
+    resources: Mapping[str, Any],
+) -> dict[str, int | bool]:
     interpretations = [
-        row for row in resources.get("interpretations", []) if isinstance(row, Mapping)
+        row
+        for row in resources.get("interpretations", [])
+        if isinstance(row, Mapping)
     ]
     work_counts = [
-        len([item for item in row.get("atomic_work", []) if isinstance(item, Mapping)])
+        len(
+            [
+                item
+                for item in row.get("atomic_work", [])
+                if isinstance(item, Mapping)
+            ]
+        )
         for row in interpretations
     ]
     signals = resources.get("task_signals", {})
@@ -257,9 +332,15 @@ def _resource_shape(resources: Mapping[str, Any]) -> dict[str, int | bool]:
     return {
         "maximum_atomic_work": max(work_counts or [1]),
         "interpretation_count": max(1, len(interpretations)),
-        "explicit_contract_items": int(structural.get("explicit_contract_items", 0) or 0),
-        "explicit_output_contract": bool(structural.get("explicit_output_contract")),
-        "independence_markers": int(structural.get("independence_markers", 0) or 0),
+        "explicit_contract_items": int(
+            structural.get("explicit_contract_items", 0) or 0
+        ),
+        "explicit_output_contract": bool(
+            structural.get("explicit_output_contract")
+        ),
+        "independence_markers": int(
+            structural.get("independence_markers", 0) or 0
+        ),
     }
 
 
@@ -280,14 +361,17 @@ def _delivery_limits(
     else:
         coverage = 1.0
         allow = False
-    min_nodes = 1 if int(shape["maximum_atomic_work"]) <= 1 else min(
-        int(shape["maximum_atomic_work"]),
-        2,
+    min_nodes = (
+        1
+        if int(shape["maximum_atomic_work"]) <= 1
+        else min(int(shape["maximum_atomic_work"]), 2)
     )
     return coverage, min_nodes, allow, {
         "user_authorized_degradation": authorized,
         "high_stakes": bool(profile.high_stakes),
-        "explicit_output_contract": bool(shape["explicit_output_contract"]),
+        "explicit_output_contract": bool(
+            shape["explicit_output_contract"]
+        ),
         "policy": "task-risk-authorization-derived",
     }
 
@@ -307,13 +391,21 @@ def _planning_limits(
         "maximum_atomic_work": 1,
         "explicit_output_contract": False,
     }
+    fallback_profile = type(
+        "Profile",
+        (),
+        {"high_stakes": False},
+    )()
     coverage, min_nodes, allow, _ = _delivery_limits(
         task,
-        profile or type("Profile", (), {"high_stakes": False})(),
+        profile or fallback_profile,
         shape,
     )
     return GraphLimits(
-        max_nodes=max(1, min(planning_nodes, total_calls - recovery_calls)),
+        max_nodes=max(
+            1,
+            min(planning_nodes, total_calls - recovery_calls),
+        ),
         max_edges=64,
         max_stages=8,
         max_model_calls=total_calls,
@@ -339,19 +431,36 @@ def _search_schedule(
         runtime.config.total_call_limit,
         max(2, work, 1 + independence),
     )
-    initial_rank = max(10, 4 * company_need, 3 * work, 2 * min(contract, 24))
+    initial_rank = max(
+        10,
+        4 * company_need,
+        3 * work,
+        2 * min(contract, 24),
+    )
     initial_rank = min(ranking_ceiling, initial_rank)
-    initial_per_work = max(4, company_need + runtime.config.recovery_call_limit)
-    initial_per_work = min(runtime.config.maximum_candidates_per_work, initial_per_work)
+    initial_per_work = max(
+        4,
+        company_need + runtime.config.recovery_call_limit,
+    )
+    initial_per_work = min(
+        runtime.config.maximum_candidates_per_work,
+        initial_per_work,
+    )
 
     schedule: list[tuple[int, int]] = []
     rank = initial_rank
     per_work = initial_per_work
     while True:
         schedule.append((rank, per_work))
-        if rank >= ranking_ceiling and per_work >= runtime.config.maximum_candidates_per_work:
+        if (
+            rank >= ranking_ceiling
+            and per_work >= runtime.config.maximum_candidates_per_work
+        ):
             break
-        next_rank = min(ranking_ceiling, max(rank + 1, int(math.ceil(rank * 1.6))))
+        next_rank = min(
+            ranking_ceiling,
+            max(rank + 1, int(math.ceil(rank * 1.6))),
+        )
         next_per_work = min(
             runtime.config.maximum_candidates_per_work,
             max(per_work + 1, int(math.ceil(per_work * 1.5))),
@@ -365,8 +474,14 @@ def _search_schedule(
 def _optimization_value(optimization: Mapping[str, Any]) -> float:
     graph = optimization.get("execution_graph", {})
     graph = graph if isinstance(graph, Mapping) else {}
-    quality = max(0.0, float(graph.get("estimated_quality", 0.0) or 0.0))
-    cost = max(0.0, float(graph.get("estimated_total_cost", 0.0) or 0.0))
+    quality = max(
+        0.0,
+        float(graph.get("estimated_quality", 0.0) or 0.0),
+    )
+    cost = max(
+        0.0,
+        float(graph.get("estimated_total_cost", 0.0) or 0.0),
+    )
     return quality / (0.0001 + cost)
 
 
@@ -385,8 +500,12 @@ def _annotate_market(
             "catalog_source": catalog_source,
             "endpoint_source": endpoint_source,
             "catalog_snapshot_id": catalog_snapshot_id,
-            "candidate_pool_policy": "task-adaptive-multi-channel-deduplicated",
-            "candidate_pool_expansion_policy": "feasibility-and-marginal-value-driven",
+            "candidate_pool_policy": (
+                "task-adaptive-multi-channel-deduplicated"
+            ),
+            "candidate_pool_expansion_policy": (
+                "feasibility-and-marginal-value-driven"
+            ),
             "model_company_policy": "task-global-all-different",
             "ranked_model_count": len(ranked),
             "ranked_company_count": len(set(companies)),
@@ -400,9 +519,13 @@ def _annotate_market(
             "rank": index,
             "model": model.id,
             "model_company": candidate_company(model),
-            "official_intelligence_rank": (model.ranks or {}).get("intelligence-high-to-low"),
+            "official_intelligence_rank": (model.ranks or {}).get(
+                "intelligence-high-to-low"
+            ),
             "prompt_usd_per_million": model.prompt_price_per_million,
-            "completion_usd_per_million": model.completion_price_per_million,
+            "completion_usd_per_million": (
+                model.completion_price_per_million
+            ),
             "context_length": model.context_length,
             "max_completion_tokens": model.max_completion_tokens,
             "components": dict(model.components),
@@ -419,16 +542,29 @@ def main(
     args = build_parser().parse_args(argv)
     run = market.build_run_config(args)
     ranking_ceiling = int(
-        args.ranking_limit or min(DEFAULT_INTELLIGENCE_RANKING_LIMIT, run.ranking_limit)
+        args.ranking_limit
+        or min(
+            DEFAULT_INTELLIGENCE_RANKING_LIMIT,
+            run.ranking_limit,
+        )
     )
-    ranking_ceiling = max(5, min(DEFAULT_INTELLIGENCE_RANKING_LIMIT, ranking_ceiling))
+    ranking_ceiling = max(
+        5,
+        min(
+            DEFAULT_INTELLIGENCE_RANKING_LIMIT,
+            ranking_ceiling,
+        ),
+    )
     run = replace(run, ranking_limit=ranking_ceiling)
     runtime = runtime or _runtime_from_args(args, run)
     output = Path(run.output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    total_calls, recovery_calls, planning_nodes, anomaly_budget = _validated_budget(
-        args, run, runtime
-    )
+    (
+        total_calls,
+        recovery_calls,
+        planning_nodes,
+        anomaly_budget,
+    ) = _validated_budget(args, run, runtime)
     _write_json(output / "v5-runtime-config.json", runtime.describe())
 
     profile = classify_production_task(run.task, run)
@@ -451,10 +587,20 @@ def main(
         profile=profile,
         resource_shape=shape,
     )
-    _, _, _, delivery_decision = _delivery_limits(run.task, profile, shape)
+    _, _, _, delivery_decision = _delivery_limits(
+        run.task,
+        profile,
+        shape,
+    )
 
-    endpoint_fixture = _load_json(args.endpoint_file) if args.endpoint_file else None
-    schedule = _search_schedule(shape, runtime, min(ranking_ceiling, len(all_ranked)))
+    endpoint_fixture = (
+        _load_json(args.endpoint_file) if args.endpoint_file else None
+    )
+    schedule = _search_schedule(
+        shape,
+        runtime,
+        min(ranking_ceiling, len(all_ranked)),
+    )
     trace: list[dict[str, Any]] = []
     incumbent: dict[str, Any] | None = None
     incumbent_value = -math.inf
@@ -473,7 +619,9 @@ def main(
             allow_synthetic = False
         elif run.dry_run and run.catalog_file:
             endpoint_payloads = {}
-            endpoint_source = "synthetic-fixture-derived-from-model-catalog"
+            endpoint_source = (
+                "synthetic-fixture-derived-from-model-catalog"
+            )
             allow_synthetic = True
         else:
             endpoint_payloads = fetch_live_endpoint_payloads(
@@ -481,7 +629,9 @@ def main(
                 run,
                 maximum_models=rank_width,
             )
-            endpoint_source = "openrouter-live-model-endpoints-bounded-current-run"
+            endpoint_source = (
+                "openrouter-live-model-endpoints-bounded-current-run"
+            )
             allow_synthetic = False
 
         snapshot = runtime.build_catalog_snapshot(
@@ -498,24 +648,36 @@ def main(
                 ranking_limit=rank_width,
                 allow_synthetic_fixture=allow_synthetic,
             )
-            candidate_graph = runtime.planner_policy.generate_candidate_graph(
-                resources,
-                compiled_market,
-                maximum_per_group=per_work,
+            candidate_graph = (
+                runtime.planner_policy.generate_candidate_graph(
+                    resources,
+                    compiled_market,
+                    maximum_per_group=per_work,
+                )
             )
-            optimization = runtime.planner_policy.optimize_execution_graph(
-                candidate_graph,
-                limits=limits,
-                quality_tolerance_pct=max(
-                    0.0,
-                    min(20.0, float(args.quality_tolerance_pct)),
-                ),
-                solver_timeout_seconds=runtime.config.solver_timeout_seconds,
+            optimization = (
+                runtime.planner_policy.optimize_execution_graph(
+                    candidate_graph,
+                    limits=limits,
+                    quality_tolerance_pct=max(
+                        0.0,
+                        min(
+                            20.0,
+                            float(args.quality_tolerance_pct),
+                        ),
+                    ),
+                    solver_timeout_seconds=(
+                        runtime.config.solver_timeout_seconds
+                    ),
+                )
             )
             value = _optimization_value(optimization)
-            improvement = None if incumbent is None else (
-                value - incumbent_value
-            ) / max(abs(incumbent_value), 1e-9)
+            improvement = (
+                None
+                if incumbent is None
+                else (value - incumbent_value)
+                / max(abs(incumbent_value), 1e-9)
+            )
             trace.append(
                 {
                     "attempt": attempt_index,
@@ -536,7 +698,7 @@ def main(
                 final_endpoint_source = endpoint_source
             if improvement is not None and improvement <= 0.01:
                 break
-        except Exception as exc:  # noqa: BLE001 - recorded as search evidence
+        except Exception as exc:  # noqa: BLE001 - search evidence
             last_error = exc
             trace.append(
                 {
@@ -555,22 +717,34 @@ def main(
             "resource_shape": shape,
             "delivery_decision": delivery_decision,
             "ranking_emergency_ceiling": ranking_ceiling,
-            "candidate_emergency_ceiling_per_work": runtime.config.maximum_candidates_per_work,
+            "candidate_emergency_ceiling_per_work": (
+                runtime.config.maximum_candidates_per_work
+            ),
             "attempts": trace,
             "cross_task_history_used": False,
         },
     )
 
-    if incumbent is None or final_market is None or final_candidates is None or final_snapshot is None:
+    if (
+        incumbent is None
+        or final_market is None
+        or final_candidates is None
+        or final_snapshot is None
+    ):
         report = build_infeasibility_report(
             final_candidates or {"candidates": []},
             limits,
-            message=str(last_error or "adaptive search exhausted without a feasible graph"),
+            message=str(
+                last_error
+                or "adaptive search exhausted without a feasible graph"
+            ),
         )
         report["adaptive_search_trace"] = trace
         _write_json(output / "v5-planning-infeasibility.json", report)
         write_manifest(output)
-        raise market.ExpertTeamError(f"{report['code']}: {report['message']}")
+        raise market.ExpertTeamError(
+            f"{report['code']}: {report['message']}"
+        )
 
     _annotate_market(
         final_market,
@@ -580,7 +754,10 @@ def main(
         catalog_snapshot_id=final_snapshot.snapshot_id,
         search_trace=trace,
     )
-    _write_json(output / "catalog-snapshot.json", final_snapshot.to_dict())
+    _write_json(
+        output / "catalog-snapshot.json",
+        final_snapshot.to_dict(),
+    )
     _write_json(output / "v5-model-endpoint-market.json", final_market)
     _write_json(output / "v5-candidate-graph.json", final_candidates)
 
@@ -595,11 +772,17 @@ def main(
         "quality_tier": run.quality_tier,
         "ranking_emergency_ceiling": ranking_ceiling,
         "selected_ranking_width": len(final_ranked),
-        "candidate_emergency_ceiling_per_work": runtime.config.maximum_candidates_per_work,
+        "candidate_emergency_ceiling_per_work": (
+            runtime.config.maximum_candidates_per_work
+        ),
         "delivery_policy": delivery_decision,
         "model_company_policy": "task-global-all-different",
         "runtime_config_sha256": sha256(
-            json.dumps(runtime.config.to_dict(), sort_keys=True, default=str).encode("utf-8")
+            json.dumps(
+                runtime.config.to_dict(),
+                sort_keys=True,
+                default=str,
+            ).encode("utf-8")
         ).hexdigest(),
     }
     optimization["catalog_snapshot_id"] = final_snapshot.snapshot_id
@@ -610,14 +793,22 @@ def main(
         "optimization": optimization,
     }
     _write_json(output / "v5-optimization.json", optimization)
-    _write_json(output / "v5-execution-graph.json", optimization["execution_graph"])
+    _write_json(
+        output / "v5-execution-graph.json",
+        optimization["execution_graph"],
+    )
 
     benchmark = planning_benchmark(planner)
     write_benchmark(output / "v5-planning-benchmark.json", benchmark)
-    graph = ExecutionGraph.from_mapping(optimization["execution_graph"])
+    graph = ExecutionGraph.from_mapping(
+        optimization["execution_graph"]
+    )
 
     if run.dry_run:
-        requests = [runtime.build_node_payload(node, run.task, []) for node in graph.nodes]
+        requests = [
+            runtime.build_node_payload(node, run.task, [])
+            for node in graph.nodes
+        ]
         _write_json(
             output / "v5-dry-run.json",
             {
@@ -650,7 +841,9 @@ def main(
     )
     _write_json(output / "v5-result.json", result)
     write_manifest(output)
-    print(f"V5 execution completed: {output / 'v5-final-report.md'}")
+    print(
+        f"V5 execution completed: {output / 'v5-final-report.md'}"
+    )
     return 0
 
 
