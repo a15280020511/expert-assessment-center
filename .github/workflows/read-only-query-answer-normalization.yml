@@ -1,0 +1,51 @@
+name: Read-Only Query Answer Normalization Run
+
+on:
+  push:
+    branches:
+      - "bootstrap/v5-deterministic-answer-normalization-20260802"
+    paths:
+      - ".github/workflows/read-only-query-answer-normalization.yml"
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  query:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      TARGET_SHA: 6d1fdb7f1359bdc1ff1994c2a0f994e3951e5c90
+      BRANCH: bootstrap/v5-deterministic-answer-normalization-20260802
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ env.BRANCH }}
+          persist-credentials: true
+      - name: Query exact qualification run
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api \
+            "/repos/$REPOSITORY/actions/workflows/one-time-v5-deterministic-answer-normalization.yml/runs?branch=$BRANCH&event=push&per_page=100" \
+            > runs.json
+          jq -e --arg sha "$TARGET_SHA" '
+            [.workflow_runs[] | select(.head_sha == $sha)]
+            | if length == 1 then .[0] else error("expected exactly one run") end
+            | {
+                run_id: (.id | tostring),
+                head_sha: .head_sha,
+                status: .status,
+                conclusion: .conclusion,
+                created_at: .created_at,
+                updated_at: .updated_at
+              }
+          ' runs.json > .github/answer-normalization-run-query.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/answer-normalization-run-query.json
+          git commit -m "audit(v5): record answer-normalization qualification run"
+          git push origin "HEAD:refs/heads/$BRANCH"
