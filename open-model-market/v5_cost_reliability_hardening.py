@@ -11,11 +11,12 @@ import os
 from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
-import v5_executor as executor
+import v5_native_primitives as native
 import v5_planner as planner
 from execution_graph import SelectedNode
 
-MIN_PROVIDER_RELIABILITY = 0.90
+ABSOLUTE_MIN_PROVIDER_RELIABILITY = 0.80
+MIN_PROVIDER_RELIABILITY = ABSOLUTE_MIN_PROVIDER_RELIABILITY
 COST_UNCERTAINTY_MULTIPLIER = 1.18
 MAX_UPSTREAM_CHARS_PER_NODE = 6_000
 MAX_UPSTREAM_CHARS_TOTAL = 24_000
@@ -44,9 +45,8 @@ _VISIBLE_FLOOR_BY_FUNCTION = {
 
 _ORIGINAL_ESTIMATED_COST = planner._estimated_cost
 _ORIGINAL_CANDIDATE_FOR = planner._candidate_for
-_ORIGINAL_BUILD_NODE_PAYLOAD = executor.build_node_payload
-_ORIGINAL_EXTRACT_ANSWER = executor._extract_answer
-_INSTALLED = False
+_ORIGINAL_BUILD_NODE_PAYLOAD = native.build_node_payload
+_ORIGINAL_EXTRACT_ANSWER = native.extract_answer
 
 
 def _clamp(value: float) -> float:
@@ -67,6 +67,27 @@ def _float(value: Any, default: float = 0.0) -> float:
         return default
     return number if math.isfinite(number) else default
 
+
+
+def provider_reliability_floor(works: Sequence[Mapping[str, Any]]) -> float:
+    """Derive the endpoint reliability floor from current work consequence only."""
+    rows = [row for row in works if isinstance(row, Mapping)]
+    if not rows:
+        return ABSOLUTE_MIN_PROVIDER_RELIABILITY
+    error_cost = max(
+        (_clamp(_float(row.get("error_cost"), 0.5)) for row in rows),
+        default=0.5,
+    )
+    importance = max(
+        (_clamp(_float(row.get("importance"), 0.5)) for row in rows),
+        default=0.5,
+    )
+    risk = (error_cost + importance) / 2.0
+    return round(
+        ABSOLUTE_MIN_PROVIDER_RELIABILITY
+        + (1.0 - ABSOLUTE_MIN_PROVIDER_RELIABILITY) * risk,
+        6,
+    )
 
 def completion_envelope(work: Mapping[str, Any], endpoint_max: int) -> int:
     """Return a conservative but bounded completion envelope."""
@@ -108,15 +129,23 @@ def conservative_estimated_cost(
         + completion_tokens * _float(endpoint.get("completion_price_per_million"))
     ) / 1_000_000
     reliability = _clamp(_float(endpoint.get("reliability"), 0.95))
-    reliability_reserve = 1.0 + max(0.0, 0.98 - reliability) * 1.75
-    return round(base * COST_UNCERTAINTY_MULTIPLIER * reliability_reserve, 8)
+    reliability_reserve = 1.0 / max(
+        ABSOLUTE_MIN_PROVIDER_RELIABILITY, reliability
+    )
+    return round(
+        base * COST_UNCERTAINTY_MULTIPLIER * reliability_reserve,
+        8,
+    )
 
 
 def hardened_candidate_for(*args: Any, **kwargs: Any) -> Any:
     """Qualify a candidate only from current endpoint and current task data."""
     endpoint = args[4] if len(args) > 4 and isinstance(args[4], Mapping) else {}
     reliability = _clamp(_float(endpoint.get("reliability"), 0.0))
-    if reliability < MIN_PROVIDER_RELIABILITY:
+    works = args[2] if len(args) > 2 and isinstance(args[2], Sequence) else ()
+    works = [row for row in works if isinstance(row, Mapping)]
+    reliability_floor = provider_reliability_floor(works)
+    if reliability < reliability_floor:
         return None
     candidate = _ORIGINAL_CANDIDATE_FOR(*args, **kwargs)
     if candidate is None:
@@ -124,11 +153,11 @@ def hardened_candidate_for(*args: Any, **kwargs: Any) -> Any:
 
     failure = _clamp(
         max(candidate.failure_probability, 1.0 - reliability)
-        + (1.0 - reliability) * 0.50
     )
-    estimated_cost = candidate.estimated_cost * (1.0 + failure * 0.40)
+    estimated_cost = candidate.estimated_cost / max(
+        reliability_floor, reliability
+    )
 
-    works = args[2] if len(args) > 2 and isinstance(args[2], Sequence) else ()
     endpoint_max = _int(endpoint.get("max_completion_tokens"), 0)
     recommended = sum(
         completion_envelope(work, endpoint_max)
@@ -140,7 +169,7 @@ def hardened_candidate_for(*args: Any, **kwargs: Any) -> Any:
     profile.update({
         "recommended_output_allowance_tokens": min(maximum, max(1_024, recommended)),
         "cost_estimation_policy": "current-snapshot-reasoning-inclusive-p95-r8",
-        "provider_reliability_floor": MIN_PROVIDER_RELIABILITY,
+        "provider_reliability_floor": reliability_floor,
         "cross_task_history_used": False,
     })
     return replace(
@@ -453,18 +482,5 @@ def robust_extract_answer(response: Mapping[str, Any]) -> str:
 
 
 def install() -> None:
-    """Compatibility installer for non-production callers; no history is used."""
-    global _INSTALLED
-    global _ORIGINAL_CANDIDATE_FOR
-    global _ORIGINAL_BUILD_NODE_PAYLOAD
-    global _ORIGINAL_EXTRACT_ANSWER
-    if _INSTALLED:
-        return
-    _ORIGINAL_CANDIDATE_FOR = planner._candidate_for
-    _ORIGINAL_BUILD_NODE_PAYLOAD = executor.build_node_payload
-    _ORIGINAL_EXTRACT_ANSWER = executor._extract_answer
-    _INSTALLED = True
-    planner._estimated_cost = conservative_estimated_cost
-    planner._candidate_for = hardened_candidate_for
-    executor.build_node_payload = hardened_build_node_payload
-    executor._extract_answer = robust_extract_answer
+    """Deprecated no-op: production composes these functions explicitly."""
+    return None

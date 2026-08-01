@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import statistics
 import urllib.parse
 from dataclasses import asdict, dataclass
 from hashlib import sha256
@@ -180,8 +181,18 @@ def _rank_quality(model: Any, ranking_limit: int) -> float:
 
 
 def _term_score(text: str, terms: Iterable[str]) -> float:
+    terms = tuple(dict.fromkeys(str(term) for term in terms if str(term)))
+    if not terms:
+        return 0.5
     hits = sum(1 for term in terms if term in text)
-    return _clamp(0.34 + 0.19 * hits) if hits else 0.30
+    return _clamp((hits + 1.0) / (len(terms) + 2.0))
+
+
+def _geometric_mean(values: Sequence[float]) -> float:
+    bounded = [max(1e-9, _clamp(value)) for value in values]
+    if not bounded:
+        return 0.0
+    return math.exp(sum(math.log(value) for value in bounded) / len(bounded))
 
 
 def _capability_vector(model: Any, labels: Sequence[str], ranking_limit: int) -> dict[str, float]:
@@ -200,7 +211,7 @@ def _capability_vector(model: Any, labels: Sequence[str], ranking_limit: int) ->
             base = _term_score(description, DOMAIN_TERMS.get(domain, (domain.replace("_", " "),)))
         else:
             base = _term_score(description, CAPABILITY_TERMS.get(label, (label.replace("_", " "),)))
-        score = 0.48 * quality + 0.52 * base
+        score = _geometric_mean((quality, base))
         if label in {"complex_reasoning", "causal_reasoning", "counterfactual_analysis", "synthesis"}:
             if "reasoning" in supported or bool(getattr(model, "reasoning", {})):
                 score += 0.13
@@ -482,9 +493,19 @@ def _candidate_for(
     weighted_fit = sum(fit * weight for fit, weight in zip(fits, importance)) / max(0.001, sum(importance))
     benchmark = float(endpoint.get("benchmark_score", 0.5))
     reliability = float(endpoint.get("reliability", 0.95))
-    quality = _clamp(0.58 * weighted_fit + 0.27 * benchmark + 0.15 * reliability + (0.015 if len(works) > 1 else 0.0))
-    confidence = _clamp(float(endpoint.get("benchmark_confidence", 0.75)) * (0.78 + 0.22 * min(fits)))
-    failure = _clamp(1.0 - reliability + (1.0 - confidence) * 0.16 + (0.025 if len(works) > 1 else 0.0))
+    quality_components = [weighted_fit, benchmark, reliability]
+    if len(works) > 1:
+        quality_components.append(min(fits))
+    quality = _clamp(statistics.fmean(quality_components))
+    confidence = _clamp(
+        _geometric_mean(
+            (float(endpoint.get("benchmark_confidence", 0.75)), min(fits))
+        )
+    )
+    fit_dispersion = (max(fits) - min(fits)) if len(fits) > 1 else 0.0
+    failure = _clamp(
+        1.0 - _geometric_mean((reliability, confidence)) + fit_dispersion
+    )
     prompt = _prompt_profile(works)
     reasoning = _reasoning_profile(works)
     parameters = _parameter_profile(endpoint, works, reasoning)
@@ -732,7 +753,13 @@ def _selected_graph(
             "version": 5,
             "interpretation_id": interpretation_id,
             "optimizer": "google-or-tools-cp-sat",
-            "objective_order": ["hard_constraints", "maximum_quality", "minimum_cost-calls-failure-inside-quality-band"],
+            "objective_order": [
+                "hard_constraints",
+                "maximum-conservative-quality",
+                "minimum-cost-inside-dynamic-quality-band",
+                "minimum-failure-risk",
+                "minimum-necessary-node-count",
+            ],
             "recovery_pool": recovery_pool,
             "selected_coverage_keys": sorted(key for row in selected for key in row.coverage_keys),
         },
@@ -791,28 +818,85 @@ def optimize_execution_graph(
                                 model.Add(x[left] + x[right] <= 1)
     quality_terms = []
     for index, candidate in enumerate(candidates):
-        score = candidate.estimated_quality * (1.0 - 0.35 * candidate.failure_probability) - 0.10 * candidate.quality_uncertainty
-        quality_terms.append(int(round(score * quality_scale)) * x[index])
+        conservative_quality = max(
+            0.0,
+            candidate.estimated_quality - candidate.quality_uncertainty,
+        ) * (1.0 - candidate.failure_probability)
+        quality_terms.append(
+            int(round(conservative_quality * quality_scale)) * x[index]
+        )
+    interpretation_divisor = max(1, limits.max_nodes)
     for interpretation_id, variable in y.items():
-        interpretation_score = float(interpretations[interpretation_id].get("metrics", {}).get("interpretation_score", 0.5))
-        quality_terms.append(int(round(interpretation_score * quality_scale * 0.25)) * variable)
+        interpretation_score = float(
+            interpretations[interpretation_id]
+            .get("metrics", {})
+            .get("interpretation_score", 0.5)
+        )
+        quality_terms.append(
+            int(
+                round(
+                    interpretation_score
+                    * quality_scale
+                    / interpretation_divisor
+                )
+            )
+            * variable
+        )
     quality_expr = sum(quality_terms)
-    model.Maximize(quality_expr)
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = max(1.0, float(solver_timeout_seconds))
+    stage_timeout = max(1.0, float(solver_timeout_seconds) / 4.0)
+    solver.parameters.max_time_in_seconds = stage_timeout
     solver.parameters.num_search_workers = 8
+
+    model.Maximize(quality_expr)
     status = solver.Solve(model)
     if status not in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
-        raise V5PlanningError(f"No feasible V5 execution graph; solver status={solver.StatusName(status)}")
+        raise V5PlanningError(
+            "No feasible V5 execution graph; "
+            f"solver status={solver.StatusName(status)}"
+        )
     best_quality_int = int(round(solver.ObjectiveValue()))
-    tolerance = _clamp(float(quality_tolerance_pct) / 100.0)
+    observed_uncertainty = statistics.fmean(
+        candidate.quality_uncertainty for candidate in candidates
+    )
+    requested_tolerance = _clamp(float(quality_tolerance_pct) / 100.0)
+    tolerance = min(requested_tolerance, _clamp(observed_uncertainty))
     floor_int = int(math.floor(best_quality_int * (1.0 - tolerance)))
     model.Add(quality_expr >= floor_int)
-    failure_terms = [int(round(candidate.failure_probability * 100_000)) * x[index] for index, candidate in enumerate(candidates)]
-    model.Minimize(sum(cost_terms) * 100 + sum(x) * 10_000 + sum(failure_terms))
+
+    cost_expr = sum(cost_terms)
+    model.Minimize(cost_expr)
     status = solver.Solve(model)
     if status not in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
-        raise V5PlanningError(f"Quality-band cost solve failed; solver status={solver.StatusName(status)}")
+        raise V5PlanningError(
+            "Quality-band cost solve failed; "
+            f"solver status={solver.StatusName(status)}"
+        )
+    best_cost_int = int(round(solver.ObjectiveValue()))
+    model.Add(cost_expr <= best_cost_int)
+
+    failure_terms = [
+        int(round(candidate.failure_probability * quality_scale)) * x[index]
+        for index, candidate in enumerate(candidates)
+    ]
+    failure_expr = sum(failure_terms)
+    model.Minimize(failure_expr)
+    status = solver.Solve(model)
+    if status not in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
+        raise V5PlanningError(
+            "Quality-cost reliability solve failed; "
+            f"solver status={solver.StatusName(status)}"
+        )
+    best_failure_int = int(round(solver.ObjectiveValue()))
+    model.Add(failure_expr <= best_failure_int)
+
+    model.Minimize(sum(x))
+    status = solver.Solve(model)
+    if status not in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
+        raise V5PlanningError(
+            "Quality-cost-reliability compactness solve failed; "
+            f"solver status={solver.StatusName(status)}"
+        )
     selected_indices = [index for index, variable in enumerate(x) if solver.Value(variable)]
     selected_interpretations = [iid for iid, variable in y.items() if solver.Value(variable)]
     if len(selected_interpretations) != 1:
@@ -829,9 +913,15 @@ def optimize_execution_graph(
         "optimizer": "google-or-tools-cp-sat",
         "solver_status": solver.StatusName(status),
         "selected_interpretation": selected_interpretation,
-        "quality_tolerance_pct": float(quality_tolerance_pct),
+        "quality_tolerance_pct": round(tolerance * 100.0, 6),
+        "quality_tolerance_ceiling_pct": float(quality_tolerance_pct),
         "best_quality_objective_scaled": best_quality_int,
         "quality_floor_objective_scaled": floor_int,
+        "best_cost_objective_scaled": best_cost_int,
+        "best_failure_objective_scaled": best_failure_int,
+        "optimization_policy": (
+            "lexicographic-quality-cost-reliability-compactness"
+        ),
         "selected_candidate_ids": [candidates[index].candidate_id for index in selected_indices],
         "execution_graph": graph.to_dict(),
         "fallback_used": False,

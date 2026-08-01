@@ -103,7 +103,7 @@ class V5ProductionCutoverTests(unittest.TestCase):
             "actual-model-company-audit.json",
             {
                 "status": "PASS",
-                "policy": "recompute-from-actual-successful-node-models",
+                "policy": "recompute-from-all-actual-cross-node-calls-and-successes",
                 "successful_node_models": [
                     {
                         "node_id": f"node-{index}",
@@ -114,6 +114,8 @@ class V5ProductionCutoverTests(unittest.TestCase):
                 ],
                 "all_called_models": [],
                 "duplicate_successful_companies": {},
+                "duplicate_called_companies": {},
+                "unknown_company_models": [],
                 "same-node-retry_is_not_a_second_expert": True,
                 "cross_task_history_used": False,
             },

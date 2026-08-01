@@ -156,15 +156,18 @@ class V5P0GovernanceTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         primary = text.index("name: Upload primary ticket artifacts")
         final = text.index("name: Render authoritative V5 final status")
+        report_publish = text.index("name: Publish audited report comments")
         attest = text.index("name: Generate post-upload final attestation")
         proof = text.index("name: Upload final attestation artifact")
-        publish = text.index("name: Publish authoritative V5 final status")
+        status_publish = text.index("name: Publish authoritative V5 final status")
         self.assertLess(primary, final)
-        self.assertLess(final, attest)
+        self.assertLess(final, report_publish)
+        self.assertLess(report_publish, attest)
         self.assertLess(attest, proof)
-        self.assertLess(proof, publish)
+        self.assertLess(proof, status_publish)
         self.assertIn("v5_final_attestation.py", text)
         self.assertIn("ticket-artifacts/final-status.json", text)
+        self.assertIn("--publication-outcome", text)
 
     def test_stale_v3_contract_and_paths_are_removed(self):
         schema = (MARKET / "execution-ticket.schema.json").read_text(

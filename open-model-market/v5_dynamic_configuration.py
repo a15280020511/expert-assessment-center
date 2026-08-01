@@ -12,8 +12,7 @@ from typing import Any, Mapping, Sequence
 
 import v5_planner as planner
 
-_INSTALLED = False
-_ORIGINAL_CANDIDATE_FOR: Any = None
+_BASE_CANDIDATE_FOR = planner._candidate_for
 
 DOMAIN_LABELS = {
     "business": "商业与财务",
@@ -96,7 +95,11 @@ def _dynamic_parameters(
     importance = max((_float(work.get("importance"), 0.5) for work in works), default=0.5)
     error_cost = max((_float(work.get("error_cost"), 0.5) for work in works), default=0.5)
     depth = _float(candidate.reasoning_profile.get("depth"), 0.5)
-    control_score = max(0.0, min(1.0, 0.45 * depth + 0.30 * error_cost + 0.25 * importance))
+    control_inputs = (depth, error_cost, importance)
+    control_score = max(
+        0.0,
+        min(1.0, sum(control_inputs) / len(control_inputs)),
+    )
     structured = bool(candidate.output_contract.get("machine_readable_required"))
     creative = bool(operations & {"creative_generation", "counterfactual_analysis"})
     verification = bool(operations & {
@@ -142,9 +145,7 @@ def _dynamic_parameters(
 
 
 def dynamic_candidate_for(*args: Any, **kwargs: Any) -> Any:
-    if _ORIGINAL_CANDIDATE_FOR is None:
-        raise RuntimeError("v5_dynamic_configuration.install() has not been called")
-    candidate = _ORIGINAL_CANDIDATE_FOR(*args, **kwargs)
+    candidate = _BASE_CANDIDATE_FOR(*args, **kwargs)
     if candidate is None:
         return None
     works = _work_rows(args)
@@ -203,10 +204,5 @@ def parameter_audit_catalog() -> list[dict[str, str]]:
 
 
 def install() -> None:
-    global _INSTALLED
-    global _ORIGINAL_CANDIDATE_FOR
-    if _INSTALLED:
-        return
-    _ORIGINAL_CANDIDATE_FOR = planner._candidate_for
-    planner._candidate_for = dynamic_candidate_for
-    _INSTALLED = True
+    """Deprecated no-op: PlannerPolicy calls dynamic functions directly."""
+    return None

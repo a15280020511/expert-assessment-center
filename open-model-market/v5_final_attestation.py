@@ -40,6 +40,7 @@ def main() -> int:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--commit-sha", required=True)
     parser.add_argument("--final-status-file", required=True)
+    parser.add_argument("--publication-outcome", required=True)
     parser.add_argument("--output", default="final-attestation.json")
     args = parser.parse_args()
 
@@ -55,11 +56,19 @@ def main() -> int:
             commit_sha=execution_commit_sha,
             final_status_file=Path(args.final_status_file),
         )
+        event_commit_sha = str(args.commit_sha).strip().casefold()
+        if not _COMMIT_SHA_RE.fullmatch(event_commit_sha):
+            raise RuntimeError("event context commit is not a full Git SHA")
+        if event_commit_sha != execution_commit_sha:
+            raise RuntimeError(
+                "event control-plane commit differs from checked-out production commit"
+            )
+        if str(args.publication_outcome) != "success":
+            raise RuntimeError("audited report publication did not succeed")
         attestation["commit_sha_source"] = "checked-out-git-head"
-        attestation["event_context_commit_sha"] = str(args.commit_sha).strip().casefold()
-        attestation["event_context_commit_matched_checkout"] = (
-            attestation["event_context_commit_sha"] == execution_commit_sha
-        )
+        attestation["event_context_commit_sha"] = event_commit_sha
+        attestation["event_context_commit_matched_checkout"] = True
+        attestation["audited_publication_outcome"] = "success"
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
     Path(args.output).write_text(

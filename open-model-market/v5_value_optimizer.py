@@ -31,7 +31,7 @@ from v5_planner import (
 COST_SCALE = 1_000_000
 QUALITY_SCALE = 100_000
 PROBABILITY_SCALE = 100_000
-CALL_OVERHEAD_USD = 0.0001
+CALL_OVERHEAD_USD = 0.0
 MAX_RATIO_ITERATIONS = 10
 
 
@@ -51,6 +51,7 @@ def _solve_cost_performance(
     model: cp_model.CpModel,
     quality: Any,
     effective_cost: Any,
+    call_count: Any,
     timeout_seconds: float,
 ) -> tuple[cp_model.CpSolver, int, list[str]]:
     """Solve the discrete quality/effective-cost ratio with linear iterations."""
@@ -102,6 +103,18 @@ def _solve_cost_performance(
     if tie_status in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
         solver = tie_solver
         status = tie_status
+        best_tie_cost = max(1, _value(tie_solver, effective_cost))
+        model.Add(effective_cost <= best_tie_cost)
+        model.Minimize(call_count)
+        compact_solver = _solver(timeout_seconds)
+        compact_status = compact_solver.Solve(model)
+        phase_status.append(
+            "best-ratio-lowest-cost-minimum-calls:"
+            f"{compact_solver.StatusName(compact_status)}"
+        )
+        if compact_status in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
+            solver = compact_solver
+            status = compact_status
     return solver, status, phase_status
 
 
@@ -300,14 +313,14 @@ def optimize_execution_graph(
 
     quality_terms = []
     for index, candidate in enumerate(candidates):
-        score = (
-            candidate.estimated_quality
-            * (1.0 - 0.35 * candidate.failure_probability)
-            - 0.10 * candidate.quality_uncertainty
-        )
+        conservative_quality = max(
+            0.0,
+            candidate.estimated_quality - candidate.quality_uncertainty,
+        ) * (1.0 - _clamp(candidate.failure_probability))
         quality_terms.append(
-            int(round(score * QUALITY_SCALE)) * x[index]
+            int(round(conservative_quality * QUALITY_SCALE)) * x[index]
         )
+    interpretation_divisor = max(1, limits.max_nodes)
     for interpretation_id, variable in y.items():
         interpretation_score = float(
             interpretations[interpretation_id]
@@ -315,7 +328,13 @@ def optimize_execution_graph(
             .get("interpretation_score", 0.5)
         )
         quality_terms.append(
-            int(round(interpretation_score * QUALITY_SCALE * 0.25))
+            int(
+                round(
+                    interpretation_score
+                    * QUALITY_SCALE
+                    / interpretation_divisor
+                )
+            )
             * variable
         )
     quality_expr = sum(quality_terms)
@@ -352,6 +371,7 @@ def optimize_execution_graph(
             model,
             quality_expr,
             effective_cost,
+            call_count,
             solver_timeout_seconds,
         )
     except V5PlanningError as exc:
@@ -445,7 +465,7 @@ def optimize_execution_graph(
         ),
         "hard_provider_diversity_scope": "none",
         "provider_diversity": (
-            "preferred-and-enforced-by-r8-runtime-rebalancing"
+            "preferred-by-native-current-run-recovery-planner"
         ),
         "constraints": [
             row
@@ -553,6 +573,10 @@ def optimize_execution_graph(
         "quality_scale": QUALITY_SCALE,
         "cost_scale": COST_SCALE,
         "call_overhead_usd": CALL_OVERHEAD_USD,
+        "call_overhead_policy": "no-invented-fixed-business-overhead",
+        "quality_utility_policy": (
+            "conservative-quality-minus-uncertainty-times-success-probability"
+        ),
         "scaled_objective_ratio": round(scaled_objective_ratio, 9),
         "cost_performance_ratio": round(
             public_cost_performance_ratio,

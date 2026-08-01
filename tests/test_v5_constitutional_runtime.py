@@ -104,6 +104,42 @@ class V5ConstitutionalRuntimeTests(unittest.TestCase):
             ),
         )
         self.assertEqual(3, len(audit["all_called_models"]))
+        self.assertEqual(
+            "recompute-from-all-actual-cross-node-calls-and-successes",
+            audit["policy"],
+        )
+        self.assertEqual({}, audit["duplicate_called_companies"])
+        self.assertEqual([], audit["unknown_company_models"])
+
+    def test_duplicate_actual_called_company_across_nodes_fails_closed(self) -> None:
+        result = {
+            "node_results": [
+                {
+                    "node_id": "n1",
+                    "resolved_model": "anthropic/final-a",
+                    "status": "success_recovered",
+                    "attempts": [
+                        {"model": "openai/failed-a", "status": "call_failed"},
+                        {"model": "anthropic/final-a", "status": "passed"},
+                    ],
+                },
+                {
+                    "node_id": "n2",
+                    "resolved_model": "google/final-b",
+                    "status": "success_recovered",
+                    "attempts": [
+                        {"model": "openai/failed-b", "status": "call_failed"},
+                        {"model": "google/final-b", "status": "passed"},
+                    ],
+                },
+            ]
+        }
+        audit = ConstitutionalExecutionEngine._actual_company_audit(result)
+        self.assertEqual("FAIL", audit["status"])
+        self.assertEqual(
+            {"openai": ["n1", "n2"]},
+            audit["duplicate_called_companies"],
+        )
 
     def test_duplicate_actual_successful_companies_fail_closed(self) -> None:
         result = {

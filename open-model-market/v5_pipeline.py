@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import re
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
@@ -21,6 +20,11 @@ from execution_graph import ExecutionGraph, GraphLimits
 from resource_matrix import compile_v5_task_resources
 from task_resource_artifacts import write_task_resource_artifacts
 from v5_benchmark import planning_benchmark, write_benchmark
+from v5_constitution import (
+    compile_task_constitution,
+    constitution_manifest,
+    dynamic_objective_weights,
+)
 from v5_endpoint_catalog import fetch_live_endpoint_payloads
 from v5_general_task_planning import (
     classify_task as classify_production_task,
@@ -35,13 +39,6 @@ from v5_recovery_runtime import build_production_runtime
 from v5_runtime import ProductionRuntime, RuntimeConfig
 
 ABSOLUTE_CANDIDATES_PER_WORK_CEILING = 64
-_DEGRADED_AUTHORIZATION_RE = re.compile(
-    r"(?:允许|接受|可以)(?:部分|降级|不完整)(?:结果|交付)|"
-    r"(?:partial|degraded|incomplete)\s+(?:result|delivery)\s+"
-    r"(?:is\s+)?(?:allowed|acceptable)",
-    re.IGNORECASE,
-)
-
 
 def _load_json(path: str | Path) -> Mapping[str, Any]:
     value = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -122,7 +119,8 @@ def _rank_v5_models(
     profile: Any,
     run: Any,
 ) -> list[Any]:
-    """Build a deduplicated multi-channel pool before CP-SAT optimization."""
+    """Build a Pareto-preserving pool with task-derived objective weights."""
+    weights = dynamic_objective_weights(profile, run)
     eligible: list[Any] = []
     for model in models.values():
         model_id = str(getattr(model, "id", ""))
@@ -176,15 +174,16 @@ def _rank_v5_models(
             "task_fit": fit,
             "value_index": value,
             "context_fit": context_ratio,
+            "dynamic_objective_weights": dict(weights),
         }
         model.score = (
-            0.42 * intelligence
-            + 0.30 * fit
-            + 0.23 * min(1.0, value)
-            + 0.05 * context_ratio
+            weights["intelligence"] * intelligence
+            + weights["task_fit"] * fit
+            + weights["value"] * min(1.0, value)
+            + weights["context"] * context_ratio
         )
         model.fit_reasons = list(reasons) + [
-            "V5 multi-channel pool: intelligence, task fit, value, price and context"
+            "V5 multi-channel pool with current-task-derived objective weights"
         ]
         eligible.append(model)
 
@@ -349,31 +348,29 @@ def _delivery_limits(
     profile: Any,
     shape: Mapping[str, int | bool],
 ) -> tuple[float, int, bool, dict[str, Any]]:
-    authorized = bool(_DEGRADED_AUTHORIZATION_RE.search(task))
-    strict = bool(profile.high_stakes or shape["explicit_output_contract"])
-    if strict:
-        coverage = 1.0
-        allow = False
-    elif authorized:
-        breadth = max(1, int(shape["maximum_atomic_work"]))
-        coverage = max(0.75, 1.0 - 1.0 / (breadth + 1.0))
-        allow = True
+    constitution = compile_task_constitution(
+        task,
+        high_stakes=bool(profile.high_stakes),
+        explicit_output_contract=bool(shape["explicit_output_contract"]),
+    )
+    allow = constitution.degradation_authorization == "allowed"
+    breadth = max(1, int(shape["maximum_atomic_work"]))
+    independence = max(0, int(shape.get("independence_markers", 0) or 0))
+    contract_items = max(0, int(shape.get("explicit_contract_items", 0) or 0))
+    if allow:
+        structural_mass = breadth + independence + contract_items
+        coverage = max(2.0 / 3.0, 1.0 - 1.0 / (structural_mass + 1.0))
     else:
         coverage = 1.0
-        allow = False
-    min_nodes = (
-        1
-        if int(shape["maximum_atomic_work"]) <= 1
-        else min(int(shape["maximum_atomic_work"]), 2)
-    )
-    return coverage, min_nodes, allow, {
-        "user_authorized_degradation": authorized,
-        "high_stakes": bool(profile.high_stakes),
-        "explicit_output_contract": bool(
-            shape["explicit_output_contract"]
-        ),
-        "policy": "task-risk-authorization-derived",
+    min_nodes = max(1, min(breadth, int(math.ceil(math.sqrt(breadth + independence)))))
+    decision = {
+        **constitution.to_dict(),
+        "minimum_required_work_coverage": round(coverage, 8),
+        "minimum_successful_content_nodes": min_nodes,
+        "policy": "single-source-constitutional-polarity-and-risk",
     }
+    return coverage, min_nodes, allow, decision
+
 
 
 def _planning_limits(
@@ -501,10 +498,10 @@ def _annotate_market(
             "endpoint_source": endpoint_source,
             "catalog_snapshot_id": catalog_snapshot_id,
             "candidate_pool_policy": (
-                "task-adaptive-multi-channel-deduplicated"
+                "task-adaptive-pareto-multi-channel-deduplicated"
             ),
             "candidate_pool_expansion_policy": (
-                "feasibility-and-marginal-value-driven"
+                "feasibility-marginal-value-and-dynamic-objective-driven"
             ),
             "model_company_policy": "task-global-all-different",
             "ranked_model_count": len(ranked),
@@ -591,6 +588,16 @@ def main(
         run.task,
         profile,
         shape,
+    )
+    _write_json(
+        output / "v5-constitution.json",
+        {
+            **constitution_manifest(),
+            "task_decision": delivery_decision,
+            "dynamic_objective_weights": dynamic_objective_weights(
+                profile, run
+            ),
+        },
     )
 
     endpoint_fixture = (

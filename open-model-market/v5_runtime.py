@@ -21,7 +21,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 import v5_cost_reliability_hardening as cost_hardening
 import v5_dynamic_prompt_delivery as dynamic_prompt
-import v5_executor as legacy_executor
+import v5_native_primitives as native_primitives
 import v5_output_contract_delivery as output_contract
 import v5_task_delivery_contract as task_delivery_contract
 import v5_quality_status_integrity as quality_integrity
@@ -451,7 +451,7 @@ class PromptPolicy:
             raise RuntimeError("provider.only must contain exactly one endpoint provider")
         if provider.get("allow_fallbacks") is not False:
             raise RuntimeError("provider fallbacks must be disabled")
-        forbidden = sorted(legacy_executor.FORBIDDEN_FIELDS.intersection(payload))
+        forbidden = sorted(native_primitives.FORBIDDEN_FIELDS.intersection(payload))
         if forbidden:
             raise RuntimeError(f"forbidden request fields: {forbidden}")
         return payload
@@ -1063,7 +1063,7 @@ class ExecutionEngine:
             root / "v5-request-audit.json",
             {
                 "status": "PASS" if all(
-                    not legacy_executor.FORBIDDEN_FIELDS.intersection(request)
+                    not native_primitives.FORBIDDEN_FIELDS.intersection(request)
                     for request in requests
                 ) else "FAIL",
                 "request_count": len(requests),

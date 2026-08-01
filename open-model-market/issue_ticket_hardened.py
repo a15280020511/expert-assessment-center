@@ -184,19 +184,18 @@ def _reject(status: dict[str, Any], reason: str) -> None:
     status["accepted"] = False
 
 
-def prepare(args: argparse.Namespace) -> int:
-    original_comments = base._issue_comments
-    original_state = base._execution_state
-    original_fingerprint = base.task_fingerprint
-    base._issue_comments = _trusted_issue_comments
-    base._execution_state = _execution_state
-    base.task_fingerprint = _substantive_task_fingerprint
-    try:
-        result = base.prepare(args)
-    finally:
-        base._issue_comments = original_comments
-        base._execution_state = original_state
-        base.task_fingerprint = original_fingerprint
+def prepare(
+    args: argparse.Namespace,
+    *,
+    schema_error_formatter: Any = base._format_schema_error,
+) -> int:
+    result = base.prepare(
+        args,
+        comments_reader=_trusted_issue_comments,
+        state_evaluator=_execution_state,
+        fingerprint_fn=_substantive_task_fingerprint,
+        schema_error_formatter=schema_error_formatter,
+    )
 
     root = Path(args.output_dir)
     status_path = root / "ticket-status.json"

@@ -7,11 +7,9 @@ failure so a failed run still preserves the exact attempted requests.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from typing import Any, Mapping
 
-import v5_executor as executor
 
 STRICT_SUCCESS_STATUSES = {
     "success",
@@ -20,8 +18,6 @@ STRICT_SUCCESS_STATUSES = {
 }
 DEGRADED_SUCCESS_STATUSES = {"success_degraded"}
 
-_INSTALLED = False
-_ORIGINAL_EXECUTE: Any = None
 
 
 def _attempt_quality_failures(row: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -194,39 +190,6 @@ def _rewrite_failure_artifacts(root: Path) -> None:
     _rewrite_request_audit(root, "FAIL")
 
 
-def integrity_execute_v5_graph(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    if _ORIGINAL_EXECUTE is None:
-        raise RuntimeError("v5_quality_status_integrity.install() has not been called")
-    output_dir = kwargs.get("output_dir")
-    try:
-        result = _ORIGINAL_EXECUTE(*args, **kwargs)
-    except Exception:
-        if output_dir is not None:
-            _rewrite_failure_artifacts(Path(output_dir))
-        raise
-    normalized = enforce_result_integrity(result)
-    if output_dir is not None:
-        _rewrite_artifacts(Path(output_dir), normalized)
-    return normalized
-
-
-def _patch_loaded_callers() -> None:
-    for module_name in (
-        "v5_pipeline",
-        "v5_live_benchmark",
-        "v5_live_benchmark_hardened",
-        "v5_live_benchmark_economy",
-    ):
-        module = sys.modules.get(module_name)
-        if module is not None and hasattr(module, "execute_v5_graph"):
-            setattr(module, "execute_v5_graph", integrity_execute_v5_graph)
-
-
 def install() -> None:
-    global _INSTALLED
-    global _ORIGINAL_EXECUTE
-    if not _INSTALLED:
-        _ORIGINAL_EXECUTE = executor.execute_v5_graph
-        executor.execute_v5_graph = integrity_execute_v5_graph
-        _INSTALLED = True
-    _patch_loaded_callers()
+    """Deprecated no-op: native runtime calls enforce_result_integrity directly."""
+    return None

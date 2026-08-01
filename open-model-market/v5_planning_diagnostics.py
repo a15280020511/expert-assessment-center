@@ -39,15 +39,7 @@ def _effective_cost_scaled(candidate: CandidateNode) -> int:
     expected_recovery = candidate.estimated_cost * max(
         0.0, min(1.0, candidate.failure_probability)
     )
-    expected_recovery_overhead = CALL_OVERHEAD_USD * max(
-        0.0, min(1.0, candidate.failure_probability)
-    )
-    value = (
-        candidate.estimated_cost
-        + expected_recovery
-        + CALL_OVERHEAD_USD
-        + expected_recovery_overhead
-    )
+    value = candidate.estimated_cost + expected_recovery + CALL_OVERHEAD_USD
     return max(1, int(round(value * COST_SCALE)))
 
 

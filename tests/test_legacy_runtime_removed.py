@@ -43,6 +43,36 @@ class LegacyRuntimeRemovalTests(unittest.TestCase):
                 violations[str(path.relative_to(ROOT))] = hits
         self.assertEqual(violations, {})
 
+    def test_native_production_modules_do_not_import_legacy_executor(self):
+        production_modules = [
+            "v5_runtime.py",
+            "v5_constitutional_runtime.py",
+            "v5_pipeline.py",
+            "v5_output_contract_delivery.py",
+            "v5_cost_reliability_hardening.py",
+            "v5_dynamic_prompt_delivery.py",
+        ]
+        violations = []
+        for name in production_modules:
+            text = (ROOT / "open-model-market" / name).read_text(
+                encoding="utf-8"
+            )
+            if "import v5_executor" in text or "from v5_executor" in text:
+                violations.append(name)
+        self.assertEqual([], violations)
+
+    def test_constitution_has_single_machine_source_and_human_contract(self):
+        machine = (
+            ROOT / "open-model-market" / "v5_constitution.py"
+        ).read_text(encoding="utf-8")
+        human = (
+            ROOT / "open-model-market" / "V5_CONSTITUTION.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn('CONSTITUTION_VERSION = "v5-constitution-2"', machine)
+        self.assertIn("v5-constitution-2", human)
+        self.assertIn("词典序目标", human)
+        self.assertIn("用户否定语义优先", human)
+
     def test_production_workflow_is_v5_only(self):
         text = (ROOT / ".github" / "workflows" / "execution-ticket.yml").read_text(encoding="utf-8")
         self.assertIn("v5_production_ticket.py", text)

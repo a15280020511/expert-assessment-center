@@ -240,6 +240,18 @@ def audit(
         )
         else {}
     )
+    duplicate_called_companies = (
+        company_audit.get("duplicate_called_companies")
+        if isinstance(company_audit, Mapping)
+        and isinstance(company_audit.get("duplicate_called_companies"), Mapping)
+        else {}
+    )
+    unknown_company_models = (
+        company_audit.get("unknown_company_models")
+        if isinstance(company_audit, Mapping)
+        and isinstance(company_audit.get("unknown_company_models"), list)
+        else []
+    )
     actual_companies = [
         str(row.get("company") or "")
         for row in successful_models
@@ -252,15 +264,19 @@ def audit(
             "actual_successful_model_count": len(successful_models),
             "actual_successful_companies": actual_companies,
             "duplicate_actual_successful_companies": duplicate_companies,
+            "duplicate_actual_called_companies": duplicate_called_companies,
+            "unknown_actual_company_models": unknown_company_models,
         }
     )
     if actual_company_status != "PASS":
         failures.append(
             "actual successful model-company audit is missing or failed"
         )
-    if actual_company_policy != "recompute-from-actual-successful-node-models":
+    if actual_company_policy != (
+        "recompute-from-all-actual-cross-node-calls-and-successes"
+    ):
         failures.append(
-            "actual model-company audit did not recompute from resolved models"
+            "actual model-company audit did not recompute every actual call"
         )
     if len(successful_models) != len(nodes):
         failures.append(
@@ -271,8 +287,14 @@ def audit(
         failures.append(
             "actual successful model companies are not globally unique"
         )
-    if any(not company or company == "unknown" for company in actual_companies):
-        failures.append("actual successful model company identity is unresolved")
+    if duplicate_called_companies:
+        failures.append(
+            "actual called model companies were reused across different nodes"
+        )
+    if unknown_company_models or any(
+        not company or company == "unknown" for company in actual_companies
+    ):
+        failures.append("actual model company identity is unresolved")
 
     budget = (
         summary.get("execution_budget")

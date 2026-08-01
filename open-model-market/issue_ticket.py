@@ -10,7 +10,7 @@ import re
 import unicodedata
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Tuple
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
@@ -160,11 +160,14 @@ def duplicate_reason(
     *,
     is_retry: bool,
     retry_id: str,
+    comments_reader: Callable[[str, int], Iterable[str]] = _issue_comments,
+    state_evaluator: Callable[[Iterable[str]], Dict[str, Any]] = _execution_state,
+    fingerprint_fn: Callable[[Dict[str, Any]], str] = task_fingerprint,
 ) -> str:
     if not repo or not os.getenv("GITHUB_TOKEN"):
         return ""
 
-    current = _execution_state(_issue_comments(repo, current_issue))
+    current = state_evaluator(comments_reader(repo, current_issue))
     if is_retry:
         if current["completed"]:
             return "this Issue already completed; successful tasks cannot be retried"
@@ -196,12 +199,12 @@ def duplicate_reason(
             if not isinstance(packet, dict):
                 continue
             same_id = str(packet.get("task_id") or "") == task_id
-            same_fingerprint = task_fingerprint(packet) == fingerprint
+            same_fingerprint = fingerprint_fn(packet) == fingerprint
             if not (same_id or same_fingerprint):
                 continue
 
             prior_issue = int(row.get("number") or 0)
-            prior_state = _execution_state(_issue_comments(repo, prior_issue))
+            prior_state = state_evaluator(comments_reader(repo, prior_issue))
             if _is_rejected_only(prior_state):
                 continue
 
@@ -292,14 +295,17 @@ def _format_schema_error(error: ValidationError) -> str:
     return f"{label}: {error.message}"
 
 
-def _schema_errors(packet: Dict[str, Any]) -> List[str]:
+def _schema_errors(
+    packet: Dict[str, Any],
+    formatter: Callable[[ValidationError], str] = _format_schema_error,
+) -> List[str]:
     errors = sorted(
         TICKET_VALIDATOR.iter_errors(packet),
         key=lambda error: (_path_text(error.absolute_path), str(error.validator), error.message),
     )
     result: List[str] = []
     for error in errors:
-        message = _format_schema_error(error)
+        message = formatter(error)
         if message not in result:
             result.append(message)
     return result
@@ -334,8 +340,12 @@ def _append_evidence_metadata(task_text: str, evidence: Any) -> str:
     return task_text + "\n".join(lines)
 
 
-def _validate_ticket(packet: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
-    errors = _schema_errors(packet)
+def _validate_ticket(
+    packet: Dict[str, Any],
+    *,
+    schema_error_formatter: Callable[[ValidationError], str] = _format_schema_error,
+) -> Tuple[Dict[str, Any], List[str]]:
+    errors = _schema_errors(packet, schema_error_formatter)
     task = packet.get("task") if isinstance(packet.get("task"), dict) else {}
     budget = packet.get("approved_budget") if isinstance(packet.get("approved_budget"), dict) else {}
     requirements = task.get("requirements") if isinstance(task.get("requirements"), list) else []
@@ -360,7 +370,14 @@ def _validate_ticket(packet: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]
     }, errors
 
 
-def prepare(args: argparse.Namespace) -> int:
+def prepare(
+    args: argparse.Namespace,
+    *,
+    comments_reader: Callable[[str, int], Iterable[str]] = _issue_comments,
+    state_evaluator: Callable[[Iterable[str]], Dict[str, Any]] = _execution_state,
+    fingerprint_fn: Callable[[Dict[str, Any]], str] = task_fingerprint,
+    schema_error_formatter: Callable[[ValidationError], str] = _format_schema_error,
+) -> int:
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
     if args.event_path:
@@ -394,7 +411,10 @@ def prepare(args: argparse.Namespace) -> int:
         if not isinstance(packet, dict):
             raise ValueError("Issue body must be one JSON object.")
 
-        validated, reasons = _validate_ticket(packet)
+        validated, reasons = _validate_ticket(
+            packet,
+            schema_error_formatter=schema_error_formatter,
+        )
         task_id = validated["task_id"]
         question = validated["question"]
         objective = validated["objective"]
@@ -402,7 +422,7 @@ def prepare(args: argparse.Namespace) -> int:
         max_cost = validated["max_cost_usd"]
         quality_tier = validated["quality_tier"]
 
-        fingerprint = task_fingerprint(packet) if task_id and question else ""
+        fingerprint = fingerprint_fn(packet) if task_id and question else ""
         if fingerprint:
             duplicate = duplicate_reason(
                 os.getenv("GITHUB_REPOSITORY", ""),
@@ -411,6 +431,9 @@ def prepare(args: argparse.Namespace) -> int:
                 fingerprint,
                 is_retry=is_retry,
                 retry_id=retry_id,
+                comments_reader=comments_reader,
+                state_evaluator=state_evaluator,
+                fingerprint_fn=fingerprint_fn,
             )
             if duplicate:
                 reasons.append(duplicate)

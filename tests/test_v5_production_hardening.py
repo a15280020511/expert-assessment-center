@@ -81,7 +81,7 @@ class TestV5ProductionHardening(unittest.TestCase):
         conservative = PlannerPolicy._p95_cost(endpoint, works, 1.0)
         usage = truncation.estimated_completion_usage(works[0], 10000)
         allowance = truncation.completion_envelope(works[0], 10000)
-        reliability_reserve = 1.0 + (0.98 - 0.96) * 1.75
+        reliability_reserve = 1.0 / 0.96
         expected = round(
             ((1000 * 2.0) + (usage * 10.0))
             / 1_000_000

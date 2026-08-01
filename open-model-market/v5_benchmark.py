@@ -30,10 +30,7 @@ def _risk_adjusted_utility(row: Mapping[str, Any]) -> float:
         0.0,
         min(1.0, float(row.get("quality_uncertainty", 0.0))),
     )
-    return max(
-        0.0,
-        quality * (1.0 - 0.35 * failure) - 0.10 * uncertainty,
-    )
+    return max(0.0, quality - uncertainty) * (1.0 - failure)
 
 
 def _effective_expected_cost(row: Mapping[str, Any]) -> float:
@@ -42,9 +39,7 @@ def _effective_expected_cost(row: Mapping[str, Any]) -> float:
         0.0,
         min(1.0, float(row.get("failure_probability", 0.0))),
     )
-    return initial * (1.0 + failure) + CALL_OVERHEAD_USD * (
-        1.0 + failure
-    )
+    return initial * (1.0 + failure) + CALL_OVERHEAD_USD
 
 
 def _constraint_map(

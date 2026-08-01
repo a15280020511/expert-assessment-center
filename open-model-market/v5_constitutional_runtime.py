@@ -1,11 +1,14 @@
 """Constitutional execution policy layered on the explicit native V5 runtime."""
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 import v5_task_delivery_contract as delivery_contract
+from v5_constitution import (
+    normalized_quantities,
+    validate_answer_against_constitution,
+)
 from execution_graph import SelectedNode
 from v5_model_company import canonical_model_company
 from v5_runtime import (
@@ -20,78 +23,25 @@ from v5_runtime import (
     RuntimeConfig,
 )
 
-_CLOSED_WORLD_RE = re.compile(
-    r"(?:仅限|仅依据|只能依据|不得编造|禁止编造|不联网|不调用工具|"
-    r"closed[- ]book|self[- ]contained|only\s+the\s+provided|no\s+external)",
-    re.IGNORECASE,
-)
-_QUANTITY_RE = re.compile(
-    r"(?<![A-Za-z0-9_.])(\d+(?:\.\d+)?)\s*"
-    r"(秒|分钟|小时|天|周|月|年|米|公里|千米|公斤|克|人|次|%|％|"
-    r"seconds?|minutes?|hours?|days?|weeks?|months?|years?|meters?|"
-    r"kilometers?|kg|people|times?)(?![A-Za-z0-9_])",
-    re.IGNORECASE,
-)
-
-
 def _normalized_quantities(text: str) -> set[tuple[str, str]]:
-    aliases = {
-        "％": "%",
-        "秒": "second",
-        "seconds": "second",
-        "second": "second",
-        "分钟": "minute",
-        "minutes": "minute",
-        "minute": "minute",
-        "小时": "hour",
-        "hours": "hour",
-        "hour": "hour",
-        "天": "day",
-        "days": "day",
-        "day": "day",
-        "周": "week",
-        "weeks": "week",
-        "week": "week",
-        "月": "month",
-        "months": "month",
-        "month": "month",
-        "年": "year",
-        "years": "year",
-        "year": "year",
-        "米": "meter",
-        "meters": "meter",
-        "meter": "meter",
-        "公里": "kilometer",
-        "千米": "kilometer",
-        "kilometers": "kilometer",
-        "kilometer": "kilometer",
-        "公斤": "kg",
-        "克": "gram",
-        "人": "people",
-        "people": "people",
-        "次": "times",
-        "times": "times",
-    }
-    values: set[tuple[str, str]] = set()
-    for number, unit in _QUANTITY_RE.findall(str(text or "")):
-        normalized_number = str(float(number)).rstrip("0").rstrip(".")
-        normalized_unit = aliases.get(unit.casefold(), unit.casefold())
-        values.add((normalized_number, normalized_unit))
-    return values
+    """Compatibility wrapper around the constitutional quantity normalizer."""
+    return normalized_quantities(text)
 
 
-def validate_scope_boundaries(task: str, answer: str) -> list[str]:
-    """Reject new precise quantities when the user imposes a closed world."""
-    if not _CLOSED_WORLD_RE.search(str(task or "")):
-        return []
-    allowed = _normalized_quantities(task)
-    introduced = sorted(_normalized_quantities(answer) - allowed)
-    if not introduced:
-        return []
-    rendered = ",".join(
-        f"{number}:{unit}" for number, unit in introduced[:12]
+def validate_scope_boundaries(
+    task: str,
+    answer: str,
+    *,
+    upstream: Sequence[Mapping[str, Any]] = (),
+    require_claim_labels: bool = False,
+) -> list[str]:
+    """Apply the single-source constitutional evidence boundary."""
+    return validate_answer_against_constitution(
+        task,
+        answer,
+        upstream=upstream,
+        require_claim_labels=require_claim_labels,
     )
-    return ["closed-world-unsupported-quantity:" + rendered]
 
 
 class ConstitutionalExecutionEngine(ExecutionEngine):
@@ -134,6 +84,12 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
         scope_violations = validate_scope_boundaries(
             original_task,
             attempt.answer,
+            upstream=upstream,
+            require_claim_labels=bool(
+                node.output_contract.get(
+                    "must_separate_fact_assumption_inference"
+                )
+            ),
         )
         violations = list(
             dict.fromkeys([*contract_violations, *scope_violations])
@@ -203,20 +159,45 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
                         }
                     )
 
-        by_company: dict[str, list[str]] = {}
+        successful_by_company: dict[str, list[str]] = {}
         for row in successful:
-            by_company.setdefault(row["company"], []).append(row["node_id"])
-        duplicates = {
+            successful_by_company.setdefault(row["company"], []).append(
+                row["node_id"]
+            )
+        duplicate_successful = {
             company: sorted(set(nodes))
-            for company, nodes in by_company.items()
+            for company, nodes in successful_by_company.items()
             if len(set(nodes)) > 1
         }
+
+        called_by_company: dict[str, list[str]] = {}
+        for row in called:
+            called_by_company.setdefault(row["company"], []).append(
+                row["node_id"]
+            )
+        duplicate_called = {
+            company: sorted(set(nodes))
+            for company, nodes in called_by_company.items()
+            if len(set(nodes)) > 1
+        }
+        unknown = sorted(
+            {
+                row["model"]
+                for row in [*successful, *called]
+                if row["company"] in {"", "unknown"}
+            }
+        )
+        failed = bool(duplicate_successful or duplicate_called or unknown)
         return {
-            "status": "FAIL" if duplicates else "PASS",
-            "policy": "recompute-from-actual-successful-node-models",
+            "status": "FAIL" if failed else "PASS",
+            "policy": (
+                "recompute-from-all-actual-cross-node-calls-and-successes"
+            ),
             "successful_node_models": successful,
             "all_called_models": called,
-            "duplicate_successful_companies": duplicates,
+            "duplicate_successful_companies": duplicate_successful,
+            "duplicate_called_companies": duplicate_called,
+            "unknown_company_models": unknown,
             "same-node-retry_is_not_a_second_expert": True,
             "cross_task_history_used": False,
         }
@@ -259,11 +240,11 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
                 )
                 (root / "v5-final-report.md").write_text(
                     "# V5 execution failed\n\n"
-                    "Actual successful model companies were not unique.\n",
+                    "Actual model companies were reused across different nodes.\n",
                     encoding="utf-8",
                 )
             raise RuntimeError(
-                "actual successful model companies are not unique"
+                "actual model companies are not unique across nodes"
             )
         return result
 

@@ -62,16 +62,8 @@ def _v5_schema_error(error: Any) -> str:
             "approved_budget.cost_anomaly_usd must be a finite positive number "
             "at most 100."
         )
-    return hardened.base._V5_ORIGINAL_FORMAT_SCHEMA_ERROR(error)
+    return hardened.base._format_schema_error(error)
 
-
-def _install_schema_messages() -> None:
-    """Temporary schema-message compatibility; it does not alter runtime policies."""
-    if not hasattr(hardened.base, "_V5_ORIGINAL_FORMAT_SCHEMA_ERROR"):
-        hardened.base._V5_ORIGINAL_FORMAT_SCHEMA_ERROR = (
-            hardened.base._format_schema_error
-        )
-    hardened.base._format_schema_error = _v5_schema_error
 
 
 def _reject(status: dict[str, Any], reason: str) -> None:
@@ -115,7 +107,6 @@ def _event_comment(args: argparse.Namespace) -> str:
 
 
 def prepare(args: argparse.Namespace) -> int:
-    _install_schema_messages()
     command_mode = "invalid"
     command_id = ""
     command_error = ""
@@ -124,7 +115,10 @@ def prepare(args: argparse.Namespace) -> int:
     except (ValueError, OSError, json.JSONDecodeError) as exc:
         command_error = str(exc)
 
-    result = hardened.prepare(args)
+    result = hardened.prepare(
+        args,
+        schema_error_formatter=_v5_schema_error,
+    )
     root = Path(args.output_dir)
     status_path = root / "ticket-status.json"
     ticket_path = root / "ticket.json"

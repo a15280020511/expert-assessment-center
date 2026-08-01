@@ -11,13 +11,12 @@ import json
 import os
 from typing import Any, Mapping
 
-import v5_executor
+import v5_native_primitives as native
 import v5_task_delivery_contract as task_delivery_contract
 from execution_graph import SelectedNode
 
-_INSTALLED = False
-_ORIGINAL_SYSTEM_PROMPT = v5_executor._system_prompt
-_ORIGINAL_QUALITY_GATE = v5_executor.quality_gate
+_ORIGINAL_SYSTEM_PROMPT = native.base_system_prompt
+_ORIGINAL_QUALITY_GATE = native.base_quality_gate
 COMPACT_MODE_ENV = "V5_COMPACT_OUTPUT_CONTRACT"
 CONTRACT_METADATA_KEYS = (
     "machine_readable_required",
@@ -95,7 +94,7 @@ def _delivery_rule(node: SelectedNode) -> str:
     response_scope = "最终响应" if contract_kind != "generic" else "本节点响应"
     if node.output_contract.get("machine_readable_required"):
         separation_rule = (
-            "事实、假设、推断和不确定性必须在相应字段内明确区分。"
+            "事实、假设、推断和不确定性必须在相应字段内明确区分。事实项必须写成“事实（题面）:”或“事实（上游:<节点ID>）:”并确保内容可由对应输入直接支持；无法由输入支持的内容必须标为假设、推断、阈值或建议。"
             if separate
             else ""
         )
@@ -112,7 +111,7 @@ def _delivery_rule(node: SelectedNode) -> str:
         )
     if node.output_contract.get("explicit_markdown_contract"):
         separation_rule = (
-            "每个章节内必须明确区分事实、假设、推断和不确定性。"
+            "每个章节内必须明确区分事实、假设、推断和不确定性。事实项必须写成“事实（题面）:”或“事实（上游:<节点ID>）:”并确保内容可由对应输入直接支持；无法由输入支持的内容必须标为假设、推断、阈值或建议。"
             if separate
             else ""
         )
@@ -131,7 +130,7 @@ def _delivery_rule(node: SelectedNode) -> str:
         else ""
     )
     separation_rule = (
-        "正文中必须明确区分事实、假设、推断和不确定性。"
+        "正文中必须明确区分事实、假设、推断和不确定性。事实项必须写成“事实（题面）:”或“事实（上游:<节点ID>）:”并确保内容可由对应输入直接支持；无法由输入支持的内容必须标为假设、推断、阈值或建议。"
         if separate
         else ""
     )
@@ -148,7 +147,7 @@ def _delivery_rule(node: SelectedNode) -> str:
 def contract_aware_system_prompt(node: SelectedNode) -> str:
     modules = list(node.prompt_profile.get("modules", []))
     rules = "".join(
-        v5_executor.PROMPT_MODULES.get(
+        native.PROMPT_MODULES.get(
             str(name), f"执行提示模块：{name}。"
         )
         for name in modules
@@ -223,10 +222,5 @@ def contract_aware_quality_gate(
 
 
 def install() -> None:
-    """Install contract-aware prompt and quality gate for formal V5 paths."""
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _INSTALLED = True
-    v5_executor._system_prompt = contract_aware_system_prompt
-    v5_executor.quality_gate = contract_aware_quality_gate
+    """Deprecated no-op: native runtime calls this module explicitly."""
+    return None

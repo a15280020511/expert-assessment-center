@@ -1,11 +1,8 @@
 """Deliver the computed professional role without weakening output contracts."""
 from __future__ import annotations
 
-import v5_executor as executor
 import v5_output_contract_delivery as contracts
 from execution_graph import SelectedNode
-
-_INSTALLED = False
 
 
 def dynamic_system_prompt(node: SelectedNode) -> str:
@@ -26,8 +23,5 @@ def dynamic_system_prompt(node: SelectedNode) -> str:
 
 
 def install() -> None:
-    """Install after the contract layer and remain deterministic across call order."""
-    global _INSTALLED
-    contracts.install()
-    executor._system_prompt = dynamic_system_prompt
-    _INSTALLED = True
+    """Deprecated no-op: native runtime calls dynamic_system_prompt directly."""
+    return None

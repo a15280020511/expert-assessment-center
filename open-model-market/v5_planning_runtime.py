@@ -26,6 +26,21 @@ class PlannerPolicy:
         )
         self.minimum_candidates_per_work = 2
 
+    @staticmethod
+    def _resource_works(
+        resource_bundle: Mapping[str, Any],
+    ) -> list[Mapping[str, Any]]:
+        works: list[Mapping[str, Any]] = []
+        for interpretation in resource_bundle.get("interpretations", []):
+            if not isinstance(interpretation, Mapping):
+                continue
+            works.extend(
+                row
+                for row in interpretation.get("atomic_work", [])
+                if isinstance(row, Mapping)
+            )
+        return works
+
     def compile_market(
         self,
         ranked: Sequence[Any],
@@ -42,12 +57,16 @@ class PlannerPolicy:
             ranking_limit=ranking_limit,
             allow_synthetic_fixture=allow_synthetic_fixture,
         )
+        resource_works = self._resource_works(resource_bundle)
+        reliability_floor = cost_policy.provider_reliability_floor(
+            resource_works
+        )
         endpoints = [
             dict(endpoint)
             for endpoint in market.get("endpoints", [])
             if isinstance(endpoint, Mapping)
             and float(endpoint.get("reliability", 0.0) or 0.0)
-            >= cost_policy.MIN_PROVIDER_RELIABILITY
+            >= reliability_floor
         ]
         if not endpoints:
             raise base_planner.V5PlanningError(
@@ -66,7 +85,10 @@ class PlannerPolicy:
         )
         result["planning_policy"] = {
             "composition": "explicit-direct-call",
-            "provider_reliability_floor": cost_policy.MIN_PROVIDER_RELIABILITY,
+            "provider_reliability_floor": reliability_floor,
+            "provider_reliability_policy": (
+                "current-task-error-cost-and-importance-derived"
+            ),
             "cost_estimation": "reasoning-and-truncation-aware-p95-usage",
             "candidate_configuration": "task-and-endpoint-dynamic",
             "pareto_pruning": "model-company-diversity-preserving",
@@ -132,9 +154,8 @@ class PlannerPolicy:
                 float(endpoint.get("reliability", 0.95) or 0.95),
             ),
         )
-        reliability_reserve = (
-            1.0 + max(0.0, 0.98 - reliability) * 1.75
-        )
+        reliability_floor = cost_policy.ABSOLUTE_MIN_PROVIDER_RELIABILITY
+        reliability_reserve = 1.0 / max(reliability_floor, reliability)
         return round(base * reliability_reserve, 8)
 
     @staticmethod
@@ -151,18 +172,19 @@ class PlannerPolicy:
                 float(endpoint.get("reliability", 0.0) or 0.0),
             ),
         )
-        if reliability < cost_policy.MIN_PROVIDER_RELIABILITY:
-            return None
-        candidate = base_planner._candidate_for(*args, **kwargs)
-        if candidate is None:
-            return None
-
         works = (
             args[2]
             if len(args) > 2 and isinstance(args[2], Sequence)
             else ()
         )
         works = [work for work in works if isinstance(work, Mapping)]
+        reliability_floor = cost_policy.provider_reliability_floor(works)
+        if reliability < reliability_floor:
+            return None
+        candidate = base_planner._candidate_for(*args, **kwargs)
+        if candidate is None:
+            return None
+
         endpoint_max = int(
             endpoint.get("max_completion_tokens", 0) or 0
         )
@@ -174,19 +196,16 @@ class PlannerPolicy:
             candidate.failure_probability,
             1.0 - reliability,
         )
-        failure = max(
-            0.0,
-            min(
-                1.0,
-                failure + (1.0 - reliability) * 0.50,
-            ),
-        )
+        failure = max(0.0, min(1.0, failure))
         p95_cost = PlannerPolicy._p95_cost(
             endpoint,
             works,
             discount,
         )
-        risk_adjusted_cost = p95_cost * (1.0 + failure * 0.40)
+        risk_adjusted_cost = p95_cost / max(
+            reliability_floor,
+            1.0 - failure,
+        )
 
         allowance = int(
             math.ceil(
@@ -237,8 +256,9 @@ class PlannerPolicy:
                     discount,
                     6,
                 ),
-                "provider_reliability_floor": (
-                    cost_policy.MIN_PROVIDER_RELIABILITY
+                "provider_reliability_floor": reliability_floor,
+                "provider_reliability_policy": (
+                    "current-work-error-cost-and-importance-derived"
                 ),
                 "model_company": (
                     company_diversity.canonical_model_company(
