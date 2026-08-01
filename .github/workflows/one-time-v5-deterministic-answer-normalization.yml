@@ -6,6 +6,7 @@ on:
       - "bootstrap/v5-deterministic-answer-normalization-20260802"
     paths:
       - "tools/one_time_v5_deterministic_answer_normalization.py"
+      - "tools/one_time_v5_deterministic_answer_normalization_v2.py"
       - ".github/workflows/one-time-v5-deterministic-answer-normalization.yml"
 
 permissions:
@@ -47,8 +48,12 @@ jobs:
           git show \
             "origin/$BOOTSTRAP_BRANCH:tools/one_time_v5_deterministic_answer_normalization.py" \
             > tools/.one_time_v5_deterministic_answer_normalization.py
-          python tools/.one_time_v5_deterministic_answer_normalization.py
+          git show \
+            "origin/$BOOTSTRAP_BRANCH:tools/one_time_v5_deterministic_answer_normalization_v2.py" \
+            > tools/.one_time_v5_deterministic_answer_normalization_v2.py
+          python tools/.one_time_v5_deterministic_answer_normalization_v2.py
           rm tools/.one_time_v5_deterministic_answer_normalization.py
+          rm tools/.one_time_v5_deterministic_answer_normalization_v2.py
           git diff --check
 
       - name: Install pinned dependencies
