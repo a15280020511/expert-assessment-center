@@ -49,14 +49,17 @@ jobs:
             open-model-market/v5_planning_runtime.py \
             open-model-market/v5_global_company_calibration.py \
             open-model-market/v5_cross_endpoint_planner.py \
+            open-model-market/v5_task_constraints.py \
             open-model-market/v5_constitutional_runtime.py \
+            open-model-market/v5_constitutional_pipeline.py \
             open-model-market/v5_value_optimizer.py \
             open-model-market/v5_runtime.py \
-            open-model-market/v5_executor.py \
             open-model-market/v5_benchmark.py \
             open-model-market/v5_pipeline.py \
             open-model-market/v5_production_ticket.py \
             open-model-market/v5_execution_auditor.py \
+            open-model-market/v5_execution_auditor_integrity.py \
+            open-model-market/v5_independent_artifact_revalidation.py \
             open-model-market/v5_final_attestation.py \
             open-model-market/v5_total_call_cap.py
       - name: Run V5 unit and recovery tests
@@ -71,22 +74,24 @@ jobs:
             tests.test_v5_explicit_runtime \
             tests.test_v5_empty_output_recovery \
             tests.test_v5_constitutional_runtime \
+            tests.test_v5_task_constraints \
+            tests.test_v5_dynamic_model_fit \
             tests.test_v5_global_company_calibration \
             tests.test_v5_r8_gate_wiring \
             tests.test_v5_production_cutover \
             tests.test_v5_p0_governance \
             tests.test_legacy_runtime_removed \
             -v 2>&1 | tee v5-unit-test.log
-      - name: Run deterministic V5 end-to-end dry-run
+      - name: Run deterministic constitutional V5 end-to-end dry-run
         run: |
-          python open-model-market/v5_pipeline.py \
+          python open-model-market/v5_constitutional_pipeline.py \
             --task "比较三个城市公共投资方案，完成财务建模、政策与法律合规、证据核验、预测推演、独立红队反证和最终决策。" \
             --catalog-file tests/fixtures/models.json \
             --endpoint-file tests/fixtures/endpoints.json \
             --dry-run \
             --maximum-total-calls 16 \
             --maximum-recovery-calls 2 \
-            --quality-tier quality \
+            --quality-tier value \
             --output-dir v5-validation-artifacts
       - name: Verify V5 artifacts and safety invariants
         run: |
@@ -104,6 +109,7 @@ jobs:
           benchmark = json.loads((root / "v5-planning-benchmark.json").read_text())
           runtime = json.loads((root / "v5-runtime-config.json").read_text())
           snapshot = json.loads((root / "catalog-snapshot.json").read_text())
+          constraints = json.loads((root / "task-constraints.json").read_text())
           forbidden = {
               "tools", "tool_choice", "plugins", "web_search", "web_search_options",
               "file_search", "browser", "code_interpreter", "models",
@@ -118,11 +124,18 @@ jobs:
           assert market["planning_policy"]["capability_pool_policy"] == "evidence-backed-global-company-assignment-calibration"
           assert market["planning_policy"]["proxy_floor_lowered"] is False
           assert market["cross_task_history_used"] is False
+          assert market["fixed_preselection_weight_tuple_used"] is False
+          assert market["fixed_task_fit_weight_tuple_used"] is False
+          assert market["preselection_policy"] == "task-derived-normalized-objective"
+          assert market["task_fit_policy"] == "task-profile-derived-normalized-features"
+          assert abs(sum(market["preselection_objective_weights"].values()) - 1.0) < 1e-9
+          assert abs(sum(market["task_fit_feature_weights"].values()) - 1.0) < 1e-9
           assert search["policy"] == "task-shape-feasibility-marginal-value"
           assert search["attempts"]
           assert search["ranking_emergency_ceiling"] <= 150
           assert search["candidate_emergency_ceiling_per_work"] == 64
           assert search["cross_task_history_used"] is False
+          assert 0.0 <= search["dynamic_quality_tolerance_pct"] <= search["quality_tolerance_platform_ceiling_pct"]
           assert candidates["candidate_count_after_pareto"] > 0
           assert candidates["candidate_count_after_pareto"] <= candidates["candidate_count_before_pareto"]
           calibration = candidates["hard_capability_calibration"]
@@ -148,6 +161,7 @@ jobs:
           assert optimization["approved_budget"]["maximum_recovery_calls"] == 2
           assert optimization["approved_budget"]["maximum_initial_calls"] == 14
           assert optimization["approved_budget"]["planning_node_policy"] == "optimizer-decides-within-call-budget"
+          assert optimization["approved_budget"]["quality_tier_policy"] == "compatibility-label-not-fixed-weight-tuple"
           assert graph["metadata"]["highest_principle"] == "maximum_cost_performance"
           assert graph["metadata"]["marginal_utility_stop"]
           assert 1 <= len(graph["nodes"]) <= 14
@@ -158,10 +172,13 @@ jobs:
           companies = [node["parameter_profile"]["model_company"] for node in graph["nodes"]]
           assert len(companies) == len(set(companies))
           assert dry["status"] == "planned-not-executed"
-          assert dry["production_entrypoint_changed"] is False
+          assert dry["production_entrypoint_changed"] is True
           assert dry["global_monkey_patching"] is False
           assert dry["model_company_policy"] == "task-global-all-different"
           assert dry["approved_budget"]["maximum_total_calls"] == 16
+          assert dry["task_constraints"] == constraints
+          assert constraints["external_tools_allowed"] is False
+          assert constraints["fail_closed"] is True
           assert runtime["global_monkey_patching"] is False
           assert runtime["cross_task_history_used"] is False
           assert runtime["configuration"]["initial_call_limit"] == 14
@@ -209,6 +226,7 @@ jobs:
           assert (root / "atomic-work-graph.json").exists()
           assert (root / "task-resource-matrix.json").exists()
           assert (root / "v5-adaptive-search.json").exists()
+          assert (root / "task-constraints.json").exists()
           assert (root / "artifact-manifest.json").exists()
           PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
