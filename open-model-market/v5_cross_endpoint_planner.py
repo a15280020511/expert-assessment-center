@@ -376,6 +376,7 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
 
         eligible_by_node: dict[str, list[dict[str, Any]]] = {}
         budget_excluded_by_node: dict[str, int] = {}
+        estimated_above_planning_budget_by_node: dict[str, int] = {}
         for selected in selected_rows:
             node_id = str(selected.get("candidate_id") or "")
             selected_model = str(selected.get("model") or "")
@@ -398,18 +399,25 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
                 != str(selected.get("provider_endpoint") or "")
                 and candidate_company(row) not in selected_companies
             ]
-            before_budget = len(alternatives)
-            if remaining_recovery_budget is not None:
-                alternatives = [
-                    row
+            estimated_above_planning_budget_by_node[node_id] = (
+                0
+                if remaining_recovery_budget is None
+                else sum(
+                    1
                     for row in alternatives
                     if max(
                         0.0,
                         float(row.get("estimated_cost", 0.0) or 0.0),
                     )
-                    <= remaining_recovery_budget + 1e-12
-                ]
-            budget_excluded_by_node[node_id] = before_budget - len(alternatives)
+                    > remaining_recovery_budget + 1e-12
+                )
+            )
+            # Planning-time estimated remaining budget is advisory only. Initial
+            # calls are reconciled against provider-billed actual cost, so
+            # permanently deleting candidates here can strand a failed node even
+            # when the live ledger has ample budget. Runtime BudgetController is
+            # the authoritative admission gate for every retry/replacement.
+            budget_excluded_by_node[node_id] = 0
             critical_delivery = node_id in critical_node_ids
             alternatives.sort(
                 key=lambda row: self._recovery_sort_key(
@@ -429,6 +437,18 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
                 payload["recovery_delivery_utility"] = round(
                     self._delivery_utility(row),
                     9,
+                )
+                estimated_cost = max(
+                    0.0,
+                    float(row.get("estimated_cost", 0.0) or 0.0),
+                )
+                payload["planning_budget_advisory_only"] = True
+                payload[
+                    "estimated_cost_above_planning_remaining_budget"
+                ] = bool(
+                    remaining_recovery_budget is not None
+                    and estimated_cost
+                    > remaining_recovery_budget + 1e-12
                 )
                 unique_by_company.append(payload)
                 seen_companies.add(company)
@@ -501,6 +521,12 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
                 else round(remaining_recovery_budget, 8)
             ),
             "budget_excluded_by_node": budget_excluded_by_node,
+            "estimated_above_planning_budget_by_node": (
+                estimated_above_planning_budget_by_node
+            ),
+            "planning_estimated_budget_advisory_only": True,
+            "runtime_budget_controller_authoritative": True,
+            "recovery_candidates_retained_for_live_ledger_admission": True,
             "cross_task_history_used": False,
         }
         graph["metadata"] = metadata
