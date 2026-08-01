@@ -280,8 +280,8 @@ class TestV5CapabilityCalibration(unittest.TestCase):
         )
 
     def test_formal_entries_use_explicit_policy_without_monkey_patching(self):
-        pipeline = (
-            ROOT / "open-model-market" / "v5_pipeline.py"
+        constitutional_pipeline = (
+            ROOT / "open-model-market" / "v5_constitutional_pipeline.py"
         ).read_text(encoding="utf-8")
         production = (
             ROOT / "open-model-market" / "v5_production_ticket.py"
@@ -294,10 +294,14 @@ class TestV5CapabilityCalibration(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn(
             "runtime.planner_policy.generate_candidate_graph",
-            pipeline,
+            constitutional_pipeline,
         )
-        self.assertIn("config = RuntimeConfig(", production)
-        self.assertIn("build_production_runtime(config)", production)
+        self.assertIn(
+            "import v5_constitutional_pipeline as v5_pipeline",
+            production,
+        )
+        self.assertIn("RuntimeConfig(", production)
+        self.assertIn("build_production_runtime(", production)
         self.assertIn("return build_runtime(", recovery)
         self.assertIn(
             "planner_policy=CrossEndpointPlannerPolicy(config)",
@@ -311,7 +315,7 @@ class TestV5CapabilityCalibration(unittest.TestCase):
             "diversity_preserving_pareto_prune",
             planner_source,
         )
-        self.assertNotIn(".install()", pipeline)
+        self.assertNotIn(".install()", constitutional_pipeline)
         self.assertNotIn("v5_production_hardening.install()", production)
         self.assertNotIn(".install()", recovery)
 
