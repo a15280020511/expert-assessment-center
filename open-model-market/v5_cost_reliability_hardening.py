@@ -20,9 +20,26 @@ COST_UNCERTAINTY_MULTIPLIER = 1.18
 MAX_UPSTREAM_CHARS_PER_NODE = 6_000
 MAX_UPSTREAM_CHARS_TOTAL = 24_000
 MAX_OUTPUT_ALLOWANCE_TOKENS = 32_768
+MIN_VISIBLE_OUTPUT_RESERVE_TOKENS = 1_024
+MIN_REASONING_BUDGET_TOKENS = 1_024
 _HIGH_REASONING_FUNCTIONS = {
     "synthesis", "quantitative_modeling", "implementation",
     "adversarial_reasoning", "counterfactual_analysis",
+}
+_REASONING_SHARE_BY_EFFORT = {
+    "minimal": 0.10,
+    "low": 0.20,
+    "medium": 0.50,
+    "high": 0.68,
+    "xhigh": 0.72,
+    "max": 0.72,
+}
+_VISIBLE_FLOOR_BY_FUNCTION = {
+    "synthesis": 3_072,
+    "adversarial_reasoning": 2_048,
+    "quantitative_modeling": 2_048,
+    "implementation": 1_536,
+    "counterfactual_analysis": 1_536,
 }
 
 _ORIGINAL_ESTIMATED_COST = planner._estimated_cost
@@ -242,6 +259,118 @@ def _output_allowance(node: SelectedNode) -> tuple[str | None, int]:
     return None, allowance
 
 
+def _reasoning_effort(node: SelectedNode) -> str:
+    request_reasoning = node.request_config.get("reasoning")
+    if isinstance(request_reasoning, Mapping):
+        effort = str(request_reasoning.get("effort") or "").casefold()
+        if effort:
+            return effort
+    decisions = node.parameter_profile.get("dynamic_parameter_decisions")
+    if isinstance(decisions, Mapping):
+        effort = str(decisions.get("reasoning_effort") or "").casefold()
+        if effort:
+            return effort
+    return str(node.reasoning_profile.get("effort") or "medium").casefold()
+
+
+def completion_token_budget(
+    node: SelectedNode,
+    *,
+    total_allowance: int | None = None,
+    reasoning_effort: str | None = None,
+) -> dict[str, Any]:
+    """Split completion permission into capped reasoning and protected visible output.
+
+    The total allowance remains endpoint- and task-derived. The visible reserve is
+    computed from the selected node's delivery contract and functions. Reasoning
+    receives only the remaining bounded share, so it cannot consume the entire
+    completion allowance before a deliverable answer is emitted.
+    """
+    total = max(
+        1,
+        int(total_allowance if total_allowance is not None else _output_allowance(node)[1]),
+    )
+    effort = str(reasoning_effort or _reasoning_effort(node) or "medium").casefold()
+    reasoning_enabled = bool(node.reasoning_profile.get("reasoning_enabled", True))
+    supported = {
+        str(value).casefold()
+        for value in node.parameter_profile.get("supported_parameters", [])
+    }
+    reasoning_supported = "reasoning" in supported or isinstance(
+        node.request_config.get("reasoning"), Mapping
+    )
+
+    fields = [
+        str(value).strip()
+        for value in node.output_contract.get("required_fields", [])
+        if str(value).strip()
+    ]
+    explicit_sections = _int(
+        node.output_contract.get("task_explicit_delivery_section_count"),
+        0,
+    )
+    functions = {str(value).casefold() for value in node.functions}
+    function_floor = max(
+        (_VISIBLE_FLOOR_BY_FUNCTION.get(name, 0) for name in functions),
+        default=0,
+    )
+    contract_floor = max(
+        len(fields) * 192,
+        min(6_400, explicit_sections * 320),
+    )
+    if node.output_contract.get("machine_readable_required"):
+        contract_floor = max(contract_floor, 2_048)
+    if node.output_contract.get("task_explicit_long_form_required"):
+        contract_floor = max(contract_floor, 4_096)
+
+    share = _REASONING_SHARE_BY_EFFORT.get(effort, 0.50)
+    ratio_floor = int(math.ceil(total * (1.0 - share)))
+    visible_reserve = max(
+        MIN_VISIBLE_OUTPUT_RESERVE_TOKENS,
+        function_floor,
+        contract_floor,
+        ratio_floor,
+    )
+
+    if not reasoning_enabled or not reasoning_supported:
+        reasoning_max = 0
+        visible_reserve = total
+    else:
+        maximum_reasoning_space = max(0, total - visible_reserve)
+        desired_reasoning = int(math.floor(total * share))
+        reasoning_max = min(maximum_reasoning_space, desired_reasoning)
+        if reasoning_max < MIN_REASONING_BUDGET_TOKENS:
+            if total >= MIN_REASONING_BUDGET_TOKENS + MIN_VISIBLE_OUTPUT_RESERVE_TOKENS:
+                reasoning_max = MIN_REASONING_BUDGET_TOKENS
+                visible_reserve = total - reasoning_max
+            else:
+                reasoning_max = 0
+                visible_reserve = total
+
+    if reasoning_max:
+        reasoning_max = min(reasoning_max, total - 1)
+        visible_reserve = min(visible_reserve, total - reasoning_max)
+    visible_reserve = max(1, min(total, visible_reserve))
+
+    if reasoning_max >= total:
+        raise RuntimeError("reasoning token budget must be below total completion allowance")
+    if total - reasoning_max < visible_reserve:
+        raise RuntimeError("visible output reserve is not protected by completion budget")
+
+    return {
+        "policy": "task-contract-reasoning-visible-output-split-v1",
+        "total_completion_allowance_tokens": total,
+        "reasoning_max_tokens": reasoning_max,
+        "visible_output_reserve_tokens": visible_reserve,
+        "reasoning_effort_source": effort,
+        "reasoning_supported": reasoning_supported,
+        "reasoning_enabled": reasoning_enabled,
+        "required_field_count": len(fields),
+        "explicit_delivery_section_count": explicit_sections,
+        "functions": sorted(functions),
+    }
+
+
 def hardened_build_node_payload(
     node: SelectedNode,
     original_task: str,
@@ -269,12 +398,28 @@ def hardened_build_node_payload(
     if isinstance(reasoning, Mapping) and str(reasoning.get("effort") or "").casefold() == "high":
         if not functions.intersection(_HIGH_REASONING_FUNCTIONS):
             payload["reasoning"] = {**dict(reasoning), "effort": "medium"}
+            reasoning = payload["reasoning"]
 
     field, allowance = _output_allowance(node)
     if field:
         payload.pop("max_tokens", None)
         payload.pop("max_completion_tokens", None)
         payload[field] = allowance
+
+    reasoning = payload.get("reasoning")
+    if isinstance(reasoning, Mapping):
+        budget = completion_token_budget(
+            node,
+            total_allowance=allowance,
+            reasoning_effort=str(reasoning.get("effort") or _reasoning_effort(node)),
+        )
+        if budget["reasoning_max_tokens"]:
+            payload["reasoning"] = {
+                "max_tokens": budget["reasoning_max_tokens"],
+                "exclude": True,
+            }
+        else:
+            payload.pop("reasoning", None)
 
     provider = dict(payload.get("provider") or {})
     provider["require_parameters"] = True

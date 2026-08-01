@@ -4,6 +4,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "execution-ticket.yml"
 PROMOTION = ROOT / ".github" / "workflows" / "promote-v5-production.yml"
+PAID_ACCEPTANCE = (
+    ROOT / ".github" / "workflows" / "v5-one-time-paid-acceptance.yml"
+)
+DETACHED_ATTESTATION = (
+    ROOT / ".github" / "workflows" / "v5-paid-acceptance-attest.yml"
+)
+DETACHED_ATTESTATION_REQUEST = (
+    ROOT / ".github" / "v5-paid-acceptance-attest-request.json"
+)
 
 
 class WorkflowContractTests(unittest.TestCase):
@@ -11,6 +20,7 @@ class WorkflowContractTests(unittest.TestCase):
     def setUpClass(cls):
         cls.text = WORKFLOW.read_text(encoding="utf-8")
         cls.promotion = PROMOTION.read_text(encoding="utf-8")
+        cls.paid_acceptance = PAID_ACCEPTANCE.read_text(encoding="utf-8")
 
     def test_dynamic_graph_uses_ticket_approved_call_ceiling(self):
         self.assertNotIn('TOTAL_MODEL_CALLS: "16"', self.text)
@@ -26,7 +36,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("v5_final_status.py", self.text)
         self.assertIn("v5_final_attestation.py", self.text)
         self.assertNotIn("expert_team_hardened.py", self.text)
-        self.assertNotIn("python open-model-market/execution_auditor.py", self.text)
+        self.assertNotIn(
+            "python open-model-market/execution_auditor.py", self.text
+        )
         self.assertNotIn("python open-model-market/final_status.py", self.text)
 
     def test_only_explicit_comment_commands_can_trigger_execution(self):
@@ -96,17 +108,37 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("model-performance-state", self.text)
         self.assertNotIn("MODEL_HISTORY_PATH", self.text)
 
-    def test_promotion_and_rollback_are_same_runtime_ref_operations(self):
+    def test_promotion_is_read_only_until_constitutional_acceptance(self):
         self.assertIn("workflow_dispatch:", self.promotion)
-        self.assertIn("options:\n          - promote\n          - rollback", self.promotion)
-        self.assertIn("group: v5-production-release", self.promotion)
-        self.assertIn("git merge-base --is-ancestor", self.promotion)
-        self.assertIn("--force-with-lease", self.promotion)
-        self.assertIn("refs/heads/production", self.promotion)
-        self.assertIn("python -m unittest discover", self.promotion)
-        self.assertIn("--dry-run", self.promotion)
-        self.assertIn("--maximum-total-calls 4", self.promotion)
+        self.assertIn("permissions:\n  contents: read", self.promotion)
+        self.assertIn("group: v5-production-qualification", self.promotion)
+        self.assertIn("task-independent constitutional matrix", self.promotion)
+        self.assertIn("v5-adaptive-search.json", self.promotion)
+        self.assertIn("task_specific_production_branching", self.promotion)
+        self.assertIn("case_derived_compaction_applied", self.promotion)
+        self.assertIn("test ! -e .release-authorized", self.promotion)
+        self.assertNotIn("git push", self.promotion)
+        self.assertNotIn("refs/heads/production", self.promotion)
         self.assertNotIn("OPENROUTER_API_KEY", self.promotion)
+
+    def test_paid_attestation_is_bound_to_same_run_artifact(self):
+        paid = self.paid_acceptance
+        self.assertIn("needs: paid-generic-acceptance", paid)
+        self.assertIn("EXPECTED_ARTIFACT_NAME: v5-paid-acceptance-", paid)
+        self.assertIn(
+            '"/repos/$REPOSITORY/actions/runs/$PAID_RUN_ID/artifacts',
+            paid,
+        )
+        self.assertIn("verdict.get(\"head_sha\")", paid)
+        self.assertIn("os.environ[\"PAID_HEAD_SHA\"]", paid)
+        self.assertIn("verdict.get(\"workflow_run_id\")", paid)
+        self.assertIn("os.environ[\"PAID_RUN_ID\"]", paid)
+        self.assertIn("artifact_bound_to_same_run", paid)
+        self.assertIn("branch_head_unchanged_before_attestation", paid)
+        self.assertIn('test "$(git rev-parse HEAD)" = "$PAID_HEAD_SHA"', paid)
+        self.assertNotIn("status=completed&per_page=20", paid)
+        self.assertFalse(DETACHED_ATTESTATION.exists())
+        self.assertFalse(DETACHED_ATTESTATION_REQUEST.exists())
 
 
 if __name__ == "__main__":

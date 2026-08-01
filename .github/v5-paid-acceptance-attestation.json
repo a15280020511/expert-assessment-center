@@ -1,0 +1,43 @@
+{
+  "schema_version": "v5-paid-acceptance-attestation-2",
+  "status": "PASS",
+  "request_id": "constitution-p0-final-5-819075e3-20260801",
+  "paid_workflow_run_id": "30690849178",
+  "paid_workflow_run_url": "https://github.com/a15280020511/expert-assessment-center/actions/runs/30690849178",
+  "paid_head_sha": "af53e67024c640a2d66a40b2010c24e936f25db1",
+  "paid_artifact_id": 8815643661,
+  "paid_artifact_name": "v5-paid-acceptance-30690849178",
+  "paid_artifact_digest": "sha256:536b9cbc636d2ca2d02c9f3317a34f89911d1317d753798d53fbe27e878306bc",
+  "model_calls": 3,
+  "actual_cost_usd": 0.00135065,
+  "cost_cap_usd": 0.03,
+  "node_count": 3,
+  "successful_models": [
+    {
+      "node_id": "node-18f66a3d0e5ad88a",
+      "model": "mistralai/mistral-small-24b-instruct-2501",
+      "company": "mistral"
+    },
+    {
+      "node_id": "node-c29ec688e6b82bbd",
+      "model": "xiaomi/mimo-v2.5",
+      "company": "xiaomi"
+    },
+    {
+      "node_id": "node-d9e5ca87449ef9f4",
+      "model": "deepseek/deepseek-v4-flash-0731",
+      "company": "deepseek"
+    }
+  ],
+  "completion_mode": "full",
+  "quality_status": "full_success",
+  "contract_heading_count": 4,
+  "actual_model_company_audit": "PASS",
+  "external_tools_allowed": false,
+  "production_ref_moved": false,
+  "public_report_published": false,
+  "cross_task_history_used": false,
+  "independent_artifact_revalidation": true,
+  "artifact_bound_to_same_run": true,
+  "branch_head_unchanged_before_attestation": true
+}

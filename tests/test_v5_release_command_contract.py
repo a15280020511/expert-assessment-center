@@ -14,97 +14,52 @@ class TestV5ReleaseCommandContract(unittest.TestCase):
         cls.validate_text = VALIDATE_WORKFLOW.read_text(encoding="utf-8")
         cls.ruff_text = RUFF_CONFIG.read_text(encoding="utf-8")
 
-    def test_manual_dispatch_remains_available(self):
+    def test_gate_is_triggerable_but_cannot_promote(self):
         self.assertIn("workflow_dispatch:", self.text)
-        self.assertIn("target_sha:", self.text)
-        self.assertIn("- promote\n          - rollback", self.text)
-
-    def test_release_pr_is_owner_only_same_repo_and_fixed_head(self):
         self.assertIn("pull_request:", self.text)
         self.assertIn("branches: [main]", self.text)
-        self.assertIn("paths: [.release-request.json]", self.text)
-        self.assertIn("github.actor == github.repository_owner", self.text)
+        self.assertIn("permissions:\n  contents: read", self.text)
+        self.assertIn("persist-credentials: false", self.text)
+        self.assertNotIn("contents: write", self.text)
+        self.assertNotIn("git push", self.text)
+        self.assertNotIn("update-ref", self.text)
+        self.assertNotIn("--force-with-lease", self.text)
+        self.assertNotIn("OPENROUTER_API_KEY", self.text)
+
+    def test_gate_uses_task_independent_changed_paths(self):
+        self.assertIn('- "open-model-market/**"', self.text)
+        self.assertIn('- "tests/**"', self.text)
         self.assertIn(
-            "startsWith(github.event.pull_request.title, '[release]')",
+            '- ".github/workflows/promote-v5-production.yml"',
             self.text,
         )
-        self.assertIn(
-            "github.event.pull_request.head.repo.full_name == github.repository",
-            self.text,
-        )
-        self.assertIn(
-            "github.event.pull_request.head.ref == 'v5-production-release'",
-            self.text,
-        )
+        self.assertNotIn(".release-request.json", self.text)
+        self.assertNotIn("v5-production-release", self.text)
         self.assertNotIn("pull_request_target:", self.text)
         self.assertNotIn("issue_comment:", self.text)
 
-    def test_request_checkout_is_isolated_and_has_no_persisted_credentials(self):
-        self.assertIn("name: Checkout isolated release request", self.text)
-        self.assertIn("path: request-source", self.text)
-        self.assertIn("persist-credentials: false", self.text)
-        self.assertIn(
-            "ref: ${{ github.event.pull_request.head.sha }}",
-            self.text,
+    def test_zero_cost_validation_precedes_fail_closed_state(self):
+        install = self.text.index(
+            "name: Install pinned validation dependencies"
         )
+        canonical = self.text.index(
+            "name: Run canonical static and unit gates"
+        )
+        matrix = self.text.index(
+            "name: Run task-independent constitutional matrix"
+        )
+        closed = self.text.index(
+            "name: Enforce fail-closed promotion state"
+        )
+        diagnostics = self.text.index(
+            "name: Upload qualification diagnostics"
+        )
+        self.assertLess(install, canonical)
+        self.assertLess(canonical, matrix)
+        self.assertLess(matrix, closed)
+        self.assertLess(closed, diagnostics)
 
-    def test_request_parser_requires_exact_schema_action_and_full_sha(self):
-        self.assertIn('request="request-source/.release-request.json"', self.text)
-        self.assertIn(
-            '(keys | sort) == ["action", "request_id", "schema_version", "target_sha"]',
-            self.text,
-        )
-        self.assertIn('.schema_version == "v5-production-release-1"', self.text)
-        self.assertIn('[[ "$target" =~ ^[0-9a-f]{40}$ ]]', self.text)
-        self.assertIn("jq -e", self.text)
-
-    def test_request_commit_is_one_file_on_exact_target_parent(self):
-        self.assertIn("git -C request-source rev-parse HEAD^", self.text)
-        self.assertIn('test "$parent" = "$target"', self.text)
-        self.assertIn(
-            "git -C request-source diff --name-only HEAD^ HEAD",
-            self.text,
-        )
-        self.assertIn('test "$changed" = ".release-request.json"', self.text)
-
-    def test_release_validation_is_split_without_lowering_the_gate(self):
-        ruff = self.text.index("name: Run canonical Ruff checks")
-        compile_sources = self.text.index("name: Compile canonical Python tree")
-        unit = self.text.index("name: Run canonical full unit test suite")
-        enforce = self.text.index("name: Enforce canonical validation gate")
-        dry = self.text.index("name: Run deterministic no-call V5 regression")
-        move = self.text.index("name: Move production ref")
-        verify = self.text.index(
-            "name: Verify production ref and create authoritative receipt"
-        )
-        receipt_artifact = self.text.index(
-            "name: Upload authoritative release receipt"
-        )
-        notify = self.text.index("name: Publish optional PR notification")
-
-        self.assertLess(ruff, compile_sources)
-        self.assertLess(compile_sources, unit)
-        self.assertLess(unit, enforce)
-        self.assertLess(enforce, dry)
-        self.assertLess(dry, move)
-        self.assertLess(move, verify)
-        self.assertLess(verify, receipt_artifact)
-        self.assertLess(receipt_artifact, notify)
-        self.assertNotIn("name: Run static and full unit validation", self.text)
-        self.assertIn("python -m ruff check .", self.text)
-        self.assertIn(
-            "python -m compileall -q open-model-market tests tools",
-            self.text,
-        )
-        self.assertIn(
-            "python -m unittest discover -s tests -p 'test*.py' -v",
-            self.text,
-        )
-        self.assertIn("--maximum-total-calls 4", self.text)
-        self.assertIn("--maximum-recovery-calls 1", self.text)
-        self.assertNotIn("OPENROUTER_API_KEY", self.text)
-
-    def test_pull_request_and_release_use_identical_validation_commands(self):
+    def test_pull_request_and_gate_use_identical_canonical_commands(self):
         commands = (
             "python -m ruff check .",
             "python -m compileall -q open-model-market tests tools",
@@ -114,93 +69,72 @@ class TestV5ReleaseCommandContract(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(self.text.count(command), 1)
                 self.assertEqual(self.validate_text.count(command), 1)
-
         self.assertNotIn("--select E9,F63,F7,F82", self.validate_text)
         self.assertIn('python-version: "3.12"', self.text)
         self.assertIn('python-version: "3.12"', self.validate_text)
-        self.assertIn("ruff==0.16.0", (ROOT / "requirements-dev.txt").read_text())
+        self.assertIn(
+            "ruff==0.16.0",
+            (ROOT / "requirements-dev.txt").read_text(),
+        )
         self.assertIn('select = ["E4", "E7", "E9", "F"]', self.ruff_text)
 
-    def test_release_reports_all_validation_results_before_enforcement(self):
-        self.assertIn("id: ruff", self.text)
-        self.assertIn("id: compile", self.text)
-        self.assertIn("id: unit", self.text)
+    def test_matrix_exercises_generic_shapes_not_named_cases(self):
+        self.assertIn('"simple":', self.text)
+        self.assertIn('"contract":', self.text)
+        self.assertIn('"complex":', self.text)
         self.assertIn(
-            "if: always() && steps.dependencies.outcome == 'success'",
+            'signals["task_specific_production_branching"] is False',
             self.text,
         )
-        self.assertIn("RUFF_OUTCOME: ${{ steps.ruff.outcome }}", self.text)
-        self.assertIn("COMPILE_OUTCOME: ${{ steps.compile.outcome }}", self.text)
-        self.assertIn("UNIT_OUTCOME: ${{ steps.unit.outcome }}", self.text)
-        self.assertIn('test "$RUFF_OUTCOME" = "success"', self.text)
-        self.assertIn('test "$COMPILE_OUTCOME" = "success"', self.text)
-        self.assertIn('test "$UNIT_OUTCOME" = "success"', self.text)
+        self.assertIn(
+            'signals["case_derived_compaction_applied"] is False',
+            self.text,
+        )
+        self.assertIn(
+            'signals["architecture_selection_policy"] == "generic-semantic-matrix-only"',
+            self.text,
+        )
+        self.assertIn(
+            'search["policy"] == "task-shape-feasibility-marginal-value"',
+            self.text,
+        )
+        self.assertIn(
+            'complexity["complex"] >= complexity["simple"]',
+            self.text,
+        )
+        self.assertNotIn("tabletop", self.text.casefold())
 
-    def test_validation_diagnostics_are_always_retained(self):
-        self.assertIn("name: Upload release validation diagnostics", self.text)
+    def test_matrix_enforces_company_uniqueness_and_no_monkey_patch(self):
+        self.assertIn(
+            "len(companies) == len(set(companies))",
+            self.text,
+        )
+        self.assertIn(
+            'dry["model_company_policy"] == "task-global-all-different"',
+            self.text,
+        )
+        self.assertIn(
+            'dry["global_monkey_patching"] is False',
+            self.text,
+        )
+
+    def test_gate_explicitly_records_production_is_not_moved(self):
+        self.assertIn(
+            "Production ref movement remains disabled until paid generic acceptance is attached.",
+            self.text,
+        )
+        self.assertIn("test ! -e .release-authorized", self.text)
+        self.assertNotIn("refs/heads/production", self.text)
+        self.assertNotIn("release-receipt", self.text)
+
+    def test_diagnostics_are_retained_even_on_failure(self):
         self.assertIn("if: always()", self.text)
-        self.assertIn("release-validation-logs/ruff.log", self.text)
-        self.assertIn("release-validation-logs/compileall.log", self.text)
-        self.assertIn("release-validation-logs/unit-test.log", self.text)
-        self.assertIn("retention-days: 14", self.text)
-        self.assertIn("validation-logs/ruff.log", self.validate_text)
-        self.assertIn("validation-logs/compileall.log", self.validate_text)
-        self.assertIn("validation-logs/unit-test.log", self.validate_text)
-
-    def test_authoritative_receipt_verifies_remote_ref_and_is_retained(self):
-        self.assertIn("id: move", self.text)
-        self.assertIn("id: receipt", self.text)
-        self.assertIn(
-            "git ls-remote origin refs/heads/production",
-            self.text,
-        )
-        self.assertIn('test "$observed" = "$TARGET_SHA"', self.text)
-        self.assertIn(
-            '"status": "production_ref_verified"',
-            self.text,
-        )
-        self.assertIn(
-            '"observed_production_sha": os.environ["OBSERVED_PRODUCTION"]',
-            self.text,
-        )
-        self.assertIn("release-receipt/release-receipt.json", self.text)
-        self.assertIn(
-            "name: v5-production-release-receipt-${{ github.run_id }}",
-            self.text,
-        )
-        self.assertIn("if-no-files-found: error", self.text)
-        self.assertIn("retention-days: 90", self.text)
-        self.assertIn("paid_model_calls", self.text)
-        self.assertIn("model_cost_usd", self.text)
-
-    def test_pr_comment_is_optional_and_cannot_change_release_truth(self):
-        self.assertIn("name: Publish optional PR notification", self.text)
-        self.assertIn("id: notify", self.text)
-        self.assertIn("continue-on-error: true", self.text)
-        self.assertIn(
-            "if: github.event_name == 'pull_request' && steps.receipt.outcome == 'success'",
-            self.text,
-        )
-        self.assertIn("name: Record optional notification outcome", self.text)
-        self.assertIn("NOTIFICATION_OUTCOME: ${{ steps.notify.outcome }}", self.text)
-        self.assertNotIn("name: Publish release receipt", self.text)
-        self.assertNotIn("name: Record release result", self.text)
-
-    def test_release_reuses_direction_and_rollback_guards(self):
-        self.assertIn("git merge-base --is-ancestor", self.text)
-        self.assertIn("--force-with-lease", self.text)
-        self.assertIn("refs/heads/production", self.text)
-        self.assertIn("group: v5-production-release", self.text)
+        self.assertIn("release-validation-logs/", self.text)
+        self.assertIn("production-validation-artifacts/", self.text)
+        self.assertIn("if-no-files-found: warn", self.text)
+        self.assertIn("retention-days: 30", self.text)
+        self.assertIn("group: v5-production-qualification", self.text)
         self.assertIn("cancel-in-progress: false", self.text)
-
-    def test_untrusted_request_code_is_never_executed(self):
-        self.assertIn("working-directory: release-target", self.text)
-        self.assertIn(
-            "ref: ${{ steps.release.outputs.target_sha }}",
-            self.text,
-        )
-        self.assertNotIn("working-directory: request-source", self.text)
-        self.assertNotIn("python request-source", self.text)
 
 
 if __name__ == "__main__":

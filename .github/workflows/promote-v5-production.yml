@@ -1,374 +1,128 @@
-name: Promote V5 Production
+name: V5 Production Promotion Gate
 
 on:
   workflow_dispatch:
-    inputs:
-      target_sha:
-        description: Exact validated commit SHA to place on production
-        required: true
-        type: string
-      action:
-        description: Fast-forward promotion or validated ancestor rollback
-        required: true
-        default: promote
-        type: choice
-        options:
-          - promote
-          - rollback
   pull_request:
-    types: [opened, reopened, synchronize]
     branches: [main]
-    paths: [.release-request.json]
+    paths:
+      - "open-model-market/**"
+      - "tests/**"
+      - ".github/workflows/promote-v5-production.yml"
 
 permissions:
-  contents: write
-  issues: write
-  pull-requests: read
+  contents: read
 
 concurrency:
-  group: v5-production-release
+  group: v5-production-qualification
   cancel-in-progress: false
 
 jobs:
-  validate-and-move-production:
-    if: >-
-      github.actor == github.repository_owner &&
-      (
-        github.event_name == 'workflow_dispatch' ||
-        (
-          github.event_name == 'pull_request' &&
-          startsWith(github.event.pull_request.title, '[release]') &&
-          github.event.pull_request.base.ref == 'main' &&
-          github.event.pull_request.head.repo.full_name == github.repository &&
-          github.event.pull_request.head.ref == 'v5-production-release'
-        )
-      )
+  constitutional-qualification:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
-      - name: Checkout isolated release request
-        if: github.event_name == 'pull_request'
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 2
           persist-credentials: false
-          path: request-source
-
-      - name: Resolve immutable release request
-        id: release
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          DISPATCH_TARGET_SHA: ${{ inputs.target_sha }}
-          DISPATCH_ACTION: ${{ inputs.action }}
-        run: |
-          set -euo pipefail
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            target="$DISPATCH_TARGET_SHA"
-            action="$DISPATCH_ACTION"
-            request_id="manual-dispatch"
-          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
-            request="request-source/.release-request.json"
-            test -f "$request"
-            jq -e '
-              type == "object" and
-              (keys | sort) == ["action", "request_id", "schema_version", "target_sha"] and
-              .schema_version == "v5-production-release-1" and
-              (.action == "promote" or .action == "rollback") and
-              (.target_sha | type == "string") and
-              (.request_id | type == "string")
-            ' "$request" >/dev/null
-            target="$(jq -er '.target_sha' "$request")"
-            action="$(jq -er '.action' "$request")"
-            request_id="$(jq -er '.request_id' "$request")"
-            [[ "$request_id" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]]
-
-            parent="$(git -C request-source rev-parse HEAD^)"
-            test "$parent" = "$target"
-            changed="$(git -C request-source diff --name-only HEAD^ HEAD)"
-            test "$changed" = ".release-request.json"
-          else
-            echo "unsupported release event" >&2
-            exit 1
-          fi
-
-          [[ "$action" == "promote" || "$action" == "rollback" ]]
-          [[ "$target" =~ ^[0-9a-f]{40}$ ]]
-          {
-            echo "target_sha=$target"
-            echo "action=$action"
-            echo "request_id=$request_id"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Checkout declared target commit
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ steps.release.outputs.target_sha }}
-          fetch-depth: 0
-          persist-credentials: true
-          path: release-target
-
-      - name: Validate release direction
-        id: direction
-        working-directory: release-target
-        env:
-          TARGET_SHA: ${{ steps.release.outputs.target_sha }}
-          RELEASE_ACTION: ${{ steps.release.outputs.action }}
-        run: |
-          set -euo pipefail
-          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
-          git fetch origin main production --no-tags || git fetch origin main --no-tags
-          git merge-base --is-ancestor "$TARGET_SHA" origin/main
-          current="$(git ls-remote origin refs/heads/production | awk '{print $1}')"
-          echo "current_production=$current" >> "$GITHUB_OUTPUT"
-          if [[ "$RELEASE_ACTION" == "promote" ]]; then
-            if [[ -n "$current" ]]; then
-              git merge-base --is-ancestor "$current" "$TARGET_SHA"
-            fi
-          else
-            test -n "$current"
-            git merge-base --is-ancestor "$TARGET_SHA" "$current"
-          fi
-
-      - name: Set up canonical Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: |
-            release-target/requirements-runtime.txt
-            release-target/requirements-dev.txt
-
-      - name: Install pinned zero-cost validation dependencies
-        id: dependencies
-        working-directory: release-target
+            requirements-runtime.txt
+            requirements-dev.txt
+      - name: Install pinned validation dependencies
         run: |
           python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
           python -m pip check
-
-      - name: Run canonical Ruff checks
-        id: ruff
-        working-directory: release-target
-        shell: bash
-        run: |
-          set -o pipefail
-          mkdir -p release-validation-logs
-          python -m ruff check . 2>&1 | tee release-validation-logs/ruff.log
-
-      - name: Compile canonical Python tree
-        id: compile
-        if: always() && steps.dependencies.outcome == 'success'
-        working-directory: release-target
-        shell: bash
-        run: |
-          set -o pipefail
-          mkdir -p release-validation-logs
-          python -m compileall -q open-model-market tests tools 2>&1 | tee release-validation-logs/compileall.log
-
-      - name: Run canonical full unit test suite
-        id: unit
-        if: always() && steps.dependencies.outcome == 'success'
-        working-directory: release-target
-        shell: bash
-        run: |
-          set -o pipefail
-          mkdir -p release-validation-logs
-          python -m unittest discover -s tests -p 'test*.py' -v 2>&1 | tee release-validation-logs/unit-test.log
-
-      - name: Upload release validation diagnostics
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: v5-release-validation-${{ github.run_id }}
-          path: release-target/release-validation-logs/
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Enforce canonical validation gate
-        if: always() && steps.dependencies.outcome == 'success'
-        env:
-          RUFF_OUTCOME: ${{ steps.ruff.outcome }}
-          COMPILE_OUTCOME: ${{ steps.compile.outcome }}
-          UNIT_OUTCOME: ${{ steps.unit.outcome }}
+      - name: Run canonical static and unit gates
         run: |
           set -euo pipefail
-          test "$RUFF_OUTCOME" = "success"
-          test "$COMPILE_OUTCOME" = "success"
-          test "$UNIT_OUTCOME" = "success"
-
-      - name: Run deterministic no-call V5 regression
-        working-directory: release-target
+          mkdir -p release-validation-logs
+          python -m ruff check . 2>&1 | tee release-validation-logs/ruff.log
+          python -m compileall -q open-model-market tests tools 2>&1 | tee release-validation-logs/compileall.log
+          python -m unittest discover -s tests -p 'test*.py' -v 2>&1 | tee release-validation-logs/unit-test.log
+      - name: Run task-independent constitutional matrix
         shell: bash
         run: |
           set -euo pipefail
           rm -rf production-validation-artifacts
-          python - <<'PY' > release-tabletop-task.txt
-          from tests.test_v5_tabletop_production_semantics import FAILED_PRODUCTION_TASK
-          print(FAILED_PRODUCTION_TASK)
-          PY
-          python open-model-market/v5_pipeline.py \
-            --task "$(cat release-tabletop-task.txt)" \
-            --catalog-file tests/fixtures/models.json \
-            --endpoint-file tests/fixtures/endpoints.json \
-            --dry-run \
-            --maximum-total-calls 4 \
-            --maximum-recovery-calls 1 \
-            --cost-anomaly-usd 0.25 \
-            --quality-tier value \
-            --output-dir production-validation-artifacts
           python - <<'PY'
           import json
+          import subprocess
+          import sys
           from pathlib import Path
 
-          root = Path('production-validation-artifacts')
-          dry = json.loads((root / 'v5-dry-run.json').read_text())
-          runtime = json.loads((root / 'v5-runtime-config.json').read_text())
-          snapshot = json.loads((root / 'catalog-snapshot.json').read_text())
-          semantics = json.loads((root / 'task-interpretations.json').read_text())
-          matrix = json.loads((root / 'task-resource-matrix.json').read_text())
-          optimization = json.loads((root / 'v5-optimization.json').read_text())
-          graph = json.loads((root / 'v5-execution-graph.json').read_text())
-
-          signals = semantics['task_signals']
-          assert dry['status'] == 'planned-not-executed'
-          assert dry['approved_budget']['maximum_total_calls'] == 4
-          assert dry['approved_budget']['maximum_initial_calls'] == 3
-          assert dry['approved_budget']['maximum_recovery_calls'] == 1
-          assert dry['approved_budget']['cost_anomaly_usd'] == 0.25
-          assert runtime['global_monkey_patching'] is False
-          assert runtime['cross_task_history_used'] is False
-          assert snapshot['cross_task_history_used'] is False
-          assert snapshot['catalog_snapshot_id'] == dry['catalog_snapshot_id']
-          assert signals['closed_book_tabletop_compaction_applied'] is True
-          assert signals['external_evidence_required'] is False
-          assert signals['active_domains'] == ['security']
-          assert signals['active_operations'] == ['analysis', 'decision_comparison']
-          assert len(semantics['interpretations']) == 1
-          assert len(semantics['interpretations'][0]['atomic_work']) == 1
-          assert matrix['matrices'][0]['hard_requirements'] == []
-          assert optimization['solver_status'] in {'OPTIMAL', 'FEASIBLE'}
-          assert 1 <= len(graph['nodes']) <= 3
-          assert len(dry['requests']) == len(graph['nodes'])
-          assert float(graph['estimated_total_cost']) <= 0.25
-          assert not (root / 'v5-planning-infeasibility.json').exists()
-          PY
-
-      - name: Move production ref
-        id: move
-        working-directory: release-target
-        env:
-          TARGET_SHA: ${{ steps.release.outputs.target_sha }}
-          RELEASE_ACTION: ${{ steps.release.outputs.action }}
-          CURRENT_PRODUCTION: ${{ steps.direction.outputs.current_production }}
-        run: |
-          set -euo pipefail
-          if [[ "$RELEASE_ACTION" == "promote" ]]; then
-            git push origin "$TARGET_SHA:refs/heads/production"
-          else
-            git push \
-              --force-with-lease="refs/heads/production:$CURRENT_PRODUCTION" \
-              origin "$TARGET_SHA:refs/heads/production"
-          fi
-
-      - name: Verify production ref and create authoritative receipt
-        id: receipt
-        working-directory: release-target
-        env:
-          TARGET_SHA: ${{ steps.release.outputs.target_sha }}
-          RELEASE_ACTION: ${{ steps.release.outputs.action }}
-          REQUEST_ID: ${{ steps.release.outputs.request_id }}
-          PREVIOUS_PRODUCTION: ${{ steps.direction.outputs.current_production }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          observed="$(git ls-remote origin refs/heads/production | awk '{print $1}')"
-          test "$observed" = "$TARGET_SHA"
-          mkdir -p release-receipt
-          OBSERVED_PRODUCTION="$observed" python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          receipt = {
-              "schema_version": "v5-production-release-receipt-1",
-              "status": "production_ref_verified",
-              "action": os.environ["RELEASE_ACTION"],
-              "target_sha": os.environ["TARGET_SHA"],
-              "observed_production_sha": os.environ["OBSERVED_PRODUCTION"],
-              "previous_production_sha": os.environ.get("PREVIOUS_PRODUCTION", ""),
-              "request_id": os.environ["REQUEST_ID"],
-              "workflow_run_id": os.environ["RUN_ID"],
-              "workflow_run_url": os.environ["RUN_URL"],
-              "runtime": "V5 native production runtime",
-              "paid_model_calls": 0,
-              "model_cost_usd": 0,
-              "cross_task_history_used": False,
+          tasks = {
+              "simple": "比较方案A与方案B的成本并给出决策阈值。",
+              "contract": (
+                  "比较两个方案。严格使用以下4个Markdown二级标题，顺序不得改变，"
+                  "每项不得为空：\n1）已知条件\n2）计算与比较\n3）风险与反证\n4）结论与下一步"
+              ),
+              "complex": (
+                  "评估三个候选方案，分别完成定量分析、证据核验、情景推演、"
+                  "独立红队反证和最终综合决策，并说明实施条件。"
+              ),
           }
-          path = Path("release-receipt/release-receipt.json")
-          path.write_text(
-              json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-              encoding="utf-8",
-          )
-          PY
-          jq -e \
-            --arg target "$TARGET_SHA" \
-            --arg request "$REQUEST_ID" \
-            '.schema_version == "v5-production-release-receipt-1" and
-             .status == "production_ref_verified" and
-             .target_sha == $target and
-             .observed_production_sha == $target and
-             .request_id == $request and
-             .paid_model_calls == 0 and
-             .model_cost_usd == 0 and
-             .cross_task_history_used == false' \
-            release-receipt/release-receipt.json >/dev/null
-          {
-            echo "## V5 production ref verified"
-            echo
-            echo "- Action: \`$RELEASE_ACTION\`"
-            echo "- Target: \`$TARGET_SHA\`"
-            echo "- Observed production: \`$observed\`"
-            echo "- Request: \`$REQUEST_ID\`"
-            echo "- Runtime: \`V5 native production runtime\`"
-            echo "- Paid model calls: \`0\`"
-            echo "- Model cost: \`0 USD\`"
-            echo "- Cross-task model history: \`disabled\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          root = Path("production-validation-artifacts")
+          complexity = {}
+          for name, task in tasks.items():
+              output = root / name
+              command = [
+                  sys.executable,
+                  "open-model-market/v5_pipeline.py",
+                  "--task", task,
+                  "--catalog-file", "tests/fixtures/models.json",
+                  "--endpoint-file", "tests/fixtures/endpoints.json",
+                  "--dry-run",
+                  "--maximum-total-calls", "16",
+                  "--maximum-recovery-calls", "2",
+                  "--cost-anomaly-usd", "0.25",
+                  "--quality-tier", "value",
+                  "--output-dir", str(output),
+              ]
+              completed = subprocess.run(command, check=False, text=True, capture_output=True)
+              if completed.returncode != 0:
+                  raise SystemExit(completed.stdout + "\n" + completed.stderr)
+              semantics = json.loads((output / "task-interpretations.json").read_text())
+              search = json.loads((output / "v5-adaptive-search.json").read_text())
+              optimization = json.loads((output / "v5-optimization.json").read_text())
+              graph = json.loads((output / "v5-execution-graph.json").read_text())
+              dry = json.loads((output / "v5-dry-run.json").read_text())
+              signals = semantics["task_signals"]
+              assert signals["task_specific_production_branching"] is False
+              assert signals["case_derived_compaction_applied"] is False
+              assert signals["architecture_selection_policy"] == "generic-semantic-matrix-only"
+              assert search["policy"] == "task-shape-feasibility-marginal-value"
+              assert search["attempts"]
+              assert optimization["solver_status"] in {"OPTIMAL", "FEASIBLE"}
+              assert len(graph["nodes"]) <= dry["approved_budget"]["maximum_initial_calls"]
+              assert dry["approved_budget"]["maximum_initial_calls"] == 14
+              companies = [node["parameter_profile"]["model_company"] for node in graph["nodes"]]
+              assert len(companies) == len(set(companies))
+              assert dry["model_company_policy"] == "task-global-all-different"
+              assert dry["global_monkey_patching"] is False
+              complexity[name] = signals["complexity_score"]
 
-      - name: Upload authoritative release receipt
-        id: receipt_artifact
+          contract = json.loads(
+              (root / "contract" / "task-interpretations.json").read_text()
+          )["task_signals"]["structural_signals"]
+          assert contract["explicit_output_contract"] is True
+          assert contract["explicit_contract_items"] == 4
+          assert complexity["complex"] >= complexity["simple"]
+          PY
+      - name: Enforce fail-closed promotion state
+        run: |
+          echo "Constitutional zero-cost qualification passed."
+          echo "Production ref movement remains disabled until paid generic acceptance is attached."
+          test ! -e .release-authorized
+      - name: Upload qualification diagnostics
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: v5-production-release-receipt-${{ github.run_id }}
-          path: release-target/release-receipt/release-receipt.json
-          if-no-files-found: error
-          retention-days: 90
-
-      - name: Publish optional PR notification
-        id: notify
-        if: github.event_name == 'pull_request' && steps.receipt.outcome == 'success'
-        continue-on-error: true
-        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
-        env:
-          TARGET_SHA: ${{ steps.release.outputs.target_sha }}
-          RELEASE_ACTION: ${{ steps.release.outputs.action }}
-          REQUEST_ID: ${{ steps.release.outputs.request_id }}
-          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        with:
-          script: |
-            const verb = process.env.RELEASE_ACTION === 'promote' ? 'PROMOTED' : 'ROLLED_BACK';
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: `## V5_PRODUCTION_${verb}\n\n- Target: \`${process.env.TARGET_SHA}\`\n- Request: \`${process.env.REQUEST_ID}\`\n- Authoritative receipt: \`v5-production-release-receipt-${context.runId}\`\n- Paid model calls: \`0\`\n- Run: \`${process.env.RUN_URL}\``
-            });
-
-      - name: Record optional notification outcome
-        if: always() && steps.receipt.outcome == 'success'
-        env:
-          NOTIFICATION_OUTCOME: ${{ steps.notify.outcome }}
-        run: |
-          echo "- Optional PR notification: \`$NOTIFICATION_OUTCOME\`" >> "$GITHUB_STEP_SUMMARY"
+          name: v5-production-qualification-${{ github.run_id }}
+          path: |
+            release-validation-logs/
+            production-validation-artifacts/
+          if-no-files-found: warn
+          retention-days: 30

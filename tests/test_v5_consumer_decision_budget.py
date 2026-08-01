@@ -49,23 +49,32 @@ class V5ConsumerDecisionBudgetTests(unittest.TestCase):
         self.assertNotIn("research", profile.domains)
         self.assertFalse(profile.high_stakes)
 
-    def test_real_task_has_a_three_initial_call_interpretation(self) -> None:
+    def test_real_task_has_a_feasible_three_initial_call_interpretation(self) -> None:
         run = self.run_config()
         profile = classify_task(REAL_TASK, run)
         compilation = compile_task_semantics(profile, run)
         signals = compilation["task_signals"]
         self.assertEqual(["business"], signals["active_domains"])
+        self.assertGreaterEqual(len(compilation["interpretations"]), 1)
+        self.assertLessEqual(len(compilation["interpretations"]), 3)
         minimum_calls = min(
             sum(
-                int(work["independence_requirements"]["minimum_independent_copies"])
+                int(
+                    work["independence_requirements"][
+                        "minimum_independent_copies"
+                    ]
+                )
                 for work in interpretation["atomic_work"]
             )
             for interpretation in compilation["interpretations"]
         )
         self.assertLessEqual(minimum_calls, 3)
-        self.assertEqual(1, len(compilation["interpretations"]))
-        self.assertEqual(1, len(compilation["interpretations"][0]["atomic_work"]))
-        self.assertTrue(signals["cost_performance_compaction_applied"])
+        self.assertFalse(signals["task_specific_production_branching"])
+        self.assertFalse(signals["case_derived_compaction_applied"])
+        self.assertEqual(
+            "generic-semantic-matrix-only",
+            signals["architecture_selection_policy"],
+        )
 
     def test_planner_uses_runtime_risk_multiplier(self) -> None:
         runtime = ProductionRuntime(

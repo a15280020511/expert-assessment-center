@@ -10,6 +10,7 @@ from execution_graph import GraphLimits  # noqa: E402
 import v5_company_diversity as company_policy  # noqa: E402
 import v5_planner  # noqa: E402
 from v5_planning_runtime import PlannerPolicy  # noqa: E402
+from v5_runtime import RuntimeConfig  # noqa: E402
 
 
 def candidate(candidate_id, coverage_key, model, *, quality=0.8, cost=0.01):
@@ -74,12 +75,19 @@ class V5CompanyDiversityTests(unittest.TestCase):
             cost_risk_multiplier=1.18,
         )
 
-    def test_top150_and_24_candidate_contracts(self):
+    def test_top150_is_ceiling_and_candidate_floor_is_not_fixed_width(self):
         self.assertTrue(company_policy.REQUIRE_DISTINCT_MODEL_COMPANIES)
-        self.assertEqual(company_policy.MINIMUM_CANDIDATES_PER_WORK, 24)
-        policy = PlannerPolicy(runtime_config=None)
+        self.assertEqual(company_policy.MINIMUM_CANDIDATES_PER_WORK, 2)
+        policy = PlannerPolicy(
+            RuntimeConfig(
+                total_call_limit=4,
+                recovery_call_limit=1,
+                cost_anomaly_usd=None,
+                quality_tier="value",
+            )
+        )
         self.assertTrue(policy.require_distinct_model_companies)
-        self.assertEqual(policy.minimum_candidates_per_work, 24)
+        self.assertEqual(policy.minimum_candidates_per_work, 2)
 
         config = json.loads(
             (ROOT / "open-model-market" / "config.json").read_text(
@@ -87,7 +95,6 @@ class V5CompanyDiversityTests(unittest.TestCase):
             )
         )
         self.assertEqual(config["selection"]["ranking_limit"], 150)
-        self.assertEqual(config["selection"]["candidate_pool_per_seat"], 24)
         self.assertEqual(config["routing"]["max_intelligence_rank"], 150)
 
         policy_json = json.loads(
@@ -95,7 +102,10 @@ class V5CompanyDiversityTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(policy_json["official_intelligence_ranking_limit"], 150)
+        self.assertEqual(
+            policy_json["official_intelligence_ranking_limit"],
+            150,
+        )
         self.assertIn(
             "official intelligence rank within top 150",
             policy_json["hard_constraints"],
@@ -119,10 +129,20 @@ class V5CompanyDiversityTests(unittest.TestCase):
     def test_pruner_preserves_dominated_distinct_company(self):
         rows = [
             v5_planner.CandidateNode(
-                **candidate("openai-best", "w1#0", "openai/gpt-a", quality=0.95)
+                **candidate(
+                    "openai-best",
+                    "w1#0",
+                    "openai/gpt-a",
+                    quality=0.95,
+                )
             ),
             v5_planner.CandidateNode(
-                **candidate("openai-second", "w1#0", "openai/gpt-b", quality=0.90)
+                **candidate(
+                    "openai-second",
+                    "w1#0",
+                    "openai/gpt-b",
+                    quality=0.90,
+                )
             ),
             v5_planner.CandidateNode(
                 **candidate(
@@ -138,16 +158,35 @@ class V5CompanyDiversityTests(unittest.TestCase):
             rows,
             maximum_per_group=2,
         )
-        companies = {company_policy.candidate_company(row) for row in kept}
+        companies = {
+            company_policy.candidate_company(row) for row in kept
+        }
         self.assertEqual(companies, {"openai", "anthropic"})
 
     def test_optimizer_uses_different_companies(self):
         result = company_policy.risk_budgeted_optimize_execution_graph(
-            bundle([
-                candidate("oa-w1", "w1#0", "openai/gpt-a", quality=0.95),
-                candidate("oa-w2", "w2#0", "openai/gpt-b", quality=0.96),
-                candidate("an-w2", "w2#0", "anthropic/claude-a", quality=0.75),
-            ]),
+            bundle(
+                [
+                    candidate(
+                        "oa-w1",
+                        "w1#0",
+                        "openai/gpt-a",
+                        quality=0.95,
+                    ),
+                    candidate(
+                        "oa-w2",
+                        "w2#0",
+                        "openai/gpt-b",
+                        quality=0.96,
+                    ),
+                    candidate(
+                        "an-w2",
+                        "w2#0",
+                        "anthropic/claude-a",
+                        quality=0.75,
+                    ),
+                ]
+            ),
             limits=self.limits(),
             solver_timeout_seconds=3.0,
         )
@@ -164,10 +203,12 @@ class V5CompanyDiversityTests(unittest.TestCase):
             "distinct-model-company hard constraint",
         ):
             company_policy.risk_budgeted_optimize_execution_graph(
-                bundle([
-                    candidate("oa-w1", "w1#0", "openai/gpt-a"),
-                    candidate("oa-w2", "w2#0", "openai/gpt-b"),
-                ]),
+                bundle(
+                    [
+                        candidate("oa-w1", "w1#0", "openai/gpt-a"),
+                        candidate("oa-w2", "w2#0", "openai/gpt-b"),
+                    ]
+                ),
                 limits=self.limits(),
                 solver_timeout_seconds=2.0,
             )

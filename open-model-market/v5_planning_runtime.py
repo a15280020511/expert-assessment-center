@@ -5,7 +5,7 @@ import math
 from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
-import v5_capability_calibration as capability_calibration
+import v5_assignment_search_calibration as capability_calibration
 import v5_candidate_diversity as candidate_diversity
 import v5_company_diversity as company_diversity
 import v5_cost_reliability_hardening as cost_policy
@@ -24,9 +24,7 @@ class PlannerPolicy:
         self.require_distinct_model_companies = (
             company_diversity.REQUIRE_DISTINCT_MODEL_COMPANIES
         )
-        self.minimum_candidates_per_work = (
-            company_diversity.MINIMUM_CANDIDATES_PER_WORK
-        )
+        self.minimum_candidates_per_work = 2
 
     def compile_market(
         self,
@@ -73,13 +71,19 @@ class PlannerPolicy:
             "candidate_configuration": "task-and-endpoint-dynamic",
             "pareto_pruning": "model-company-diversity-preserving",
             "budget_preflight_parity": "direct-risk-budgeted-optimizer-call",
-            "require_distinct_model_companies": (
-                self.require_distinct_model_companies
+            "require_distinct_model_companies": self.require_distinct_model_companies,
+            "model_company_identity": "canonicalized-direct-model-author-prefix",
+            "candidate_breadth_policy": (
+                "minimum-assignment-slots-plus-current-adaptive-search-width"
             ),
-            "model_company_identity": (
-                "canonicalized-direct-model-author-prefix"
+            "candidate_breadth_revision": 4,
+            "capability_pool_policy": (
+                "evidence-backed-global-company-assignment-calibration"
             ),
-            "minimum_candidates_per_work": self.minimum_candidates_per_work,
+            "capability_scores_modified": False,
+            "task_demands_modified": False,
+            "proxy_floor_lowered": False,
+            "fixed_candidate_floor_used": False,
             "company_shortage_policy": "expand-pool-then-fail-closed",
             "cross_task_history_used": False,
         }
@@ -123,14 +127,18 @@ class PlannerPolicy:
         ) / 1_000_000
         reliability = max(
             0.0,
-            min(1.0, float(endpoint.get("reliability", 0.95) or 0.95)),
+            min(
+                1.0,
+                float(endpoint.get("reliability", 0.95) or 0.95),
+            ),
         )
-        reliability_reserve = 1.0 + max(0.0, 0.98 - reliability) * 1.75
+        reliability_reserve = (
+            1.0 + max(0.0, 0.98 - reliability) * 1.75
+        )
         return round(base * reliability_reserve, 8)
 
     @staticmethod
     def candidate_factory(*args: Any, **kwargs: Any) -> Any:
-        """Apply base, reliability, P95-cost, usage and dynamic configuration."""
         endpoint = (
             args[4]
             if len(args) > 4 and isinstance(args[4], Mapping)
@@ -138,7 +146,10 @@ class PlannerPolicy:
         )
         reliability = max(
             0.0,
-            min(1.0, float(endpoint.get("reliability", 0.0) or 0.0)),
+            min(
+                1.0,
+                float(endpoint.get("reliability", 0.0) or 0.0),
+            ),
         )
         if reliability < cost_policy.MIN_PROVIDER_RELIABILITY:
             return None
@@ -152,14 +163,29 @@ class PlannerPolicy:
             else ()
         )
         works = [work for work in works if isinstance(work, Mapping)]
-        endpoint_max = int(endpoint.get("max_completion_tokens", 0) or 0)
-        discount = max(0.1, float(kwargs.get("bundle_discount", 1.0)))
-        failure = max(candidate.failure_probability, 1.0 - reliability)
+        endpoint_max = int(
+            endpoint.get("max_completion_tokens", 0) or 0
+        )
+        discount = max(
+            0.1,
+            float(kwargs.get("bundle_discount", 1.0)),
+        )
+        failure = max(
+            candidate.failure_probability,
+            1.0 - reliability,
+        )
         failure = max(
             0.0,
-            min(1.0, failure + (1.0 - reliability) * 0.50),
+            min(
+                1.0,
+                failure + (1.0 - reliability) * 0.50,
+            ),
         )
-        p95_cost = PlannerPolicy._p95_cost(endpoint, works, discount)
+        p95_cost = PlannerPolicy._p95_cost(
+            endpoint,
+            works,
+            discount,
+        )
         risk_adjusted_cost = p95_cost * (1.0 + failure * 0.40)
 
         allowance = int(
@@ -189,7 +215,10 @@ class PlannerPolicy:
         parameter_profile = dict(candidate.parameter_profile)
         parameter_profile.update(
             {
-                "recommended_output_allowance_tokens": max(1_024, allowance),
+                "recommended_output_allowance_tokens": max(
+                    1_024,
+                    allowance,
+                ),
                 "estimated_completion_usage_tokens": max(1, usage),
                 "cost_estimation_policy": (
                     "reasoning-inclusive-p95-usage-not-max-allowance-r8"
@@ -211,8 +240,10 @@ class PlannerPolicy:
                 "provider_reliability_floor": (
                     cost_policy.MIN_PROVIDER_RELIABILITY
                 ),
-                "model_company": company_diversity.canonical_model_company(
-                    candidate.model
+                "model_company": (
+                    company_diversity.canonical_model_company(
+                        candidate.model
+                    )
                 ),
                 "cross_task_history_used": False,
             }
@@ -249,23 +280,41 @@ class PlannerPolicy:
         *,
         maximum_per_group: int,
     ) -> dict[str, Any]:
-        expanded_limit = max(
-            self.minimum_candidates_per_work,
-            int(maximum_per_group),
-        )
+        adaptive_limit = max(2, int(maximum_per_group))
+        if adaptive_limit > int(
+            self.config.maximum_candidates_per_work
+        ):
+            raise base_planner.V5PlanningError(
+                "Adaptive candidate request exceeds the configured emergency ceiling."
+            )
         result = capability_calibration.generate_calibrated_candidate_graph(
             resource_bundle,
             market,
-            maximum_per_group=expanded_limit,
+            maximum_per_group=adaptive_limit,
             candidate_factory=self.candidate_factory,
-            pruner=candidate_diversity.diversity_preserving_pareto_prune,
+            pruner=(
+                candidate_diversity.diversity_preserving_pareto_prune
+            ),
         )
         result["model_company_policy"] = {
             "require_distinct_model_companies": (
                 self.require_distinct_model_companies
             ),
-            "candidate_pool_requested_per_work": int(maximum_per_group),
-            "candidate_pool_effective_per_work": expanded_limit,
+            "candidate_pool_effective_per_work": adaptive_limit,
+            "candidate_pool_emergency_ceiling_per_work": int(
+                self.config.maximum_candidates_per_work
+            ),
+            "candidate_breadth_policy": (
+                "minimum-assignment-slots-plus-current-adaptive-search-width"
+            ),
+            "candidate_breadth_revision": 4,
+            "capability_pool_policy": (
+                "evidence-backed-global-company-assignment-calibration"
+            ),
+            "capability_scores_modified": False,
+            "task_demands_modified": False,
+            "proxy_floor_lowered": False,
+            "fixed_candidate_floor_used": False,
             "company_shortage_policy": "expand-pool-then-fail-closed",
         }
         return result
@@ -278,7 +327,6 @@ class PlannerPolicy:
         quality_tolerance_pct: float,
         solver_timeout_seconds: float,
     ) -> dict[str, Any]:
-        """Optimize under budget parity and the global company hard constraint."""
         return company_diversity.risk_budgeted_optimize_execution_graph(
             candidate_bundle,
             limits=limits,

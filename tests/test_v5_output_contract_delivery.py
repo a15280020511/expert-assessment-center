@@ -62,7 +62,8 @@ class TestV5OutputContractDelivery(unittest.TestCase):
     def test_machine_readable_prompt_demands_actual_json_fields(self):
         with patch.dict(os.environ, {delivery.COMPACT_MODE_ENV: ""}, clear=False):
             prompt = delivery.contract_aware_system_prompt(_node())
-        self.assertIn("最终响应必须只包含一个合法JSON对象", prompt)
+        self.assertIn("本节点响应必须只包含一个合法JSON对象", prompt)
+        self.assertIn("本节点是内部工作节点", prompt)
         self.assertIn('"assumptions"', prompt)
         self.assertIn('"evidence_gaps"', prompt)
         self.assertIn("禁止复述输出契约", prompt)
@@ -108,7 +109,8 @@ class TestV5OutputContractDelivery(unittest.TestCase):
     def test_non_machine_readable_prompt_still_forbids_schema_echo(self):
         with patch.dict(os.environ, {delivery.COMPACT_MODE_ENV: ""}, clear=False):
             prompt = delivery.contract_aware_system_prompt(_node(machine_readable=False))
-        self.assertIn("最终响应必须直接交付以下内容", prompt)
+        self.assertIn("本节点响应必须直接交付以下内容", prompt)
+        self.assertIn("本节点是内部工作节点", prompt)
         self.assertIn("assumptions", prompt)
         self.assertIn("禁止复述输出契约", prompt)
         self.assertIn("完全一致的Markdown二级标题", prompt)

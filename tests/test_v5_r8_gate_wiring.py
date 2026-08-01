@@ -49,10 +49,14 @@ def node(name):
 
 
 def answer(label):
-    return (
-        f"conclusions {label}; assumptions; uncertainties; evidence_gaps. "
-        "这是完整可交付并明确区分事实、假设、推断和不确定性的节点结果。"
-    ) * 6
+    return "\n\n".join(
+        [
+            f"## conclusions\n\n结论 {label}；这是完整可交付的节点结果。",
+            "## assumptions\n\n假设已明确列出，并与事实和推断分离。",
+            "## uncertainties\n\n不确定性已明确列出并说明影响。",
+            "## evidence_gaps\n\n证据缺口已明确列出并说明限制。",
+        ]
+    )
 
 
 def graph(nodes, metadata=None):

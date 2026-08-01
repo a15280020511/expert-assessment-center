@@ -18,104 +18,177 @@ class V5ProductionCutoverTests(unittest.TestCase):
         if isinstance(value, str):
             path.write_text(value, encoding="utf-8")
         else:
-            path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+            path.write_text(
+                json.dumps(value, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
 
     def _fixture(self, root: Path):
-        report = "# V5生产报告\n\n" + ("完整结论、约束、风险、实施方案和否决条件。" * 20)
-        self._write(root, "ticket-status.json", {
-            "accepted": True,
-            "task_id": "task-v5-production",
-            "calls": 7,
-            "maximum_recovery_calls": 2,
-            "maximum_initial_calls": 5,
-            "cost_policy": "unbounded_with_anomaly_guard",
-            "cost_anomaly_usd": 1.0,
-        })
-        self._write(root, "production-runtime.json", {
-            "fallback_policy": "fail-closed-no-alternate-runtime",
-            "legacy_runtime_present": False,
-            "maximum_model_calls": 7,
-            "maximum_recovery_calls": 2,
-            "maximum_initial_calls": 5,
-        })
-        self._write(root, "expert-team-result.json", {
-            "runtime_version": "v5-r8",
-            "status": "success",
-            "completion_mode": "complete",
-            "final_answer": report,
-            "executor": "v5-r8-fault-aware",
-            "fallback_used": False,
-            "legacy_runtime_present": False,
-        })
-        self._write(root, "v5-execution-summary.json", {
-            "status": "success",
-            "completion_mode": "complete",
-            "executor": "v5-r8-fault-aware",
-            "final_answer": report,
-            "actual_cost_usd": 0.12,
-            "execution_budget": {
-                "calls_reserved": 5,
-                "maximum_total_calls": 7,
+        report = "# V5生产报告\n\n" + (
+            "完整结论、约束、风险、实施方案和否决条件。" * 20
+        )
+        self._write(
+            root,
+            "ticket-status.json",
+            {
+                "accepted": True,
+                "task_id": "task-v5-production",
+                "calls": 7,
+                "maximum_recovery_calls": 2,
                 "maximum_initial_calls": 5,
-                "actual_cost_usd": 0.12,
+                "cost_policy": "unbounded_with_anomaly_guard",
+                "cost_anomaly_usd": 1.0,
             },
-        })
-        self._write(root, "v5-execution-graph.json", {
-            "nodes": [
-                {
-                    "node_id": f"node-{index}",
-                    "model": f"model-{index}",
-                    "provider_endpoint": f"model-{index}@provider-{index}",
-                }
-                for index in range(5)
-            ],
-            "final_nodes": ["node-4"],
-        })
-        self._write(root, "request-audit.json", {
-            "status": "PASS",
-            "approved_total_call_ceiling": 7,
-            "expected_request_count": 5,
-            "captured_request_count": 5,
-            "external_tools_allowed": False,
-        })
-        self._write(root, "call-ledger.json", {
-            "summary": {
-                "call_count": 5,
+        )
+        self._write(
+            root,
+            "production-runtime.json",
+            {
+                "fallback_policy": "fail-closed-no-alternate-runtime",
+                "legacy_runtime_present": False,
+                "maximum_model_calls": 7,
+                "maximum_recovery_calls": 2,
+                "maximum_initial_calls": 5,
+            },
+        )
+        self._write(
+            root,
+            "expert-team-result.json",
+            {
+                "runtime_version": "v5-r8",
+                "status": "success",
+                "completion_mode": "full",
+                "final_answer": report,
+                "executor": "v5-r8-fault-aware",
+                "fallback_used": False,
+                "legacy_runtime_present": False,
+            },
+        )
+        self._write(
+            root,
+            "v5-execution-summary.json",
+            {
+                "status": "success",
+                "completion_mode": "full",
+                "executor": "v5-r8-fault-aware",
+                "final_answer": report,
+                "actual_cost_usd": 0.12,
+                "execution_budget": {
+                    "calls_reserved": 5,
+                    "maximum_total_calls": 7,
+                    "maximum_initial_calls": 5,
+                    "actual_cost_usd": 0.12,
+                },
+            },
+        )
+        self._write(
+            root,
+            "v5-execution-graph.json",
+            {
+                "nodes": [
+                    {
+                        "node_id": f"node-{index}",
+                        "model": f"company-{index}/model-{index}",
+                        "provider_endpoint": (
+                            f"company-{index}/model-{index}@provider-{index}"
+                        ),
+                    }
+                    for index in range(5)
+                ],
+                "final_nodes": ["node-4"],
+            },
+        )
+        self._write(
+            root,
+            "actual-model-company-audit.json",
+            {
+                "status": "PASS",
+                "policy": "recompute-from-actual-successful-node-models",
+                "successful_node_models": [
+                    {
+                        "node_id": f"node-{index}",
+                        "model": f"company-{index}/model-{index}",
+                        "company": f"company-{index}",
+                    }
+                    for index in range(5)
+                ],
+                "all_called_models": [],
+                "duplicate_successful_companies": {},
+                "same-node-retry_is_not_a_second_expert": True,
+                "cross_task_history_used": False,
+            },
+        )
+        self._write(
+            root,
+            "request-audit.json",
+            {
+                "status": "PASS",
                 "approved_total_call_ceiling": 7,
-                "approved_recovery_call_ceiling": 2,
-                "provider_actual_cost_usd": 0.12,
-                "substantive_provider_count": 5,
-                "substantive_providers": [f"provider-{index}" for index in range(5)],
-            }
-        })
+                "expected_request_count": 5,
+                "captured_request_count": 5,
+                "external_tools_allowed": False,
+            },
+        )
+        self._write(
+            root,
+            "call-ledger.json",
+            {
+                "summary": {
+                    "call_count": 5,
+                    "approved_total_call_ceiling": 7,
+                    "approved_recovery_call_ceiling": 2,
+                    "provider_actual_cost_usd": 0.12,
+                    "substantive_provider_count": 5,
+                    "substantive_providers": [
+                        f"provider-{index}" for index in range(5)
+                    ],
+                }
+            },
+        )
         self._write(root, "expert-team-report.md", report)
         run_id = "30626072318"
         run_url = (
-            "https://github.com/a15280020511/expert-assessment-center/actions/runs/"
+            "https://github.com/a15280020511/expert-assessment-center/"
+            "actions/runs/"
             + run_id
         )
         self._write(
             root,
             "report-comments/report-comment-001.md",
-            f"<!-- expert-team-report-run:{run_id}:part:001 -->\n- Run: `{run_url}`\n\npublished",
+            f"<!-- expert-team-report-run:{run_id}:part:001 -->\n"
+            f"- Run: `{run_url}`\n\npublished",
         )
-        self._write(root, "report-comments/report-comments-manifest.json", {
-            "version": 2,
-            "report_sha256": hashlib.sha256(report.encode("utf-8")).hexdigest(),
-            "run_url": run_url,
-            "run_id": run_id,
-            "files": ["report-comment-001.md"],
-        })
+        self._write(
+            root,
+            "report-comments/report-comments-manifest.json",
+            {
+                "version": 2,
+                "report_sha256": hashlib.sha256(
+                    report.encode("utf-8")
+                ).hexdigest(),
+                "run_url": run_url,
+                "run_id": run_id,
+                "files": ["report-comment-001.md"],
+            },
+        )
 
     def test_complete_v5_fixture_passes_native_audit(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._fixture(root)
-            result = auditor.audit(root, execute_outcome="success", publish_outcome="success")
+            result = auditor.audit(
+                root,
+                execute_outcome="success",
+                publish_outcome="success",
+            )
             self.assertEqual(result["status"], "PASS", result["failures"])
             self.assertEqual(result["checks"]["model_calls"], 5)
             self.assertEqual(result["checks"]["node_count"], 5)
             self.assertEqual(result["checks"]["approved_total_calls"], 7)
+            self.assertEqual(
+                result["checks"]["actual_model_company_audit_status"],
+                "PASS",
+            )
 
     def test_alternate_runtime_fallback_evidence_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -125,9 +198,18 @@ class V5ProductionCutoverTests(unittest.TestCase):
             result = json.loads(result_path.read_text(encoding="utf-8"))
             result["fallback_used"] = True
             result_path.write_text(json.dumps(result), encoding="utf-8")
-            audited = auditor.audit(root, execute_outcome="success", publish_outcome="success")
+            audited = auditor.audit(
+                root,
+                execute_outcome="success",
+                publish_outcome="success",
+            )
             self.assertEqual(audited["status"], "FAIL")
-            self.assertTrue(any("fallback" in reason.casefold() for reason in audited["failures"]))
+            self.assertTrue(
+                any(
+                    "fallback" in reason.casefold()
+                    for reason in audited["failures"]
+                )
+            )
 
     def test_legacy_runtime_presence_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -137,9 +219,18 @@ class V5ProductionCutoverTests(unittest.TestCase):
             runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
             runtime["legacy_runtime_present"] = True
             runtime_path.write_text(json.dumps(runtime), encoding="utf-8")
-            audited = auditor.audit(root, execute_outcome="success", publish_outcome="success")
+            audited = auditor.audit(
+                root,
+                execute_outcome="success",
+                publish_outcome="success",
+            )
             self.assertEqual(audited["status"], "FAIL")
-            self.assertTrue(any("legacy runtime" in reason.casefold() for reason in audited["failures"]))
+            self.assertTrue(
+                any(
+                    "legacy runtime" in reason.casefold()
+                    for reason in audited["failures"]
+                )
+            )
 
     def test_call_ceiling_is_enforced(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -149,9 +240,18 @@ class V5ProductionCutoverTests(unittest.TestCase):
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
             summary["execution_budget"]["calls_reserved"] = 8
             summary_path.write_text(json.dumps(summary), encoding="utf-8")
-            audited = auditor.audit(root, execute_outcome="success", publish_outcome="success")
+            audited = auditor.audit(
+                root,
+                execute_outcome="success",
+                publish_outcome="success",
+            )
             self.assertEqual(audited["status"], "FAIL")
-            self.assertTrue(any("approved ticket bound" in reason for reason in audited["failures"]))
+            self.assertTrue(
+                any(
+                    "approved ticket bound" in reason
+                    for reason in audited["failures"]
+                )
+            )
 
     def test_ticket_and_runtime_ceiling_mismatch_fails(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -161,9 +261,18 @@ class V5ProductionCutoverTests(unittest.TestCase):
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
             summary["execution_budget"]["maximum_total_calls"] = 9
             summary_path.write_text(json.dumps(summary), encoding="utf-8")
-            audited = auditor.audit(root, execute_outcome="success", publish_outcome="success")
+            audited = auditor.audit(
+                root,
+                execute_outcome="success",
+                publish_outcome="success",
+            )
             self.assertEqual(audited["status"], "FAIL")
-            self.assertTrue(any("differs from approved ticket" in reason for reason in audited["failures"]))
+            self.assertTrue(
+                any(
+                    "differs from approved ticket" in reason
+                    for reason in audited["failures"]
+                )
+            )
 
 
 if __name__ == "__main__":

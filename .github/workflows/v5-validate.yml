@@ -47,6 +47,9 @@ jobs:
             open-model-market/resource_matrix.py \
             open-model-market/v5_planner.py \
             open-model-market/v5_planning_runtime.py \
+            open-model-market/v5_global_company_calibration.py \
+            open-model-market/v5_cross_endpoint_planner.py \
+            open-model-market/v5_constitutional_runtime.py \
             open-model-market/v5_value_optimizer.py \
             open-model-market/v5_runtime.py \
             open-model-market/v5_executor.py \
@@ -67,6 +70,8 @@ jobs:
             tests.test_v5_planner_executor \
             tests.test_v5_explicit_runtime \
             tests.test_v5_empty_output_recovery \
+            tests.test_v5_constitutional_runtime \
+            tests.test_v5_global_company_calibration \
             tests.test_v5_r8_gate_wiring \
             tests.test_v5_production_cutover \
             tests.test_v5_p0_governance \
@@ -95,6 +100,7 @@ jobs:
           optimization = json.loads((root / "v5-optimization.json").read_text())
           graph = json.loads((root / "v5-execution-graph.json").read_text())
           dry = json.loads((root / "v5-dry-run.json").read_text())
+          search = json.loads((root / "v5-adaptive-search.json").read_text())
           benchmark = json.loads((root / "v5-planning-benchmark.json").read_text())
           runtime = json.loads((root / "v5-runtime-config.json").read_text())
           snapshot = json.loads((root / "catalog-snapshot.json").read_text())
@@ -107,10 +113,26 @@ jobs:
           assert market["real_endpoint_count"] > 0
           assert market["synthetic_fixture_count"] == 0
           assert market["phase_b_invariants"]["provider_endpoint_is_explicit"] is True
-          assert market["candidate_pool_policy"] == "multi-channel-deduplicated-before-optimizer"
+          assert market["candidate_pool_policy"] == "task-adaptive-multi-channel-deduplicated"
+          assert market["candidate_pool_expansion_policy"] == "feasibility-and-marginal-value-driven"
+          assert market["planning_policy"]["capability_pool_policy"] == "evidence-backed-global-company-assignment-calibration"
+          assert market["planning_policy"]["proxy_floor_lowered"] is False
           assert market["cross_task_history_used"] is False
+          assert search["policy"] == "task-shape-feasibility-marginal-value"
+          assert search["attempts"]
+          assert search["ranking_emergency_ceiling"] <= 150
+          assert search["candidate_emergency_ceiling_per_work"] == 64
+          assert search["cross_task_history_used"] is False
           assert candidates["candidate_count_after_pareto"] > 0
           assert candidates["candidate_count_after_pareto"] <= candidates["candidate_count_before_pareto"]
+          calibration = candidates["hard_capability_calibration"]
+          assert calibration["version"] == 3
+          assert calibration["model_company_policy"] == "task-global-all-different"
+          assert calibration["capability_scores_modified"] is False
+          assert calibration["task_demands_modified"] is False
+          assert calibration["hard_labels_modified"] is False
+          assert calibration["proxy_floor_lowered"] is False
+          assert calibration["cross_task_history_used"] is False
           assert optimization["version"] == 5
           assert optimization["optimizer"] == "google-or-tools-cp-sat"
           assert optimization["solver_status"] in {"OPTIMAL", "FEASIBLE"}
@@ -125,6 +147,7 @@ jobs:
           assert optimization["approved_budget"]["maximum_total_calls"] == 16
           assert optimization["approved_budget"]["maximum_recovery_calls"] == 2
           assert optimization["approved_budget"]["maximum_initial_calls"] == 14
+          assert optimization["approved_budget"]["planning_node_policy"] == "optimizer-decides-within-call-budget"
           assert graph["metadata"]["highest_principle"] == "maximum_cost_performance"
           assert graph["metadata"]["marginal_utility_stop"]
           assert 1 <= len(graph["nodes"]) <= 14
@@ -132,9 +155,12 @@ jobs:
           assert graph["entry_nodes"]
           assert graph["final_nodes"]
           assert graph["required_work"]
+          companies = [node["parameter_profile"]["model_company"] for node in graph["nodes"]]
+          assert len(companies) == len(set(companies))
           assert dry["status"] == "planned-not-executed"
           assert dry["production_entrypoint_changed"] is False
           assert dry["global_monkey_patching"] is False
+          assert dry["model_company_policy"] == "task-global-all-different"
           assert dry["approved_budget"]["maximum_total_calls"] == 16
           assert runtime["global_monkey_patching"] is False
           assert runtime["cross_task_history_used"] is False
@@ -182,6 +208,7 @@ jobs:
           assert (root / "task-interpretations.json").exists()
           assert (root / "atomic-work-graph.json").exists()
           assert (root / "task-resource-matrix.json").exists()
+          assert (root / "v5-adaptive-search.json").exists()
           assert (root / "artifact-manifest.json").exists()
           PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
