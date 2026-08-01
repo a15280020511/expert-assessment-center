@@ -17,7 +17,10 @@ from v5_runtime import (  # noqa: E402
     RuntimeAttempt,
     RuntimeConfig,
 )
-from v5_task_constraints import compile_task_constraints, validate_answer_evidence  # noqa: E402
+from v5_task_constraints import (  # noqa: E402
+    compile_task_constraints,
+    validate_answer_evidence,
+)
 
 TASK = (
     "仅依据题面：西门存在不明液体且电气风险未知；"
@@ -53,7 +56,14 @@ def node() -> SelectedNode:
         quality_uncertainty=0.1,
         estimated_cost=0.001,
         failure_probability=0.02,
-        request_config={"provider": {"order": ["provider-a"], "only": ["provider-a"], "allow_fallbacks": False, "require_parameters": True}},
+        request_config={
+            "provider": {
+                "order": ["provider-a"],
+                "only": ["provider-a"],
+                "allow_fallbacks": False,
+                "require_parameters": True,
+            }
+        },
     )
 
 
@@ -64,6 +74,10 @@ class V5FactLabelPurityNormalizationTests(unittest.TestCase):
             ANSWER,
             CONTRACT,
             compile_task_constraints(TASK),
+        )
+        self.assertEqual(
+            "v5-deterministic-answer-normalization-2",
+            audit["schema_version"],
         )
         self.assertEqual(3, audit["structural_labels_inserted"])
         self.assertEqual(3, len(audit["mixed_fact_labels_split"]))
