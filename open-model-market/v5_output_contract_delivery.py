@@ -64,6 +64,23 @@ def _compact_delivery_rule(fields: list[str]) -> str:
     )
 
 
+def _task_format_scope_rule(node: SelectedNode) -> str:
+    kind = task_delivery_contract.explicit_contract_kind(
+        node.output_contract
+    )
+    if kind != "generic":
+        return (
+            "本节点承载用户明确指定的最终交付契约；原始任务中的最终格式要求"
+            "已经编译为本节点输出契约，必须以本节点契约为唯一格式依据。"
+        )
+    return (
+        "原始任务中针对最终报告的标题、章节顺序、JSON键、表格列或其他最终格式要求，"
+        "仅适用于承载显式最终交付契约的综合节点。"
+        "本节点是内部工作节点，不得复制或采用原始任务中的最终报告格式；"
+        "本节点输出格式只遵循系统消息中的本节点输出契约。"
+    )
+
+
 def _delivery_rule(node: SelectedNode) -> str:
     fields = _required_fields(node)
     quoted_fields = json.dumps(fields, ensure_ascii=False)
@@ -72,6 +89,10 @@ def _delivery_rule(node: SelectedNode) -> str:
     )
     compact_rule = _compact_delivery_rule(fields) if _compact_mode_enabled() else ""
     explicit_rule = task_delivery_contract.delivery_rule(node.output_contract)
+    contract_kind = task_delivery_contract.explicit_contract_kind(
+        node.output_contract
+    )
+    response_scope = "最终响应" if contract_kind != "generic" else "本节点响应"
     if node.output_contract.get("machine_readable_required"):
         separation_rule = (
             "事实、假设、推断和不确定性必须在相应字段内明确区分。"
@@ -79,7 +100,7 @@ def _delivery_rule(node: SelectedNode) -> str:
             else ""
         )
         return (
-            "最终响应必须只包含一个合法JSON对象，不要使用Markdown代码块或任何前后缀。"
+            f"{response_scope}必须只包含一个合法JSON对象，不要使用Markdown代码块或任何前后缀。"
             f"JSON顶层必须包含这些键：{quoted_fields}。"
             "每个键必须直接填写本节点对原始任务的实际分析、证据、结论或建议；"
             "禁止复述输出契约、字段清单或模式定义，禁止输出"
@@ -115,7 +136,7 @@ def _delivery_rule(node: SelectedNode) -> str:
         else ""
     )
     return (
-        f"最终响应必须直接交付以下内容：{field_text}。"
+        f"本节点响应必须直接交付以下内容：{field_text}。"
         f"{heading_rule}"
         "禁止复述输出契约、字段清单或模式定义。"
         f"{separation_rule}"
@@ -138,7 +159,7 @@ def contract_aware_system_prompt(node: SelectedNode) -> str:
         f"本节点功能：{functions}。负责原子工作：{', '.join(node.assigned_work)}。"
         "禁止调用、请求或假装使用网页、搜索、插件、文件、代码执行、数据库、API、浏览器、工具或其他模型。"
         "只能依据原始任务和系统显式传入的上游节点结果。不得读取未声明节点，不得与同独立组节点交换结果。"
-        f"{rules}{_delivery_rule(node)}"
+        f"{_task_format_scope_rule(node)}{rules}{_delivery_rule(node)}"
         "不要展示隐藏思维过程。"
     )
 
