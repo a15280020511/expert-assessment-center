@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Production V5 pipeline with structured constraints and dynamic preselection."""
+"""Production V5 pipeline with structured constraints and dynamic optimization."""
 from __future__ import annotations
 
 import math
@@ -13,9 +13,120 @@ from artifact_manifest import write_manifest
 from execution_graph import ExecutionGraph, GraphLimits
 from v5_model_company import candidate_company
 from v5_task_constraints import (
+    TaskConstraints,
     compile_task_constraints,
     dynamic_objective_weights,
 )
+
+
+def _normalized(raw: Mapping[str, float]) -> dict[str, float]:
+    total = sum(max(0.0, float(value)) for value in raw.values())
+    if total <= 0:
+        raise ValueError("dynamic weight vector must contain positive mass")
+    return {
+        key: max(0.0, float(value)) / total
+        for key, value in raw.items()
+    }
+
+
+def _task_fit_feature_weights(profile: Any) -> dict[str, float]:
+    """Derive model-task-fit feature weights from the current task profile."""
+    complexity = max(
+        0.0,
+        min(7.0, float(getattr(profile, "complexity_score", 0) or 0)),
+    )
+    high_stakes = 1.0 if bool(getattr(profile, "high_stakes", False)) else 0.0
+    chinese = 1.0 if bool(getattr(profile, "chinese", False)) else 0.0
+    domains = list(getattr(profile, "domains", []) or [])
+    cross_domain = min(2.0, max(0.0, float(len(domains) - 1)))
+    return _normalized(
+        {
+            "primary_domain": 1.0 + complexity / 7.0,
+            "secondary_domain": 0.5 + cross_domain / 2.0,
+            "reasoning_capability": 0.5 + complexity / 3.5,
+            "structured_output": 0.5 + 1.5 * high_stakes,
+            "language_fit": 0.25 + 0.75 * chinese,
+        }
+    )
+
+
+def _description_fit(model: Any, domain: str, policy: Mapping[str, Any]) -> float:
+    descriptions = policy.get("description_terms", {})
+    if not isinstance(descriptions, Mapping):
+        return 0.0
+    terms = descriptions.get(domain, descriptions.get("general", []))
+    if not isinstance(terms, list) or not terms:
+        return 0.0
+    text = " ".join(
+        (
+            str(getattr(model, "id", "")),
+            str(getattr(model, "name", "")),
+            str(getattr(model, "description", "")),
+        )
+    ).casefold()
+    matches = sum(1 for term in terms if str(term).casefold() in text)
+    return min(1.0, matches / max(1.0, math.sqrt(len(terms))))
+
+
+def _dynamic_task_fit(
+    model: Any,
+    profile: Any,
+) -> tuple[float, list[str], dict[str, float], dict[str, float]]:
+    """Score task fit without a fixed feature-weight tuple."""
+    policy = core.market.load_json(core.market.POLICY_FILE)
+    primary = _description_fit(model, profile.primary_domain, policy)
+    secondary = _description_fit(model, profile.secondary_domain, policy)
+    supported = {
+        str(value).casefold()
+        for value in (getattr(model, "supported_parameters", []) or [])
+    }
+    reasoning = float(
+        "reasoning" in supported
+        or bool(getattr(model, "reasoning", {}) or {})
+    )
+    structured = float(
+        bool(
+            supported.intersection(
+                {
+                    "structured_outputs",
+                    "response_format",
+                    "json_schema",
+                }
+            )
+        )
+    )
+    model_text = " ".join(
+        (
+            str(getattr(model, "id", "")),
+            str(getattr(model, "name", "")),
+            str(getattr(model, "description", "")),
+        )
+    ).casefold()
+    if bool(getattr(profile, "chinese", False)):
+        language = float(
+            any(
+                marker in model_text
+                for marker in ("chinese", "中文", "multilingual", "多语言")
+            )
+        )
+    else:
+        language = 1.0
+
+    features = {
+        "primary_domain": primary,
+        "secondary_domain": secondary,
+        "reasoning_capability": reasoning,
+        "structured_output": structured,
+        "language_fit": language,
+    }
+    weights = _task_fit_feature_weights(profile)
+    score = sum(weights[key] * features[key] for key in weights)
+    reasons = [
+        f"dynamic-task-fit:{key}={features[key]:.4f},weight={weights[key]:.4f}"
+        for key in weights
+        if features[key] > 0
+    ]
+    return max(0.0, min(1.0, score)), reasons, weights, features
 
 
 def _rank_v5_models(
@@ -36,13 +147,21 @@ def _rank_v5_models(
             continue
         if core.market._expired(getattr(model, "expiration_date", None)):
             continue
-        if int(getattr(model, "context_length", 0) or 0) < int(profile.requested_context):
+        if int(getattr(model, "context_length", 0) or 0) < int(
+            profile.requested_context
+        ):
             continue
         if int(getattr(model, "max_completion_tokens", 0) or 0) <= 0:
             continue
-        if getattr(model, "input_modalities", None) and "text" not in model.input_modalities:
+        if (
+            getattr(model, "input_modalities", None)
+            and "text" not in model.input_modalities
+        ):
             continue
-        if getattr(model, "output_modalities", None) and "text" not in model.output_modalities:
+        if (
+            getattr(model, "output_modalities", None)
+            and "text" not in model.output_modalities
+        ):
             continue
         if (
             getattr(model, "prompt_price_per_million", None) is None
@@ -57,15 +176,21 @@ def _rank_v5_models(
         )
         if intelligence_rank > int(run.ranking_limit):
             continue
-        fit, reasons = core.market._task_fit(model, profile)
+        fit, reasons, feature_weights, feature_values = _dynamic_task_fit(
+            model,
+            profile,
+        )
         price = float(model.blended_price_per_million or math.inf)
         context_fit = min(
             1.0,
-            int(model.context_length) / max(1, int(profile.requested_context) * 4),
+            int(model.context_length)
+            / max(1, int(profile.requested_context) * 4),
         )
         model.components = {
             "intelligence_rank": intelligence_rank,
-            "task_fit": max(0.0, min(1.0, float(fit))),
+            "task_fit": fit,
+            "task_fit_feature_weights": feature_weights,
+            "task_fit_feature_values": feature_values,
             "price": price,
             "context_fit": context_fit,
         }
@@ -74,11 +199,18 @@ def _rank_v5_models(
 
     if len(eligible) < 2:
         raise core.market.ExpertTeamError(
-            "V5 requires at least two eligible direct models in the admitted intelligence pool."
+            "V5 requires at least two eligible direct models in the admitted "
+            "intelligence pool."
         )
 
-    best_rank = min(int(row.components["intelligence_rank"]) for row in eligible)
-    worst_rank = max(int(row.components["intelligence_rank"]) for row in eligible)
+    best_rank = min(
+        int(row.components["intelligence_rank"])
+        for row in eligible
+    )
+    worst_rank = max(
+        int(row.components["intelligence_rank"])
+        for row in eligible
+    )
     finite_prices = [
         float(row.components["price"])
         for row in eligible
@@ -86,7 +218,8 @@ def _rank_v5_models(
     ]
     min_price = min(finite_prices or [1.0])
     max_price = max(finite_prices or [1.0])
-    weights = dynamic_objective_weights(profile, str(getattr(run, "task", "") or ""))
+    task = str(getattr(run, "task", "") or "")
+    weights = dynamic_objective_weights(profile, task)
 
     for model in eligible:
         rank = int(model.components["intelligence_rank"])
@@ -101,19 +234,30 @@ def _rank_v5_models(
             if max_price == min_price
             else 1.0 - (price - min_price) / (max_price - min_price)
         )
+        quality_weight = weights["intelligence"] + weights["task_fit"]
+        quality_estimate = (
+            weights["intelligence"] * intelligence
+            + weights["task_fit"] * float(model.components["task_fit"])
+        ) / max(quality_weight, 1e-12)
+        price_pressure = weights["value"] / max(
+            weights["value"] + quality_weight,
+            1e-12,
+        )
         value = max(
             0.0,
             min(
                 1.0,
-                (intelligence + float(model.components["task_fit"]))
-                / 2.0
-                * price_score,
+                quality_estimate
+                * price_score ** (0.5 + price_pressure),
             ),
         )
         model.components.update(
             {
                 "intelligence": intelligence,
+                "price_score": price_score,
                 "value_index": value,
+                "value_quality_estimate": quality_estimate,
+                "value_price_pressure": price_pressure,
                 "objective_weights": dict(weights),
                 "weight_policy": "task-derived-normalized",
             }
@@ -121,13 +265,16 @@ def _rank_v5_models(
         model.score = sum(
             (
                 weights["intelligence"] * intelligence,
-                weights["task_fit"] * float(model.components["task_fit"]),
+                weights["task_fit"]
+                * float(model.components["task_fit"]),
                 weights["value"] * value,
-                weights["context"] * float(model.components["context_fit"]),
+                weights["context"]
+                * float(model.components["context_fit"]),
             )
         )
         model.fit_reasons.append(
-            "V5 dynamic preselection: weights derived from current task complexity, risk, scope and context"
+            "V5 dynamic preselection: objective and task-fit feature weights "
+            "are derived from the current task"
         )
 
     ranked = sorted(
@@ -168,17 +315,26 @@ def _delivery_limits(
     shape: Mapping[str, int | bool],
 ) -> tuple[float, int, bool, dict[str, Any]]:
     constraints = compile_task_constraints(task)
-    strict = bool(profile.high_stakes or shape["explicit_output_contract"])
+    strict = bool(
+        profile.high_stakes
+        or shape["explicit_output_contract"]
+        or not constraints.external_facts_allowed
+    )
     authorized = bool(constraints.allow_degraded_success and not strict)
+    breadth = max(1, int(shape["maximum_atomic_work"]))
+    complexity = max(0, min(7, int(profile.complexity_score)))
     if authorized:
-        breadth = max(1, int(shape["maximum_atomic_work"]))
-        coverage = max(0.75, 1.0 - 1.0 / (breadth + 1.0))
+        structural_coverage = 1.0 - 1.0 / (breadth + 1.0)
+        risk_coverage = 0.5 + complexity / 20.0
+        coverage = min(0.95, max(0.5, structural_coverage, risk_coverage))
     else:
         coverage = 1.0
-    min_nodes = (
-        1
-        if int(shape["maximum_atomic_work"]) <= 1
-        else min(int(shape["maximum_atomic_work"]), 2)
+    min_nodes = max(
+        1,
+        min(
+            breadth,
+            int(math.ceil(math.log2(breadth + 1))),
+        ),
     )
     return coverage, min_nodes, authorized, {
         "user_authorized_degradation": constraints.allow_degraded_success,
@@ -186,6 +342,9 @@ def _delivery_limits(
         "degradation_authorization": constraints.degradation_authorization,
         "high_stakes": bool(profile.high_stakes),
         "explicit_output_contract": bool(shape["explicit_output_contract"]),
+        "closed_world": not constraints.external_facts_allowed,
+        "required_work_coverage": coverage,
+        "minimum_successful_content_nodes": min_nodes,
         "task_constraints": constraints.to_dict(),
         "policy": "explicit-deny-overrides-allow-default-deny",
     }
@@ -202,11 +361,22 @@ def _planning_limits(
     profile: Any,
     resource_shape: Mapping[str, int | bool],
 ) -> GraphLimits:
-    coverage, min_nodes, allow, _ = _delivery_limits(task, profile, resource_shape)
+    coverage, min_nodes, allow, _ = _delivery_limits(
+        task,
+        profile,
+        resource_shape,
+    )
+    max_nodes = max(1, min(planning_nodes, total_calls - recovery_calls))
+    max_edges = min(64, max_nodes * max(0, max_nodes - 1) // 2)
+    breadth = max(1, int(resource_shape["maximum_atomic_work"]))
+    max_stages = min(
+        8,
+        max(1, int(math.ceil(math.log2(breadth + 1))) + 1),
+    )
     return GraphLimits(
-        max_nodes=max(1, min(planning_nodes, total_calls - recovery_calls)),
-        max_edges=64,
-        max_stages=8,
+        max_nodes=max_nodes,
+        max_edges=max_edges,
+        max_stages=max_stages,
         max_model_calls=total_calls,
         max_retries=recovery_calls,
         max_replacements=recovery_calls,
@@ -216,6 +386,22 @@ def _planning_limits(
         allow_degraded_success=allow,
         cost_risk_multiplier=runtime.config.cost_risk_multiplier,
     )
+
+
+def _dynamic_quality_tolerance(
+    profile: Any,
+    constraints: TaskConstraints,
+    shape: Mapping[str, int | bool],
+    platform_ceiling: float,
+) -> float:
+    complexity = max(0.0, min(7.0, float(profile.complexity_score)))
+    strictness = (
+        2.0 * float(bool(profile.high_stakes))
+        + 1.5 * float(not constraints.external_facts_allowed)
+        + float(bool(shape["explicit_output_contract"]))
+    )
+    task_tolerance = max(0.0, 12.0 - 1.25 * complexity - 2.0 * strictness)
+    return max(0.0, min(20.0, float(platform_ceiling), task_tolerance))
 
 
 def main(
@@ -237,8 +423,8 @@ def main(
     runtime = runtime or core._runtime_from_args(args, run)
     output = Path(run.output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    total_calls, recovery_calls, planning_nodes, anomaly_budget = core._validated_budget(
-        args, run, runtime
+    total_calls, recovery_calls, planning_nodes, anomaly_budget = (
+        core._validated_budget(args, run, runtime)
     )
     core._write_json(output / "v5-runtime-config.json", runtime.describe())
 
@@ -264,9 +450,23 @@ def main(
         profile=profile,
         resource_shape=shape,
     )
-    _, _, _, delivery_decision = _delivery_limits(run.task, profile, shape)
+    _, _, _, delivery_decision = _delivery_limits(
+        run.task,
+        profile,
+        shape,
+    )
+    quality_tolerance = _dynamic_quality_tolerance(
+        profile,
+        constraints,
+        shape,
+        float(args.quality_tolerance_pct),
+    )
 
-    endpoint_fixture = core._load_json(args.endpoint_file) if args.endpoint_file else None
+    endpoint_fixture = (
+        core._load_json(args.endpoint_file)
+        if args.endpoint_file
+        else None
+    )
     schedule = core._search_schedule(
         shape,
         runtime,
@@ -299,7 +499,9 @@ def main(
                 run,
                 maximum_models=rank_width,
             )
-            endpoint_source = "openrouter-live-model-endpoints-bounded-current-run"
+            endpoint_source = (
+                "openrouter-live-model-endpoints-bounded-current-run"
+            )
             allow_synthetic = False
 
         snapshot = runtime.build_catalog_snapshot(
@@ -325,17 +527,17 @@ def main(
             optimization = runtime.planner_policy.optimize_execution_graph(
                 candidate_graph,
                 limits=limits,
-                quality_tolerance_pct=max(
-                    0.0,
-                    min(20.0, float(args.quality_tolerance_pct)),
+                quality_tolerance_pct=quality_tolerance,
+                solver_timeout_seconds=(
+                    runtime.config.solver_timeout_seconds
                 ),
-                solver_timeout_seconds=runtime.config.solver_timeout_seconds,
             )
             value = core._optimization_value(optimization)
             improvement = (
                 None
                 if incumbent is None
-                else (value - incumbent_value) / max(abs(incumbent_value), 1e-9)
+                else (value - incumbent_value)
+                / max(abs(incumbent_value), 1e-9)
             )
             trace.append(
                 {
@@ -375,23 +577,41 @@ def main(
             "policy": "task-shape-feasibility-marginal-value",
             "resource_shape": shape,
             "delivery_decision": delivery_decision,
+            "dynamic_quality_tolerance_pct": quality_tolerance,
+            "quality_tolerance_platform_ceiling_pct": float(
+                args.quality_tolerance_pct
+            ),
             "ranking_emergency_ceiling": ranking_ceiling,
-            "candidate_emergency_ceiling_per_work": runtime.config.maximum_candidates_per_work,
+            "candidate_emergency_ceiling_per_work": (
+                runtime.config.maximum_candidates_per_work
+            ),
             "attempts": trace,
             "cross_task_history_used": False,
         },
     )
 
-    if incumbent is None or final_market is None or final_candidates is None or final_snapshot is None:
+    if (
+        incumbent is None
+        or final_market is None
+        or final_candidates is None
+        or final_snapshot is None
+    ):
         report = core.build_infeasibility_report(
-            last_candidates or final_candidates or {"candidates": [], "interpretations": {}},
+            last_candidates
+            or final_candidates
+            or {"candidates": [], "interpretations": {}},
             limits,
-            message=str(last_error or "adaptive search exhausted without a feasible graph"),
+            message=str(
+                last_error
+                or "adaptive search exhausted without a feasible graph"
+            ),
         )
         report["adaptive_search_trace"] = trace
         core._write_json(output / "v5-planning-infeasibility.json", report)
         write_manifest(output)
-        raise core.market.ExpertTeamError(f"{report['code']}: {report['message']}")
+        raise core.market.ExpertTeamError(
+            f"{report['code']}: {report['message']}"
+        )
 
     core._annotate_market(
         final_market,
@@ -401,12 +621,32 @@ def main(
         catalog_snapshot_id=final_snapshot.snapshot_id,
         search_trace=trace,
     )
-    final_market["preselection_objective_weights"] = dynamic_objective_weights(profile, run.task)
+    final_market["preselection_objective_weights"] = (
+        dynamic_objective_weights(profile, run.task)
+    )
+    final_market["task_fit_feature_weights"] = (
+        _task_fit_feature_weights(profile)
+    )
     final_market["fixed_preselection_weight_tuple_used"] = False
-    final_market["preselection_policy"] = "task-derived-normalized-objective"
-    core._write_json(output / "catalog-snapshot.json", final_snapshot.to_dict())
-    core._write_json(output / "v5-model-endpoint-market.json", final_market)
-    core._write_json(output / "v5-candidate-graph.json", final_candidates)
+    final_market["fixed_task_fit_weight_tuple_used"] = False
+    final_market["preselection_policy"] = (
+        "task-derived-normalized-objective"
+    )
+    final_market["task_fit_policy"] = (
+        "task-profile-derived-normalized-features"
+    )
+    core._write_json(
+        output / "catalog-snapshot.json",
+        final_snapshot.to_dict(),
+    )
+    core._write_json(
+        output / "v5-model-endpoint-market.json",
+        final_market,
+    )
+    core._write_json(
+        output / "v5-candidate-graph.json",
+        final_candidates,
+    )
 
     optimization = dict(incumbent)
     optimization["approved_budget"] = {
@@ -417,14 +657,28 @@ def main(
         "planning_node_policy": "optimizer-decides-within-call-budget",
         "cost_anomaly_usd": anomaly_budget,
         "quality_tier": run.quality_tier,
+        "quality_tier_policy": "compatibility-label-not-fixed-weight-tuple",
+        "dynamic_quality_tolerance_pct": quality_tolerance,
         "ranking_emergency_ceiling": ranking_ceiling,
         "selected_ranking_width": len(final_ranked),
-        "candidate_emergency_ceiling_per_work": runtime.config.maximum_candidates_per_work,
+        "candidate_emergency_ceiling_per_work": (
+            runtime.config.maximum_candidates_per_work
+        ),
         "delivery_policy": delivery_decision,
         "model_company_policy": "task-global-all-different",
-        "dynamic_preselection_weights": dynamic_objective_weights(profile, run.task),
+        "dynamic_preselection_weights": dynamic_objective_weights(
+            profile,
+            run.task,
+        ),
+        "dynamic_task_fit_feature_weights": (
+            _task_fit_feature_weights(profile)
+        ),
         "runtime_config_sha256": sha256(
-            core.json.dumps(runtime.config.to_dict(), sort_keys=True, default=str).encode("utf-8")
+            core.json.dumps(
+                runtime.config.to_dict(),
+                sort_keys=True,
+                default=str,
+            ).encode("utf-8")
         ).hexdigest(),
     }
     optimization["catalog_snapshot_id"] = final_snapshot.snapshot_id
@@ -435,13 +689,24 @@ def main(
         "optimization": optimization,
     }
     core._write_json(output / "v5-optimization.json", optimization)
-    core._write_json(output / "v5-execution-graph.json", optimization["execution_graph"])
+    core._write_json(
+        output / "v5-execution-graph.json",
+        optimization["execution_graph"],
+    )
     benchmark = core.planning_benchmark(planner)
-    core.write_benchmark(output / "v5-planning-benchmark.json", benchmark)
-    graph = ExecutionGraph.from_mapping(optimization["execution_graph"])
+    core.write_benchmark(
+        output / "v5-planning-benchmark.json",
+        benchmark,
+    )
+    graph = ExecutionGraph.from_mapping(
+        optimization["execution_graph"]
+    )
 
     if run.dry_run:
-        requests = [runtime.build_node_payload(node, run.task, []) for node in graph.nodes]
+        requests = [
+            runtime.build_node_payload(node, run.task, [])
+            for node in graph.nodes
+        ]
         core._write_json(
             output / "v5-dry-run.json",
             {
@@ -475,7 +740,9 @@ def main(
     )
     core._write_json(output / "v5-result.json", result)
     write_manifest(output)
-    print(f"V5 execution completed: {output / 'v5-final-report.md'}")
+    print(
+        f"V5 execution completed: {output / 'v5-final-report.md'}"
+    )
     return 0
 
 
