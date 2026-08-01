@@ -1,0 +1,118 @@
+{
+  "schema_version": "v5-paid-acceptance-durable-receipt-1",
+  "status": "PASS",
+  "request_id": "constitutional-final-receipt-20260802-v7",
+  "request_branch": "acceptance/v5-constitutional-final-receipt-v7-20260802",
+  "request_commit_sha": "ba67998a36ec705a9709008a4193f84de2c90649",
+  "target_sha": "d2a3bb12a4c5072f9126badb3d603fabb4ee392f",
+  "paid_workflow_run_id": "30714714331",
+  "paid_job_result": "success",
+  "independent_job_result": "success",
+  "paid_artifact": {
+    "id": 8823013990,
+    "node_id": "MDg6QXJ0aWZhY3Q4ODIzMDEzOTkw",
+    "name": "v5-paid-acceptance-30714714331",
+    "size_in_bytes": 592409,
+    "url": "https://api.github.com/repos/a15280020511/expert-assessment-center/actions/artifacts/8823013990",
+    "archive_download_url": "https://api.github.com/repos/a15280020511/expert-assessment-center/actions/artifacts/8823013990/zip",
+    "expired": false,
+    "digest": "sha256:405272db183e9992b4ff1ffdcf1aa0b2e1ee63fc6ef61c56dfe9a091faf3bd75",
+    "created_at": "2026-08-01T19:29:30Z",
+    "updated_at": "2026-08-01T19:29:30Z",
+    "expires_at": "2026-08-31T19:29:29Z",
+    "workflow_run": {
+      "id": 30714714331,
+      "repository_id": 1316227495,
+      "head_repository_id": 1316227495,
+      "head_branch": "acceptance/v5-constitutional-final-receipt-v7-20260802",
+      "head_sha": "ba67998a36ec705a9709008a4193f84de2c90649"
+    }
+  },
+  "independent_attestation_artifact": {
+    "id": 8823016514,
+    "node_id": "MDg6QXJ0aWZhY3Q4ODIzMDE2NTE0",
+    "name": "v5-paid-acceptance-attestation-30714714331",
+    "size_in_bytes": 1790,
+    "url": "https://api.github.com/repos/a15280020511/expert-assessment-center/actions/artifacts/8823016514",
+    "archive_download_url": "https://api.github.com/repos/a15280020511/expert-assessment-center/actions/artifacts/8823016514/zip",
+    "expired": false,
+    "digest": "sha256:fb511fc761e1858e746435c7af95a643343c017241583b6858f0388f03d6c0f7",
+    "created_at": "2026-08-01T19:29:44Z",
+    "updated_at": "2026-08-01T19:29:44Z",
+    "expires_at": "2026-08-31T19:29:43Z",
+    "workflow_run": {
+      "id": 30714714331,
+      "repository_id": 1316227495,
+      "head_repository_id": 1316227495,
+      "head_branch": "acceptance/v5-constitutional-final-receipt-v7-20260802",
+      "head_sha": "ba67998a36ec705a9709008a4193f84de2c90649"
+    }
+  },
+  "independent_attestation": {
+    "schema_version": "v5-paid-acceptance-attestation-3",
+    "status": "PASS",
+    "request_id": "constitutional-final-receipt-20260802-v7",
+    "paid_workflow_run_id": "30714714331",
+    "paid_target_sha": "d2a3bb12a4c5072f9126badb3d603fabb4ee392f",
+    "paid_artifact_id": 8823013990,
+    "paid_artifact_name": "v5-paid-acceptance-30714714331",
+    "paid_artifact_digest": "sha256:405272db183e9992b4ff1ffdcf1aa0b2e1ee63fc6ef61c56dfe9a091faf3bd75",
+    "independent_revalidation": {
+      "schema_version": "v5-independent-artifact-revalidation-2",
+      "status": "PASS",
+      "expected_run_id": "30714714331",
+      "artifact_run_id": "30714714331",
+      "expected_execution_sha": "d2a3bb12a4c5072f9126badb3d603fabb4ee392f",
+      "artifact_execution_sha": "d2a3bb12a4c5072f9126badb3d603fabb4ee392f",
+      "manifest_file_count": 31,
+      "manifest_files_checked": 31,
+      "actual_artifact_file_count": 31,
+      "model_calls": 3,
+      "actual_cost_usd": 0.00216492,
+      "call_ledger_cost_usd": 0.00216492,
+      "maximum_calls": 4,
+      "maximum_cost_usd": 0.01,
+      "node_count": 3,
+      "actual_called_models": [
+        {
+          "node_id": "node-36914a817c4b44a6",
+          "model": "deepseek/deepseek-v4-flash-0731",
+          "company": "deepseek",
+          "status": "passed"
+        },
+        {
+          "node_id": "node-4caa0deeaef47771",
+          "model": "qwen/qwen3.5-9b",
+          "company": "alibaba",
+          "status": "passed"
+        },
+        {
+          "node_id": "node-ed24fbc06625ddea",
+          "model": "openai/gpt-oss-120b",
+          "company": "openai",
+          "status": "passed"
+        }
+      ],
+      "duplicate_called_companies_across_nodes": {},
+      "unresolved_called_companies": [],
+      "completion_mode": "full",
+      "quality_status": "full_success",
+      "runtime_evidence_integrity_status": "PASS",
+      "independently_recomputed_evidence_violations": [],
+      "final_report_contract_violations": [],
+      "archive_sha256": "405272db183e9992b4ff1ffdcf1aa0b2e1ee63fc6ef61c56dfe9a091faf3bd75",
+      "expected_artifact_digest": "sha256:405272db183e9992b4ff1ffdcf1aa0b2e1ee63fc6ef61c56dfe9a091faf3bd75",
+      "recomputed_from_primitive_evidence": true,
+      "paid_acceptance_verdict_used_as_source": false,
+      "failures": []
+    },
+    "independently_recomputed_from_primitive_evidence": true,
+    "paid_acceptance_verdict_used_as_source": false,
+    "production_ref_moved": false,
+    "public_report_published": false
+  },
+  "independently_recomputed_from_primitive_evidence": true,
+  "production_ref_moved": false,
+  "public_report_published": false,
+  "authoritative_qualification_receipt": true
+}
