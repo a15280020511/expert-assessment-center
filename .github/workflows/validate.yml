@@ -6,12 +6,7 @@ on:
       - "open-model-market/**"
       - "tests/**"
       - "tools/**"
-      - ".github/workflows/execution-ticket.yml"
-      - ".github/workflows/expert-integrity-validate.yml"
-      - ".github/workflows/v5-validate.yml"
-      - ".github/workflows/validate.yml"
-      - ".github/workflows/promote-v5-production.yml"
-      - ".github/workflows/v5-one-time-paid-acceptance.yml"
+      - ".github/workflows/**"
       - ".github/dependabot.yml"
       - "requirements*.txt"
       - "ruff.toml"
@@ -22,12 +17,7 @@ on:
       - "open-model-market/**"
       - "tests/**"
       - "tools/**"
-      - ".github/workflows/execution-ticket.yml"
-      - ".github/workflows/expert-integrity-validate.yml"
-      - ".github/workflows/v5-validate.yml"
-      - ".github/workflows/validate.yml"
-      - ".github/workflows/promote-v5-production.yml"
-      - ".github/workflows/v5-one-time-paid-acceptance.yml"
+      - ".github/workflows/**"
       - ".github/dependabot.yml"
       - "requirements*.txt"
       - "ruff.toml"
@@ -38,9 +28,9 @@ permissions:
 
 jobs:
   validate:
-    name: Validate V5 toolkit
+    name: Validate constitutional V5 toolkit
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -53,81 +43,119 @@ jobs:
             requirements-runtime.txt
             requirements-dev.txt
       - name: Install pinned Python dependencies
-        run: python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
-      - name: Verify dependencies and OR-Tools
         run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
           python -m pip check
           python -c "from ortools.sat.python import cp_model; print(cp_model.CpModel())"
-      - name: Run canonical Ruff checks
+      - name: Verify constitutional production architecture
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
+          required=(
+            .github/dependabot.yml
+            .github/workflows/validate.yml
+            .github/workflows/v5-validate.yml
+            .github/workflows/expert-integrity-validate.yml
+            .github/workflows/execution-ticket.yml
+            .github/workflows/promote-v5-production.yml
+            .github/workflows/v5-one-time-paid-acceptance.yml
+            ruff.toml
+            open-model-market/v5_pipeline.py
+            open-model-market/v5_constitutional_pipeline.py
+            open-model-market/v5_task_constraints.py
+            open-model-market/v5_constitutional_runtime.py
+            open-model-market/v5_execution_primitives.py
+            open-model-market/v5_runtime.py
+            open-model-market/v5_production_ticket.py
+            open-model-market/v5_issue_ticket.py
+            open-model-market/v5_admission_lock.py
+            open-model-market/v5_execution_auditor.py
+            open-model-market/v5_execution_auditor_integrity.py
+            open-model-market/v5_independent_artifact_revalidation.py
+            open-model-market/v5_final_status.py
+            open-model-market/v5_final_attestation.py
+            open-model-market/v5_general_task_planning.py
+            open-model-market/v5_planning_diagnostics.py
+            open-model-market/v5_quality_status_integrity.py
+            open-model-market/v5_truncation_budget_policy.py
+            open-model-market/v5_planner.py
+            open-model-market/v5_value_optimizer.py
+            open-model-market/legacy-cleanup-report.json
+            open-model-market/constitutional-qualification-report.json
+            tests/test_v5_task_constraints.py
+            tests/test_v5_dynamic_model_fit.py
+            tests/test_v5_general_task_planning.py
+            tests/test_v5_general_task_full_planning.py
+            tests/test_v5_planning_scenario_matrix.py
+            tests/test_v5_constitutional_runtime.py
+            tests/test_v5_independent_artifact_revalidation.py
+            tests/test_v5_full_load_stability.py
+            tools/run_v5_p0_regressions.py
+          )
+          for path in "${required[@]}"; do
+            test -s "$path"
+          done
+          legacy=(
+            open-model-market/v5_executor.py
+            open-model-market/v5_empty_output_recovery.py
+            open-model-market/v5_total_call_cap.py
+            open-model-market/v5_production_hardening.py
+            open-model-market/v5_r8_executor.py
+            open-model-market/v5_r8_gate_wiring.py
+            open-model-market/v5_r8_policy.py
+            open-model-market/v5_r8_provider_policy.py
+            open-model-market/v5_r8_retry_policy.py
+            open-model-market/v5_resilient_executor.py
+            open-model-market/v5_stage_d_provider_compat.py
+          )
+          for path in "${legacy[@]}"; do
+            test ! -e "$path"
+          done
+          test "$(jq -r '.status' open-model-market/legacy-cleanup-report.json)" = "PASS"
+          test "$(jq -r '.v5_executor_production_reachable' open-model-market/legacy-cleanup-report.json)" = "false"
+          test "$(jq -r '.status' open-model-market/constitutional-qualification-report.json)" = "PASS"
+          if grep -RInE --include='*.py' 'def install\(|\.install\(' open-model-market tests; then
+            echo "Legacy install hook remains" >&2
+            exit 1
+          fi
+      - name: Run canonical Ruff and compile gates
+        shell: bash
+        run: |
+          set -euo pipefail
           mkdir -p validation-logs
           python -m ruff check . 2>&1 | tee validation-logs/ruff.log
-      - name: Compile canonical Python tree
-        shell: bash
-        run: |
-          set -o pipefail
-          mkdir -p validation-logs
-          python -m compileall -q open-model-market tests tools 2>&1 | tee validation-logs/compileall.log
-      - name: Verify constitutional V5 production files
-        run: |
-          test -s .github/dependabot.yml
-          test -s .github/workflows/validate.yml
-          test -s .github/workflows/v5-validate.yml
-          test -s .github/workflows/expert-integrity-validate.yml
-          test -s .github/workflows/execution-ticket.yml
-          test -s .github/workflows/promote-v5-production.yml
-          test -s .github/workflows/v5-one-time-paid-acceptance.yml
-          test -s ruff.toml
-          test -s open-model-market/v5_pipeline.py
-          test -s open-model-market/v5_constitutional_pipeline.py
-          test -s open-model-market/v5_task_constraints.py
-          test -s open-model-market/v5_constitutional_runtime.py
-          test -s open-model-market/v5_production_ticket.py
-          test -s open-model-market/v5_issue_ticket.py
-          test -s open-model-market/v5_admission_lock.py
-          test -s open-model-market/v5_execution_auditor.py
-          test -s open-model-market/v5_execution_auditor_integrity.py
-          test -s open-model-market/v5_independent_artifact_revalidation.py
-          test -s open-model-market/v5_final_status.py
-          test -s open-model-market/v5_final_attestation.py
-          test -s open-model-market/v5_general_task_planning.py
-          test -s open-model-market/v5_planning_diagnostics.py
-          test -s open-model-market/v5_quality_status_integrity.py
-          test -s open-model-market/v5_truncation_budget_policy.py
-          test -s open-model-market/v5_empty_output_recovery.py
-          test -s open-model-market/v5_total_call_cap.py
-          test -s open-model-market/v5_planner.py
-          test -s open-model-market/v5_value_optimizer.py
-          test -s tests/test_v5_task_constraints.py
-          test -s tests/test_v5_dynamic_model_fit.py
-          test -s tests/test_v5_general_task_planning.py
-          test -s tests/test_v5_general_task_full_planning.py
-          test -s tests/test_v5_planning_scenario_matrix.py
-          test -s tests/test_v5_quality_status_integrity.py
-          test -s tests/test_v5_empty_output_recovery.py
-          test -s tools/run_v5_p0_regressions.py
+          python -m compileall -q open-model-market tests tools \
+            2>&1 | tee validation-logs/compileall.log
       - name: Run canonical full unit test suite
         shell: bash
         run: |
-          set -o pipefail
-          mkdir -p validation-logs
-          python -m unittest discover -s tests -p 'test*.py' -v 2>&1 | tee validation-logs/unit-test.log
-      - name: Run mandatory P0 regressions
+          set -euo pipefail
+          python -m unittest discover -s tests -p 'test*.py' -v \
+            2>&1 | tee validation-logs/unit-test.log
+          grep -Eq '^Ran [0-9]+ tests? in ' validation-logs/unit-test.log
+          grep -q '^OK$' validation-logs/unit-test.log
+      - name: Run mandatory native P0 regressions
         shell: bash
         run: |
-          set -o pipefail
-          python tools/run_v5_p0_regressions.py 2>&1 | tee p0-regressions.log
-          grep -q "REGISTERED V5GeneralTaskPlanningTests: 6" p0-regressions.log
-          grep -q "REGISTERED V5GeneralTaskFullPlanningTests: 4" p0-regressions.log
-          grep -q "REGISTERED V5PlanningScenarioMatrixTests: 4" p0-regressions.log
-          grep -q "REGISTERED V5QualityStatusIntegrityTests: 6" p0-regressions.log
-          grep -q "REGISTERED V5EmptyOutputRecoveryTests: 6" p0-regressions.log
-          grep -q "REGISTERED TOTAL: 26" p0-regressions.log
-          grep -q "P0 REGRESSION RESULT: run=26, passed=26, failures=0, errors=0, skipped=0" p0-regressions.log
+          set -euo pipefail
+          python tools/run_v5_p0_regressions.py \
+            2>&1 | tee validation-logs/p0-regressions.log
+          grep -q "REGISTERED V5GeneralTaskPlanningTests: 6" validation-logs/p0-regressions.log
+          grep -q "REGISTERED V5PlanningScenarioMatrixTests: 4" validation-logs/p0-regressions.log
+          grep -q "REGISTERED V5GeneralTaskFullPlanningTests: 4" validation-logs/p0-regressions.log
+          grep -q "REGISTERED V5ConstitutionalRuntimeTests: 6" validation-logs/p0-regressions.log
+          grep -q "REGISTERED TaskConstraintPolarityTests: 3" validation-logs/p0-regressions.log
+          grep -q "REGISTERED ClosedWorldEvidenceTests: 5" validation-logs/p0-regressions.log
+          grep -q "REGISTERED DynamicObjectiveTests: 1" validation-logs/p0-regressions.log
+          grep -q "REGISTERED ActualCompanyAuditTests: 2" validation-logs/p0-regressions.log
+          grep -q "REGISTERED IndependentArtifactRevalidationTests: 3" validation-logs/p0-regressions.log
+          grep -q "REGISTERED TOTAL: 34" validation-logs/p0-regressions.log
+          grep -q "P0 REGRESSION RESULT: run=34, passed=34, failures=0, errors=0, skipped=0" \
+            validation-logs/p0-regressions.log
       - name: Run deterministic constitutional V5 end-to-end dry-run
+        shell: bash
         run: |
+          set -euo pipefail
           python open-model-market/v5_constitutional_pipeline.py \
             --task "比较三个城市公共投资方案，完成财务建模、政策与法律合规、证据核验、预测推演、独立红队反证和最终决策。" \
             --catalog-file tests/fixtures/models.json \
@@ -137,24 +165,32 @@ jobs:
             --maximum-recovery-calls 2 \
             --quality-tier value \
             --output-dir validation-artifacts
-          test -s validation-artifacts/v5-execution-graph.json
-          test -s validation-artifacts/v5-planning-benchmark.json
-          test -s validation-artifacts/task-constraints.json
-          test -s validation-artifacts/v5-model-endpoint-market.json
-          test -s validation-artifacts/artifact-manifest.json
           python - <<'PY'
           import json
           from pathlib import Path
+
           root = Path("validation-artifacts")
           constraints = json.loads((root / "task-constraints.json").read_text())
           market = json.loads((root / "v5-model-endpoint-market.json").read_text())
+          optimization = json.loads((root / "v5-optimization.json").read_text())
+          graph = json.loads((root / "v5-execution-graph.json").read_text())
           dry = json.loads((root / "v5-dry-run.json").read_text())
+          companies = [
+              node["parameter_profile"]["model_company"]
+              for node in graph["nodes"]
+          ]
+          assert optimization["solver_status"] in {"OPTIMAL", "FEASIBLE"}
+          assert optimization["optimizer"] == "google-or-tools-cp-sat"
+          assert len(companies) == len(set(companies))
           assert constraints["external_tools_allowed"] is False
           assert constraints["fail_closed"] is True
+          assert dry["global_monkey_patching"] is False
+          assert dry["model_company_policy"] == "task-global-all-different"
+          assert dry["task_constraints"] == constraints
           assert market["fixed_preselection_weight_tuple_used"] is False
           assert market["fixed_task_fit_weight_tuple_used"] is False
-          assert dry["global_monkey_patching"] is False
-          assert dry["task_constraints"] == constraints
+          assert abs(sum(market["preselection_objective_weights"].values()) - 1.0) < 1e-9
+          assert abs(sum(market["task_fit_feature_weights"].values()) - 1.0) < 1e-9
           PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
@@ -163,6 +199,5 @@ jobs:
           path: |
             validation-artifacts/
             validation-logs/
-            p0-regressions.log
           if-no-files-found: warn
           retention-days: 7
