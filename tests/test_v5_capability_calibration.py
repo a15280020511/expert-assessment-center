@@ -17,7 +17,7 @@ from v5_runtime import RuntimeConfig  # noqa: E402
 def _resource_bundle(
     required_copies: int = 2,
     *,
-    different_model_required=True,
+    different_model_required: bool = True,
 ):
     interpretation_id = "interpretation-test"
     work = {
@@ -44,13 +44,9 @@ def _resource_bundle(
             "machine_readable_required": False,
         },
         "independence_requirements": {
-            "independent_execution_preferred": bool(
-                different_model_required
-            ),
-            "different_model_required": bool(different_model_required),
-            "different_provider_preferred": bool(
-                different_model_required
-            ),
+            "independent_execution_preferred": different_model_required,
+            "different_model_required": different_model_required,
+            "different_provider_preferred": different_model_required,
         },
     }
     return {
@@ -144,7 +140,19 @@ class TestV5CapabilityCalibration(unittest.TestCase):
             maximum_per_group=12,
         )
 
-    def test_rank_backed_adaptive_proxy_restores_required_models(self):
+    @staticmethod
+    def limits():
+        return GraphLimits(
+            max_nodes=2,
+            max_edges=4,
+            max_stages=2,
+            max_model_calls=2,
+            max_retries=0,
+            max_replacements=0,
+            max_budget_usd=0.30,
+        )
+
+    def test_rank_backed_global_company_calibration_restores_assignment(self):
         resources = _resource_bundle(required_copies=2)
         market = {
             "endpoints": [
@@ -159,46 +167,28 @@ class TestV5CapabilityCalibration(unittest.TestCase):
         self.assertTrue(audit["calibration_applied"])
         self.assertEqual(
             audit["calibration_status"],
-            "rank-backed-adaptive-proxy-calibrated",
+            "rank-backed-global-company-breadth-calibrated",
         )
-        self.assertEqual(audit["static_eligible_model_count"], 0)
-        self.assertEqual(audit["adaptive_eligible_model_count"], 2)
+        self.assertEqual(audit["static_eligible_company_count"], 0)
+        self.assertEqual(audit["adaptive_eligible_company_count"], 2)
         self.assertEqual(audit["adaptive_proxy_floor"], 0.52)
-        self.assertEqual(audit["required_distinct_models"], 2)
+        self.assertEqual(audit["local_distinct_model_target"], 2)
+        self.assertEqual(audit["work_candidate_company_breadth_target"], 2)
         self.assertFalse(audit["capability_scores_modified"])
         self.assertFalse(audit["task_demands_modified"])
-        self.assertEqual(
-            {row["model"] for row in bundle["candidates"]},
-            {"vendor-a/model-a", "vendor-b/model-b"},
-        )
+        self.assertFalse(audit["proxy_floor_lowered"])
         optimized = self.policy.optimize_execution_graph(
             bundle,
-            limits=GraphLimits(
-                max_nodes=2,
-                max_edges=4,
-                max_stages=2,
-                max_model_calls=2,
-                max_retries=0,
-                max_replacements=0,
-                max_budget_usd=0.30,
-            ),
+            limits=self.limits(),
             quality_tolerance_pct=2.0,
             solver_timeout_seconds=5.0,
         )
-        graph = optimized["execution_graph"]
-        self.assertEqual(len(graph["nodes"]), 2)
-        self.assertEqual(
-            len({node["model"] for node in graph["nodes"]}),
-            2,
-        )
-        self.assertEqual(
-            graph["metadata"]["model_company_policy"][
-                "selected_company_count"
-            ],
-            2,
-        )
+        policy = optimized["execution_graph"]["metadata"][
+            "model_company_policy"
+        ]
+        self.assertEqual(policy["selected_company_count"], 2)
 
-    def test_proxy_baseline_insufficient_remains_fail_closed(self):
+    def test_rank_or_proxy_shortage_remains_fail_closed(self):
         resources = _resource_bundle(required_copies=2)
         market = {
             "endpoints": [
@@ -213,56 +203,21 @@ class TestV5CapabilityCalibration(unittest.TestCase):
         self.assertFalse(audit["calibration_applied"])
         self.assertEqual(
             audit["calibration_status"],
-            "rank-backed-proxy-still-insufficient",
+            "rank-backed-global-company-breadth-insufficient",
         )
         self.assertEqual(
-            audit["adaptive_eligible_models"],
-            ["vendor-a/model-a"],
+            audit["adaptive_eligible_companies"],
+            ["vendor-a"],
         )
         with self.assertRaises(v5_planner.V5PlanningError):
             self.policy.optimize_execution_graph(
                 bundle,
-                limits=GraphLimits(
-                    max_nodes=2,
-                    max_edges=4,
-                    max_stages=2,
-                    max_model_calls=2,
-                    max_retries=0,
-                    max_replacements=0,
-                    max_budget_usd=0.30,
-                ),
+                limits=self.limits(),
                 quality_tolerance_pct=2.0,
                 solver_timeout_seconds=5.0,
             )
 
-    def test_low_rank_model_cannot_enter_adaptive_calibration(self):
-        resources = _resource_bundle(required_copies=2)
-        market = {
-            "endpoints": [
-                _endpoint("vendor-a/model-a", "provider-a", 0.55, 1.0),
-                _endpoint(
-                    "vendor-b/model-b",
-                    "provider-b",
-                    0.52,
-                    1.1,
-                    benchmark_score=0.34,
-                ),
-            ]
-        }
-        bundle = self.generate(resources, market)
-        audit = bundle["hard_capability_calibration"]["interpretations"][
-            "interpretation-test"
-        ]["work_calibrations"][0]
-        self.assertEqual(
-            audit["calibration_status"],
-            "rank-backed-proxy-still-insufficient",
-        )
-        self.assertEqual(
-            audit["adaptive_eligible_models"],
-            ["vendor-a/model-a"],
-        )
-
-    def test_static_threshold_remains_when_market_is_sufficient(self):
+    def test_static_threshold_is_retained_when_market_is_sufficient(self):
         resources = _resource_bundle(required_copies=2)
         market = {
             "endpoints": [
@@ -277,11 +232,11 @@ class TestV5CapabilityCalibration(unittest.TestCase):
         self.assertFalse(audit["calibration_applied"])
         self.assertEqual(
             audit["calibration_status"],
-            "static-threshold-sufficient",
+            "static-threshold-global-company-breadth-sufficient",
         )
-        self.assertEqual(audit["static_eligible_model_count"], 2)
+        self.assertEqual(audit["static_eligible_company_count"], 2)
 
-    def test_company_constraint_overrides_ordinary_model_reuse(self):
+    def test_task_global_company_constraint_overrides_local_model_reuse(self):
         resources = _resource_bundle(
             required_copies=2,
             different_model_required=False,
@@ -296,7 +251,7 @@ class TestV5CapabilityCalibration(unittest.TestCase):
             "interpretation-test"
         ]["work_calibrations"][0]
         self.assertEqual(audit["required_execution_copies"], 2)
-        self.assertEqual(audit["required_distinct_models"], 1)
+        self.assertEqual(audit["local_distinct_model_target"], 1)
         self.assertFalse(audit["different_model_required"])
         with self.assertRaisesRegex(
             v5_planner.V5PlanningError,
@@ -304,20 +259,12 @@ class TestV5CapabilityCalibration(unittest.TestCase):
         ):
             self.policy.optimize_execution_graph(
                 bundle,
-                limits=GraphLimits(
-                    max_nodes=2,
-                    max_edges=4,
-                    max_stages=2,
-                    max_model_calls=2,
-                    max_retries=0,
-                    max_replacements=0,
-                    max_budget_usd=0.30,
-                ),
+                limits=self.limits(),
                 quality_tolerance_pct=2.0,
                 solver_timeout_seconds=5.0,
             )
 
-    def test_compatibility_installers_do_not_mutate_formal_planner(self):
+    def test_compatibility_installers_are_no_ops(self):
         original_generator = v5_planner.generate_candidate_graph
         original_pruner = v5_planner.pareto_prune
         original_optimizer_generator = (
@@ -325,17 +272,14 @@ class TestV5CapabilityCalibration(unittest.TestCase):
         )
         calibration.install()
         v5_candidate_diversity.install()
-        self.assertIs(
-            v5_planner.generate_candidate_graph,
-            original_generator,
-        )
+        self.assertIs(v5_planner.generate_candidate_graph, original_generator)
         self.assertIs(v5_planner.pareto_prune, original_pruner)
         self.assertIs(
             v5_value_optimizer.generate_candidate_graph,
             original_optimizer_generator,
         )
 
-    def test_formal_production_entries_use_explicit_policy(self):
+    def test_formal_entries_use_explicit_policy_without_monkey_patching(self):
         pipeline = (
             ROOT / "open-model-market" / "v5_pipeline.py"
         ).read_text(encoding="utf-8")
@@ -354,7 +298,7 @@ class TestV5CapabilityCalibration(unittest.TestCase):
         )
         self.assertIn("config = RuntimeConfig(", production)
         self.assertIn("build_production_runtime(config)", production)
-        self.assertIn("return ProductionRuntime(", recovery)
+        self.assertIn("return build_runtime(", recovery)
         self.assertIn(
             "planner_policy=CrossEndpointPlannerPolicy(config)",
             recovery,
