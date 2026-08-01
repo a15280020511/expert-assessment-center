@@ -32,17 +32,65 @@ BASE_CAPABILITIES = (
 )
 
 OPERATION_CAPABILITIES: Mapping[str, Mapping[str, float]] = {
-    "analysis": {"general_analysis": 0.92, "complex_reasoning": 0.74, "delivery": 0.62},
-    "causal_reasoning": {"causal_reasoning": 0.96, "complex_reasoning": 0.86, "evidence_validation": 0.62},
-    "quantitative_modeling": {"quantitative_reasoning": 0.98, "statistics": 0.84, "complex_reasoning": 0.82, "delivery": 0.70},
-    "forecasting": {"forecasting": 0.98, "statistics": 0.70, "complex_reasoning": 0.78, "risk_discovery": 0.60},
-    "counterfactual_analysis": {"counterfactual_analysis": 0.96, "causal_reasoning": 0.74, "complex_reasoning": 0.82},
-    "evidence_validation": {"evidence_validation": 0.99, "risk_discovery": 0.72, "complex_reasoning": 0.74, "delivery": 0.66},
-    "decision_comparison": {"decision_comparison": 0.98, "complex_reasoning": 0.86, "risk_discovery": 0.68, "delivery": 0.78},
-    "adversarial_reasoning": {"adversarial_reasoning": 0.99, "risk_discovery": 0.94, "evidence_validation": 0.72},
-    "implementation": {"implementation": 0.99, "complex_reasoning": 0.70, "delivery": 0.82},
-    "creative_generation": {"creative_generation": 0.98, "delivery": 0.58},
-    "synthesis": {"synthesis": 0.99, "decision_comparison": 0.82, "evidence_validation": 0.72, "delivery": 0.92},
+    "analysis": {
+        "general_analysis": 0.92,
+        "complex_reasoning": 0.74,
+        "delivery": 0.62,
+    },
+    "causal_reasoning": {
+        "causal_reasoning": 0.96,
+        "complex_reasoning": 0.86,
+        "evidence_validation": 0.62,
+    },
+    "quantitative_modeling": {
+        "quantitative_reasoning": 0.98,
+        "statistics": 0.84,
+        "complex_reasoning": 0.82,
+        "delivery": 0.70,
+    },
+    "forecasting": {
+        "forecasting": 0.98,
+        "statistics": 0.70,
+        "complex_reasoning": 0.78,
+        "risk_discovery": 0.60,
+    },
+    "counterfactual_analysis": {
+        "counterfactual_analysis": 0.96,
+        "causal_reasoning": 0.74,
+        "complex_reasoning": 0.82,
+    },
+    "evidence_validation": {
+        "evidence_validation": 0.99,
+        "risk_discovery": 0.72,
+        "complex_reasoning": 0.74,
+        "delivery": 0.66,
+    },
+    "decision_comparison": {
+        "decision_comparison": 0.98,
+        "complex_reasoning": 0.86,
+        "risk_discovery": 0.68,
+        "delivery": 0.78,
+    },
+    "adversarial_reasoning": {
+        "adversarial_reasoning": 0.99,
+        "risk_discovery": 0.94,
+        "evidence_validation": 0.72,
+    },
+    "implementation": {
+        "implementation": 0.99,
+        "complex_reasoning": 0.70,
+        "delivery": 0.82,
+    },
+    "creative_generation": {
+        "creative_generation": 0.98,
+        "delivery": 0.58,
+    },
+    "synthesis": {
+        "synthesis": 0.99,
+        "decision_comparison": 0.82,
+        "evidence_validation": 0.72,
+        "delivery": 0.92,
+    },
 }
 
 HARD_BY_OPERATION: Mapping[str, set[str]] = {
@@ -55,10 +103,11 @@ HARD_BY_OPERATION: Mapping[str, set[str]] = {
     "synthesis": {"synthesis"},
 }
 
-# A reversible field trial is not the same thing as validating external evidence.
-# Normalize only phrases where “validation” directly modifies a trial step/period.
 _TRIAL_VALIDATION_ZH = re.compile(r"验证(?=(步骤|计划|周期|期|流程|方案|试用))")
-_TRIAL_VALIDATION_EN = re.compile(r"\bvalidation(?=\s+(step|plan|period|workflow|trial))", re.I)
+_TRIAL_VALIDATION_EN = re.compile(
+    r"\bvalidation(?=\s+(step|plan|period|workflow|trial))",
+    re.I,
+)
 
 
 def _clamp(value: float) -> float:
@@ -83,21 +132,35 @@ def _semantic_run(run: Any) -> tuple[Any, bool]:
 
 
 def _capability_labels(interpretation: Mapping[str, Any]) -> list[str]:
-    domains = sorted({str(domain) for work in interpretation["atomic_work"] for domain in work["domain_requirements"]})
+    domains = sorted(
+        {
+            str(domain)
+            for work in interpretation["atomic_work"]
+            for domain in work["domain_requirements"]
+        }
+    )
     return [*BASE_CAPABILITIES, *(f"domain:{domain}" for domain in domains)]
 
 
-def _work_capability_demands(work: Mapping[str, Any], labels: list[str]) -> tuple[dict[str, float], dict[str, bool], dict[str, float]]:
+def _work_capability_demands(
+    work: Mapping[str, Any],
+    labels: list[str],
+) -> tuple[dict[str, float], dict[str, bool], dict[str, float]]:
     demand = {label: 0.0 for label in labels}
     hard = {label: False for label in labels}
     confidence = {label: 0.0 for label in labels}
     operation_requirements = work.get("operation_requirements", {})
     for operation, operation_weight_raw in operation_requirements.items():
         operation_weight = _clamp(operation_weight_raw)
-        for capability, base_weight in OPERATION_CAPABILITIES.get(str(operation), {}).items():
+        for capability, base_weight in OPERATION_CAPABILITIES.get(
+            str(operation), {}
+        ).items():
             value = _clamp(base_weight * (0.62 + 0.38 * operation_weight))
             demand[capability] = max(demand.get(capability, 0.0), value)
-            confidence[capability] = max(confidence.get(capability, 0.0), 0.68 + 0.26 * operation_weight)
+            confidence[capability] = max(
+                confidence.get(capability, 0.0),
+                0.68 + 0.26 * operation_weight,
+            )
         for capability in HARD_BY_OPERATION.get(str(operation), set()):
             hard[capability] = True
 
@@ -112,11 +175,11 @@ def _work_capability_demands(work: Mapping[str, Any], labels: list[str]) -> tupl
         label = f"domain:{domain}"
         value = _clamp(domain_weight_raw)
         demand[label] = max(demand.get(label, 0.0), value)
-        # Domain fit remains an optimization signal for ordinary work. It becomes
-        # a hard gate only when the task compiler explicitly requests independent
-        # high-assurance specialist coverage.
         hard[label] = bool(high_assurance_domain and value >= 0.62)
-        confidence[label] = max(confidence.get(label, 0.0), 0.72 + 0.22 * value)
+        confidence[label] = max(
+            confidence.get(label, 0.0),
+            0.72 + 0.22 * value,
+        )
 
     context = work.get("context_requirements", {})
     if int(context.get("required_context_tokens", 0)) >= 32768:
@@ -141,8 +204,21 @@ def _matrix_rows(interpretation: Mapping[str, Any]) -> dict[str, Any]:
     demand_rows: list[list[float]] = []
     hard_rows: list[list[int]] = []
     confidence_rows: list[list[float]] = []
-    prompt_labels = sorted({name for work in works for name in work.get("prompt_requirements", {})})
-    reasoning_labels = sorted({name for work in works for name in work.get("reasoning_requirements", {}) if name != "reasoning_enabled"})
+    prompt_labels = sorted(
+        {
+            name
+            for work in works
+            for name in work.get("prompt_requirements", {})
+        }
+    )
+    reasoning_labels = sorted(
+        {
+            name
+            for work in works
+            for name in work.get("reasoning_requirements", {})
+            if name != "reasoning_enabled"
+        }
+    )
     prompt_rows: list[list[float]] = []
     reasoning_rows: list[list[float]] = []
     work_index: list[dict[str, Any]] = []
@@ -152,9 +228,31 @@ def _matrix_rows(interpretation: Mapping[str, Any]) -> dict[str, Any]:
         demand, hard, confidence = _work_capability_demands(work, labels)
         demand_rows.append([round(demand[label], 6) for label in labels])
         hard_rows.append([1 if hard[label] else 0 for label in labels])
-        confidence_rows.append([round(confidence[label], 6) for label in labels])
-        prompt_rows.append([round(_clamp(work.get("prompt_requirements", {}).get(label, 0.0)), 6) for label in prompt_labels])
-        reasoning_rows.append([round(_clamp(work.get("reasoning_requirements", {}).get(label, 0.0)), 6) for label in reasoning_labels])
+        confidence_rows.append(
+            [round(confidence[label], 6) for label in labels]
+        )
+        prompt_rows.append(
+            [
+                round(
+                    _clamp(
+                        work.get("prompt_requirements", {}).get(label, 0.0)
+                    ),
+                    6,
+                )
+                for label in prompt_labels
+            ]
+        )
+        reasoning_rows.append(
+            [
+                round(
+                    _clamp(
+                        work.get("reasoning_requirements", {}).get(label, 0.0)
+                    ),
+                    6,
+                )
+                for label in reasoning_labels
+            ]
+        )
         work_index.append(
             {
                 "work_id": work["work_id"],
@@ -162,9 +260,15 @@ def _matrix_rows(interpretation: Mapping[str, Any]) -> dict[str, Any]:
                 "importance": work["importance"],
                 "error_cost": work["error_cost"],
                 "verifiability": work["verifiability"],
-                "minimum_independent_copies": work.get("independence_requirements", {}).get("minimum_independent_copies", 1),
-                "required_context_tokens": work.get("context_requirements", {}).get("required_context_tokens", 0),
-                "expected_output_tokens": work.get("context_requirements", {}).get("expected_output_tokens", 0),
+                "minimum_independent_copies": work.get(
+                    "independence_requirements", {}
+                ).get("minimum_independent_copies", 1),
+                "required_context_tokens": work.get(
+                    "context_requirements", {}
+                ).get("required_context_tokens", 0),
+                "expected_output_tokens": work.get(
+                    "context_requirements", {}
+                ).get("expected_output_tokens", 0),
             }
         )
         for label in labels:
@@ -182,8 +286,14 @@ def _matrix_rows(interpretation: Mapping[str, Any]) -> dict[str, Any]:
     demand_array = np.asarray(demand_rows, dtype=float)
     hard_array = np.asarray(hard_rows, dtype=np.int8)
     confidence_array = np.asarray(confidence_rows, dtype=float)
-    if demand_array.shape != hard_array.shape or demand_array.shape != confidence_array.shape:
-        raise ValueError("Capability demand, hard-requirement, and confidence matrices must have identical shapes.")
+    if (
+        demand_array.shape != hard_array.shape
+        or demand_array.shape != confidence_array.shape
+    ):
+        raise ValueError(
+            "Capability demand, hard-requirement, and confidence matrices "
+            "must have identical shapes."
+        )
 
     return {
         "interpretation_id": interpretation["interpretation_id"],
@@ -194,11 +304,20 @@ def _matrix_rows(interpretation: Mapping[str, Any]) -> dict[str, Any]:
         "hard_requirement_matrix": hard_array.tolist(),
         "confidence_matrix": confidence_array.round(6).tolist(),
         "prompt_labels": prompt_labels,
-        "prompt_requirement_matrix": np.asarray(prompt_rows, dtype=float).round(6).tolist(),
+        "prompt_requirement_matrix": np.asarray(
+            prompt_rows,
+            dtype=float,
+        ).round(6).tolist(),
         "reasoning_labels": reasoning_labels,
-        "reasoning_requirement_matrix": np.asarray(reasoning_rows, dtype=float).round(6).tolist(),
+        "reasoning_requirement_matrix": np.asarray(
+            reasoning_rows,
+            dtype=float,
+        ).round(6).tolist(),
         "hard_requirements": hard_requirements,
-        "shape": {"work_count": int(demand_array.shape[0]), "capability_count": int(demand_array.shape[1])},
+        "shape": {
+            "work_count": int(demand_array.shape[0]),
+            "capability_count": int(demand_array.shape[1]),
+        },
     }
 
 
@@ -223,12 +342,7 @@ def compile_v5_task_resources(
     *,
     semantic_compiler: Any | None = None,
 ) -> dict[str, Any]:
-    """Compile resources through an explicitly selected semantic compiler.
-
-    The default preserves the base compiler for isolated callers. Production
-    passes the corrected compiler explicitly, eliminating import-order behavior
-    and global monkey patching.
-    """
+    """Compile resources through an explicitly selected semantic compiler."""
     semantic_run, trial_validation_disambiguated = _semantic_run(run)
     compiler = semantic_compiler or _default_compile_task_semantics
     task_semantics = compiler(
@@ -240,8 +354,12 @@ def compile_v5_task_resources(
     matrices = compile_resource_matrices(task_semantics)
     return {
         "version": 5,
-        "architecture": "task-interpretations-to-atomic-work-graphs-to-resource-matrices",
+        "architecture": (
+            "task-interpretations-to-atomic-work-graphs-to-resource-matrices"
+        ),
         "task_semantics": task_semantics,
+        "interpretations": list(task_semantics.get("interpretations", [])),
+        "task_signals": dict(task_semantics.get("task_signals", {})),
         "atomic_work_graphs": graphs,
         "resource_matrices": matrices,
         "semantic_input_policy": {
