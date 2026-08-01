@@ -12,7 +12,7 @@ import math
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 from hashlib import sha256
 from pathlib import Path
@@ -539,6 +539,93 @@ class ExecutionEngine:
         return 0.0
 
     @staticmethod
+    def _reasoning_saturation_evidence(
+        usage: Mapping[str, Any],
+        request: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        details = usage.get("completion_tokens_details")
+        details = details if isinstance(details, Mapping) else {}
+        try:
+            completion = max(0, int(usage.get("completion_tokens") or 0))
+        except (TypeError, ValueError):
+            completion = 0
+        try:
+            reasoning = max(0, int(details.get("reasoning_tokens") or 0))
+        except (TypeError, ValueError):
+            reasoning = 0
+        reasoning_request = request.get("reasoning")
+        reasoning_request = (
+            reasoning_request if isinstance(reasoning_request, Mapping) else {}
+        )
+        try:
+            requested_reasoning = max(
+                0,
+                int(reasoning_request.get("max_tokens") or 0),
+            )
+        except (TypeError, ValueError):
+            requested_reasoning = 0
+        ratio = reasoning / completion if completion else 0.0
+        saturated = bool(
+            completion > 0
+            and reasoning > 0
+            and (
+                ratio >= 0.75
+                or (
+                    requested_reasoning > 0
+                    and reasoning >= requested_reasoning
+                )
+            )
+        )
+        return {
+            "completion_tokens": completion,
+            "reasoning_tokens": reasoning,
+            "requested_reasoning_max_tokens": requested_reasoning,
+            "reasoning_share": round(ratio, 6),
+            "reasoning_saturated_empty_output": saturated,
+        }
+
+    @classmethod
+    def _reasoning_saturated_attempt(
+        cls,
+        attempt: RuntimeAttempt | None,
+    ) -> bool:
+        if attempt is None or attempt.answer:
+            return False
+        evidence = cls._reasoning_saturation_evidence(
+            attempt.usage,
+            attempt.request,
+        )
+        return bool(evidence["reasoning_saturated_empty_output"])
+
+    @staticmethod
+    def _visible_output_only_candidate(
+        node: SelectedNode,
+    ) -> SelectedNode:
+        reasoning_profile = dict(node.reasoning_profile)
+        reasoning_profile.update({
+            "reasoning_enabled": False,
+            "effort": "minimal",
+            "recovery_visible_output_only": True,
+        })
+        parameter_profile = dict(node.parameter_profile)
+        decisions = parameter_profile.get("dynamic_parameter_decisions")
+        decisions = dict(decisions) if isinstance(decisions, Mapping) else {}
+        decisions.update({
+            "reasoning_effort": "disabled-after-reasoning-saturation",
+            "visible_output_only_recovery": True,
+        })
+        parameter_profile["dynamic_parameter_decisions"] = decisions
+        parameter_profile["visible_output_only_recovery"] = True
+        request_config = dict(node.request_config)
+        request_config.pop("reasoning", None)
+        return replace(
+            node,
+            reasoning_profile=reasoning_profile,
+            parameter_profile=parameter_profile,
+            request_config=request_config,
+        )
+
+    @staticmethod
     def _finish_reason(response: Mapping[str, Any]) -> str:
         choices = response.get("choices")
         if isinstance(choices, list) and choices and isinstance(choices[0], Mapping):
@@ -720,6 +807,17 @@ class ExecutionEngine:
             actual_cost = self._actual_cost(response)
             budget_exceeded = budget.reconcile(actual_cost)
             if not answer:
+                saturation = self._reasoning_saturation_evidence(usage, payload)
+                gate_reasons = ["empty-output"]
+                transformations: list[Mapping[str, Any]] = []
+                message = "provider returned no usable answer"
+                if saturation["reasoning_saturated_empty_output"]:
+                    gate_reasons.append("reasoning-saturated-empty-output")
+                    message += " after reasoning consumed the visible-output path"
+                    transformations.append({
+                        "type": "reasoning-saturation-evidence",
+                        **saturation,
+                    })
                 failure = ExecutionFailure(
                     category=FailureCategory.PROVIDER_EMPTY_RESPONSE,
                     retryable=True,
@@ -729,16 +827,17 @@ class ExecutionEngine:
                     response_received=True,
                     usage_received=bool(usage),
                     actual_cost_usd=actual_cost,
-                    message="provider returned no usable answer",
+                    message=message,
                 )
                 return RuntimeAttempt(
                     attempt_index, kind, node.node_id, node.model, node.provider_endpoint,
-                    payload, "call_failed", None, 0.0, ["empty-output"],
+                    payload, "call_failed", None, 0.0, gate_reasons,
                     round(float(latency), 6), usage,
                     str(response.get("id") or "") or None,
                     str(response.get("model") or node.model) or None,
                     str(response.get("provider") or "") or None,
                     failure.to_dict(),
+                    answer_transformations=transformations,
                 )
             passed, quality, reasons = self.quality_policy.evaluate(node, response, answer)
             finish = self._finish_reason(response).casefold()
@@ -915,17 +1014,38 @@ class ExecutionEngine:
         # audited effective-cost-per-quality policy with a different objective.
         alternatives = [self._candidate(row, selected) for row in recovery_rows]
         last_attempted_node = selected
+        source_attempt = attempts[-1] if attempts else initial
+        reasoning_saturated = self._reasoning_saturated_attempt(source_attempt)
         if category in self.recovery_policy.replace_categories:
             for replacement in alternatives:
+                original_replacement = replacement
+                adaptation: dict[str, Any] | None = None
+                if reasoning_saturated:
+                    replacement = self._visible_output_only_candidate(replacement)
+                    adaptation = {
+                        "type": "recovery-request-adaptation",
+                        "policy": "reasoning-saturated-empty-output-visible-only-v1",
+                        "source_model": source_attempt.model if source_attempt else None,
+                        "source_provider_endpoint": (
+                            source_attempt.provider_endpoint if source_attempt else None
+                        ),
+                        "replacement_model": replacement.model,
+                        "replacement_provider_endpoint": replacement.provider_endpoint,
+                        "reasoning_removed": True,
+                        "substantive_prompt_changed": False,
+                    }
                 attempted = call(replacement, "replacement")
                 if attempted is None:
                     continue
+                if adaptation is not None:
+                    attempted.answer_transformations.append(adaptation)
                 last_attempted_node = replacement
                 if attempted.status == "passed":
                     return self._node_result(
                         selected, replacement, attempts, attempted, "success_recovered"
                     )
-                if self._degraded_usable(replacement, attempted) and (
+                quality_node = replacement if adaptation is not None else original_replacement
+                if self._degraded_usable(quality_node, attempted) and (
                     best is None or attempted.quality_score > best[0].quality_score
                 ):
                     best = (attempted, replacement)
