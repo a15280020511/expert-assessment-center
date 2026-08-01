@@ -61,6 +61,27 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("Checkout pinned production source", self.text)
         self.assertNotIn("ref: main", self.text)
 
+    def test_control_plane_and_execution_source_are_one_frozen_version(self):
+        self.assertEqual(
+            self.text.count("Enforce frozen production control plane"),
+            1,
+        )
+        self.assertIn("Resolve authoritative execution source", self.text)
+        self.assertGreaterEqual(
+            self.text.count('test "$main" = "$production"'),
+            2,
+        )
+        self.assertGreaterEqual(
+            self.text.count('test "$checked" = "$production"'),
+            2,
+        )
+        self.assertIn("checked-out-production-sha.txt", self.text)
+        self.assertIn(
+            '--commit-sha "$AUTHORITATIVE_EXECUTION_SHA"',
+            self.text,
+        )
+        self.assertNotIn('--commit-sha "${{ github.sha }}"', self.text)
+
     def test_production_has_atomic_admission_and_execution_groups(self):
         self.assertIn("group: expert-production-admission", self.text)
         self.assertIn("group: expert-production-global", self.text)
@@ -69,29 +90,44 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("EXECUTION_REJECTED", self.text)
 
     def test_report_audit_primary_artifact_and_final_attestation_order(self):
-        report = self.text.index("name: Prepare public report comments")
-        audit = self.text.index("name: Audit native V5 execution")
-        refresh = self.text.index("name: Refresh primary artifact manifest")
+        prepare = self.text.index("name: Prepare report publication package")
+        audit = self.text.index(
+            "name: Audit complete native V5 evidence before publication"
+        )
+        freeze = self.text.index(
+            "name: Freeze primary artifact manifest after audit"
+        )
         upload = self.text.index("name: Upload primary ticket artifacts")
+        publish_report = self.text.index(
+            "name: Publish report only after audit and artifact freeze"
+        )
         final = self.text.index("name: Render authoritative V5 final status")
         attest = self.text.index("name: Generate post-upload final attestation")
         proof = self.text.index("name: Upload final attestation artifact")
-        publish = self.text.index("name: Publish authoritative V5 final status")
-        self.assertLess(report, audit)
-        self.assertLess(audit, refresh)
-        self.assertLess(refresh, upload)
-        self.assertLess(upload, final)
+        publish_status = self.text.index(
+            "name: Publish authoritative V5 final status"
+        )
+        self.assertLess(prepare, audit)
+        self.assertLess(audit, freeze)
+        self.assertLess(freeze, upload)
+        self.assertLess(upload, publish_report)
+        self.assertLess(publish_report, final)
         self.assertLess(final, attest)
         self.assertLess(attest, proof)
-        self.assertLess(proof, publish)
+        self.assertLess(proof, publish_status)
+        self.assertIn("steps.audit.outputs.status == 'PASS'", self.text)
         self.assertIn("ticket-artifacts/final-status.json", self.text)
 
     def test_authoritative_failure_is_visible_job_failure(self):
         marker = self.text.index("name: Verify authoritative V5 final outcome")
         tail = self.text[marker:]
+        self.assertIn("steps.execute.outcome", tail)
+        self.assertIn("steps.prepare_report.outcome", tail)
         self.assertIn("steps.ticket_artifact.outcome", tail)
         self.assertIn("steps.audit.outcome", tail)
+        self.assertIn("steps.audit.outputs.status", tail)
         self.assertIn("steps.manifest.outcome", tail)
+        self.assertIn("steps.publish.outcome", tail)
         self.assertIn("steps.attest.outcome", tail)
         self.assertIn("steps.proof_artifact.outcome", tail)
         self.assertIn("steps.final.outputs.status", tail)
@@ -121,21 +157,38 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("refs/heads/production", self.promotion)
         self.assertNotIn("OPENROUTER_API_KEY", self.promotion)
 
-    def test_paid_attestation_is_bound_to_same_run_artifact(self):
+    def test_paid_acceptance_is_request_driven_and_recomputed(self):
         paid = self.paid_acceptance
-        self.assertIn("needs: paid-generic-acceptance", paid)
-        self.assertIn("EXPECTED_ARTIFACT_NAME: v5-paid-acceptance-", paid)
+        self.assertIn('branches:\n      - "acceptance/**"', paid)
+        self.assertIn('schema_version == "v5-paid-acceptance-2"', paid)
+        self.assertIn("target_sha", paid)
+        self.assertIn("maximum_total_calls", paid)
+        self.assertIn("maximum_recovery_calls", paid)
+        self.assertIn("cost_cap_usd", paid)
+        self.assertIn("quality_tier", paid)
+        self.assertIn(".task.question", paid)
+        self.assertNotIn("PR_NUMBER", paid)
+        self.assertNotIn("fix/v5-constitution-p0-publication-integrity", paid)
+        self.assertNotIn("generic-two-option-business-decision", paid)
+
+        self.assertIn("needs: paid-acceptance", paid)
+        self.assertIn("EXPECTED_ARTIFACT_NAME:", paid)
         self.assertIn(
             '"/repos/$REPOSITORY/actions/runs/$PAID_RUN_ID/artifacts',
             paid,
         )
-        self.assertIn("verdict.get(\"head_sha\")", paid)
-        self.assertIn("os.environ[\"PAID_HEAD_SHA\"]", paid)
-        self.assertIn("verdict.get(\"workflow_run_id\")", paid)
-        self.assertIn("os.environ[\"PAID_RUN_ID\"]", paid)
-        self.assertIn("artifact_bound_to_same_run", paid)
-        self.assertIn("branch_head_unchanged_before_attestation", paid)
-        self.assertIn('test "$(git rev-parse HEAD)" = "$PAID_HEAD_SHA"', paid)
+        self.assertIn("v5_independent_artifact_revalidation.py", paid)
+        self.assertIn("--archive paid-evidence.zip", paid)
+        self.assertIn("--expected-artifact-digest", paid)
+        self.assertIn(
+            "independently_recomputed_from_primitive_evidence: true",
+            paid,
+        )
+        self.assertIn("paid_acceptance_verdict_used_as_source: false", paid)
+        self.assertIn(
+            'test "$(git -C runtime-source rev-parse HEAD)" = "$TARGET_SHA"',
+            paid,
+        )
         self.assertNotIn("status=completed&per_page=20", paid)
         self.assertFalse(DETACHED_ATTESTATION.exists())
         self.assertFalse(DETACHED_ATTESTATION_REQUEST.exists())
