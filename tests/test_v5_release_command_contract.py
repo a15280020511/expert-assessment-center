@@ -82,6 +82,7 @@ class TestV5ReleaseCommandContract(unittest.TestCase):
         self.assertIn('"simple":', self.text)
         self.assertIn('"contract":', self.text)
         self.assertIn('"complex":', self.text)
+        self.assertIn('"closed_world":', self.text)
         self.assertIn(
             'signals["task_specific_production_branching"] is False',
             self.text,
@@ -91,15 +92,24 @@ class TestV5ReleaseCommandContract(unittest.TestCase):
             self.text,
         )
         self.assertIn(
-            'signals["architecture_selection_policy"] == "generic-semantic-matrix-only"',
+            'signals["architecture_selection_policy"]',
             self.text,
         )
+        self.assertIn('"generic-semantic-matrix-only"', self.text)
         self.assertIn(
             'search["policy"] == "task-shape-feasibility-marginal-value"',
             self.text,
         )
         self.assertIn(
             'complexity["complex"] >= complexity["simple"]',
+            self.text,
+        )
+        self.assertIn(
+            'weights["complex"] != weights["simple"]',
+            self.text,
+        )
+        self.assertIn(
+            'closed_world["external_facts_allowed"] is False',
             self.text,
         )
         self.assertNotIn("tabletop", self.text.casefold())
@@ -117,10 +127,18 @@ class TestV5ReleaseCommandContract(unittest.TestCase):
             'dry["global_monkey_patching"] is False',
             self.text,
         )
+        self.assertIn(
+            'market["fixed_preselection_weight_tuple_used"] is False',
+            self.text,
+        )
+        self.assertIn(
+            'constraints["fail_closed"] is True',
+            self.text,
+        )
 
     def test_gate_explicitly_records_production_is_not_moved(self):
         self.assertIn(
-            "Production ref movement remains disabled until paid generic acceptance is attached.",
+            "Production ref movement remains disabled until paid request-driven acceptance is attached.",
             self.text,
         )
         self.assertIn("test ! -e .release-authorized", self.text)
