@@ -46,6 +46,7 @@ class OpenRouterHardDeadlineTests(unittest.TestCase):
         elapsed = time.monotonic() - started
         self.assertEqual("timeout", raised.exception.category)
         self.assertTrue(raised.exception.retryable)
+        self.assertIn("hard deadline", str(raised.exception))
         self.assertLess(elapsed, 0.30)
 
     def test_fast_response_still_decodes_normally(self) -> None:
