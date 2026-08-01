@@ -198,6 +198,40 @@ def normalized_quantities(text: str) -> set[tuple[str, str, str]]:
     return values
 
 
+def closed_world_numeric_prompt(
+    task: str,
+    constraints: TaskConstraints | Mapping[str, Any] | None = None,
+) -> str:
+    """Render an operational numeric policy from the immutable task evidence."""
+    policy = constraints or compile_task_constraints(task)
+    if isinstance(policy, Mapping):
+        precise_allowed = bool(
+            policy.get("unsupported_precise_quantities_allowed", True)
+        )
+    else:
+        precise_allowed = policy.unsupported_precise_quantities_allowed
+    if precise_allowed:
+        return ""
+
+    allowed = sorted(
+        normalized_quantities(task),
+        key=lambda row: (row[2], float(row[0]), float(row[1] or row[0])),
+    )
+    tokens = [
+        f"{lo}{('-' + hi) if hi else ''}:{unit}"
+        for lo, hi, unit in allowed
+    ]
+    rendered = "[" + ", ".join(tokens) + "]"
+    return (
+        "封闭世界精确数量规则（不可覆盖）：允许出现的‘数值+单位’仅限"
+        f"以下规范化集合：{rendered}。除该集合外，禁止输出任何带单位的"
+        "精确数量，包括算术中间结果、示例值、替代月份或年份、敏感性阈值、"
+        "预测值和派生情景。校验题面给定结果时，只能写由清单内数量组成、且"
+        "等式结果也已在清单中的直接等式；不得展开或报告新的中间数值。"
+        "反转条件若题面未给数值阈值，只能定性表述。"
+    )
+
+
 def _normalize_claim(value: str) -> str:
     value = re.sub(r"[（(][^）)]*[）)]", "", str(value or ""))
     value = re.sub(r"[`*_~#>\[\]{}]", "", value)

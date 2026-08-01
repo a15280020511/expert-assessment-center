@@ -18,6 +18,7 @@ from v5_constitutional_runtime import (  # noqa: E402
     validate_scope_boundaries,
 )
 import v5_task_delivery_contract as contracts  # noqa: E402
+from v5_task_constraints import closed_world_numeric_prompt  # noqa: E402
 
 HEADINGS = [
     "题面事实",
@@ -32,6 +33,13 @@ TASK = (
     "- 严格依次使用四个Markdown二级标题：题面事实、计算与校验、"
     "推断与未知、结论与反转条件；每节不得为空\n"
     "- 不得调用外部工具，不得引入题面外精确数量。"
+)
+PAID_TASK = (
+    "仅依据题面完成封闭世界决策。方案A一次性投入1200元、每月300元；"
+    "方案B一次性投入300元、每月450元；评估期24个月。"
+    "题面给定并要求校验：盈亏平衡点为第6个月，方案A的24个月总成本为"
+    "8400元，方案B为11100元，差额为2700元。不得调用外部工具、不得联网、"
+    "不得引入题面外事实或其他精确数量。"
 )
 
 
@@ -109,15 +117,51 @@ class V5V4ContractIsolationTests(unittest.TestCase):
             self.assertNotIn(heading, internal_user)
             self.assertIn(heading, final_user)
 
+        numeric = closed_world_numeric_prompt(TASK)
+        self.assertIn("1200:yuan", numeric)
+        self.assertIn("300:yuan", numeric)
+        self.assertIn("450:yuan", numeric)
+        self.assertIn("24:month", numeric)
+        self.assertIn("算术中间结果", numeric)
+        self.assertIn("直接等式", numeric)
+        self.assertIn("定性表述", numeric)
+        self.assertNotIn("2550:yuan", numeric)
+        for payload in (internal_payload, final_payload):
+            system = payload["messages"][0]["content"]
+            self.assertIn(numeric, system)
+
     def test_closed_world_rejects_v4_novel_month_and_currency_values(self):
-        answer = (
-            "若评估期为3个月，方案A为2100元，方案B为1650元。"
+        rejected = (
+            "若评估期为5个月，阈值为2550元；另以12个月、150元、3000元、"
+            "7200元和10800元作为中间结果或派生情景。"
         )
-        violations = validate_scope_boundaries(TASK, answer)
-        rendered = ";".join(violations)
-        self.assertIn("3:month", rendered)
-        self.assertIn("2100:yuan", rendered)
-        self.assertIn("1650:yuan", rendered)
+        rendered = ";".join(validate_scope_boundaries(PAID_TASK, rejected))
+        for token in (
+            "5:month",
+            "12:month",
+            "150:yuan",
+            "2550:yuan",
+            "3000:yuan",
+            "7200:yuan",
+            "10800:yuan",
+        ):
+            self.assertIn(token, rendered)
+
+        compliant = (
+            "## 题面事实\n"
+            "方案A一次性投入1200元、每月300元；方案B一次性投入300元、"
+            "每月450元；评估期24个月。\n"
+            "## 计算与校验\n"
+            "1200元 + 300元 × 24个月 = 8400元。\n"
+            "300元 + 450元 × 24个月 = 11100元。\n"
+            "11100元 - 8400元 = 2700元。\n"
+            "1200元 + 300元 × 6个月 = 300元 + 450元 × 6个月。\n"
+            "## 推断与未知\n"
+            "题面未给其他情景参数，不作数值外推。\n"
+            "## 结论与反转条件\n"
+            "按题面总成本选择方案A；反转条件仅作定性表述。"
+        )
+        self.assertEqual([], validate_scope_boundaries(PAID_TASK, compliant))
 
     def test_company_audit_separates_degraded_from_strict_success(self):
         audit = ConstitutionalExecutionEngine._actual_company_audit(

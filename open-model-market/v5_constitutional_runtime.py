@@ -24,6 +24,7 @@ from v5_runtime import (
 )
 from v5_task_constraints import (
     TaskConstraints,
+    closed_world_numeric_prompt,
     compile_task_constraints,
     validate_answer_evidence,
 )
@@ -82,6 +83,7 @@ class ConstitutionalPromptPolicy:
             structured,
         )
         constraints = compile_task_constraints(original_task)
+        numeric_policy = closed_world_numeric_prompt(original_task, constraints)
         messages = payload.get("messages")
         if (
             isinstance(messages, list)
@@ -102,6 +104,7 @@ class ConstitutionalPromptPolicy:
                     + constitutional
                     + "\n题面是唯一用户事实源。模型推断必须标为推断或假设；"
                     "不得把上游模型判断改标为事实；不得引入题面没有的精确数量。"
+                    + (("\n" + numeric_policy) if numeric_policy else "")
                 ),
             }
             payload["messages"] = messages

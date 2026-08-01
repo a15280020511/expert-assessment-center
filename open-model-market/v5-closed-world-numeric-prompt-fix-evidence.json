@@ -1,0 +1,25 @@
+{
+  "schema_version": "v5-closed-world-numeric-prompt-fix-1",
+  "status": "PASS",
+  "source_paid_run_id": "30713073803",
+  "source_paid_artifact_id": 8822576440,
+  "source_paid_artifact_digest": "sha256:76e1d43f130dd8172109498f4a4dbd04be5809f7c8ee931eca9e63bf11c57dd5",
+  "allowed_quantities_derived_from_task": true,
+  "arithmetic_intermediate_quantities_forbidden": true,
+  "hypothetical_numeric_scenarios_forbidden": true,
+  "source_number_preserving_direct_equations_required": true,
+  "qualitative_reversal_conditions_required_without_task_threshold": true,
+  "v5_failure_quantities_remain_rejected": [
+    "5:month",
+    "12:month",
+    "150:yuan",
+    "2550:yuan",
+    "3000:yuan",
+    "7200:yuan",
+    "10800:yuan"
+  ],
+  "full_unit_test_count": 273,
+  "p0_regression_count": 45,
+  "paid_model_calls": 0,
+  "production_ref_moved": false
+}
