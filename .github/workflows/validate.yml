@@ -27,6 +27,20 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
+      - name: Set up pinned Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-runtime.txt
+
+      - name: Install pinned runtime dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
+          python -m pip check
+
       - name: Reconstruct and verify bound patch
         shell: bash
         run: |
