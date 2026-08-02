@@ -40,6 +40,57 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
           python -m pip check
+      - name: Diagnose reordered quantity binding
+        run: |
+          set -euo pipefail
+          PYTHONPATH=open-model-market python - <<'PY'
+          import json
+          from difflib import SequenceMatcher
+          import v5_task_constraints as c
+
+          task = '纸质登记表显示4件反光背心已领用，但现场只能确认3件。'
+          claim = '现场只能确认3件，登记表显示已领用4件反光背心'
+          rows = c._source_evidence_rows(task)
+          report = {
+              'claim': claim,
+              'claim_fragments': [],
+              'claim_result': c.fact_claim_supported(task, claim),
+              'quantity_mentions_claim': c._quantity_mentions(claim),
+              'quantity_mentions_task': c._quantity_mentions(task),
+          }
+          for fragment in c._evidence_fragments(claim, include_whole=False):
+              normalized = c._normalize_claim(fragment)
+              polarity = c._negation_polarity(fragment)
+              quantities = sorted(c.normalized_quantities(fragment))
+              item = {
+                  'fragment': fragment,
+                  'normalized': normalized,
+                  'polarity': polarity,
+                  'quantities': quantities,
+                  'quantity_binding_supported': c._quantity_bindings_supported(fragment, task) if quantities else None,
+                  'quantity_skeleton': c._quantity_skeleton(fragment),
+                  'source_candidates': [],
+              }
+              for row in rows:
+                  if row['polarity'] != polarity:
+                      continue
+                  item['source_candidates'].append({
+                      'raw': row['raw'],
+                      'context_raw': row['context_raw'],
+                      'normalized': row['normalized'],
+                      'contextual_normalized': row['contextual_normalized'],
+                      'quantities': sorted(row['quantities']),
+                      'contextual_quantities': sorted(row['contextual_quantities']),
+                      'quantity_skeleton': row['quantity_skeleton'],
+                      'contextual_quantity_skeleton': row['contextual_quantity_skeleton'],
+                      'spatially_compatible': c._spatially_compatible(fragment, row['context_raw']),
+                      'semantic_reorder_supported': c._semantic_reorder_supported(fragment, row),
+                      'fragment_ratio': SequenceMatcher(None, normalized, row['normalized']).ratio(),
+                      'context_ratio': SequenceMatcher(None, normalized, row['contextual_normalized']).ratio(),
+                  })
+              report['claim_fragments'].append(item)
+          print(json.dumps(report, ensure_ascii=False, indent=2, default=list))
+          PY
       - name: Run targeted spatial and closed-world regressions
         run: |
           set -euo pipefail
@@ -62,6 +113,7 @@ jobs:
           assert fact_claim_supported(task, '西侧出口外有不明液体')
           assert fact_claim_supported(task, '门外有自称维修人员要求进入且无法核验身份')
           assert fact_claim_supported(task, '反光背心已领用4件，现场只能确认3件')
+          assert fact_claim_supported(task, '现场只能确认3件，登记表显示已领用4件反光背心')
           assert not fact_claim_supported(task, '东侧出口外有不明液体')
           assert not fact_claim_supported(task, '西侧出口外地面干燥但有玻璃碎片')
           assert not fact_claim_supported(task, '门内有2名无法核验身份的人')
