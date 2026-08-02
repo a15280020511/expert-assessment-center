@@ -13,7 +13,10 @@
     "gpt_model": "~openai/gpt-latest",
     "claude_model": "~anthropic/claude-opus-latest",
     "claude_red_team_calls": 1,
-    "gpt_synthesis_calls_max": 1,
+    "claude_advisory_only": true,
+    "claude_gatekeeping_allowed": false,
+    "gpt_synthesis_calls": 1,
+    "governance_calls": 3,
     "model_loop_allowed": false
   },
   "execution": {
