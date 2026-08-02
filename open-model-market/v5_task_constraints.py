@@ -304,10 +304,24 @@ def _normalize_claim(value: str) -> str:
     return value
 
 
+_CARDINALITY_CONTEXT_MARKERS = (
+    "只有",
+    "仅有",
+    "共有",
+    "共计",
+    "总计",
+    "合计",
+)
+_CARDINALITY_LINK_SUFFIX_RE = re.compile(r"(?:为|是|有)$")
+
+
 def _quantity_skeleton(value: str) -> str:
-    """Remove only explicit quantities while preserving semantic anchors."""
+    """Normalize only cardinality syntax while preserving semantic anchors."""
     without_quantities = _QUANTITY_RE.sub("", str(value or ""))
-    return _normalize_claim(without_quantities)
+    normalized = _normalize_claim(without_quantities)
+    for marker in _CARDINALITY_CONTEXT_MARKERS:
+        normalized = normalized.replace(marker, "")
+    return _CARDINALITY_LINK_SUFFIX_RE.sub("", normalized)
 
 
 def _semantic_core(value: str, polarity: str) -> str:

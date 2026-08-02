@@ -367,6 +367,14 @@ def _planning_limits(
         resource_shape,
     )
     max_nodes = max(1, min(planning_nodes, total_calls - recovery_calls))
+    synthesis_slots = min(
+        max(0, max_nodes - 1),
+        1
+        if int(resource_shape.get("maximum_synthesis_work", 0) or 0) > 0
+        else 0,
+    )
+    maximum_content_nodes = max(1, max_nodes - synthesis_slots)
+    effective_min_nodes = min(int(min_nodes), maximum_content_nodes)
     max_edges = min(64, max_nodes * max(0, max_nodes - 1) // 2)
     breadth = max(1, int(resource_shape["maximum_atomic_work"]))
     max_stages = min(
@@ -382,7 +390,7 @@ def _planning_limits(
         max_replacements=recovery_calls,
         max_budget_usd=anomaly_budget,
         min_required_work_coverage=coverage,
-        min_successful_content_nodes=min_nodes,
+        min_successful_content_nodes=effective_min_nodes,
         allow_degraded_success=allow,
         cost_risk_multiplier=runtime.config.cost_risk_multiplier,
     )
@@ -450,11 +458,35 @@ def main(
         profile=profile,
         resource_shape=shape,
     )
-    _, _, _, delivery_decision = _delivery_limits(
-        run.task,
-        profile,
-        shape,
+    _, requested_minimum_content_nodes, _, delivery_decision = (
+        _delivery_limits(
+            run.task,
+            profile,
+            shape,
+        )
     )
+    reserved_synthesis_slots = min(
+        max(0, int(limits.max_nodes) - 1),
+        1 if int(shape.get("maximum_synthesis_work", 0) or 0) > 0 else 0,
+    )
+    maximum_plannable_content_nodes = max(
+        1,
+        int(limits.max_nodes) - reserved_synthesis_slots,
+    )
+    delivery_decision = {
+        **dict(delivery_decision),
+        "requested_minimum_successful_content_nodes": int(
+            requested_minimum_content_nodes
+        ),
+        "reserved_synthesis_slots": reserved_synthesis_slots,
+        "maximum_plannable_content_nodes": maximum_plannable_content_nodes,
+        "minimum_successful_content_nodes": int(
+            limits.min_successful_content_nodes
+        ),
+        "minimum_node_policy": (
+            "task-derived-clamped-to-initial-call-content-capacity"
+        ),
+    }
     quality_tolerance = _dynamic_quality_tolerance(
         profile,
         constraints,

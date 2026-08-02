@@ -1168,7 +1168,12 @@ class ExecutionEngine:
             sections.extend(["", f"## {index}. {work_id}", result.answer or ""])
         return "\n".join(sections).strip()
 
-    def _preflight(self, graph: ExecutionGraph) -> dict[str, Any]:
+    def _preflight(
+        self,
+        graph: ExecutionGraph,
+        limits: GraphLimits | None = None,
+    ) -> dict[str, Any]:
+        limits = limits or GraphLimits()
         risk_cost = graph.estimated_total_cost * self.config.cost_risk_multiplier
         providers: dict[str, int] = {}
         blockers: list[str] = []
@@ -1197,6 +1202,20 @@ class ExecutionEngine:
                         key = f"recovery:{selected_id}:{index}"
                         contract_integrity[key] = violations
                         blockers.append(f"output-contract-integrity:{key}")
+        content_work = self._content_work_ids(graph)
+        planned_content_node_ids = sorted(
+            {
+                node.node_id
+                for node in graph.nodes
+                if set(node.assigned_work).intersection(content_work)
+            }
+        )
+        minimum_content_nodes = max(
+            1,
+            int(limits.min_successful_content_nodes),
+        )
+        if len(planned_content_node_ids) < minimum_content_nodes:
+            blockers.append("planned-content-nodes-below-delivery-minimum")
         if (
             self.config.cost_anomaly_usd is not None
             and risk_cost > self.config.cost_anomaly_usd + 1e-12
@@ -1208,6 +1227,16 @@ class ExecutionEngine:
             "risk_adjusted_cost_upper_usd": round(risk_cost, 8),
             "cost_anomaly_usd": self.config.cost_anomaly_usd,
             "provider_counts": providers,
+            "delivery_feasibility": {
+                "planned_content_node_ids": planned_content_node_ids,
+                "planned_content_node_count": len(planned_content_node_ids),
+                "minimum_successful_content_nodes": minimum_content_nodes,
+                "status": (
+                    "PASS"
+                    if len(planned_content_node_ids) >= minimum_content_nodes
+                    else "FAIL"
+                ),
+            },
             "output_contract_integrity": contract_integrity,
             "blockers": list(dict.fromkeys(blockers)),
             "policy": "native-runtime-preflight-before-first-call",
@@ -1288,7 +1317,7 @@ class ExecutionEngine:
         if len(graph.nodes) > self.config.initial_call_limit:
             raise RuntimeError("planned nodes exceed RuntimeConfig.initial_call_limit")
 
-        preflight = self._preflight(graph)
+        preflight = self._preflight(graph, limits)
         root = Path(output_dir) if output_dir is not None else None
         if preflight["blockers"]:
             if root is not None:
@@ -1357,7 +1386,11 @@ class ExecutionEngine:
             stage_results.sort(key=lambda row: row.node_id)
             for row in stage_results:
                 outputs[row.node_id] = row
-            failed = [row.node_id for row in stage_results if not row.status.startswith("success")]
+            failed = [
+                row.node_id
+                for row in stage_results
+                if row.status not in STRICT_SUCCESS_STATUSES
+            ]
             stage_records.append(
                 {
                     "stage_index": stage_index,
@@ -1395,15 +1428,29 @@ class ExecutionEngine:
         covered = set(best_by_work)
         missing = sorted(content_work - covered)
         coverage = len(covered) / max(1, len(content_work))
-        successful_content_nodes = len({
-            result.node_id for result in best_by_work.values()
-        })
+        usable_content_nodes = len(
+            {result.node_id for result in best_by_work.values()}
+        )
+        successful_content_nodes = len(
+            {
+                result.node_id
+                for result in best_by_work.values()
+                if result.status in STRICT_SUCCESS_STATUSES
+            }
+        )
         complete_nodes = (
             len(outputs) == len(graph.nodes)
-            and all(row.status.startswith("success") for row in outputs.values())
+            and all(
+                row.status in STRICT_SUCCESS_STATUSES
+                for row in outputs.values()
+            )
         )
         minimum_coverage = max(0.0, min(1.0, float(limits.min_required_work_coverage)))
-        degradation_used = False
+        degradation_used = any(
+            row.status.startswith("success")
+            and row.status not in STRICT_SUCCESS_STATUSES
+            for row in outputs.values()
+        )
         final_answer = preferred_final
         if not final_answer and coverage >= minimum_coverage:
             final_answer = self._degraded_synthesis(best_by_work, missing)
@@ -1422,7 +1469,13 @@ class ExecutionEngine:
         if degradation_used and not limits.allow_degraded_success:
             delivery_blockers.append("degraded-success-disabled")
 
-        if final_answer and not degradation_used and complete_nodes and not missing:
+        if (
+            final_answer
+            and not degradation_used
+            and complete_nodes
+            and not missing
+            and not delivery_blockers
+        ):
             status = "success"
             completion_mode = "full"
             quality_status = "full_success"
@@ -1463,6 +1516,7 @@ class ExecutionEngine:
                 "missing_work_ids": missing,
                 "coverage_ratio": round(coverage, 6),
                 "minimum_degraded_coverage": minimum_coverage,
+                "usable_content_nodes": usable_content_nodes,
                 "successful_content_nodes": successful_content_nodes,
             },
             "delivery_policy": {
@@ -1471,6 +1525,12 @@ class ExecutionEngine:
                 "missing_non_degradable_work_ids": missing_non_degradable,
                 "minimum_required_work_coverage": minimum_coverage,
                 "minimum_successful_content_nodes": int(limits.min_successful_content_nodes),
+                "planned_content_node_ids": list(
+                    preflight["delivery_feasibility"]["planned_content_node_ids"]
+                ),
+                "planned_content_node_count": int(
+                    preflight["delivery_feasibility"]["planned_content_node_count"]
+                ),
                 "allow_degraded_success": bool(limits.allow_degraded_success),
                 "blockers": delivery_blockers,
             },
