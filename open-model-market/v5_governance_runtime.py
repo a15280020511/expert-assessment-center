@@ -15,6 +15,7 @@ from v5_claude_red_team_policy import (
     parse_claude_red_team_advice,
 )
 from v5_execution_primitives import actual_cost, extract_answer
+from v5_governance_catalog import synthetic_governance_models
 from v5_gpt_expert_selector import (
     build_proposal_request,
     build_synthesis_request,
@@ -72,11 +73,85 @@ def _assert_provider_lock(
         )
 
 
+def _bind_governance_request(
+    request: Mapping[str, Any],
+    endpoint: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Bind a fixed logical protocol to one exact compatible endpoint."""
+    logical_model = str(endpoint.get("logical_model") or "").strip()
+    resolved_model = str(endpoint.get("resolved_model") or "").strip()
+    provider_slug = str(endpoint.get("provider") or "").strip()
+    supported = {
+        str(value).casefold()
+        for value in endpoint.get("supported_parameters", [])
+    }
+    if not logical_model or not resolved_model or not provider_slug:
+        raise GovernanceRuntimeError(
+            "governance endpoint binding is incomplete"
+        )
+    if endpoint.get("provider_fallback_allowed") is not False:
+        raise GovernanceRuntimeError(
+            "governance endpoint fallback must remain disabled"
+        )
+
+    bound = dict(request)
+    bound["logical_model"] = logical_model
+    bound["model"] = resolved_model
+    bound["provider"] = {
+        "only": [provider_slug],
+        "order": [provider_slug],
+        "allow_fallbacks": False,
+        "require_parameters": True,
+    }
+    bound["governance_endpoint"] = {
+        "company": str(endpoint.get("company") or ""),
+        "provider": provider_slug,
+        "official_intelligence_rank": endpoint.get(
+            "official_intelligence_rank"
+        ),
+        "supported_parameters": sorted(supported),
+        "synthetic_fixture_only": bool(
+            endpoint.get("synthetic_fixture_only")
+        ),
+    }
+
+    if "temperature" in bound and "temperature" not in supported:
+        bound.pop("temperature")
+    if "max_tokens" in bound and "max_tokens" not in supported:
+        if "max_completion_tokens" in supported:
+            bound["max_completion_tokens"] = bound.pop("max_tokens")
+        else:
+            raise GovernanceRuntimeError(
+                "governance endpoint cannot enforce output limit"
+            )
+    if "reasoning" in bound and not {
+        "reasoning",
+        "reasoning_effort",
+    }.intersection(supported):
+        raise GovernanceRuntimeError(
+            "governance endpoint does not support reasoning control"
+        )
+    if "response_format" in bound and not {
+        "response_format",
+        "structured_outputs",
+    }.intersection(supported):
+        raise GovernanceRuntimeError(
+            "governance endpoint does not support structured output"
+        )
+    return bound
+
+
 def _api_payload(request: Mapping[str, Any]) -> dict[str, Any]:
     return {
         str(key): value
         for key, value in request.items()
-        if key not in {"governance_policy", "red_team_policy"}
+        if key
+        not in {
+            "governance_policy",
+            "red_team_policy",
+            "logical_model",
+            "governance_endpoint",
+        }
     }
 
 
@@ -106,18 +181,24 @@ def _request_receipt(request: Mapping[str, Any]) -> dict[str, Any]:
             schema_name = str(schema.get("name") or "")
     provider = request.get("provider")
     provider = dict(provider) if isinstance(provider, Mapping) else {}
+    endpoint = request.get("governance_endpoint")
+    endpoint = dict(endpoint) if isinstance(endpoint, Mapping) else {}
     return {
+        "logical_model": str(request.get("logical_model") or ""),
         "model": str(request.get("model") or ""),
+        "temperature_present": "temperature" in request,
         "temperature": request.get("temperature"),
         "max_tokens": request.get("max_tokens"),
+        "max_completion_tokens": request.get("max_completion_tokens"),
         "reasoning": dict(request.get("reasoning") or {})
         if isinstance(request.get("reasoning"), Mapping)
         else {},
         "provider": provider,
+        "governance_endpoint": endpoint,
         "response_schema": schema_name,
         "messages": message_rows,
         "raw_message_content_persisted": False,
-        "request_fields": sorted(str(key) for key in request),
+        "request_fields": sorted(str(key) for key in _api_payload(request)),
     }
 
 
@@ -126,6 +207,7 @@ class GovernanceCall:
     sequence: int
     kind: str
     requested_model: str
+    selected_model: str
     resolved_model: str
     provider: str
     request: Mapping[str, Any]
@@ -139,6 +221,7 @@ class GovernanceCall:
             "sequence": self.sequence,
             "kind": self.kind,
             "requested_model": self.requested_model,
+            "selected_model": self.selected_model,
             "resolved_model": self.resolved_model,
             "provider": self.provider,
             "request": dict(self.request),
@@ -167,14 +250,19 @@ class GovernanceLedger:
         _assert_provider_lock(request, response)
         usage = response.get("usage")
         usage = dict(usage) if isinstance(usage, Mapping) else {}
+        selected_model = str(request.get("model") or "")
         self.calls.append(
             GovernanceCall(
                 sequence=len(self.calls) + 1,
                 kind=kind,
-                requested_model=str(request.get("model") or ""),
+                requested_model=str(
+                    request.get("logical_model")
+                    or selected_model
+                ),
+                selected_model=selected_model,
                 resolved_model=str(
                     response.get("model")
-                    or request.get("model")
+                    or selected_model
                     or ""
                 ),
                 provider=_provider(request, response),
@@ -188,7 +276,7 @@ class GovernanceLedger:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": "v5-advisory-governance-call-ledger-2",
+            "schema_version": "v5-advisory-governance-call-ledger-3",
             "status": "PASS",
             "maximum_governance_calls": self.maximum_calls,
             "actual_governance_calls": len(self.calls),
@@ -248,7 +336,7 @@ def _call_and_parse(
     response, latency = call_fn(run, api_request)
     ledger.record(
         kind=kind,
-        request=api_request,
+        request=request,
         response=response,
         latency_seconds=latency,
     )
@@ -256,6 +344,26 @@ def _call_and_parse(
     if not text:
         raise GovernanceRuntimeError(f"{kind} returned no visible output")
     return parser(text)
+
+
+def _validated_governance_models(
+    governance_models: Mapping[str, Any] | None,
+) -> Mapping[str, Any]:
+    resolved = governance_models or synthetic_governance_models()
+    if not isinstance(resolved, Mapping) or resolved.get("status") != "PASS":
+        raise GovernanceRuntimeError(
+            "governance model resolution must have PASS status"
+        )
+    for role in ("gpt", "claude"):
+        if not isinstance(resolved.get(role), Mapping):
+            raise GovernanceRuntimeError(
+                f"governance model resolution is missing {role}"
+            )
+    if resolved.get("provider_fallback_allowed") is not False:
+        raise GovernanceRuntimeError(
+            "governance model resolution cannot allow fallback"
+        )
+    return resolved
 
 
 def run_single_pass_governance(
@@ -269,6 +377,7 @@ def run_single_pass_governance(
     governance_calls_reserved: int,
     approved_recovery_calls: int,
     cost_anomaly_usd: float | None,
+    governance_models: Mapping[str, Any] | None = None,
     call_fn: Callable[
         [Any, Mapping[str, Any]],
         tuple[Mapping[str, Any], float],
@@ -278,6 +387,9 @@ def run_single_pass_governance(
     if int(governance_calls_reserved) != CLAUDE_RED_TEAM_GOVERNANCE_CALLS:
         raise GovernanceRuntimeError("governance call reserve must equal three")
     call = call_fn or _default_call
+    resolved = _validated_governance_models(governance_models)
+    gpt_endpoint = resolved["gpt"]
+    claude_endpoint = resolved["claude"]
     limits = {
         "approved_total_calls": approved_total_calls,
         "governance_calls_reserved": governance_calls_reserved,
@@ -286,11 +398,14 @@ def run_single_pass_governance(
     }
     ledger = GovernanceLedger(maximum_calls=governance_calls_reserved)
 
-    proposal_request = build_proposal_request(
-        task=task,
-        task_envelope=task_envelope,
-        catalog=catalog,
-        **limits,
+    proposal_request = _bind_governance_request(
+        build_proposal_request(
+            task=task,
+            task_envelope=task_envelope,
+            catalog=catalog,
+            **limits,
+        ),
+        gpt_endpoint,
     )
     initial = _call_and_parse(
         run=run,
@@ -309,7 +424,10 @@ def run_single_pass_governance(
         task_digest=task_digest,
         **limits,
     )
-    claude_request = build_claude_red_team_request(claude_input)
+    claude_request = _bind_governance_request(
+        build_claude_red_team_request(claude_input),
+        claude_endpoint,
+    )
     claude_advice = _call_and_parse(
         run=run,
         request=claude_request,
@@ -319,13 +437,16 @@ def run_single_pass_governance(
         parser=parse_claude_red_team_advice,
     )
 
-    synthesis_request = build_synthesis_request(
-        task=task,
-        initial_proposal=initial,
-        claude_advice=claude_advice,
-        task_envelope=task_envelope,
-        catalog=catalog,
-        **limits,
+    synthesis_request = _bind_governance_request(
+        build_synthesis_request(
+            task=task,
+            initial_proposal=initial,
+            claude_advice=claude_advice,
+            task_envelope=task_envelope,
+            catalog=catalog,
+            **limits,
+        ),
+        gpt_endpoint,
     )
     final = dict(
         _call_and_parse(
@@ -375,11 +496,12 @@ def run_single_pass_governance(
         **limits,
     )
     governance = {
-        "schema_version": "v5-advisory-governance-result-2",
+        "schema_version": "v5-advisory-governance-result-3",
         "status": "PASS",
         "initial_proposal": initial,
         "claude_advice": dict(claude_advice),
         "final_proposal": final,
+        "governance_model_resolution": dict(resolved),
         "claude_review_count": 1,
         "gpt_synthesis_count": 1,
         "claude_is_advisory_only": True,
