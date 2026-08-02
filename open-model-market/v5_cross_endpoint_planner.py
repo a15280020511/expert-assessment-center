@@ -237,15 +237,54 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
         evidence["removed_candidate_ids"] = removed
         return filtered, evidence
 
-    @classmethod
+    def _recovery_cost_risk_multiplier(
+        self,
+        row: Mapping[str, Any],
+    ) -> float:
+        profile = row.get("parameter_profile")
+        profile = profile if isinstance(profile, Mapping) else {}
+        p95 = max(1.0, float(profile.get("p95_token_usage_multiplier", 1.0) or 1.0))
+        structured = max(
+            1.0,
+            float(profile.get("structured_p95_token_usage_multiplier", 1.0) or 1.0),
+        )
+        uncertainty = max(
+            0.0,
+            min(1.0, float(row.get("quality_uncertainty", 0.0) or 0.0)),
+        )
+        serviceability = profile.get("operational_serviceability")
+        serviceability = serviceability if isinstance(serviceability, Mapping) else {}
+        try:
+            deadline_ratio = max(
+                0.0,
+                float(serviceability.get("estimated_deadline_ratio") or 0.0),
+            )
+        except (TypeError, ValueError):
+            deadline_ratio = 0.0
+        deadline_multiplier = 1.0 + max(0.0, deadline_ratio - 0.50)
+        return max(
+            1.0,
+            float(self.config.cost_risk_multiplier),
+            p95 * structured,
+            1.0 + uncertainty,
+            deadline_multiplier,
+        )
+
+    def _risk_adjusted_recovery_cost(
+        self,
+        row: Mapping[str, Any],
+    ) -> float:
+        cost = max(0.0, float(row.get("estimated_cost", 0.0) or 0.0))
+        return cost * self._recovery_cost_risk_multiplier(row)
+
     def _recovery_sort_key(
-        cls,
+        self,
         row: Mapping[str, Any],
         selected_provider: str,
         *,
         critical_delivery: bool,
     ) -> tuple[Any, ...]:
-        provider = cls._provider(row)
+        provider = self._provider(row)
         cost = max(
             0.0,
             float(row.get("estimated_cost", 0.0) or 0.0),
@@ -268,21 +307,37 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
                 float(row.get("quality_uncertainty", 1.0) or 1.0),
             ),
         )
-        effective_cost_per_quality = cost * (1.0 + failure) / quality
+        delivery_utility = max(0.01, self._delivery_utility(row))
+        risk_adjusted_cost = self._risk_adjusted_recovery_cost(row)
+        effective_cost_per_delivery = risk_adjusted_cost / delivery_utility
+        profile = row.get("parameter_profile")
+        profile = profile if isinstance(profile, Mapping) else {}
+        serviceability = profile.get("operational_serviceability")
+        serviceability = serviceability if isinstance(serviceability, Mapping) else {}
+        try:
+            deadline_ratio = max(
+                0.0,
+                float(serviceability.get("estimated_deadline_ratio") or 0.0),
+            )
+        except (TypeError, ValueError):
+            deadline_ratio = 0.0
         if critical_delivery:
             return (
                 provider == selected_provider,
-                -cls._delivery_utility(row),
+                effective_cost_per_delivery,
                 failure,
                 uncertainty,
+                deadline_ratio,
                 cost,
+                -quality,
                 candidate_company(row),
                 str(row.get("candidate_id") or ""),
             )
         return (
             provider == selected_provider,
-            effective_cost_per_quality,
+            effective_cost_per_delivery,
             failure,
+            deadline_ratio,
             cost,
             -quality,
             candidate_company(row),
@@ -436,12 +491,23 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
                     > remaining_recovery_budget + 1e-12
                 )
             )
-            # The absolute anomaly guard is a hard admission boundary, so a
-            # candidate whose own estimate exceeds it can never execute. The
-            # estimated remaining budget is different: initial calls reconcile
-            # against provider-billed actual cost, so candidates within the
-            # absolute cap remain available for the live ledger to admit.
-            budget_excluded_by_node[node_id] = 0
+            budget_excluded_by_node[node_id] = (
+                0
+                if remaining_recovery_budget is None
+                else sum(
+                    1
+                    for row in alternatives
+                    if self._risk_adjusted_recovery_cost(row)
+                    > remaining_recovery_budget + 1e-12
+                )
+            )
+            if remaining_recovery_budget is not None:
+                alternatives = [
+                    row
+                    for row in alternatives
+                    if self._risk_adjusted_recovery_cost(row)
+                    <= remaining_recovery_budget + 1e-12
+                ]
             critical_delivery = node_id in critical_node_ids
             alternatives.sort(
                 key=lambda row: self._recovery_sort_key(
@@ -466,15 +532,34 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
                     0.0,
                     float(row.get("estimated_cost", 0.0) or 0.0),
                 )
-                payload["planning_budget_advisory_only"] = True
+                risk_multiplier = self._recovery_cost_risk_multiplier(row)
+                risk_adjusted_cost = estimated_cost * risk_multiplier
+                payload["planning_budget_advisory_only"] = False
                 payload["absolute_cost_cap_feasible"] = True
-                payload[
-                    "estimated_cost_above_planning_remaining_budget"
-                ] = bool(
-                    remaining_recovery_budget is not None
-                    and estimated_cost
-                    > remaining_recovery_budget + 1e-12
+                payload["estimated_cost_above_planning_remaining_budget"] = False
+                payload["recovery_cost_risk_multiplier"] = round(
+                    risk_multiplier,
+                    8,
                 )
+                payload["recovery_risk_adjusted_cost_usd"] = round(
+                    risk_adjusted_cost,
+                    8,
+                )
+                parameter_profile = payload.get("parameter_profile")
+                parameter_profile = (
+                    dict(parameter_profile)
+                    if isinstance(parameter_profile, Mapping)
+                    else {}
+                )
+                parameter_profile["recovery_cost_risk_multiplier"] = round(
+                    risk_multiplier,
+                    8,
+                )
+                parameter_profile["recovery_risk_adjusted_cost_usd"] = round(
+                    risk_adjusted_cost,
+                    8,
+                )
+                payload["parameter_profile"] = parameter_profile
                 unique_by_company.append(payload)
                 seen_companies.add(company)
             eligible_by_node[node_id] = unique_by_company
@@ -544,7 +629,7 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
             ),
             "candidate_options_do_not_reserve_paid_calls": True,
             "actual_recovery_calls_remain_budget_limited": True,
-            "critical_delivery_utility_first": True,
+            "critical_delivery_cost_effectiveness_after_utility_floor": True,
             "critical_nodes_allocated_first": True,
             "critical_node_ids": sorted(critical_node_ids),
             "selected_initial_cost_usd": round(selected_initial_cost, 8),
@@ -563,9 +648,11 @@ class CrossEndpointPlannerPolicy(PlannerPolicy):
             "estimated_above_planning_budget_by_node": (
                 estimated_above_planning_budget_by_node
             ),
-            "planning_estimated_budget_advisory_only": True,
+            "planning_estimated_budget_advisory_only": False,
+            "risk_adjusted_remaining_budget_enforced_at_planning": True,
             "runtime_budget_controller_authoritative": True,
-            "recovery_candidates_retained_for_live_ledger_admission": True,
+            "recovery_candidates_retained_for_live_ledger_admission": False,
+            "runtime_ledger_revalidates_frozen_risk_multiplier": True,
             "cross_task_history_used": False,
         }
         graph["metadata"] = metadata

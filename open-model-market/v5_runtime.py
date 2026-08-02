@@ -334,9 +334,21 @@ class BudgetController:
             if node_id in by_id
         }
 
-    def reserve(self, kind: str, estimated_cost_usd: float, node_id: str) -> tuple[bool, str]:
+    def reserve(
+        self,
+        kind: str,
+        estimated_cost_usd: float,
+        node_id: str,
+        *,
+        risk_multiplier: float | None = None,
+    ) -> tuple[bool, str]:
         estimated = max(0.0, float(estimated_cost_usd))
-        risk = estimated * float(self.config.cost_risk_multiplier)
+        multiplier = (
+            float(self.config.cost_risk_multiplier)
+            if risk_multiplier is None
+            else max(1.0, float(risk_multiplier))
+        )
+        risk = estimated * multiplier
         with self._lock:
             reason = ""
             if self.calls_reserved >= self.config.total_call_limit:
@@ -359,6 +371,8 @@ class BudgetController:
                         "node_id": node_id,
                         "kind": kind,
                         "estimated_cost_usd": round(estimated, 8),
+                        "risk_multiplier": round(multiplier, 8),
+                        "risk_adjusted_cost_usd": round(risk, 8),
                         "reason": reason,
                     }
                 )
@@ -797,7 +811,23 @@ class ExecutionEngine:
     ) -> RuntimeAttempt | None:
         if not budget.endpoint_available(node.provider_endpoint):
             return None
-        allowed, _ = budget.reserve(kind, node.estimated_cost, selected_node_id)
+        risk_multiplier = None
+        if kind == "replacement":
+            try:
+                risk_multiplier = float(
+                    node.parameter_profile.get(
+                        "recovery_cost_risk_multiplier",
+                        self.config.cost_risk_multiplier,
+                    )
+                )
+            except (TypeError, ValueError):
+                risk_multiplier = float(self.config.cost_risk_multiplier)
+        allowed, _ = budget.reserve(
+            kind,
+            node.estimated_cost,
+            selected_node_id,
+            risk_multiplier=risk_multiplier,
+        )
         if not allowed:
             return None
         payload: Mapping[str, Any] = {}
