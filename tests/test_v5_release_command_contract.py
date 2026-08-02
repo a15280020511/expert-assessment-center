@@ -81,7 +81,13 @@ class TestV5ReleaseCommandContract(unittest.TestCase):
         self.assertIn('select = ["E4", "E7", "E9", "F"]', self.ruff_text)
 
     def test_matrix_exercises_generic_shapes(self):
-        for key in ('"simple":', '"contract":', '"complex":', '"closed_world":'):
+        for key in (
+            '"simple":',
+            '"contract":',
+            '"complex":',
+            '"closed_world":',
+            '"long":',
+        ):
             self.assertIn(key, self.text)
         self.assertIn("open-model-market/v5_pipeline.py", self.text)
         self.assertIn('dry["status"] == "validated-not-executed"', self.text)
@@ -102,23 +108,35 @@ class TestV5ReleaseCommandContract(unittest.TestCase):
             'dry["second_claude_review_allowed"] is False',
             'runtime["final_authority"] == "deterministic-constitutional-validator"',
             'runtime["model_loop_allowed"] is False',
+            'runtime["task_decomposition_authority"] == "gpt-latest"',
         )
         for fragment in required:
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, self.text)
 
     def test_gate_proves_local_selection_algorithms_are_absent(self):
+        self.assertIn("removed=(", self.text)
+        self.assertIn(
+            'for path in "${removed[@]}"; do test ! -e "$path"; done',
+            self.text,
+        )
         for path in (
-            "v5_planner.py",
-            "v5_constitutional_pipeline.py",
-            "v5_value_optimizer.py",
-            "v5_cross_endpoint_planner.py",
-            "v5_operational_resilience.py",
+            "open-model-market/v5_planner.py",
+            "open-model-market/v5_constitutional_pipeline.py",
+            "open-model-market/v5_value_optimizer.py",
+            "open-model-market/v5_cross_endpoint_planner.py",
+            "open-model-market/v5_operational_resilience.py",
+            "open-model-market/v5_general_task_planning.py",
+            "open-model-market/task_semantic_compiler.py",
+            "open-model-market/resource_matrix.py",
+            "open-model-market/atomic_work_graph.py",
         ):
-            self.assertIn(f"test ! -e open-model-market/{path}", self.text)
+            self.assertIn(path, self.text)
         self.assertIn('dry["local_scoring_used"] is False', self.text)
         self.assertIn('dry["optimizer_used"] is False', self.text)
         self.assertIn('dry["cp_sat_used"] is False', self.text)
+        self.assertIn('dry["local_task_classification_used"] is False', self.text)
+        self.assertIn('dry["local_resource_matrix_used"] is False', self.text)
         self.assertNotIn("solver_status", self.text)
         self.assertNotIn("preselection_objective_weights", self.text)
 
