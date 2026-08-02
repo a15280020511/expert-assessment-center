@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
 from v5_claude_red_team_policy import (  # noqa: E402
+    CLAUDE_RED_TEAM_GOVERNANCE_CALLS,
     CLAUDE_RED_TEAM_MAX_INPUT_CHARS,
     CLAUDE_RED_TEAM_MAX_OUTPUT_CHARS,
     CLAUDE_RED_TEAM_MAX_OUTPUT_TOKENS,
@@ -31,6 +32,7 @@ def internal_payload() -> dict:
         "task_digest": TASK_DIGEST,
         "proposal_digest": PROPOSAL_DIGEST,
         "approved_total_calls": 6,
+        "governance_calls_reserved": CLAUDE_RED_TEAM_GOVERNANCE_CALLS,
         "approved_recovery_calls": 1,
         "cost_anomaly_usd": 0.35,
         "required_work": ["work-1", "work-2"],
@@ -182,6 +184,18 @@ class V5ClaudeRedTeamPolicyTests(unittest.TestCase):
         external["claims"][0]["text"] = "字" * 241
         with self.assertRaises(ValueError):
             canonical_review_input(RedTeamScope.EXTERNAL_INFORMATION, external)
+
+    def test_governance_calls_are_fixed_and_reduce_expert_capacity(self) -> None:
+        payload = internal_payload()
+        payload["governance_calls_reserved"] = 1
+        with self.assertRaises(ValueError):
+            canonical_review_input(RedTeamScope.INTERNAL_SELECTION, payload)
+
+        payload = internal_payload()
+        payload["approved_total_calls"] = 4
+        payload["approved_recovery_calls"] = 1
+        with self.assertRaises(ValueError):
+            canonical_review_input(RedTeamScope.INTERNAL_SELECTION, payload)
 
     def test_forbidden_capabilities_are_machine_readable(self) -> None:
         forbidden = set(forbidden_claude_capabilities())
