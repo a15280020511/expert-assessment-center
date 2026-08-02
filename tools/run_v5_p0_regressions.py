@@ -16,15 +16,48 @@ sys.path.insert(0, str(ROOT / "open-model-market"))
 sys.path.insert(0, str(TESTS))
 
 SPECS = (
-    (TESTS / "test_v5_constitutional_runtime.py", "V5ConstitutionalRuntimeTests", 6),
-    (TESTS / "test_v5_claude_red_team_advice.py", "ClaudeRedTeamAdviceTests", 6),
-    (TESTS / "test_v5_extreme_advisory_stress.py", "ExtremeAdvisoryStressTests", 8),
-    (TESTS / "test_v5_repository_residue_audit.py", "RepositoryResidueAuditTests", 10),
+    (
+        TESTS / "test_v5_constitutional_runtime.py",
+        "V5ConstitutionalRuntimeTests",
+        6,
+    ),
+    (
+        TESTS / "test_v5_claude_red_team_advice.py",
+        "ClaudeRedTeamAdviceTests",
+        6,
+    ),
+    (
+        TESTS / "test_v5_catalog_endpoint_eligibility.py",
+        "CatalogEndpointEligibilityTests",
+        5,
+    ),
+    (
+        TESTS / "test_v5_extreme_advisory_stress.py",
+        "ExtremeAdvisoryStressTests",
+        8,
+    ),
+    (
+        TESTS / "test_v5_repository_residue_audit.py",
+        "RepositoryResidueAuditTests",
+        10,
+    ),
     (TESTS / "test_v5_command_trigger.py", "V5CommandTriggerTests", 5),
     (TESTS / "test_v5_ticket_gate.py", "V5TicketGateTests", 6),
-    (TESTS / "test_v5_task_constraints.py", "TaskConstraintPolarityTests", 3),
-    (TESTS / "test_v5_task_constraints.py", "ClosedWorldEvidenceTests", 5),
-    (TESTS / "test_v5_task_constraints.py", "ActualCompanyAuditTests", 2),
+    (
+        TESTS / "test_v5_task_constraints.py",
+        "TaskConstraintPolarityTests",
+        3,
+    ),
+    (
+        TESTS / "test_v5_task_constraints.py",
+        "ClosedWorldEvidenceTests",
+        5,
+    ),
+    (
+        TESTS / "test_v5_task_constraints.py",
+        "ActualCompanyAuditTests",
+        2,
+    ),
     (
         TESTS / "test_v5_independent_artifact_revalidation.py",
         "IndependentArtifactRevalidationTests",
@@ -35,7 +68,11 @@ SPECS = (
         "FailureEvidencePersistenceTests",
         1,
     ),
-    (TESTS / "test_v5_v4_contract_isolation.py", "V5V4ContractIsolationTests", 6),
+    (
+        TESTS / "test_v5_v4_contract_isolation.py",
+        "V5V4ContractIsolationTests",
+        6,
+    ),
 )
 
 
@@ -53,16 +90,23 @@ def _load_module(path: Path, index: int) -> ModuleType:
 def _load_case(path: Path, class_name: str, expected: int, index: int):
     module = _load_module(path, index)
     case_type = getattr(module, class_name, None)
-    if not isinstance(case_type, type) or not issubclass(case_type, unittest.TestCase):
-        raise RuntimeError(f"{class_name} is not a unittest.TestCase in {path}")
+    if not isinstance(case_type, type) or not issubclass(
+        case_type,
+        unittest.TestCase,
+    ):
+        raise RuntimeError(
+            f"{class_name} is not a unittest.TestCase in {path}"
+        )
     methods = sorted(
         name
         for name in dir(case_type)
-        if name.startswith("test_") and callable(getattr(case_type, name, None))
+        if name.startswith("test_")
+        and callable(getattr(case_type, name, None))
     )
     if len(methods) != expected:
         raise RuntimeError(
-            f"{class_name} expected {expected} tests but registered {len(methods)}: {methods}"
+            f"{class_name} expected {expected} tests but registered "
+            f"{len(methods)}: {methods}"
         )
     print(f"REGISTERED {class_name}: {len(methods)}", flush=True)
     return case_type, methods
@@ -97,20 +141,25 @@ def _run_direct(
             except AssertionError:
                 failures += 1
                 print(
-                    f"FAIL {case_type.__name__}.{method_name}\n{traceback.format_exc()}",
+                    f"FAIL {case_type.__name__}.{method_name}\n"
+                    f"{traceback.format_exc()}",
                     file=sys.stderr,
                     flush=True,
                 )
             except Exception:
                 errors += 1
                 print(
-                    f"ERROR {case_type.__name__}.{method_name}\n{traceback.format_exc()}",
+                    f"ERROR {case_type.__name__}.{method_name}\n"
+                    f"{traceback.format_exc()}",
                     file=sys.stderr,
                     flush=True,
                 )
             else:
                 passed += 1
-                print(f"PASS {case_type.__name__}.{method_name}", flush=True)
+                print(
+                    f"PASS {case_type.__name__}.{method_name}",
+                    flush=True,
+                )
             finally:
                 teardown = getattr(case, "tearDown", None)
                 if callable(teardown):
@@ -136,7 +185,12 @@ def main() -> int:
     for index, (path, class_name, expected) in enumerate(SPECS):
         if not path.is_file():
             raise RuntimeError(f"missing regression file: {path}")
-        case_type, methods = _load_case(path, class_name, expected, index)
+        case_type, methods = _load_case(
+            path,
+            class_name,
+            expected,
+            index,
+        )
         loaded.append((case_type, methods))
         expected_total += expected
     print(f"REGISTERED TOTAL: {expected_total}", flush=True)
@@ -148,7 +202,8 @@ def main() -> int:
         except Exception:
             errors += len(methods)
             print(
-                f"ERROR {case_type.__name__}.class_setup\n{traceback.format_exc()}",
+                f"ERROR {case_type.__name__}.class_setup\n"
+                f"{traceback.format_exc()}",
                 file=sys.stderr,
                 flush=True,
             )
