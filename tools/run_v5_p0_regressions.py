@@ -32,6 +32,11 @@ SPECS = (
         5,
     ),
     (
+        TESTS / "test_v5_governance_model_resolution.py",
+        "GovernanceModelResolutionTests",
+        6,
+    ),
+    (
         TESTS / "test_v5_extreme_advisory_stress.py",
         "ExtremeAdvisoryStressTests",
         8,
