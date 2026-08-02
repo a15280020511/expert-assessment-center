@@ -1,8 +1,7 @@
-"""Bounded Claude red-team policy for expert selection and information review.
+"""Bounded, fixed-prompt Claude red-team policy.
 
-Claude is a fail-closed reviewer only. It cannot select, replace, reorder, or
-execute experts and cannot write reports. All inputs and outputs are compact,
-strictly structured, length-bounded, and auditable.
+Claude is a fail-closed reviewer only. It runs at most once per task, cannot
+select or modify experts, cannot execute work, and cannot emit free-form prose.
 """
 from __future__ import annotations
 
@@ -10,9 +9,10 @@ import json
 import math
 import re
 from enum import Enum
+from hashlib import sha256
 from typing import Any, Mapping
 
-CLAUDE_RED_TEAM_MODEL = "anthropic/claude-opus-5"
+CLAUDE_RED_TEAM_MODEL = "anthropic/claude-opus-latest"
 CLAUDE_RED_TEAM_PROVIDER = "anthropic"
 CLAUDE_RED_TEAM_REASONING_EFFORT = "low"
 CLAUDE_RED_TEAM_MAX_INPUT_CHARS = 6_000
@@ -23,7 +23,17 @@ CLAUDE_RED_TEAM_MAX_CODES = 8
 CLAUDE_RED_TEAM_MAX_TARGETS = 8
 CLAUDE_RED_TEAM_MAX_STRING_CHARS = 240
 CLAUDE_RED_TEAM_MAX_DEPTH = 5
-CLAUDE_RED_TEAM_GOVERNANCE_CALLS = 2
+
+GPT_PROPOSAL_CALLS = 1
+CLAUDE_RED_TEAM_MAX_CALLS_PER_TASK = 1
+GPT_SYNTHESIS_CALLS_MAX = 1
+# Compatibility name: worst-case governance reserve for proposal, one red-team
+# verdict, and one post-rejection GPT synthesis.
+CLAUDE_RED_TEAM_GOVERNANCE_CALLS = (
+    GPT_PROPOSAL_CALLS
+    + CLAUDE_RED_TEAM_MAX_CALLS_PER_TASK
+    + GPT_SYNTHESIS_CALLS_MAX
+)
 
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9_.:@/+-]{1,96}$")
@@ -65,17 +75,32 @@ EXTERNAL_CODES = frozenset(
     }
 )
 
+INTERNAL_SELECTION_PROMPT = (
+    "你是专家团中心的固定红队判定器。你只审核GPT已经提出的动态专家团组合是否违反输入中的硬约束。"
+    "你不得选择、替换、排序、增加、删除专家，不得修改执行图，不得执行任务，不得调用工具，"
+    "不得浏览，不得输出解释、建议、报告或自然语言。你在每个任务中最多执行一次。"
+    "只返回JSON Schema允许的APPROVE或REJECT、枚举codes和targets；证据不足必须REJECT。"
+)
+EXTERNAL_INFORMATION_PROMPT = (
+    "你是专家团中心的固定信息红队判定器。你只审核输入信息的事实来源、数量、位置、未知项和交付合同。"
+    "你不得补充事实、改写内容、给出建议、生成报告、参与专家选择或执行任务，不得调用工具或浏览。"
+    "你在每个任务中最多执行一次。只返回JSON Schema允许的APPROVE或REJECT、枚举codes和targets；"
+    "证据不足必须REJECT。"
+)
+INTERNAL_SELECTION_PROMPT_SHA256 = (
+    "12561265f5454459ea83764359db893fb92b9ead331b6af1502c8ef89f620790"
+)
+EXTERNAL_INFORMATION_PROMPT_SHA256 = (
+    "d56a006dc6742f5bc7e6e4c73c1cc6809e2efe3d419bedf569d1c9b2dce6a2b2"
+)
+
 _SYSTEM_PROMPTS = {
-    RedTeamScope.INTERNAL_SELECTION: (
-        "你是受限红队判定器。只检查GPT提出的专家团动态组合是否违反输入中的硬约束。"
-        "不得选择、替换、排序、补充专家，不得修改执行图，不得输出解释、建议、报告或自然语言。"
-        "只返回JSON Schema允许的APPROVE或REJECT、枚举codes和targets。证据不足必须REJECT。"
-    ),
-    RedTeamScope.EXTERNAL_INFORMATION: (
-        "你是受限信息审核判定器。只检查输入信息的事实来源、数量、位置、未知项和交付合同。"
-        "不得补充事实、改写内容、给出建议、生成报告或参与专家执行。"
-        "只返回JSON Schema允许的APPROVE或REJECT、枚举codes和targets。证据不足必须REJECT。"
-    ),
+    RedTeamScope.INTERNAL_SELECTION: INTERNAL_SELECTION_PROMPT,
+    RedTeamScope.EXTERNAL_INFORMATION: EXTERNAL_INFORMATION_PROMPT,
+}
+_PROMPT_HASHES = {
+    RedTeamScope.INTERNAL_SELECTION: INTERNAL_SELECTION_PROMPT_SHA256,
+    RedTeamScope.EXTERNAL_INFORMATION: EXTERNAL_INFORMATION_PROMPT_SHA256,
 }
 
 _INTERNAL_TOP_LEVEL_KEYS = frozenset(
@@ -129,6 +154,21 @@ def _codes(scope: RedTeamScope) -> frozenset[str]:
     return INTERNAL_CODES if scope is RedTeamScope.INTERNAL_SELECTION else EXTERNAL_CODES
 
 
+def fixed_prompt(scope: RedTeamScope | str) -> str:
+    scope = RedTeamScope(scope)
+    prompt = _SYSTEM_PROMPTS[scope]
+    digest = sha256(prompt.encode("utf-8")).hexdigest()
+    if digest != _PROMPT_HASHES[scope]:
+        raise RuntimeError("Claude fixed red-team prompt integrity check failed")
+    return prompt
+
+
+def fixed_prompt_sha256(scope: RedTeamScope | str) -> str:
+    scope = RedTeamScope(scope)
+    fixed_prompt(scope)
+    return _PROMPT_HASHES[scope]
+
+
 def _check_digest(value: Any, field: str) -> None:
     if not isinstance(value, str) or not _DIGEST_RE.fullmatch(value):
         raise ValueError(f"{field} must be a lowercase SHA-256 hex digest")
@@ -158,7 +198,12 @@ def _check_integer(value: Any, field: str, *, minimum: int, maximum: int) -> int
     return value
 
 
-def _check_string_list(value: Any, field: str, *, maximum: int = CLAUDE_RED_TEAM_MAX_ITEMS) -> None:
+def _check_string_list(
+    value: Any,
+    field: str,
+    *,
+    maximum: int = CLAUDE_RED_TEAM_MAX_ITEMS,
+) -> None:
     if not isinstance(value, list) or len(value) > maximum:
         raise ValueError(f"{field} must be a bounded list")
     for index, item in enumerate(value):
@@ -219,7 +264,7 @@ def _validate_internal(payload: Mapping[str, Any]) -> None:
     total_calls = _check_integer(
         payload["approved_total_calls"],
         "approved_total_calls",
-        minimum=4,
+        minimum=5,
         maximum=16,
     )
     governance_calls = _check_integer(
@@ -235,7 +280,11 @@ def _validate_internal(payload: Mapping[str, Any]) -> None:
         maximum=total_calls - governance_calls - 1,
     )
     if payload["cost_anomaly_usd"] is not None:
-        _check_number(payload["cost_anomaly_usd"], "cost_anomaly_usd", minimum=0.00000001)
+        _check_number(
+            payload["cost_anomaly_usd"],
+            "cost_anomaly_usd",
+            minimum=0.00000001,
+        )
     _check_string_list(payload["required_work"], "required_work")
 
     nodes = payload["nodes"]
@@ -245,11 +294,20 @@ def _validate_internal(payload: Mapping[str, Any]) -> None:
         or not nodes
         or len(nodes) > min(CLAUDE_RED_TEAM_MAX_ITEMS, maximum_nodes)
     ):
-        raise ValueError("nodes exceed the expert-call capacity after governance and recovery reserve")
+        raise ValueError(
+            "nodes exceed expert-call capacity after governance and recovery reserve"
+        )
     for index, node in enumerate(nodes):
         if not isinstance(node, Mapping) or set(node) != _INTERNAL_NODE_KEYS:
             raise ValueError(f"nodes[{index}] has missing or extra fields")
-        for field in ("node_id", "candidate_id", "model", "company", "provider", "contract_kind"):
+        for field in (
+            "node_id",
+            "candidate_id",
+            "model",
+            "company",
+            "provider",
+            "contract_kind",
+        ):
             _check_id(node[field], f"nodes[{index}].{field}")
         _check_string_list(node["work_ids"], f"nodes[{index}].work_ids")
         _check_string_list(
@@ -257,7 +315,10 @@ def _validate_internal(payload: Mapping[str, Any]) -> None:
             f"nodes[{index}].recovery_candidate_ids",
             maximum=4,
         )
-        _check_number(node["estimated_cost_usd"], f"nodes[{index}].estimated_cost_usd")
+        _check_number(
+            node["estimated_cost_usd"],
+            f"nodes[{index}].estimated_cost_usd",
+        )
 
     edges = payload["edges"]
     if not isinstance(edges, list) or len(edges) > CLAUDE_RED_TEAM_MAX_ITEMS:
@@ -276,7 +337,11 @@ def _validate_external(payload: Mapping[str, Any]) -> None:
     _check_digest(payload["information_digest"], "information_digest")
     _check_id(payload["contract_kind"], "contract_kind")
     claims = payload["claims"]
-    if not isinstance(claims, list) or not claims or len(claims) > CLAUDE_RED_TEAM_MAX_ITEMS:
+    if (
+        not isinstance(claims, list)
+        or not claims
+        or len(claims) > CLAUDE_RED_TEAM_MAX_ITEMS
+    ):
         raise ValueError("claims must be a non-empty bounded list")
     for index, claim in enumerate(claims):
         if not isinstance(claim, Mapping) or set(claim) != _EXTERNAL_CLAIM_KEYS:
@@ -296,7 +361,10 @@ def _validate_external(payload: Mapping[str, Any]) -> None:
         )
 
 
-def canonical_review_input(scope: RedTeamScope | str, payload: Mapping[str, Any]) -> str:
+def canonical_review_input(
+    scope: RedTeamScope | str,
+    payload: Mapping[str, Any],
+) -> str:
     scope = RedTeamScope(scope)
     if not isinstance(payload, Mapping):
         raise ValueError("Claude red-team input must be an object")
@@ -328,12 +396,18 @@ def verdict_json_schema(scope: RedTeamScope | str) -> dict[str, Any]:
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "decision": {"type": "string", "enum": ["APPROVE", "REJECT"]},
+                    "decision": {
+                        "type": "string",
+                        "enum": ["APPROVE", "REJECT"],
+                    },
                     "codes": {
                         "type": "array",
                         "maxItems": CLAUDE_RED_TEAM_MAX_CODES,
                         "uniqueItems": True,
-                        "items": {"type": "string", "enum": sorted(_codes(scope))},
+                        "items": {
+                            "type": "string",
+                            "enum": sorted(_codes(scope)),
+                        },
                     },
                     "targets": {
                         "type": "array",
@@ -357,10 +431,11 @@ def build_claude_red_team_request(
     scope = RedTeamScope(scope)
     _check_id(provider_slug, "provider_slug")
     user_content = canonical_review_input(scope, payload)
+    prompt = fixed_prompt(scope)
     return {
         "model": CLAUDE_RED_TEAM_MODEL,
         "messages": [
-            {"role": "system", "content": _SYSTEM_PROMPTS[scope]},
+            {"role": "system", "content": prompt},
             {"role": "user", "content": user_content},
         ],
         "temperature": 0,
@@ -376,6 +451,12 @@ def build_claude_red_team_request(
             "order": [provider_slug],
             "allow_fallbacks": False,
             "require_parameters": True,
+        },
+        "red_team_policy": {
+            "maximum_calls_per_task": CLAUDE_RED_TEAM_MAX_CALLS_PER_TASK,
+            "prompt_sha256": fixed_prompt_sha256(scope),
+            "free_text_allowed": False,
+            "second_review_allowed": False,
         },
     }
 
@@ -393,7 +474,10 @@ def parse_claude_red_team_verdict(
         value = json.loads(text)
     except json.JSONDecodeError as exc:
         raise ValueError("Claude red-team verdict is not valid JSON") from exc
-    if not isinstance(value, Mapping) or set(value) != {"decision", "codes", "targets"}:
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != {"decision", "codes", "targets"}
+    ):
         raise ValueError("Claude red-team verdict has missing or extra fields")
     decision = value["decision"]
     codes = value["codes"]
@@ -426,6 +510,9 @@ def parse_claude_red_team_verdict(
         "scope": scope.value,
         "model": CLAUDE_RED_TEAM_MODEL,
         "reviewer_role": "bounded-red-team-verdict-only",
+        "prompt_sha256": fixed_prompt_sha256(scope),
+        "maximum_calls_per_task": CLAUDE_RED_TEAM_MAX_CALLS_PER_TASK,
+        "second_review_allowed": False,
     }
 
 
@@ -442,4 +529,5 @@ def forbidden_claude_capabilities() -> tuple[str, ...]:
         "write_report",
         "rewrite_information",
         "emit_free_text_reasoning",
+        "repeat_red_team_review",
     )
