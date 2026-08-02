@@ -38,12 +38,10 @@ jobs:
         run: |
           set -euo pipefail
           unset OPENROUTER_API_KEY OPENROUTER_MANAGEMENT_KEY || true
-          gh api \
-            -H "Accept: application/vnd.github+json" \
+          gh api -H "Accept: application/vnd.github+json" \
             "/repos/$REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" \
             > failed-production-artifact.zip
-          echo '2823d4e3b9bab5dd9aca1fa8b7d1bfc313ea135155aeff2f9b1402bd455515a1  failed-production-artifact.zip' \
-            | sha256sum -c -
+          echo '2823d4e3b9bab5dd9aca1fa8b7d1bfc313ea135155aeff2f9b1402bd455515a1  failed-production-artifact.zip' | sha256sum -c -
           mkdir replay-artifact
           unzip -q failed-production-artifact.zip -d replay-artifact
           test -f replay-artifact/expert-team-result.json
@@ -60,77 +58,59 @@ jobs:
           from pathlib import Path
           from types import SimpleNamespace
 
-          from model_market import classify_task
-          from task_semantic_compiler import compile_task_semantics
+          from v5_general_task_planning import classify_task, compile_task_semantics
           from v5_independent_artifact_revalidation import _canonical_task
           from v5_pipeline import _planning_limits, _resource_shape
           from v5_recovery_runtime import build_production_runtime
           from v5_runtime import RuntimeConfig
           from v5_task_constraints import fact_claim_supported, validate_answer_evidence
-          from v5_task_delivery_contract import (
-              apply_explicit_contract,
-              extract_explicit_markdown_contract,
-          )
+          from v5_task_delivery_contract import apply_explicit_contract, extract_explicit_markdown_contract
 
           root = Path("replay-artifact")
           ticket = json.loads((root / "ticket.json").read_text(encoding="utf-8"))
           task = _canonical_task(ticket)
           expected_headings = [
-              "已知事实与未知",
-              "风险与隔离",
-              "立即行动",
-              "门禁与沟通",
-              "物资核对与记录",
-              "条件式移交结论",
+              "已知事实与未知", "风险与隔离", "立即行动",
+              "门禁与沟通", "物资核对与记录", "条件式移交结论",
           ]
 
           explicit = extract_explicit_markdown_contract(task)
           assert explicit["explicit_markdown_contract"] is True
           assert explicit["exact_markdown_headings"] == expected_headings
           assert explicit["task_explicit_delivery_section_count"] == 6
-          assert explicit["contract_extraction_policy"] == (
-              "explicit-format-text-only-inline-inferred-count"
-          )
+          assert explicit["contract_extraction_policy"] == "explicit-format-text-only-inline-inferred-count"
 
           claim = "值守人员为 2 名。"
           assert fact_claim_supported(task, claim)
-          nodes = json.loads(
-              (root / "v5-node-results.json").read_text(encoding="utf-8")
-          )
+          nodes = json.loads((root / "v5-node-results.json").read_text(encoding="utf-8"))
           degraded = next(row for row in nodes if row.get("status") == "success_degraded")
           violations = validate_answer_evidence(task, degraded.get("answer", ""))
           assert f"unsupported-fact-label:{claim}" not in violations, violations
 
-          graph = json.loads(
-              (root / "v5-execution-graph.json").read_text(encoding="utf-8")
-          )
+          graph = json.loads((root / "v5-execution-graph.json").read_text(encoding="utf-8"))
           final_node_id = graph["final_nodes"][0]
           old_final_contract = next(
-              node["output_contract"]
-              for node in graph["nodes"]
+              node["output_contract"] for node in graph["nodes"]
               if node["node_id"] == final_node_id
           )
-          compiled_final = apply_explicit_contract(
-              task,
-              {"synthesis": 1.0},
-              old_final_contract,
-          )
+          compiled_final = apply_explicit_contract(task, {"synthesis": 1.0}, old_final_contract)
           assert compiled_final["explicit_markdown_contract"] is True
           assert compiled_final["exact_markdown_headings"] == expected_headings
           assert compiled_final["required_fields"] == expected_headings
 
-          profile_run = SimpleNamespace(
+          production_run = SimpleNamespace(
+              task=task,
               minimum_context_length=16384,
               max_completion_tokens=10000,
+              maximum_total_calls=4,
+              maximum_recovery_calls=1,
           )
-          profile = classify_task(task, profile_run)
-          resources = compile_task_semantics(profile, SimpleNamespace(task=task))
+          profile = classify_task(task, production_run)
+          resources = compile_task_semantics(profile, production_run)
           shape = _resource_shape(resources)
           assert shape["explicit_output_contract"] is True, shape
           assert int(shape["maximum_synthesis_work"]) >= 1, shape
-          runtime = build_production_runtime(
-              RuntimeConfig(4, 1, 0.35, "value")
-          )
+          runtime = build_production_runtime(RuntimeConfig(4, 1, 0.35, "value"))
           limits = _planning_limits(
               total_calls=4,
               recovery_calls=1,
@@ -147,19 +127,16 @@ jobs:
 
           print(json.dumps({
               "status": "PASS",
+              "production_semantic_layer": "v5_general_task_planning",
               "exact_markdown_headings": expected_headings,
               "heading_count": 6,
               "cardinality_claim_supported": True,
               "degraded_node_evidence_violations": violations,
-              "old_final_contract_explicit": bool(
-                  old_final_contract.get("explicit_markdown_contract")
-              ),
+              "old_final_contract_explicit": bool(old_final_contract.get("explicit_markdown_contract")),
               "recompiled_final_contract_explicit": True,
               "maximum_synthesis_work": shape["maximum_synthesis_work"],
               "max_nodes": limits.max_nodes,
-              "minimum_successful_content_nodes": (
-                  limits.min_successful_content_nodes
-              ),
+              "minimum_successful_content_nodes": limits.min_successful_content_nodes,
               "model_calls": 0,
               "model_cost_usd": 0,
           }, ensure_ascii=False, sort_keys=True))
@@ -169,8 +146,7 @@ jobs:
           set -euo pipefail
           unset OPENROUTER_API_KEY OPENROUTER_MANAGEMENT_KEY || true
           set +e
-          PYTHONPATH=open-model-market python \
-            open-model-market/v5_independent_artifact_revalidation.py \
+          PYTHONPATH=open-model-market python open-model-market/v5_independent_artifact_revalidation.py \
             --artifact-dir replay-artifact \
             --expected-sha 94e979eb3ec9ed76a9f909c160bb2323ac116876 \
             --expected-run-id 30733518972 \
@@ -189,8 +165,7 @@ jobs:
           jq -e '.model_calls == 4 and .actual_cost_usd == 0.00714544' replay-evidence/replay-verdict.json
           jq -e '.revalidation_exception == null' replay-evidence/replay-verdict.json
           jq -e '.failures | length > 0' replay-evidence/replay-verdict.json
-          jq -e '[.independently_recomputed_evidence_violations[] | select(. == "unsupported-fact-label:值守人员为 2 名。") ] | length == 0' \
-            replay-evidence/replay-verdict.json
+          jq -e '[.independently_recomputed_evidence_violations[] | select(. == "unsupported-fact-label:值守人员为 2 名。") ] | length == 0' replay-evidence/replay-verdict.json
       - name: Run mandatory and focused zero-cost regressions
         run: |
           set -euo pipefail
@@ -203,10 +178,8 @@ jobs:
             tests.test_v5_fact_provenance_semantic_normalization
           python tools/run_v5_p0_regressions.py | tee replay-evidence/p0.log
           grep -q 'REGISTERED TOTAL: 58' replay-evidence/p0.log
-          grep -q 'P0 REGRESSION RESULT: run=58, passed=58, failures=0, errors=0, skipped=0' \
-            replay-evidence/p0.log
-          printf '{"status":"PASS","source_run_id":"30733518972","source_artifact_id":"8828782971","historical_failure_reclassified":false,"model_calls":0,"model_cost_usd":0}\n' \
-            > replay-evidence/zero-cost-attestation.json
+          grep -q 'P0 REGRESSION RESULT: run=58, passed=58, failures=0, errors=0, skipped=0' replay-evidence/p0.log
+          printf '{"status":"PASS","source_run_id":"30733518972","source_artifact_id":"8828782971","historical_failure_reclassified":false,"model_calls":0,"model_cost_usd":0}\n' > replay-evidence/zero-cost-attestation.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
