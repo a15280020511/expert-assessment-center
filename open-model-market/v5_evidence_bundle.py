@@ -6,22 +6,15 @@ legacy evidence-bundle builder.
 """
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
 from artifact_manifest import sha256_file
+from v5_json_io import load_json_or_default
 
 RUNTIME_VERSION = "v5-native-runtime-1"
-
-
-def _load(path: Path, default: Any) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return default
 
 
 @dataclass(frozen=True)
@@ -37,7 +30,7 @@ class FinalStatusInputs:
     @classmethod
     def from_directory(cls, root: Path) -> "FinalStatusInputs":
         def mapping(name: str, default: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
-            value = _load(root / name, default or {})
+            value = load_json_or_default(root / name, default or {})
             return dict(value) if isinstance(value, Mapping) else {}
         return cls(
             ticket=mapping("ticket-status.json"),
@@ -233,8 +226,8 @@ def build_final_attestation_record(
         raise RuntimeError("failed execution requires deterministic diagnosis evidence")
     if not primary_artifact_id or not primary_artifact_digest:
         raise RuntimeError("primary artifact identity is required")
-    diagnosis = _load(diagnosis_path, {})
-    evidence = _load(bundle, {})
+    diagnosis = load_json_or_default(diagnosis_path, {})
+    evidence = load_json_or_default(bundle, {})
     report_present = report.is_file()
     return {
         "version": 2,

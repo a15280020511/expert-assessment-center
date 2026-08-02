@@ -5,6 +5,9 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "execution-ticket.yml"
 PROMOTION = ROOT / ".github" / "workflows" / "promote-v5-production.yml"
 PAID_ACCEPTANCE = (
+    ROOT / ".github" / "workflows" / "v5-final-paid-claude-acceptance-20260803.yml"
+)
+LEGACY_PAID_ACCEPTANCE = (
     ROOT / ".github" / "workflows" / "v5-one-time-paid-acceptance.yml"
 )
 DETACHED_ATTESTATION = (
@@ -162,39 +165,22 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("refs/heads/production", self.promotion)
         self.assertNotIn("OPENROUTER_API_KEY", self.promotion)
 
-    def test_paid_acceptance_is_request_driven_and_recomputed(self):
+    def test_paid_acceptance_is_explicit_bounded_and_current(self):
         paid = self.paid_acceptance
-        self.assertIn('branches:\n      - "acceptance/**"', paid)
-        self.assertIn('schema_version == "v5-paid-acceptance-3"', paid)
-        self.assertIn("target_sha", paid)
-        self.assertIn("maximum_total_calls", paid)
-        self.assertIn("maximum_recovery_calls", paid)
-        self.assertIn("cost_cap_usd", paid)
+        self.assertIn("workflow_dispatch:", paid)
+        self.assertIn("RUN-EXACTLY-ONCE", paid)
+        self.assertIn("v5_pipeline.py", paid)
+        self.assertIn("--maximum-total-calls 4", paid)
+        self.assertIn("--maximum-recovery-calls 0", paid)
+        self.assertIn("--cost-anomaly-usd 0.25", paid)
+        self.assertIn("claude_review_count", paid)
+        self.assertIn("gpt_synthesis_count", paid)
+        self.assertIn("claude_is_advisory_only", paid)
+        self.assertIn("claude_gatekeeping_allowed", paid)
+        self.assertIn("old_local_planner_used", paid)
         self.assertNotIn("quality_tier", paid)
-        self.assertIn(".task.question", paid)
-        self.assertNotIn("PR_NUMBER", paid)
-        self.assertNotIn("fix/v5-constitution-p0-publication-integrity", paid)
-        self.assertNotIn("generic-two-option-business-decision", paid)
-
-        self.assertIn("needs: paid-acceptance", paid)
-        self.assertIn("EXPECTED_ARTIFACT_NAME:", paid)
-        self.assertIn(
-            '"/repos/$REPOSITORY/actions/runs/$PAID_RUN_ID/artifacts',
-            paid,
-        )
-        self.assertIn("v5_independent_artifact_revalidation.py", paid)
-        self.assertIn("--archive paid-evidence.zip", paid)
-        self.assertIn("--expected-artifact-digest", paid)
-        self.assertIn(
-            "independently_recomputed_from_primitive_evidence: true",
-            paid,
-        )
-        self.assertIn("paid_acceptance_verdict_used_as_source: false", paid)
-        self.assertIn(
-            'test "$(git -C runtime-source rev-parse HEAD)" = "$TARGET_SHA"',
-            paid,
-        )
-        self.assertNotIn("status=completed&per_page=20", paid)
+        self.assertNotIn("--quality-tier", paid)
+        self.assertFalse(LEGACY_PAID_ACCEPTANCE.exists())
         self.assertFalse(DETACHED_ATTESTATION.exists())
         self.assertFalse(DETACHED_ATTESTATION_REQUEST.exists())
 

@@ -28,7 +28,11 @@ from execution_graph import ExecutionGraph, GraphLimits, SelectedNode
 from execution_graph_validator import validate_execution_graph
 from openrouter_api import CHAT_URL, request_json
 from text_normalization import normalize_heading_key
-from v5_execution_primitives import actual_cost as extract_actual_cost
+from v5_execution_primitives import (
+    actual_cost as extract_actual_cost,
+    finish_reason as extract_finish_reason,
+)
+from v5_json_io import write_json
 
 RUNTIME_VERSION = "v5-native-runtime-1"
 MIN_DEGRADED_WORK_COVERAGE = 2.0 / 3.0
@@ -487,6 +491,8 @@ class QualityGatePolicy:
 
 
 class ExecutionEngine:
+    _write_json = staticmethod(write_json)
+
     def __init__(
         self,
         config: RuntimeConfig,
@@ -621,13 +627,6 @@ class ExecutionEngine:
             parameter_profile=parameter_profile,
             request_config=request_config,
         )
-
-    @staticmethod
-    def _finish_reason(response: Mapping[str, Any]) -> str:
-        choices = response.get("choices")
-        if isinstance(choices, list) and choices and isinstance(choices[0], Mapping):
-            return str(choices[0].get("finish_reason") or "")
-        return ""
 
     @staticmethod
     def _failure_from_exception(
@@ -881,7 +880,7 @@ class ExecutionEngine:
             reasons.append("actual-budget-exceeded")
         failure = self._response_failure(
             node, response, usage, actual_cost, passed, reasons,
-            self._finish_reason(response).casefold(), budget_exceeded,
+            extract_finish_reason(response).casefold(), budget_exceeded,
         )
         status = "passed" if passed and not budget_exceeded else "quality_gate_failed"
         return RuntimeAttempt(
@@ -1339,14 +1338,14 @@ class ExecutionEngine:
     ) -> None:
         root.mkdir(parents=True, exist_ok=True)
         node_rows = [asdict(outputs[node_id]) for node_id in sorted(outputs)]
-        self._write_json(root / "v5-node-results.json", node_rows)
-        self._write_json(
+        write_json(root / "v5-node-results.json", node_rows)
+        write_json(
             root / "v5-execution-summary.json",
             {key: value for key, value in result.items() if key != "node_results"},
         )
         attempts = [attempt for row in outputs.values() for attempt in row.attempts]
         requests = [attempt.request for attempt in attempts]
-        self._write_json(
+        write_json(
             root / "v5-request-audit.json",
             {
                 "status": "PASS" if all(
@@ -1377,13 +1376,6 @@ class ExecutionEngine:
             encoding="utf-8",
         )
 
-    @staticmethod
-    def _write_json(path: Path, value: Any) -> None:
-        path.write_text(
-            json.dumps(value, ensure_ascii=False, indent=2, default=str),
-            encoding="utf-8",
-        )
-
     def _validated_graph(
         self,
         graph: ExecutionGraph | Mapping[str, Any],
@@ -1408,8 +1400,8 @@ class ExecutionEngine:
         self, root: Path | None, preflight: Mapping[str, Any]
     ) -> None:
         if root is not None:
-            self._write_json(root / "v5-node-results.json", [])
-            self._write_json(
+            write_json(root / "v5-node-results.json", [])
+            write_json(
                 root / "v5-execution-summary.json",
                 {
                     "version": 5, "status": "failed", "completion_mode": "none",
@@ -1425,7 +1417,7 @@ class ExecutionEngine:
                     "stop_reason": "native-runtime-preflight-rejected",
                 },
             )
-            self._write_json(
+            write_json(
                 root / "v5-request-audit.json",
                 {"status": "PASS", "request_count": 0, "requests": []},
             )

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 from pathlib import Path
 from typing import Any, Mapping
 
+from artifact_manifest import sha256_file
 from v5_model_company import canonical_model_company
 from v5_task_constraints import (
     compile_task_constraints,
@@ -42,14 +42,6 @@ def _load_optional(path: Path, default: Any) -> Any:
         return _load(path)
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return default
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _manifest_identity(
@@ -104,7 +96,7 @@ def _manifest_entry_checks(
         checked += 1
         if artifact_path.stat().st_size != int(row.get("size") or -1):
             failures.append(f"manifest size mismatch: {relative}")
-        if _sha256(artifact_path) != str(row.get("sha256") or ""):
+        if sha256_file(artifact_path) != str(row.get("sha256") or ""):
             failures.append(f"manifest hash mismatch: {relative}")
     return failures, listed_paths, checked
 
@@ -575,7 +567,7 @@ def _archive_digest_audit(
 ) -> tuple[str | None, list[str]]:
     if archive is None:
         return None, []
-    archive_sha256 = _sha256(archive)
+    archive_sha256 = sha256_file(archive)
     expected = str(expected_artifact_digest or "").removeprefix("sha256:")
     failures = []
     if not expected or archive_sha256 != expected:
@@ -692,7 +684,7 @@ def main() -> int:
             expected_artifact_digest=args.expected_artifact_digest,
         )
     except Exception as exc:
-        archive_sha256 = _sha256(archive) if archive is not None and archive.is_file() else None
+        archive_sha256 = sha256_file(archive) if archive is not None and archive.is_file() else None
         result = {
             "schema_version": "v5-independent-artifact-revalidation-3",
             "status": "FAIL",

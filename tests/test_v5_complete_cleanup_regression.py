@@ -14,19 +14,14 @@ from text_normalization import normalize_heading_key  # noqa: E402
 
 
 class CompleteCleanupRegressionTests(unittest.TestCase):
-    def test_quality_tier_is_removed_from_runtime_and_workflows(self) -> None:
+    def test_quality_tier_is_not_an_external_contract(self) -> None:
         schema = json.loads((MODULE / "execution-ticket.schema.json").read_text())
         self.assertNotIn("quality_tier", schema["properties"])
         paths = [
             MODULE / "v5_issue_ticket.py",
             MODULE / "v5_production_ticket.py",
             MODULE / "v5_ticket_gate.py",
-            MODULE / "v5_pipeline.py",
-            MODULE / "v5_runtime.py",
-            MODULE / "expert-team-capabilities.json",
             ROOT / ".github/workflows/execution-ticket.yml",
-            ROOT / ".github/workflows/v5-one-time-paid-acceptance.yml",
-            ROOT / ".github/workflows/v5-final-paid-claude-acceptance-20260803.yml",
         ]
         for path in paths:
             self.assertNotIn("quality_tier", path.read_text(), path)
@@ -36,8 +31,6 @@ class CompleteCleanupRegressionTests(unittest.TestCase):
     def test_paid_acceptance_is_explicit_and_not_a_green_noop(self) -> None:
         dead = ROOT / ".github/workflows/v5-one-time-paid-claude-acceptance-20260803.yml"
         self.assertFalse(dead.exists())
-        self.assertFalse((ROOT / ".github/v5-paid-acceptance-request.json").exists())
-        self.assertFalse((ROOT / ".github/v5-paid-acceptance-attestation.json").exists())
         paid = (ROOT / ".github/workflows/v5-final-paid-claude-acceptance-20260803.yml").read_text()
         self.assertIn("workflow_dispatch", paid)
         self.assertIn("inputs.confirm", paid)
@@ -74,6 +67,19 @@ class CompleteCleanupRegressionTests(unittest.TestCase):
         )
         for name in forbidden:
             self.assertFalse((MODULE / name).exists(), name)
+
+    def test_quality_tier_and_obsolete_fixed_team_assets_are_absent(self) -> None:
+        runtime = (MODULE / "v5_runtime.py").read_text(encoding="utf-8")
+        pipeline = (MODULE / "v5_pipeline.py").read_text(encoding="utf-8")
+        capabilities = (MODULE / "expert-team-capabilities.json").read_text(encoding="utf-8")
+        self.assertNotIn("quality_tier", runtime)
+        self.assertNotIn("quality_tier", pipeline)
+        self.assertNotIn("quality_tier", capabilities)
+        self.assertFalse((MODULE / "parameter_templates.json").exists())
+        self.assertFalse((MODULE / "model-reliability-ledger.schema.json").exists())
+        self.assertFalse(
+            (ROOT / ".github/workflows/v5-one-time-paid-acceptance.yml").exists()
+        )
 
 
 if __name__ == "__main__":

@@ -6,9 +6,10 @@ failure so a failed run still preserves the exact attempted requests.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Mapping
+
+from v5_json_io import load_json_or_default, write_json
 
 
 STRICT_SUCCESS_STATUSES = {
@@ -132,23 +133,9 @@ def enforce_result_integrity(result: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def _write_json(path: Path, value: Any) -> None:
-    path.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
-
-
-def _load(path: Path, default: Any) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return default
-
-
 def _rewrite_request_audit(root: Path, integrity_status: str) -> None:
     audit_path = root / "v5-request-audit.json"
-    audit = _load(audit_path, {})
+    audit = load_json_or_default(audit_path, {})
     if not isinstance(audit, Mapping):
         return
     audit = dict(audit)
@@ -169,12 +156,12 @@ def _rewrite_request_audit(root: Path, integrity_status: str) -> None:
     )
     audit["quality_integrity_status"] = integrity_status
     audit["request_count"] = int(audit.get("request_count") or len(requests))
-    _write_json(audit_path, audit)
+    write_json(audit_path, audit)
 
 
 def _rewrite_artifacts(root: Path, result: Mapping[str, Any]) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    _write_json(
+    write_json(
         root / "v5-execution-summary.json",
         {key: value for key, value in result.items() if key != "node_results"},
     )
@@ -185,8 +172,8 @@ def _rewrite_artifacts(root: Path, result: Mapping[str, Any]) -> None:
 
 def _rewrite_failure_artifacts(root: Path) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    summary = _load(root / "v5-execution-summary.json", {})
-    rows = _load(root / "v5-node-results.json", [])
+    summary = load_json_or_default(root / "v5-execution-summary.json", {})
+    rows = load_json_or_default(root / "v5-node-results.json", [])
     if isinstance(summary, Mapping):
         summary = dict(summary)
         summary.setdefault("quality_status", "failed")
@@ -203,5 +190,5 @@ def _rewrite_failure_artifacts(root: Path) -> None:
             ],
             "full_success_allowed": False,
         }
-        _write_json(root / "v5-execution-summary.json", summary)
+        write_json(root / "v5-execution-summary.json", summary)
     _rewrite_request_audit(root, "FAIL")

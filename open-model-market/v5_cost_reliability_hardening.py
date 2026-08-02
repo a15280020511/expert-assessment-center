@@ -47,14 +47,6 @@ def _integer(value: Any, default: int = 0) -> int:
         return default
 
 
-def _finite(value: Any, default: float = 0.0) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return default
-    return number if math.isfinite(number) else default
-
-
 def completion_envelope(
     work: Mapping[str, Any],
     endpoint_max: int,
@@ -95,9 +87,9 @@ def conservative_estimated_cost(
     discount = max(0.1, float(bundle_discount))
     base = (
         int(prompt_tokens * discount)
-        * _finite(endpoint.get("prompt_price_per_million"))
+        * primitives.finite_number(endpoint.get("prompt_price_per_million"))
         + int(completion_tokens * discount)
-        * _finite(endpoint.get("completion_price_per_million"))
+        * primitives.finite_number(endpoint.get("completion_price_per_million"))
     ) / 1_000_000
     return round(base * COST_UNCERTAINTY_MULTIPLIER, 8)
 

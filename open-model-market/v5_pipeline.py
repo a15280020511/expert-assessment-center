@@ -28,20 +28,13 @@ from v5_governance_runtime import (
     write_governance_artifacts,
 )
 from v5_gpt_expert_selector import build_proposal_request
+from v5_json_io import write_json
 from v5_proposal_materializer import materialize_proposal
 from v5_recovery_runtime import build_production_runtime
 from v5_runtime import RuntimeConfig
 from v5_task_envelope import build_task_envelope
 
 RUNTIME_VERSION = "v5-gpt-claude-runtime-3"
-
-
-def _write(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
 
 
 def _load(path: str | Path) -> Mapping[str, Any]:
@@ -148,7 +141,7 @@ def _merge_request_audit(
         and all(not forbidden_fields(row) for row in requests)
         else "FAIL"
     )
-    _write(
+    write_json(
         path,
         {
             "schema_version": "v5-complete-request-audit-3",
@@ -213,8 +206,8 @@ def _prepare_task(
         minimum_context_length=run.minimum_context_length,
         maximum_completion_tokens=run.max_completion_tokens,
     )
-    _write(output / "v5-task-envelope.json", envelope)
-    _write(output / "task-constraints.json", envelope["task_constraints"])
+    write_json(output / "v5-task-envelope.json", envelope)
+    write_json(output / "task-constraints.json", envelope["task_constraints"])
     return task, digest, envelope
 
 
@@ -249,7 +242,7 @@ def _build_catalog_state(
         required_context_tokens=required_context,
         governance_call_fn=governance_call_fn,
     )
-    _write(
+    write_json(
         output / "v5-governance-models.json",
         {
             **governance_models,
@@ -336,9 +329,9 @@ def _write_catalog_artifacts(
     snapshot: Mapping[str, Any],
     runtime_config: Mapping[str, Any],
 ) -> None:
-    _write(output / "catalog-snapshot.json", snapshot)
-    _write(output / "v5-gpt-catalog-view.json", catalog)
-    _write(output / "v5-runtime-config.json", runtime_config)
+    write_json(output / "catalog-snapshot.json", snapshot)
+    write_json(output / "v5-gpt-catalog-view.json", catalog)
+    write_json(output / "v5-runtime-config.json", runtime_config)
 
 
 def _write_dry_run(
@@ -361,7 +354,7 @@ def _write_dry_run(
         approved_recovery_calls=recovery_calls,
         cost_anomaly_usd=cost_anomaly_usd,
     )
-    _write(
+    write_json(
         output / "v5-dry-run.json",
         {
             "schema_version": "v5-gpt-claude-advisory-dry-run-3",
@@ -463,9 +456,9 @@ def _run_governance_and_materialize(
         cost_anomaly_usd=remaining,
     )
     governance["materialization_after_governance_cost"] = materialization
-    _write(output / "v5-governance-result.json", governance)
-    _write(output / "v5-selection.json", _selection_payload(governance, governance_models, materialization))
-    _write(output / "v5-execution-graph.json", graph.to_dict())
+    write_json(output / "v5-governance-result.json", governance)
+    write_json(output / "v5-selection.json", _selection_payload(governance, governance_models, materialization))
+    write_json(output / "v5-execution-graph.json", graph.to_dict())
     return governance, ledger, graph, limits, governance_cost, remaining
 
 
@@ -557,8 +550,8 @@ def _write_final_artifacts(
     governance_ledger: Mapping[str, Any],
     total_calls: int,
 ) -> None:
-    _write(output / "v5-result.json", result)
-    _write(
+    write_json(output / "v5-result.json", result)
+    write_json(
         output / "v5-execution-summary.json",
         {key: value for key, value in result.items() if key != "node_results"},
     )

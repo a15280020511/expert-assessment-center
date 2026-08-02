@@ -10,23 +10,9 @@ from typing import Any, Mapping
 
 from artifact_manifest import write_manifest
 from v5_claude_red_team_policy import CLAUDE_RED_TEAM_GOVERNANCE_CALLS
+from v5_json_io import load_json_or_default, write_json
 
 RUNTIME_VERSION = "v5-gpt-claude-runtime-1"
-
-
-def _load(path: Path, default: Any) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return default
-
-
-def _write(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
 
 
 def _canonical_sha(value: Any) -> str:
@@ -84,10 +70,10 @@ class EvidenceInputs:
     @classmethod
     def from_directory(cls, root: Path) -> "EvidenceInputs":
         def mapping(name: str) -> Mapping[str, Any]:
-            value = _load(root / name, {})
+            value = load_json_or_default(root / name, {})
             return dict(value) if isinstance(value, Mapping) else {}
 
-        raw_nodes = _load(root / "v5-node-results.json", [])
+        raw_nodes = load_json_or_default(root / "v5-node-results.json", [])
         nodes = tuple(
             row for row in raw_nodes if isinstance(row, Mapping)
         ) if isinstance(raw_nodes, list) else ()
@@ -518,7 +504,7 @@ class EvidenceBundleBuilder:
     ) -> dict[str, Any]:
         documents = self.build(require_report=require_report)
         for name, document in documents.items():
-            _write(root / name, document)
+            write_json(root / name, document)
         if require_report:
             (root / "expert-team-report.md").write_text(
                 self.inputs.final_report,
@@ -545,6 +531,6 @@ class EvidenceBundleBuilder:
                 "primary_artifact_url",
             ],
         }
-        _write(root / "evidence-bundle.json", snapshot)
+        write_json(root / "evidence-bundle.json", snapshot)
         write_manifest(root)
         return documents["expert-team-result.json"]

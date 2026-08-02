@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import v5_execution_auditor as base
+from v5_json_io import load_json_or_default
 from v5_quality_status_integrity import (
     DEGRADED_SUCCESS_STATUSES,
     STRICT_SUCCESS_STATUSES,
@@ -32,17 +33,10 @@ _OBSOLETE_COMPANY_FAILURE_PREFIXES = (
 )
 
 
-def _load(path: Path, default: Any) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return default
-
-
 def _planning_failure(root: Path) -> dict[str, Any] | None:
-    error = _load(root / "expert-team-error.json", {})
+    error = load_json_or_default(root / "expert-team-error.json", {})
     error = error if isinstance(error, Mapping) else {}
-    report = _load(root / "v5-planning-infeasibility.json", {})
+    report = load_json_or_default(root / "v5-planning-infeasibility.json", {})
     report = report if isinstance(report, Mapping) else {}
     code = str(error.get("error_code") or report.get("code") or "")
     message = str(error.get("message") or report.get("message") or "")
@@ -106,7 +100,7 @@ def _classify_quality_row(
 
 
 def _node_quality(root: Path) -> dict[str, Any]:
-    raw_rows = _load(root / "v5-node-results.json", [])
+    raw_rows = load_json_or_default(root / "v5-node-results.json", [])
     rows = raw_rows if isinstance(raw_rows, list) else []
     strict: list[str] = []
     degraded: list[dict[str, Any]] = []
@@ -136,11 +130,11 @@ def _node_quality(root: Path) -> dict[str, Any]:
 def _native_contract_evidence(
     root: Path,
 ) -> tuple[set[str], str]:
-    envelope = _load(root / "expert-team-result.json", {})
+    envelope = load_json_or_default(root / "expert-team-result.json", {})
     envelope = envelope if isinstance(envelope, Mapping) else {}
-    summary = _load(root / "v5-execution-summary.json", {})
+    summary = load_json_or_default(root / "v5-execution-summary.json", {})
     summary = summary if isinstance(summary, Mapping) else {}
-    runtime = _load(root / "production-runtime.json", {})
+    runtime = load_json_or_default(root / "production-runtime.json", {})
     runtime = runtime if isinstance(runtime, Mapping) else {}
     runtime_versions = {
         str(envelope.get("runtime_version") or ""),
@@ -225,7 +219,7 @@ def _normalize_planning_failure(
     result: dict[str, Any],
     planning: Mapping[str, Any],
 ) -> dict[str, Any]:
-    manifest = _load(root / "report-comments" / "report-comments-manifest.json", {})
+    manifest = load_json_or_default(root / "report-comments" / "report-comments-manifest.json", {})
     manifest = manifest if isinstance(manifest, Mapping) else {}
     publication_status = str(manifest.get("publication_status") or "missing")
     evidence_valid = (
@@ -273,11 +267,11 @@ def _normalize_planning_failure(
 
 
 def _constitutional_evidence(root: Path) -> dict[str, Any]:
-    constraints = _load(root / "task-constraints.json", {})
+    constraints = load_json_or_default(root / "task-constraints.json", {})
     constraints = constraints if isinstance(constraints, Mapping) else {}
-    evidence = _load(root / "evidence-integrity.json", {})
+    evidence = load_json_or_default(root / "evidence-integrity.json", {})
     evidence = evidence if isinstance(evidence, Mapping) else {}
-    company = _load(root / "actual-model-company-audit.json", {})
+    company = load_json_or_default(root / "actual-model-company-audit.json", {})
     company = company if isinstance(company, Mapping) else {}
 
     called = company.get("all_called_models", [])
@@ -431,7 +425,7 @@ def audit(
     if planning is not None:
         return _normalize_planning_failure(root, result, planning)
 
-    summary = _load(root / "v5-execution-summary.json", {})
+    summary = load_json_or_default(root / "v5-execution-summary.json", {})
     summary = summary if isinstance(summary, Mapping) else {}
     node_evidence = _node_quality(root)
     constitutional = _constitutional_evidence(root)

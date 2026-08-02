@@ -8,11 +8,11 @@ model/provider rows to GPT.
 from __future__ import annotations
 
 import json
-import math
 import urllib.parse
 from hashlib import sha256
 from typing import Any, Mapping, Sequence
 
+from v5_execution_primitives import finite_number
 from v5_model_company import canonical_model_company
 
 ENDPOINTS_URL = "https://openrouter.ai/api/v1/models/{author}/{slug}/endpoints"
@@ -139,16 +139,8 @@ def _provider_slug(endpoint: Mapping[str, Any]) -> str:
     return ""
 
 
-def _finite(value: Any, default: float = 0.0) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return default
-    return number if math.isfinite(number) else default
-
-
 def _ppm(value: Any, fallback: float = 0.0) -> float:
-    number = _finite(value, fallback)
+    number = finite_number(value, fallback)
     if number < 0:
         return fallback
     return number * 1_000_000 if number < 0.1 else number
@@ -203,11 +195,11 @@ def _endpoint_numbers(
     )
     prompt = _ppm(
         pricing.get("prompt"),
-        _finite(getattr(model, "prompt_price_per_million", 0.0)),
+        finite_number(getattr(model, "prompt_price_per_million", 0.0)),
     )
     completion = _ppm(
         pricing.get("completion"),
-        _finite(getattr(model, "completion_price_per_million", 0.0)),
+        finite_number(getattr(model, "completion_price_per_million", 0.0)),
     )
     return context_length, completion_tokens, prompt, completion
 

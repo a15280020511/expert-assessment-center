@@ -10,16 +10,11 @@ import os
 from pathlib import Path
 from typing import Any, Mapping
 
+from v5_json_io import load_json_or_default
+
 RUNTIME_VERSION = "v5-r8"
 ABSOLUTE_MAX_MODEL_CALLS = 16
 ABSOLUTE_MAX_NODES = 16
-
-
-def _load(path: Path, default: Any) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return default
 
 
 def _write_output(name: str, value: Any) -> None:
@@ -40,19 +35,19 @@ def _positive_optional(value: Any) -> float | None:
 
 class AuditEvidence:
     def __init__(self, root: Path) -> None:
-        self.ticket = _load(root / "ticket-status.json", {})
-        self.result = _load(root / "expert-team-result.json", {})
-        self.summary = _load(root / "v5-execution-summary.json", {})
-        self.graph = _load(root / "v5-execution-graph.json", {})
-        self.request_audit = _load(root / "request-audit.json", {})
-        self.ledger = _load(root / "call-ledger.json", {})
-        self.runtime = _load(root / "production-runtime.json", {})
-        self.company_audit = _load(root / "actual-model-company-audit.json", {})
-        self.report_manifest = _load(
+        self.ticket = load_json_or_default(root / "ticket-status.json", {})
+        self.result = load_json_or_default(root / "expert-team-result.json", {})
+        self.summary = load_json_or_default(root / "v5-execution-summary.json", {})
+        self.graph = load_json_or_default(root / "v5-execution-graph.json", {})
+        self.request_audit = load_json_or_default(root / "request-audit.json", {})
+        self.ledger = load_json_or_default(root / "call-ledger.json", {})
+        self.runtime = load_json_or_default(root / "production-runtime.json", {})
+        self.company_audit = load_json_or_default(root / "actual-model-company-audit.json", {})
+        self.report_manifest = load_json_or_default(
             root / "report-comments" / "report-comments-manifest.json",
             {},
         )
-        self.error = _load(root / "expert-team-error.json", {})
+        self.error = load_json_or_default(root / "expert-team-error.json", {})
 
 
 class BudgetState:

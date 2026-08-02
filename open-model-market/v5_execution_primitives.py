@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any, Mapping, Sequence
 
 from execution_graph import SelectedNode
@@ -109,6 +110,14 @@ def extract_answer(response: Mapping[str, Any]) -> str:
             if isinstance(row, Mapping) and isinstance(row.get("text"), str)
         ).strip()
     return ""
+
+
+def finite_number(value: Any, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if math.isfinite(number) else default
 
 
 def finish_reason(response: Mapping[str, Any]) -> str:

@@ -11,28 +11,15 @@ from typing import Any, Mapping, Sequence
 
 import v5_pipeline
 from v5_claude_red_team_policy import CLAUDE_RED_TEAM_GOVERNANCE_CALLS
+from v5_json_io import load_json_or_default, write_json
 from v5_run_evidence import ApprovedRun, EvidenceBundleBuilder, EvidenceInputs
 from v5_task_constraints import compile_task_constraints
 
 RUNTIME_VERSION = "v5-gpt-claude-runtime-1"
 
 
-def _load(path: Path, default: Any) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return default
-
-
-def _write(path: Path, value: Any) -> None:
-    path.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
-
-
 def _canonical_user_task(root: Path, fallback: str) -> tuple[str, str]:
-    packet = _load(root / "ticket.json", {})
+    packet = load_json_or_default(root / "ticket.json", {})
     task = packet.get("task") if isinstance(packet, Mapping) else None
     if (
         not isinstance(task, Mapping)
@@ -140,7 +127,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not task:
         raise ValueError("canonical user task is empty")
     constraints = compile_task_constraints(task)
-    _write(
+    write_json(
         root / "planning-task.json",
         {
             "schema_version": "v5-gpt-planning-task-2",
@@ -160,7 +147,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "optimizer_used": False,
         },
     )
-    _write(
+    write_json(
         root / "production-runtime.json",
         {
             "runtime_version": RUNTIME_VERSION,
@@ -231,7 +218,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _normalize(root, args, False)
         except Exception as normalize_exc:  # noqa: BLE001
             normalization_error = str(normalize_exc)
-        _write(
+        write_json(
             root / "expert-team-error.json",
             {
                 "version": 5,
