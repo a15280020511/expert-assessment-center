@@ -165,6 +165,24 @@ def _check_string_list(value: Any, field: str, *, maximum: int = CLAUDE_RED_TEAM
         _check_id(item, f"{field}[{index}]")
 
 
+def _check_semantic_token_list(
+    value: Any,
+    field: str,
+    *,
+    maximum: int = CLAUDE_RED_TEAM_MAX_ITEMS,
+) -> None:
+    if not isinstance(value, list) or len(value) > maximum:
+        raise ValueError(f"{field} must be a bounded list")
+    for index, item in enumerate(value):
+        if (
+            not isinstance(item, str)
+            or not item.strip()
+            or len(item) > 64
+            or any(ord(character) < 32 for character in item)
+        ):
+            raise ValueError(f"{field}[{index}] is not a bounded semantic token")
+
+
 def _check_tree(value: Any, *, depth: int = 0) -> None:
     if depth > CLAUDE_RED_TEAM_MAX_DEPTH:
         raise ValueError("Claude red-team input exceeds maximum nesting depth")
@@ -268,8 +286,14 @@ def _validate_external(payload: Mapping[str, Any]) -> None:
         text = claim["text"]
         if not isinstance(text, str) or not text.strip() or len(text) > 240:
             raise ValueError(f"claims[{index}].text is empty or oversized")
-        _check_string_list(claim["quantity_tokens"], f"claims[{index}].quantity_tokens")
-        _check_string_list(claim["location_tokens"], f"claims[{index}].location_tokens")
+        _check_semantic_token_list(
+            claim["quantity_tokens"],
+            f"claims[{index}].quantity_tokens",
+        )
+        _check_semantic_token_list(
+            claim["location_tokens"],
+            f"claims[{index}].location_tokens",
+        )
 
 
 def canonical_review_input(scope: RedTeamScope | str, payload: Mapping[str, Any]) -> str:
