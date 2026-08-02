@@ -36,6 +36,7 @@ jobs:
         run: |
           set -euo pipefail
           python tools/v5_quantity_binding_context.patch
+          python tools/v5_quantity_similarity_guard.patch
           git diff --check
 
       - name: Install pinned dependencies
@@ -71,6 +72,7 @@ jobs:
       - name: Remove one-time patch entry
         run: |
           rm -f tools/v5_quantity_binding_context.patch
+          rm -f tools/v5_quantity_similarity_guard.patch
           rm -f .github/workflows/v5-apply-quantity-binding-patch.yml
 
       - name: Commit clean production patch
