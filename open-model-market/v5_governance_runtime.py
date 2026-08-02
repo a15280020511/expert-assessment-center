@@ -9,6 +9,7 @@ from typing import Any, Callable, Mapping
 
 from openrouter_api import CHAT_URL, request_json
 from v5_claude_red_team_policy import (
+    CLAUDE_RED_TEAM_GOVERNANCE_CALLS,
     RedTeamScope,
     build_claude_red_team_request,
     parse_claude_red_team_advice,
@@ -21,7 +22,6 @@ from v5_gpt_expert_selector import (
 )
 from v5_proposal_materializer import (
     claude_internal_review_payload,
-    compact_resources_for_gpt,
     deterministic_violations,
     materialize_proposal,
 )
@@ -56,6 +56,32 @@ def _provider(
         if isinstance(values, list) and values:
             return str(values[0])
     return ""
+
+
+def _expected_provider(request: Mapping[str, Any]) -> str:
+    provider = request.get("provider")
+    if not isinstance(provider, Mapping):
+        raise GovernanceRuntimeError("governance provider lock is missing")
+    only = provider.get("only")
+    if not isinstance(only, list) or len(only) != 1:
+        raise GovernanceRuntimeError(
+            "governance provider.only must contain exactly one provider"
+        )
+    if provider.get("allow_fallbacks") is not False:
+        raise GovernanceRuntimeError("governance provider fallback is forbidden")
+    return str(only[0])
+
+
+def _assert_provider_lock(
+    request: Mapping[str, Any],
+    response: Mapping[str, Any],
+) -> None:
+    expected = _expected_provider(request).casefold()
+    actual = str(response.get("provider") or "").strip().casefold()
+    if actual and actual != expected:
+        raise GovernanceRuntimeError(
+            f"governance provider mismatch: expected={expected}, actual={actual}"
+        )
 
 
 def _api_payload(request: Mapping[str, Any]) -> dict[str, Any]:
@@ -108,9 +134,8 @@ class GovernanceLedger:
         latency_seconds: float,
     ) -> None:
         if len(self.calls) >= self.maximum_calls:
-            raise GovernanceRuntimeError(
-                "governance call ceiling exceeded"
-            )
+            raise GovernanceRuntimeError("governance call ceiling exceeded")
+        _assert_provider_lock(request, response)
         usage = response.get("usage")
         usage = dict(usage) if isinstance(usage, Mapping) else {}
         self.calls.append(
@@ -127,17 +152,14 @@ class GovernanceLedger:
                 request=dict(request),
                 usage=usage,
                 actual_cost_usd=round(_actual_cost(response), 8),
-                latency_seconds=round(
-                    max(0.0, latency_seconds),
-                    6,
-                ),
+                latency_seconds=round(max(0.0, latency_seconds), 6),
                 response_id=str(response.get("id") or "") or None,
             )
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": "v5-advisory-governance-call-ledger-1",
+            "schema_version": "v5-advisory-governance-call-ledger-2",
             "status": "PASS",
             "maximum_governance_calls": self.maximum_calls,
             "actual_governance_calls": len(self.calls),
@@ -155,8 +177,7 @@ class GovernanceLedger:
             "second_claude_review_allowed": False,
             "model_loop_allowed": False,
             "actual_cost_usd": round(
-                sum(row.actual_cost_usd for row in self.calls),
-                8,
+                sum(row.actual_cost_usd for row in self.calls), 8
             ),
             "calls": [row.to_dict() for row in self.calls],
         }
@@ -168,9 +189,7 @@ def _default_call(
 ) -> tuple[Mapping[str, Any], float]:
     api_key = getattr(run, "api_key", None)
     if not api_key:
-        raise GovernanceRuntimeError(
-            "OPENROUTER_API_KEY is not set"
-        )
+        raise GovernanceRuntimeError("OPENROUTER_API_KEY is not set")
     started = time.monotonic()
     response = request_json(
         CHAT_URL,
@@ -204,9 +223,7 @@ def _call_and_parse(
     )
     text = extract_answer(response)
     if not text:
-        raise GovernanceRuntimeError(
-            f"{kind} returned no visible output"
-        )
+        raise GovernanceRuntimeError(f"{kind} returned no visible output")
     return parser(text)
 
 
@@ -215,7 +232,7 @@ def run_single_pass_governance(
     run: Any,
     task: str,
     task_digest: str,
-    resources: Mapping[str, Any],
+    task_envelope: Mapping[str, Any],
     catalog: Mapping[str, Any],
     approved_total_calls: int,
     governance_calls_reserved: int,
@@ -227,21 +244,20 @@ def run_single_pass_governance(
     ] | None = None,
 ) -> tuple[Any, Any, dict[str, Any], dict[str, Any]]:
     """Run GPT proposal, Claude advice, GPT synthesis, final validator."""
+    if int(governance_calls_reserved) != CLAUDE_RED_TEAM_GOVERNANCE_CALLS:
+        raise GovernanceRuntimeError("governance call reserve must equal three")
     call = call_fn or _default_call
-    compact_resources = compact_resources_for_gpt(resources)
     limits = {
         "approved_total_calls": approved_total_calls,
         "governance_calls_reserved": governance_calls_reserved,
         "approved_recovery_calls": approved_recovery_calls,
         "cost_anomaly_usd": cost_anomaly_usd,
     }
-    ledger = GovernanceLedger(
-        maximum_calls=governance_calls_reserved
-    )
+    ledger = GovernanceLedger(maximum_calls=governance_calls_reserved)
 
     proposal_request = build_proposal_request(
         task=task,
-        resources=compact_resources,
+        task_envelope=task_envelope,
         catalog=catalog,
         **limits,
     )
@@ -256,7 +272,7 @@ def run_single_pass_governance(
 
     claude_input = claude_internal_review_payload(
         initial,
-        resources,
+        task_envelope,
         catalog,
         task_digest=task_digest,
         **limits,
@@ -281,7 +297,7 @@ def run_single_pass_governance(
         task=task,
         initial_proposal=initial,
         claude_advice=claude_advice,
-        resources=compact_resources,
+        task_envelope=task_envelope,
         catalog=catalog,
         **limits,
     )
@@ -315,7 +331,8 @@ def run_single_pass_governance(
 
     violations = deterministic_violations(
         final,
-        resources,
+        task,
+        task_envelope,
         catalog,
         **limits,
     )
@@ -326,12 +343,13 @@ def run_single_pass_governance(
         )
     graph, graph_limits, materialization = materialize_proposal(
         final,
-        resources,
+        task,
+        task_envelope,
         catalog,
         **limits,
     )
     governance = {
-        "schema_version": "v5-advisory-governance-result-1",
+        "schema_version": "v5-advisory-governance-result-2",
         "status": "PASS",
         "initial_proposal": initial,
         "claude_advice": dict(claude_advice),
@@ -342,9 +360,7 @@ def run_single_pass_governance(
         "claude_gatekeeping_allowed": False,
         "second_claude_review_allowed": False,
         "model_loop_allowed": False,
-        "final_authority": (
-            "deterministic-constitutional-validator"
-        ),
+        "final_authority": "deterministic-constitutional-validator",
         "materialization": materialization,
     }
     return graph, graph_limits, governance, ledger.to_dict()
