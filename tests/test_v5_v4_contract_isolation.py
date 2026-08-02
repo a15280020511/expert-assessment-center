@@ -118,14 +118,16 @@ class V5V4ContractIsolationTests(unittest.TestCase):
             self.assertIn(heading, final_user)
 
         numeric = closed_world_numeric_prompt(TASK)
-        self.assertIn("1200:yuan", numeric)
-        self.assertIn("300:yuan", numeric)
-        self.assertIn("450:yuan", numeric)
-        self.assertIn("24:month", numeric)
+        self.assertIn("1200元", numeric)
+        self.assertIn("300元", numeric)
+        self.assertIn("450元", numeric)
+        self.assertIn("24个月", numeric)
+        self.assertNotIn("1200:yuan", numeric)
+        self.assertNotIn("24:month", numeric)
         self.assertIn("算术中间结果", numeric)
         self.assertIn("直接等式", numeric)
         self.assertIn("定性表述", numeric)
-        self.assertNotIn("2550:yuan", numeric)
+        self.assertNotIn("2550元", numeric)
         for payload in (internal_payload, final_payload):
             system = payload["messages"][0]["content"]
             self.assertIn(numeric, system)
