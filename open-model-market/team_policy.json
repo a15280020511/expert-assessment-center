@@ -1,124 +1,42 @@
 {
-  "schema_version": "v5-team-policy-2",
-  "pattern": "task-derived-dynamic-execution-graph",
+  "schema_version": "v5-gpt-led-team-policy-1",
+  "pattern": "gpt-direct-proposal-claude-single-red-team-deterministic-validation",
   "constitution": {
     "task_independent": true,
-    "scenario_specific_production_branches_forbidden": true,
-    "all_computable_decisions_dynamic": true,
-    "dynamic_variables": [
-      "task interpretation breadth",
-      "atomic work graph",
-      "node count",
-      "professional capabilities",
-      "roles",
-      "models",
-      "model companies",
-      "provider endpoints",
-      "reasoning depth",
-      "prompt modules",
-      "output contracts",
-      "candidate search width",
-      "recovery allocation",
-      "quality thresholds",
-      "objective weights",
-      "delivery coverage"
-    ],
-    "platform_safety_limits_are_not_solver_preferences": true,
-    "fixed_model_score_weight_tuples_forbidden": true,
-    "fixed_role_or_seat_count_forbidden": true,
-    "fixed_interpretation_count_forbidden": true,
-    "same_company_across_distinct_nodes_forbidden": true,
-    "all_actual_calls_in_company_audit": true,
-    "failed_calls_in_company_audit": true,
+    "gpt_is_selection_authority": true,
+    "claude_is_red_team_only": true,
+    "claude_red_team_calls_per_task": 1,
+    "gpt_synthesis_calls_max": 1,
+    "second_claude_review_allowed": false,
+    "model_loop_allowed": false,
+    "local_model_scoring_allowed": false,
+    "fixed_weight_tuple_allowed": false,
+    "heuristic_ranking_allowed": false,
+    "pareto_pruning_allowed": false,
+    "cp_sat_allowed": false,
+    "solver_allowed": false,
+    "same_company_across_distinct_experts_forbidden": true,
+    "openai_and_anthropic_reserved_for_governance": true,
     "external_tools_allowed": false,
     "provider_fallback_allowed": false,
     "cross_task_history_allowed": false,
-    "explicit_user_denial_overrides_permission": true,
-    "degraded_delivery_default": "denied",
-    "fact_truth_must_not_be_inferred_from_structure": true,
-    "unsupported_precise_quantities_fail_closed": true,
-    "structured_task_constraints_required": true,
-    "checked_out_execution_sha_is_authoritative": true,
+    "deterministic_constitutional_validator_is_final": true,
     "complete_audit_before_publication": true,
-    "independent_acceptance_recomputes_from_primitive_evidence": true,
     "fail_closed": true
   },
-  "capability_vocabulary": [
-    {
-      "key": "primary_analysis",
-      "description": "建立问题框架、识别关键变量、完成必要分析与计算。",
-      "binding_seat": false
-    },
-    {
-      "key": "independent_verification",
-      "description": "使用不同方法或相邻专业独立验证关键结论。",
-      "binding_seat": false
-    },
-    {
-      "key": "adversarial_reasoning",
-      "description": "寻找反例、失败条件、证据缺口、隐藏假设和最坏情景。",
-      "binding_seat": false
-    },
-    {
-      "key": "synthesis",
-      "description": "按任务输出合同综合可交付结论。",
-      "binding_seat": false
-    }
-  ],
-  "capability_vocabulary_policy": {
-    "templates_are_nonbinding": true,
-    "solver_may_select_zero_one_or_multiple_instances": true,
-    "solver_may_create_other_task_derived_capabilities": true,
-    "templates_must_not_determine_node_count": true
-  },
   "keywords": {
-    "international_relations": ["外交", "国际关系", "地缘政治", "国务卿", "外长", "制裁", "乌克兰", "俄罗斯", "北约", "geopolit", "foreign policy", "foreign minister", "secretary of state", "sanction"],
-    "legal": ["法律", "法规", "诉讼", "合同", "判例", "合规", "监管", "legal", "law", "regulation", "contract", "compliance"],
+    "international_relations": ["外交", "国际关系", "地缘政治", "制裁", "战争", "geopolit", "foreign policy", "sanction", "war"],
+    "legal": ["法律", "法规", "诉讼", "合同", "合规", "监管", "legal", "law", "regulation", "contract", "compliance"],
     "medical": ["医疗", "健康", "疾病", "诊断", "治疗", "药物", "临床", "medical", "health", "clinical", "diagnosis", "treatment"],
-    "security": ["网络安全", "信息安全", "威胁建模", "攻击面", "安全漏洞", "红队测试", "cybersecurity", "cyber threat", "attack surface", "security vulnerability", "red team"],
+    "security": ["网络安全", "信息安全", "威胁建模", "攻击面", "安全漏洞", "cybersecurity", "attack surface", "security vulnerability"],
     "supply_chain": ["供应链", "物流", "库存", "采购", "交付", "产能", "supply chain", "logistics", "inventory", "procurement"],
     "public_policy": ["公共政策", "政策评估", "政府", "财政政策", "社会治理", "public policy", "government", "policy evaluation"],
     "coding": ["code", "coding", "software", "api", "bug", "debug", "python", "javascript", "sql", "代码", "编程", "接口", "仓库", "调试", "软件"],
-    "math": ["math", "proof", "equation", "optimization", "statistics", "probability", "monte carlo", "simulation", "modeling", "数学", "证明", "优化", "统计", "概率", "蒙特卡罗", "仿真", "建模"],
-    "research": ["research", "evidence", "source", "latest", "current data", "benchmark", "literature", "news", "研究", "证据", "来源", "最新数据", "基准", "文献", "新闻", "调查研究"],
-    "business": ["business", "investment", "revenue", "profit", "strategy", "finance", "economics", "pricing", "cost", "price", "budget", "purchase", "device", "subscription", "commercial decision", "商业", "投资", "营收", "利润", "战略", "金融", "财务", "经济", "定价", "经营", "回报", "企业", "餐饮", "项目", "成本", "价格", "预算", "套餐", "设备", "购买", "月费", "消费决策"],
+    "math": ["math", "proof", "equation", "statistics", "probability", "simulation", "modeling", "数学", "证明", "统计", "概率", "仿真", "建模"],
+    "research": ["research", "evidence", "source", "latest", "current data", "literature", "news", "研究", "证据", "来源", "最新数据", "文献", "新闻"],
+    "business": ["business", "investment", "revenue", "profit", "strategy", "finance", "economics", "pricing", "cost", "budget", "purchase", "商业", "投资", "营收", "利润", "战略", "金融", "经济", "定价", "经营", "成本", "预算", "购买"],
     "creative": ["creative", "story", "poem", "script", "copywriting", "design", "创意", "故事", "诗", "剧本", "文案", "设计"]
   },
-  "description_terms": {
-    "international_relations": ["geopolitics", "foreign policy", "policy", "diplomacy", "international relations", "analysis", "reasoning"],
-    "legal": ["legal", "law", "compliance", "regulation", "contract", "policy", "reasoning"],
-    "medical": ["medical", "clinical", "health", "science", "evidence", "research", "reasoning"],
-    "security": ["security", "cyber", "risk", "audit", "adversarial", "reasoning", "analysis"],
-    "supply_chain": ["supply chain", "logistics", "operations", "optimization", "business", "analysis"],
-    "public_policy": ["policy", "government", "research", "evidence", "economics", "analysis"],
-    "coding": ["code", "coding", "software", "programming", "developer", "debug", "security"],
-    "math": ["math", "mathematical", "reasoning", "science", "proof", "statistics", "simulation"],
-    "research": ["research", "knowledge", "evidence", "long context", "document", "analysis"],
-    "business": ["analysis", "business", "finance", "economic", "enterprise", "strategy", "investment", "consumer", "cost", "pricing"],
-    "creative": ["creative", "writing", "story", "style", "design"],
-    "general": ["general", "reasoning", "analysis"]
-  },
-  "professional_capability_vocabulary": {
-    "international_relations": ["geopolitical_analysis", "policy_verification", "escalation_risk", "evidence_synthesis"],
-    "legal": ["rule_application", "evidence_and_procedure", "counterargument", "risk_synthesis"],
-    "medical": ["clinical_evidence", "research_methodology", "safety_and_bias", "risk_synthesis"],
-    "security": ["threat_analysis", "detection_and_response", "adversarial_testing", "residual_risk"],
-    "supply_chain": ["operations_optimization", "inventory_and_logistics", "disruption_analysis", "resilience_synthesis"],
-    "public_policy": ["impact_evaluation", "implementation_analysis", "adverse_effects", "evidence_synthesis"],
-    "coding": ["software_architecture", "reliability_testing", "security_failure_modes", "technical_synthesis"],
-    "math": ["quantitative_modeling", "sensitivity_validation", "assumption_stress_test", "model_synthesis"],
-    "research": ["research_design", "methodology_verification", "bias_and_counterevidence", "evidence_synthesis"],
-    "business": ["strategy_analysis", "financial_and_market_validation", "competitive_risk", "decision_synthesis"],
-    "creative": ["creative_strategy", "audience_experience", "brand_and_execution_risk", "communication_synthesis"],
-    "general": ["primary_analysis", "independent_verification", "adversarial_reasoning", "synthesis"]
-  },
-  "professional_capability_policy": {
-    "titles_are_not_fixed_roles": true,
-    "capabilities_are_selected_and_weighted_by_task_matrix": true,
-    "solver_may_combine_or_split_capabilities": true,
-    "domain_vocabulary_does_not_create_nodes": true
-  },
   "high_stakes": ["medical", "clinical", "diagnosis", "treatment", "legal advice", "lawsuit", "criminal", "cybersecurity", "military", "war", "regulatory compliance", "public safety", "医疗", "临床", "诊断", "治疗", "法律意见", "诉讼", "刑事", "网络安全", "军事", "战争", "监管合规", "公共安全", "制裁", "外交危机"],
-  "long_context": ["document", "report", "contract", "repository", "codebase", "full text", "文档", "报告", "合同", "全文", "代码库", "整个仓库"],
-  "chinese_authors": []
+  "long_context": ["document", "report", "contract", "repository", "codebase", "full text", "文档", "报告", "合同", "全文", "代码库", "整个仓库"]
 }
