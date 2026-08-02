@@ -97,7 +97,9 @@ class OpenRouterResponseProtocolTests(unittest.TestCase):
         self.assertEqual(64, len(diagnostics["body_sha256"]))
         self.assertEqual("json", diagnostics["parse_mode"])
         self.assertEqual(2, diagnostics["json_error"]["line"])
+        self.assertLessEqual(len(diagnostics["leading_token"]), 96)
         self.assertNotIn("choices", str(error))
+        self.assertNotIn(body.decode("utf-8"), str(error))
 
     def test_html_or_arbitrary_text_is_not_repaired(self) -> None:
         body = b"<!doctype html><title>upstream error</title>"
@@ -117,8 +119,6 @@ class OpenRouterResponseProtocolTests(unittest.TestCase):
                 "test",
             )
         self.assertEqual("sse", raised.exception.response_diagnostics["parse_mode"])
-
-
 
 
 if __name__ == "__main__":
