@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GPT-led V5 production pipeline with one Claude red-team pass."""
+"""GPT-led V5 pipeline with one Claude advisory red-team pass."""
 from __future__ import annotations
 
 import argparse
@@ -178,6 +178,8 @@ def _merge_request_audit(
             "requests": requests,
             "external_tools_allowed": False,
             "provider_fallback_allowed": False,
+            "claude_is_advisory_only": True,
+            "claude_gatekeeping_allowed": False,
             "second_claude_review_allowed": False,
             "model_loop_allowed": False,
         },
@@ -272,9 +274,10 @@ def main(
             ),
             "cost_anomaly_usd": args.cost_anomaly_usd,
             "selection_authority": "gpt-latest",
-            "red_team_authority": (
-                "claude-opus-latest-single-call"
-            ),
+            "red_team_role": "claude-opus-latest-advisory-once",
+            "claude_is_advisory_only": True,
+            "claude_gatekeeping_allowed": False,
+            "gpt_synthesis_calls": 1,
             "final_authority": (
                 "deterministic-constitutional-validator"
             ),
@@ -300,7 +303,7 @@ def main(
         _write(
             output / "v5-dry-run.json",
             {
-                "schema_version": "v5-gpt-claude-dry-run-1",
+                "schema_version": "v5-gpt-claude-advisory-dry-run-1",
                 "status": "validated-not-executed",
                 "model_calls": 0,
                 "proposal_request": proposal_request,
@@ -308,7 +311,9 @@ def main(
                     "~anthropic/claude-opus-latest"
                 ),
                 "claude_calls_per_task": 1,
-                "gpt_synthesis_calls_max": 1,
+                "claude_is_advisory_only": True,
+                "claude_gatekeeping_allowed": False,
+                "gpt_synthesis_calls": 1,
                 "second_claude_review_allowed": False,
                 "local_scoring_used": False,
                 "optimizer_used": False,
@@ -374,8 +379,11 @@ def main(
             "schema_version": "v5-gpt-direct-selection-1",
             "status": "PASS",
             "proposal": governance["final_proposal"],
+            "claude_advice": governance["claude_advice"],
             "materialization": materialization,
             "selection_authority": "gpt-latest",
+            "claude_is_advisory_only": True,
+            "claude_gatekeeping_allowed": False,
             "local_scoring_used": False,
             "optimizer_used": False,
         },
@@ -415,6 +423,9 @@ def main(
         "reserved_calls": CLAUDE_RED_TEAM_GOVERNANCE_CALLS,
         "actual_cost_usd": governance_cost,
         "claude_calls": 1,
+        "gpt_synthesis_calls": 1,
+        "claude_is_advisory_only": True,
+        "claude_gatekeeping_allowed": False,
         "second_claude_review_allowed": False,
     }
     result["total_model_calls"] = governance_calls + expert_calls
