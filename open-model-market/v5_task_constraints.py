@@ -1,8 +1,8 @@
 """Stable public facade for constitutional task constraints and evidence gates.
 
 The implementation module contains the general fail-closed validators. This
-facade adds quantity-local Chinese cardinality canonicalization without
-weakening polarity, spatial, unit, or quantity binding requirements.
+facade adds quantity-local and spatial-local Chinese surface canonicalization
+without weakening polarity, object, unit, quantity, or location binding.
 """
 from __future__ import annotations
 
@@ -32,14 +32,20 @@ _REMAINING_QUANTITY_RE = re.compile(
     rf"剩余\s*电量\s*(?:为|是|有)?(?=\s*{_QUANTITY_LITERAL_PATTERN})",
     re.IGNORECASE,
 )
+_SPATIAL_EXISTENTIAL_RE = re.compile(
+    r"(?P<location>旁边|附近)\s*"
+    r"(?:放着|放有|摆着|摆放着|有)\s*"
+    r"(?:一个|一台|一部|一件|一只|一把)?(?=\S)"
+)
 
 
 def _canonicalize_quantity_local_language(value: str) -> str:
-    """Canonicalize only syntax directly bound to an explicit quantity."""
+    """Canonicalize only syntax directly bound to a quantity or location."""
     rendered = str(value or "")
     rendered = _CARDINALITY_PREFIX_RE.sub("只有", rendered)
     rendered = _QUANTITY_COUNT_LINK_RE.sub("只有", rendered)
     rendered = _REMAINING_QUANTITY_RE.sub("剩余", rendered)
+    rendered = _SPATIAL_EXISTENTIAL_RE.sub(r"\g<location>有", rendered)
     for pattern, replacement in (
         (r"(?:已经|已)(?=交接)", ""),
         (r"实际\s*可(?=确认)", ""),
@@ -52,7 +58,7 @@ def _canonicalize_quantity_local_language(value: str) -> str:
 
 
 def fact_claim_supported(task: str, claim: str) -> bool:
-    """Validate a fact after safe quantity-local surface canonicalization."""
+    """Validate a fact after safe local surface canonicalization."""
     return _impl.fact_claim_supported(
         _canonicalize_quantity_local_language(task),
         _canonicalize_quantity_local_language(claim),
