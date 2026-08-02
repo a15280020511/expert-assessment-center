@@ -1,0 +1,20 @@
+{
+  "schema_version": "pr227-paid-acceptance-2",
+  "authorization": "RUN-EXACTLY-ONCE",
+  "purpose": "final-pr227-production-qualification-after-contract-fix",
+  "target_sha": "f7f0bec6cbecee2314a352a736f45f92d82034f4",
+  "maximum_total_calls": 4,
+  "maximum_recovery_calls": 0,
+  "cost_cap_usd": 0.25,
+  "task": {
+    "question": "仅依据以下题面选择一个方案：A方案月费20元、月流量100GB；B方案月费30元、月流量150GB。",
+    "requirements": [
+      "不得调用外部工具或补充题面外事实",
+      "给出唯一推荐",
+      "列出两条直接依据题面数字的理由",
+      "明确区分已知事实与分析结论",
+      "使用简体中文"
+    ],
+    "language": "zh-CN"
+  }
+}
