@@ -255,7 +255,7 @@ class ExtremeAdvisoryStressTests(unittest.TestCase):
             "请严格使用以下16个Markdown二级标题，顺序不得改变且每节非空："
             + headings
             + "。仅依据题面，不得联网，不得调用工具。"
-            + "甲" * 48_000
+            + "A" * 48_000
         )
         signatures: list[str] = []
         with tempfile.TemporaryDirectory(prefix="v5-extreme-dry-") as directory:
