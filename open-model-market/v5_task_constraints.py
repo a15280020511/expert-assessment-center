@@ -58,6 +58,7 @@ _QUANTITY_RE = re.compile(
     r"(?<![A-Za-z0-9_.])(?:第\s*)?(?P<lo>\d+(?:\.\d+)?)"
     r"(?:\s*(?:-|–|—|~|至|到)\s*(?P<hi>\d+(?:\.\d+)?))?"
     r"\s*(?:个)?\s*(?P<unit>SLA|秒|分钟|小时|天|周|月|年|米|公里|千米|公斤|克|人|名|位|次|%|％|"
+    r"件|台|部|套|支|辆|本|份|箱|包|瓶|枚|张|把|只|艘|架|"
     r"seconds?|minutes?|hours?|days?|weeks?|months?|years?|meters?|"
     r"kilometers?|kg|people|times?|元|块|人民币|rmb|cny|yuan|美元|美金|usd)"
     r"(?![A-Za-z0-9_])",
@@ -178,6 +179,23 @@ def normalized_quantities(text: str) -> set[tuple[str, str, str]]:
         "名": "people",
         "位": "people",
         "people": "people",
+        "件": "item",
+        "台": "item",
+        "部": "item",
+        "套": "item",
+        "支": "item",
+        "辆": "item",
+        "本": "item",
+        "份": "item",
+        "箱": "item",
+        "包": "item",
+        "瓶": "item",
+        "枚": "item",
+        "张": "item",
+        "把": "item",
+        "只": "item",
+        "艘": "item",
+        "架": "item",
         "次": "times",
         "times": "times",
         "sla": "sla",
@@ -255,16 +273,210 @@ _NEGATION_GENERIC_RE = re.compile(
 
 def _normalize_claim(value: str) -> str:
     value = re.sub(r"[（(][^）)]*[）)]", "", str(value or ""))
+    for pattern, replacement in (
+        (r"(?:无法|不能|不可|未能|未)确认", "未知"),
+        (r"(?:无法|不能|不可)核验", "未核验"),
+        (r"是否存在", ""),
+        (r"(?:题面|直接支持|题面事实)", ""),
+    ):
+        value = re.sub(pattern, replacement, value, flags=re.IGNORECASE)
     value = re.sub(r"[`*_~#>\[\]{}]", "", value)
     value = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "", value).casefold()
     for source, target in (
         ("存在", "有"),
         ("人员", "人"),
         ("人士", "人"),
+        ("以及", ""),
+        ("并且", ""),
+        ("而且", ""),
+        ("和", ""),
+        ("及", ""),
+        ("与", ""),
         ("被", ""),
     ):
         value = value.replace(source, target)
     return value
+
+
+def _quantity_skeleton(value: str) -> str:
+    """Remove only explicit quantities while preserving semantic anchors."""
+    without_quantities = _QUANTITY_RE.sub("", str(value or ""))
+    return _normalize_claim(without_quantities)
+
+
+def _semantic_core(value: str, polarity: str) -> str:
+    """Normalize the proposition core after its polarity is checked separately."""
+    rendered = str(value or "")
+    if polarity == "unknown":
+        rendered = _NEGATION_UNKNOWN_RE.sub("", rendered)
+    elif polarity == "absence":
+        rendered = _NEGATION_ABSENCE_RE.sub("", rendered)
+    elif polarity == "negative":
+        rendered = _NEGATION_GENERIC_RE.sub("", rendered)
+    return _normalize_claim(rendered)
+
+
+def _ngram_coverage(needle: str, haystack: str, size: int) -> float:
+    if size <= 0 or len(needle) < size:
+        return 0.0
+    needle_grams = {
+        needle[index : index + size]
+        for index in range(len(needle) - size + 1)
+    }
+    haystack_grams = {
+        haystack[index : index + size]
+        for index in range(max(0, len(haystack) - size + 1))
+    }
+    if not needle_grams:
+        return 0.0
+    return len(needle_grams & haystack_grams) / len(needle_grams)
+
+
+_SPATIAL_ANCHOR_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("east", ("东侧", "东边", "东门", "东口", "东部")),
+    ("west", ("西侧", "西边", "西门", "西口", "西部")),
+    ("south", ("南侧", "南边", "南门", "南口", "南部")),
+    ("north", ("北侧", "北边", "北门", "北口", "北部")),
+    ("inside", ("门内", "室内", "内部", "场内")),
+    ("outside", ("门外", "室外", "外部", "场外")),
+    ("upstairs", ("楼上",)),
+    ("downstairs", ("楼下",)),
+    ("left", ("左侧", "左边")),
+    ("right", ("右侧", "右边")),
+)
+_MAJOR_EVIDENCE_FRAGMENT_RE = re.compile(r"[。！？!?；;|\n]+")
+
+
+def _spatial_anchors(value: str) -> set[str]:
+    rendered = str(value or "")
+    return {
+        name
+        for name, variants in _SPATIAL_ANCHOR_GROUPS
+        if any(variant in rendered for variant in variants)
+    }
+
+
+def _spatially_compatible(claim: str, source: str) -> bool:
+    claim_anchors = _spatial_anchors(claim)
+    if not claim_anchors:
+        return True
+    return claim_anchors.issubset(_spatial_anchors(source))
+
+
+def _major_evidence_fragments(value: str) -> list[str]:
+    return [
+        fragment.strip()
+        for fragment in _MAJOR_EVIDENCE_FRAGMENT_RE.split(str(value or ""))
+        if fragment.strip()
+    ]
+
+
+def _reordered_semantic_match(claim: str, source: str) -> bool:
+    """Match safe word reordering after quantity, polarity and space are gated."""
+    if not claim or not source or not _spatially_compatible(claim, source):
+        return False
+    return bool(
+        claim in source
+        or source in claim
+        or SequenceMatcher(None, claim, source).ratio() >= 0.72
+        or (
+            _ngram_coverage(claim, source, 2) >= 0.72
+            and _ngram_coverage(claim, source, 3) >= 0.42
+        )
+    )
+
+
+_QUANTITY_MAJOR_FRAGMENT_RE = re.compile(
+    r"[。！？!?；;\n]+|(?:但是|但|然而|却|不过)",
+    re.IGNORECASE,
+)
+_QUANTITY_MINOR_FRAGMENT_RE = re.compile(r"[，,、|]+")
+
+
+def _quantity_mentions(value: str) -> list[dict[str, Any]]:
+    """Bind each normalized quantity to local and enclosing clause context."""
+    rendered = str(value or "")
+    mentions: list[dict[str, Any]] = []
+    major_fragments = [
+        fragment.strip()
+        for fragment in _QUANTITY_MAJOR_FRAGMENT_RE.split(rendered)
+        if fragment.strip()
+    ]
+    for major in major_fragments:
+        major_context = _quantity_skeleton(major)
+        minor_fragments = [
+            fragment.strip()
+            for fragment in _QUANTITY_MINOR_FRAGMENT_RE.split(major)
+            if fragment.strip()
+        ]
+        for minor in minor_fragments or [major]:
+            quantities = normalized_quantities(minor)
+            if not quantities:
+                continue
+            contexts = list(
+                dict.fromkeys(
+                    context
+                    for context in (_quantity_skeleton(minor), major_context)
+                    if context
+                )
+            )
+            for quantity in sorted(quantities):
+                mentions.append(
+                    {
+                        "quantity": quantity,
+                        "contexts": contexts,
+                        "raw": minor,
+                    }
+                )
+    return mentions
+
+
+def _quantity_contexts_match(
+    claim_contexts: Sequence[str],
+    source_contexts: Sequence[str],
+) -> bool:
+    for claim_context in claim_contexts:
+        if len(claim_context) < 2:
+            continue
+        for source_context in source_contexts:
+            if not source_context:
+                continue
+            if _reordered_semantic_match(claim_context, source_context):
+                return True
+    return False
+
+
+def _quantity_bindings_supported(claim: str, task: str) -> bool:
+    """Require a distinct task-local semantic binding for every claim quantity."""
+    claim_mentions = _quantity_mentions(claim)
+    source_mentions = _quantity_mentions(task)
+    if not claim_mentions or not source_mentions:
+        return False
+    edges: list[list[int]] = []
+    for claim_mention in claim_mentions:
+        matches = [
+            index
+            for index, source_mention in enumerate(source_mentions)
+            if claim_mention["quantity"] == source_mention["quantity"]
+            and _quantity_contexts_match(
+                claim_mention["contexts"],
+                source_mention["contexts"],
+            )
+        ]
+        if not matches:
+            return False
+        edges.append(matches)
+
+    def assign(position: int, used: set[int]) -> bool:
+        if position >= len(edges):
+            return True
+        return any(
+            source_index not in used
+            and assign(position + 1, used | {source_index})
+            for source_index in edges[position]
+        )
+
+    return assign(0, set())
 
 
 def _evidence_fragments(value: str, *, include_whole: bool) -> list[str]:
@@ -292,32 +504,120 @@ def _negation_polarity(value: str) -> str:
     return "positive"
 
 
+def _source_evidence_rows(task: str) -> list[dict[str, Any]]:
+    """Build clause-local rows so split fragments inherit only their sentence context."""
+    rows: list[dict[str, Any]] = []
+    for context in _major_evidence_fragments(task):
+        contextual_normalized = _normalize_claim(context)
+        contextual_quantities = normalized_quantities(context)
+        contextual_skeleton = _quantity_skeleton(context)
+        contextual_anchors = _spatial_anchors(context)
+        for fragment in _evidence_fragments(context, include_whole=True):
+            rows.append(
+                {
+                    "raw": fragment,
+                    "context_raw": context,
+                    "normalized": _normalize_claim(fragment),
+                    "contextual_normalized": contextual_normalized,
+                    "polarity": _negation_polarity(fragment),
+                    "quantities": normalized_quantities(fragment),
+                    "contextual_quantities": contextual_quantities,
+                    "quantity_skeleton": _quantity_skeleton(fragment),
+                    "contextual_quantity_skeleton": contextual_skeleton,
+                    "spatial_anchors": contextual_anchors or _spatial_anchors(fragment),
+                }
+            )
+    return rows
+
+
+def _semantic_reorder_supported(fragment: str, row: Mapping[str, Any]) -> bool:
+    claim_skeleton = _quantity_skeleton(fragment)
+    if not claim_skeleton:
+        return False
+    source_skeletons = tuple(
+        dict.fromkeys(
+            value
+            for value in (
+                str(row.get("quantity_skeleton", "")),
+                str(row.get("contextual_quantity_skeleton", "")),
+            )
+            if value
+        )
+    )
+    return any(
+        _reordered_semantic_match(claim_skeleton, source_skeleton)
+        for source_skeleton in source_skeletons
+    )
+
+
 def _claim_supported(claim: str, task: str) -> bool:
-    source_fragments = _evidence_fragments(task, include_whole=True)
-    source_rows = [
-        (_normalize_claim(fragment), _negation_polarity(fragment))
-        for fragment in source_fragments
-    ]
+    source_rows = _source_evidence_rows(task)
     for fragment in _evidence_fragments(claim, include_whole=False):
         normalized = _normalize_claim(fragment)
         if not normalized:
             continue
         polarity = _negation_polarity(fragment)
+        compatible = [
+            row
+            for row in source_rows
+            if row["normalized"]
+            and polarity == row["polarity"]
+            and _spatially_compatible(fragment, str(row["context_raw"]))
+        ]
+        generic_quantities = normalized_quantities(fragment)
+        generic_compatible = [
+            row
+            for row in compatible
+            if not generic_quantities
+            or generic_quantities.issubset(
+                set(row["quantities"]) | set(row["contextual_quantities"])
+            )
+        ]
+        if generic_quantities and not _quantity_bindings_supported(fragment, task):
+            return False
         if any(
-            normalized in source and polarity == source_polarity
-            for source, source_polarity in source_rows
-            if source
+            normalized in str(row["normalized"])
+            or normalized in str(row["contextual_normalized"])
+            for row in generic_compatible
         ):
             continue
-        supported = any(
-            polarity == source_polarity
-            and SequenceMatcher(None, normalized, source).ratio() >= 0.72
-            for source, source_polarity in source_rows
-            if source
-        )
-        if not supported:
-            return False
+        if any(
+            SequenceMatcher(None, normalized, candidate).ratio() >= 0.72
+            for row in generic_compatible
+            for candidate in (
+                str(row["normalized"]),
+                str(row["contextual_normalized"]),
+            )
+            if candidate
+        ):
+            continue
+        if any(
+            _semantic_reorder_supported(fragment, row)
+            for row in generic_compatible
+        ):
+            continue
+
+        if polarity in {"unknown", "absence", "negative"}:
+            claim_core = _semantic_core(fragment, polarity)
+            polarity_supported = any(
+                bool(claim_core)
+                and bool(source_core := _semantic_core(str(row["raw"]), polarity))
+                and (
+                    claim_core in source_core
+                    or source_core in claim_core
+                    or SequenceMatcher(None, claim_core, source_core).ratio() >= 0.82
+                )
+                for row in compatible
+            )
+            if polarity_supported:
+                continue
+        return False
     return True
+
+
+def fact_claim_supported(task: str, claim: str) -> bool:
+    """Public deterministic fact-provenance predicate used by normalization."""
+    return _claim_supported(claim, task)
 
 
 def validate_answer_evidence(

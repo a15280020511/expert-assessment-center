@@ -6,7 +6,11 @@ from collections import Counter
 from hashlib import sha256
 from typing import Any, Mapping, Sequence
 
-from v5_task_constraints import TaskConstraints, normalized_quantities
+from v5_task_constraints import (
+    TaskConstraints,
+    fact_claim_supported,
+    normalized_quantities,
+)
 
 _H2_RE = re.compile(r"^\s{0,3}##\s+(.+?)\s*#*\s*$")
 _FACT_LABEL_LINE_RE = re.compile(
@@ -21,6 +25,12 @@ _NORMATIVE_TAIL_RE = re.compile(
     r"需(?:要)?|建议|优先|否决|拒绝|应|可(?:以)?|"
     r"must\b|should\b|must\s+not\b|do\s+not\b|"
     r"recommend\b|reject\b|deny\b).+)$",
+    re.IGNORECASE,
+)
+
+_INFERENTIAL_FACT_RE = re.compile(
+    r"(?:风险|隐患|受限|缺口|不足|劣势|优先|核心|首要|"
+    r"表明|意味着|说明|可能|潜在|试图|暴露|引入|导致|构成|反映)",
     re.IGNORECASE,
 )
 
@@ -148,6 +158,107 @@ def _split_mixed_fact_labels(answer: str) -> tuple[str, list[dict[str, Any]]]:
     return "\n".join(rows) + suffix, evidence
 
 
+def _cjk_ngrams(value: str, size: int) -> set[str]:
+    rendered = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "", str(value or "")).casefold()
+    return {
+        rendered[index : index + size]
+        for index in range(max(0, len(rendered) - size + 1))
+    }
+
+
+_INFERENCE_CLAUSE_RE = re.compile(
+    r"[，,；;。|、]+|(?:以及|并且|同时|和|与)",
+    re.IGNORECASE,
+)
+_INFERENCE_GENERIC_ANCHOR_TERMS = (
+    "当前",
+    "存在",
+    "风险",
+    "隐患",
+    "受限",
+    "缺口",
+    "不足",
+    "严重",
+    "可能",
+    "潜在",
+    "试图",
+    "资源",
+    "资产",
+    "外部",
+    "核心",
+    "首要",
+)
+_INFERENCE_GENERIC_BIGRAMS = set().union(
+    *(_cjk_ngrams(term, 2) for term in _INFERENCE_GENERIC_ANCHOR_TERMS)
+)
+
+
+def _inferential_relabel_allowed(task: str, body: str) -> bool:
+    """Allow label-only repair only for task-anchored inferential synthesis."""
+    if not _INFERENTIAL_FACT_RE.search(body):
+        return False
+    if normalized_quantities(body) - normalized_quantities(task):
+        return False
+    task_bigrams = _cjk_ngrams(task, 2)
+    body_bigrams = _cjk_ngrams(body, 2)
+    task_fourgrams = _cjk_ngrams(task, 4)
+    body_fourgrams = _cjk_ngrams(body, 4)
+    strict_overlap = (
+        len(task_bigrams & body_bigrams) >= 6
+        and len(task_fourgrams & body_fourgrams) >= 1
+    )
+    if strict_overlap:
+        return True
+
+    task_anchors = task_bigrams - _INFERENCE_GENERIC_BIGRAMS
+    body_anchors = body_bigrams - _INFERENCE_GENERIC_BIGRAMS
+    shared_anchors = task_anchors & body_anchors
+    clauses = [
+        clause.strip()
+        for clause in _INFERENCE_CLAUSE_RE.split(str(body or ""))
+        if clause.strip()
+    ]
+    anchored_clauses = sum(
+        bool(
+            (_cjk_ngrams(clause, 2) - _INFERENCE_GENERIC_BIGRAMS)
+            & task_anchors
+        )
+        for clause in clauses
+    )
+    return len(shared_anchors) >= 3 and anchored_clauses >= 2
+
+
+def _relabel_inferential_fact_labels(
+    task: str,
+    answer: str,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Relabel unsupported task-anchored synthesis as inference, never as fact."""
+    rows: list[str] = []
+    evidence: list[dict[str, Any]] = []
+    for line_number, line in enumerate(str(answer or "").splitlines(), start=1):
+        match = _FACT_LABEL_LINE_RE.match(line)
+        if not match:
+            rows.append(line)
+            continue
+        body = match.group("body").strip()
+        if fact_claim_supported(task, body) or not _inferential_relabel_allowed(task, body):
+            rows.append(line)
+            continue
+        prefix = match.group("prefix")
+        repaired = f"{prefix}推断：{body}"
+        rows.append(repaired)
+        evidence.append(
+            {
+                "line_number": line_number,
+                "original": line,
+                "relabelled": repaired,
+                "reason": "unsupported-fact-label-is-task-anchored-inference",
+            }
+        )
+    suffix = "\n" if str(answer or "").endswith("\n") else ""
+    return "\n".join(rows) + suffix, evidence
+
+
 def normalize_answer(
     task: str,
     answer: str,
@@ -164,10 +275,10 @@ def normalize_answer(
     """
     original = str(answer or "")
     audit: dict[str, Any] = {
-        "schema_version": "v5-deterministic-answer-normalization-2",
+        "schema_version": "v5-deterministic-answer-normalization-3",
         "policy": (
-            "split-mixed-fact-normative-labels-delete-unsupported-quantity-lines-"
-            "and-reorder-complete-h2-only"
+            "split-mixed-fact-normative-labels-relabel-task-anchored-inference-"
+            "delete-unsupported-quantity-lines-and-reorder-complete-h2-only"
         ),
         "applied": False,
         "original_answer_sha256": sha256(original.encode("utf-8")).hexdigest(),
@@ -176,6 +287,7 @@ def normalize_answer(
         "removed_lines": [],
         "unsupported_quantities_removed": [],
         "mixed_fact_labels_split": [],
+        "inferential_fact_labels_relabelled": [],
         "structural_labels_inserted": 0,
         "substantive_text_invented": False,
         "h2_reordered": False,
@@ -186,7 +298,9 @@ def normalize_answer(
     }
     working, mixed_fact_labels = _split_mixed_fact_labels(original)
     audit["mixed_fact_labels_split"] = mixed_fact_labels
-    audit["structural_labels_inserted"] = len(mixed_fact_labels)
+    working, inferential_labels = _relabel_inferential_fact_labels(task, working)
+    audit["inferential_fact_labels_relabelled"] = inferential_labels
+    audit["structural_labels_inserted"] = len(mixed_fact_labels) + len(inferential_labels)
     if not constraints.unsupported_precise_quantities_allowed:
         allowed = normalized_quantities(task)
         audit["allowed_quantities"] = sorted(_quantity_token(value) for value in allowed)

@@ -560,15 +560,58 @@ def main() -> int:
     parser.add_argument("--expected-artifact-digest")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
-    result = recompute(
-        Path(args.artifact_dir),
-        expected_sha=args.expected_sha,
-        expected_run_id=args.expected_run_id,
-        maximum_calls=args.maximum_calls,
-        maximum_cost_usd=args.maximum_cost_usd,
-        archive=Path(args.archive) if args.archive else None,
-        expected_artifact_digest=args.expected_artifact_digest,
-    )
+    archive = Path(args.archive) if args.archive else None
+    try:
+        result = recompute(
+            Path(args.artifact_dir),
+            expected_sha=args.expected_sha,
+            expected_run_id=args.expected_run_id,
+            maximum_calls=args.maximum_calls,
+            maximum_cost_usd=args.maximum_cost_usd,
+            archive=archive,
+            expected_artifact_digest=args.expected_artifact_digest,
+        )
+    except Exception as exc:
+        archive_sha256 = _sha256(archive) if archive is not None and archive.is_file() else None
+        result = {
+            "schema_version": "v5-independent-artifact-revalidation-3",
+            "status": "FAIL",
+            "expected_run_id": str(args.expected_run_id),
+            "artifact_run_id": None,
+            "expected_execution_sha": args.expected_sha,
+            "artifact_execution_sha": None,
+            "manifest_file_count": None,
+            "manifest_files_checked": 0,
+            "actual_artifact_file_count": sum(
+                1 for path in Path(args.artifact_dir).rglob("*") if path.is_file()
+            ),
+            "model_calls": None,
+            "actual_cost_usd": None,
+            "call_ledger_cost_usd": None,
+            "maximum_calls": args.maximum_calls,
+            "maximum_cost_usd": args.maximum_cost_usd,
+            "node_count": None,
+            "actual_called_models": [],
+            "duplicate_called_companies_across_nodes": {},
+            "unresolved_called_companies": [],
+            "completion_mode": None,
+            "quality_status": None,
+            "runtime_evidence_integrity_status": None,
+            "independently_recomputed_evidence_violations": [],
+            "final_report_contract_violations": [],
+            "archive_sha256": archive_sha256,
+            "expected_artifact_digest": args.expected_artifact_digest,
+            "recomputed_from_primitive_evidence": False,
+            "paid_acceptance_verdict_used_as_source": False,
+            "revalidation_exception": {
+                "type": type(exc).__name__,
+                "message": str(exc),
+            },
+            "failures": [
+                f"independent artifact revalidation could not be completed: "
+                f"{type(exc).__name__}: {exc}"
+            ],
+        }
     Path(args.output).write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
