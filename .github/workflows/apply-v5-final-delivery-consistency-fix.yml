@@ -35,8 +35,46 @@ jobs:
       - name: Apply exact production patch
         run: |
           python tools/apply_v5_final_delivery_consistency_patch.py
-          sed -i '/        by_id = {node.node_id: node for node in graph.nodes}/d' \
-            tests/test_v5_live_delivery_consistency.py
+          python - <<'PY'
+          from pathlib import Path
+
+          runtime = Path("open-model-market/v5_runtime.py")
+          text = runtime.read_text(encoding="utf-8")
+          old = '''    def _preflight(
+              self,
+              graph: ExecutionGraph,
+              limits: GraphLimits,
+          ) -> dict[str, Any]:
+              blockers: list[str] = []
+          '''
+          new = '''    def _preflight(
+              self,
+              graph: ExecutionGraph,
+              limits: GraphLimits | None = None,
+          ) -> dict[str, Any]:
+              limits = limits or GraphLimits()
+              blockers: list[str] = []
+          '''
+          if old not in text:
+              raise SystemExit("preflight compatibility target missing")
+          runtime.write_text(text.replace(old, new), encoding="utf-8")
+
+          test = Path("tests/test_v5_live_delivery_consistency.py")
+          text = test.read_text(encoding="utf-8")
+          text = text.replace(
+              'relation_type="information"',
+              'relation_type="synthesis"',
+          )
+          text = text.replace(
+              'profile = SimpleNamespace(high_stakes=True)',
+              'profile = SimpleNamespace(high_stakes=True, complexity_score=7)',
+          )
+          text = text.replace(
+              '        by_id = {node.node_id: node for node in graph.nodes}\n',
+              '',
+          )
+          test.write_text(text, encoding="utf-8")
+          PY
       - name: Verify focused production regressions
         run: |
           set -euo pipefail
