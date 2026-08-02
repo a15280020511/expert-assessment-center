@@ -96,6 +96,17 @@ class V5FactProvenanceSemanticNormalizationTests(unittest.TestCase):
             validate_answer_evidence(task, f"- 事实：{claim}。\n"),
         )
 
+    def test_clause_context_cannot_stitch_spatial_facts(self) -> None:
+        task = "东门外有2名访客等待核验。西门外有维修人员要求进入。"
+        self.assertTrue(fact_claim_supported(task, "西门外有维修人员要求进入"))
+        self.assertFalse(fact_claim_supported(task, "东门外有维修人员要求进入"))
+        self.assertTrue(
+            validate_answer_evidence(
+                task,
+                "- 事实：东门外有维修人员要求进入。\n",
+            )
+        )
+
     def test_task_anchored_risk_synthesis_is_relabelled_as_inference(self) -> None:
         answer = (
             "事实：当前存在双侧出口隐患（东侧物理伤害风险、"
