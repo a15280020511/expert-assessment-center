@@ -17,6 +17,7 @@ from v5_model_company import canonical_model_company
 
 ENDPOINTS_URL = "https://openrouter.ai/api/v1/models/{author}/{slug}/endpoints"
 MAX_VISIBLE_MODELS = 150
+MINIMUM_EXPERT_COMPLETION_TOKENS = 256
 FORBIDDEN_MODEL_TERMS = (
     "openrouter/",
     ":online",
@@ -25,6 +26,7 @@ FORBIDDEN_MODEL_TERMS = (
     "preview",
 )
 GOVERNANCE_COMPANIES = frozenset({"openai", "anthropic"})
+OUTPUT_LIMIT_PARAMETERS = frozenset({"max_tokens", "max_completion_tokens"})
 
 
 class CatalogViewError(RuntimeError):
@@ -57,9 +59,16 @@ def eligible_models(
     maximum_models: int = MAX_VISIBLE_MODELS,
     exclude_governance_companies: bool = True,
 ) -> list[Any]:
-    """Return official-rank-ordered eligible models without custom scoring."""
+    """Return official-rank-ordered model candidates for endpoint inspection.
+
+    Model-level ``max_completion_tokens`` is deliberately not a hard filter.
+    OpenRouter may omit it at the aggregate model layer while exact provider
+    endpoints expose a valid limit. Completion capacity is enforced only after
+    exact endpoint inventories are fetched.
+    """
     rows: list[Any] = []
     context_floor = max(1, int(requested_context))
+    rank_ceiling = max(1, min(MAX_VISIBLE_MODELS, int(maximum_models)))
     for model in models.values():
         model_id = str(getattr(model, "id", "") or "")
         if not stable_model_id(model_id):
@@ -68,8 +77,6 @@ def eligible_models(
         if exclude_governance_companies and company in GOVERNANCE_COMPANIES:
             continue
         if int(getattr(model, "context_length", 0) or 0) < context_floor:
-            continue
-        if int(getattr(model, "max_completion_tokens", 0) or 0) <= 0:
             continue
         if (
             getattr(model, "input_modalities", None)
@@ -91,7 +98,7 @@ def eligible_models(
                 MAX_VISIBLE_MODELS + 1,
             )
         )
-        if rank > maximum_models:
+        if rank > rank_ceiling:
             continue
         rows.append(model)
     rows.sort(
@@ -106,8 +113,11 @@ def eligible_models(
         )
     )
     if not rows:
-        raise CatalogViewError("no constitutionally eligible expert models")
-    return rows[: max(1, min(MAX_VISIBLE_MODELS, int(maximum_models)))]
+        raise CatalogViewError(
+            "no constitutionally eligible model candidates within official "
+            f"intelligence rank ceiling {rank_ceiling}"
+        )
+    return rows
 
 
 def _endpoint_rows(payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -149,10 +159,17 @@ def compact_endpoint_catalog(
     endpoint_payloads: Mapping[str, Mapping[str, Any]],
     *,
     allow_synthetic_fixture: bool = False,
+    required_context_tokens: int = 1,
+    minimum_completion_tokens: int = MINIMUM_EXPERT_COMPLETION_TOKENS,
 ) -> dict[str, Any]:
     """Expose exact model/provider rows without inferred capability scores."""
     rows: list[dict[str, Any]] = []
     rejected: list[dict[str, str]] = []
+    context_floor = max(1, int(required_context_tokens))
+    completion_floor = max(
+        MINIMUM_EXPERT_COMPLETION_TOKENS,
+        int(minimum_completion_tokens),
+    )
     for model in ranked:
         model_id = str(getattr(model, "id", "") or "")
         endpoints = _endpoint_rows(endpoint_payloads.get(model_id, {}))
@@ -185,13 +202,60 @@ def compact_endpoint_catalog(
                 }
             ]
         if not endpoints:
-            rejected.append({"model": model_id, "reason": "no-provider-endpoint"})
+            rejected.append(
+                {"model": model_id, "reason": "no-provider-endpoint"}
+            )
             continue
         for endpoint in endpoints:
             provider = _provider_slug(endpoint)
             if not provider:
                 rejected.append(
                     {"model": model_id, "reason": "endpoint-missing-provider"}
+                )
+                continue
+            context_length = int(
+                endpoint.get("context_length")
+                or getattr(model, "context_length", 0)
+                or 0
+            )
+            if context_length < context_floor:
+                rejected.append(
+                    {
+                        "model": model_id,
+                        "reason": "endpoint-insufficient-context",
+                    }
+                )
+                continue
+            max_completion_tokens = int(
+                endpoint.get("max_completion_tokens")
+                or getattr(model, "max_completion_tokens", 0)
+                or 0
+            )
+            if max_completion_tokens < completion_floor:
+                rejected.append(
+                    {
+                        "model": model_id,
+                        "reason": "endpoint-missing-completion-limit",
+                    }
+                )
+                continue
+            supported = sorted(
+                {
+                    str(value)
+                    for value in (
+                        endpoint.get("supported_parameters")
+                        or getattr(model, "supported_parameters", [])
+                        or []
+                    )
+                }
+            )
+            supported_folded = {value.casefold() for value in supported}
+            if not OUTPUT_LIMIT_PARAMETERS.intersection(supported_folded):
+                rejected.append(
+                    {
+                        "model": model_id,
+                        "reason": "endpoint-cannot-enforce-output-limit",
+                    }
                 )
                 continue
             pricing = (
@@ -205,21 +269,15 @@ def compact_endpoint_catalog(
             )
             completion = _ppm(
                 pricing.get("completion"),
-                _finite(getattr(model, "completion_price_per_million", 0.0)),
+                _finite(
+                    getattr(model, "completion_price_per_million", 0.0)
+                ),
             )
             if prompt < 0 or completion < 0:
-                rejected.append({"model": model_id, "reason": "invalid-pricing"})
+                rejected.append(
+                    {"model": model_id, "reason": "invalid-pricing"}
+                )
                 continue
-            supported = sorted(
-                {
-                    str(value)
-                    for value in (
-                        endpoint.get("supported_parameters")
-                        or getattr(model, "supported_parameters", [])
-                        or []
-                    )
-                }
-            )
             rows.append(
                 {
                     "model": model_id,
@@ -232,16 +290,8 @@ def compact_endpoint_catalog(
                     ),
                     "provider": provider,
                     "provider_endpoint": f"{model_id}@{provider}",
-                    "context_length": int(
-                        endpoint.get("context_length")
-                        or getattr(model, "context_length", 0)
-                        or 0
-                    ),
-                    "max_completion_tokens": int(
-                        endpoint.get("max_completion_tokens")
-                        or getattr(model, "max_completion_tokens", 0)
-                        or 0
-                    ),
+                    "context_length": context_length,
+                    "max_completion_tokens": max_completion_tokens,
                     "prompt_price_per_million": round(prompt, 8),
                     "completion_price_per_million": round(completion, 8),
                     "supported_parameters": supported,
@@ -264,9 +314,9 @@ def compact_endpoint_catalog(
         )
     )
     if not rows:
-        raise CatalogViewError("no exact model/provider endpoint rows")
+        raise CatalogViewError("no exact constitutionally usable endpoint rows")
     return {
-        "schema_version": "v5-gpt-catalog-view-1",
+        "schema_version": "v5-gpt-catalog-view-2",
         "selection_authority": "gpt-direct-no-local-scoring",
         "official_order_only": True,
         "local_score_computed": False,
@@ -274,17 +324,24 @@ def compact_endpoint_catalog(
         "pareto_pruning_used": False,
         "heuristic_ranking_used": False,
         "governance_companies_excluded": sorted(GOVERNANCE_COMPANIES),
+        "required_context_tokens": context_floor,
+        "minimum_completion_tokens": completion_floor,
         "endpoints": rows,
         "rejected": rejected,
     }
 
 
-def catalog_index(catalog: Mapping[str, Any]) -> dict[tuple[str, str], Mapping[str, Any]]:
+def catalog_index(
+    catalog: Mapping[str, Any],
+) -> dict[tuple[str, str], Mapping[str, Any]]:
     result: dict[tuple[str, str], Mapping[str, Any]] = {}
     for row in catalog.get("endpoints", []):
         if not isinstance(row, Mapping):
             continue
-        key = (str(row.get("model") or ""), str(row.get("provider") or ""))
+        key = (
+            str(row.get("model") or ""),
+            str(row.get("provider") or ""),
+        )
         if not all(key):
             continue
         if key in result:
