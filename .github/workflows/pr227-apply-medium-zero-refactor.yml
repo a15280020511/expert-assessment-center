@@ -84,6 +84,32 @@ jobs:
         run: |
           set -euo pipefail
           git apply /tmp/pr227-medium-zero-refactor.patch
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("open-model-market/v5_runtime.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''        call = lambda node, kind: self._recorded_call(
+              selected, attempts, original_task, upstream, run, call_fn, budget, node, kind
+          )
+          '''
+          new = '''        def call(node: SelectedNode, kind: str) -> RuntimeAttempt | None:
+              return self._recorded_call(
+                  selected,
+                  attempts,
+                  original_task,
+                  upstream,
+                  run,
+                  call_fn,
+                  budget,
+                  node,
+                  kind,
+              )
+          '''
+          if text.count(old) != 1:
+              raise SystemExit("expected exactly one v5_runtime call lambda")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
           git diff --check
           git diff --stat > /tmp/pr227-evidence/refactor-diff-stat.txt
           git diff --name-only > /tmp/pr227-evidence/refactor-changed-files.txt
