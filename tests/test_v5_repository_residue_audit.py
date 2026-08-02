@@ -34,6 +34,8 @@ class RepositoryResidueAuditTests(unittest.TestCase):
             ROOT / "tests" / "test_v5_planning_scenario_matrix.py",
             ROOT / "tests" / "test_v5_tabletop_production_semantics.py",
             ROOT / "tests" / "test_v5_single_pass_advisory.py",
+            ROOT / ".remediation",
+            ROOT / ".github" / "workflows" / "one-time-apply-claude-remediation-20260803.yml",
         )
         existing = [str(path.relative_to(ROOT)) for path in forbidden if path.exists()]
         self.assertEqual([], existing)
