@@ -200,7 +200,7 @@ jobs:
               recovery_policy = metadata["recovery_pool_policy"]
               selected_companies = set(companies)
               selected_node_ids = {
-                  node["candidate_id"] for node in graph["nodes"]
+                  node["node_id"] for node in graph["nodes"]
               }
               recovery_companies = []
               remaining_budget = float(
