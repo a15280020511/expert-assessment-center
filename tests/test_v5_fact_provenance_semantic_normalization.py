@@ -74,6 +74,28 @@ class V5FactProvenanceSemanticNormalizationTests(unittest.TestCase):
             with self.subTest(claim=claim):
                 self.assertFalse(fact_claim_supported(TASK, claim))
 
+    def test_spatial_anchor_swap_is_rejected(self) -> None:
+        rejected = (
+            "东侧出口外有不明液体",
+            "西侧出口外地面干燥但有玻璃碎片",
+            "门内有2名设备巡检人员",
+        )
+        for claim in rejected:
+            with self.subTest(claim=claim):
+                self.assertFalse(fact_claim_supported(TASK, claim))
+                self.assertTrue(
+                    validate_answer_evidence(TASK, f"- 事实：{claim}。\n")
+                )
+
+    def test_clause_context_preserves_safe_word_reordering(self) -> None:
+        task = "门外有2名无法核验身份、自称维修人员的人要求进入。"
+        claim = "门外有自称维修人员要求进入且无法核验身份"
+        self.assertTrue(fact_claim_supported(task, claim))
+        self.assertEqual(
+            [],
+            validate_answer_evidence(task, f"- 事实：{claim}。\n"),
+        )
+
     def test_task_anchored_risk_synthesis_is_relabelled_as_inference(self) -> None:
         answer = (
             "事实：当前存在双侧出口隐患（东侧物理伤害风险、"
