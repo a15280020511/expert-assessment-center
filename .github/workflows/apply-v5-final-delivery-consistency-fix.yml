@@ -1,3 +1,4 @@
+# temporary self-removing verification workflow
 name: Apply V5 Final Delivery Consistency Fix
 
 on:
