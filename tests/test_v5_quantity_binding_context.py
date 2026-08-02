@@ -15,9 +15,10 @@ from v5_task_constraints import (  # noqa: E402
 )
 
 TASK = (
-    "纸质登记表显示4件反光背心已领用，但现场只能确认3件。"
+    "仅依据题面：纸质登记表显示4件反光背心已领用，但现场只能确认3件。"
     "门外有2名无法核验身份、自称设备巡检人员的人要求进入。"
     "值守手机剩余46%电量。"
+    "禁止联网、调用工具或编造题面外事实。"
 )
 
 
@@ -43,7 +44,7 @@ class V5QuantityBindingContextTests(unittest.TestCase):
             "4架",
         ):
             with self.subTest(rendered=rendered):
-                self.assertEqual({("4", "4", "item")}, normalized_quantities(rendered))
+                self.assertEqual({("4", "", "item")}, normalized_quantities(rendered))
 
     def test_reordered_quantity_fact_remains_supported(self) -> None:
         for claim in (
@@ -57,7 +58,7 @@ class V5QuantityBindingContextTests(unittest.TestCase):
                 self.assertTrue(fact_claim_supported(TASK, claim))
                 self.assertEqual(
                     [],
-                    validate_answer_evidence(TASK, f"事实：{claim}。\n"),
+                    validate_answer_evidence(TASK, f"- 事实：{claim}。\n"),
                 )
 
     def test_wrong_quantity_cannot_pass_generic_similarity(self) -> None:
@@ -70,7 +71,7 @@ class V5QuantityBindingContextTests(unittest.TestCase):
             with self.subTest(claim=claim):
                 self.assertFalse(fact_claim_supported(TASK, claim))
                 self.assertTrue(
-                    validate_answer_evidence(TASK, f"事实：{claim}。\n")
+                    validate_answer_evidence(TASK, f"- 事实：{claim}。\n")
                 )
 
 
