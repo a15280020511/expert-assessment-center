@@ -54,6 +54,7 @@ class V5TicketGateTests(unittest.TestCase):
             "retry_id": "",
             "trigger_mode": "run",
             "execution_id": self.ticket["task_id"],
+            "analysis_owner": "github-v5-gpt-claude-expert-graph",
             "authoritative_trigger": "issue_comment.created",
             "runtime_version": "v5-native-runtime-1",
             "fallback_policy": "disabled-fail-closed",
@@ -75,7 +76,8 @@ class V5TicketGateTests(unittest.TestCase):
             encoding="utf-8",
         )
         (self.root / "task.txt").write_text(
-            "委托边界：专家禁止使用外部工具。\n\n" + self.ticket["task"]["question"],
+            "委托边界：专家禁止使用外部工具。\n\n"
+            + self.ticket["task"]["question"],
             encoding="utf-8",
         )
 
@@ -105,7 +107,10 @@ class V5TicketGateTests(unittest.TestCase):
         self.assertEqual(before, after)
         self.assertEqual(0, result["model_calls_performed"])
         self.assertFalse(result["mutation_performed"])
-        self.assertEqual(result["task_fingerprint"], self.status["task_fingerprint"])
+        self.assertEqual(
+            result["task_fingerprint"],
+            self.status["task_fingerprint"],
+        )
 
     def test_workflow_call_mismatch_fails_closed(self) -> None:
         with self.assertRaises(gate.TicketGateError):
@@ -116,7 +121,9 @@ class V5TicketGateTests(unittest.TestCase):
                 expected_quality_tier="value",
                 expected_cost_anomaly_usd=0.25,
             )
-        failure = json.loads((self.root / "ticket-gate.json").read_text(encoding="utf-8"))
+        failure = json.loads(
+            (self.root / "ticket-gate.json").read_text(encoding="utf-8")
+        )
         self.assertEqual("FAIL", failure["status"])
         self.assertEqual(0, failure["model_calls_performed"])
 
@@ -125,11 +132,18 @@ class V5TicketGateTests(unittest.TestCase):
         self._write_fixture()
         with self.assertRaises(gate.TicketGateError):
             self._run()
-        failure = json.loads((self.root / "ticket-gate.json").read_text(encoding="utf-8"))
-        self.assertTrue(any("anomaly guard" in item for item in failure["errors"]))
+        failure = json.loads(
+            (self.root / "ticket-gate.json").read_text(encoding="utf-8")
+        )
+        self.assertTrue(
+            any("anomaly guard" in item for item in failure["errors"])
+        )
 
     def test_task_text_tampering_fails_closed(self) -> None:
-        (self.root / "task.txt").write_text("different task", encoding="utf-8")
+        (self.root / "task.txt").write_text(
+            "different task",
+            encoding="utf-8",
+        )
         with self.assertRaises(gate.TicketGateError):
             self._run()
 
