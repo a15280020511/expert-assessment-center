@@ -6,7 +6,6 @@ and conservative capacity facts needed before GPT performs task decomposition.
 """
 from __future__ import annotations
 
-import math
 from hashlib import sha256
 from typing import Any, Mapping, Sequence
 
