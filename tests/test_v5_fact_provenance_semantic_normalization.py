@@ -132,6 +132,23 @@ class V5FactProvenanceSemanticNormalizationTests(unittest.TestCase):
         self.assertEqual([], validate_answer_evidence(TASK, normalized))
         self.assertFalse(audit["substantive_text_invented"])
 
+    def test_compact_task_anchored_risk_synthesis_is_relabelled(self) -> None:
+        answer = (
+            "- 事实：当前存在双侧出口隐患、外部未核验人员试图进入、"
+            "资产记录缺口以及通信与照明资源受限。\n"
+        )
+        normalized, audit = normalize_answer(
+            TASK,
+            answer,
+            {},
+            compile_task_constraints(TASK),
+        )
+        self.assertIn("- 推断：当前存在双侧出口隐患", normalized)
+        self.assertNotIn("- 事实：当前存在双侧出口隐患", normalized)
+        self.assertEqual(1, len(audit["inferential_fact_labels_relabelled"]))
+        self.assertEqual([], validate_answer_evidence(TASK, normalized))
+        self.assertFalse(audit["substantive_text_invented"])
+
     def test_unrelated_external_claim_is_not_relabelled(self) -> None:
         answer = "事实：纽约港当前存在严重航运风险和资产记录缺口。\n"
         normalized, audit = normalize_answer(

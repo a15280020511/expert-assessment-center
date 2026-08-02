@@ -166,6 +166,33 @@ def _cjk_ngrams(value: str, size: int) -> set[str]:
     }
 
 
+_INFERENCE_CLAUSE_RE = re.compile(
+    r"[，,；;。|、]+|(?:以及|并且|同时|和|与)",
+    re.IGNORECASE,
+)
+_INFERENCE_GENERIC_ANCHOR_TERMS = (
+    "当前",
+    "存在",
+    "风险",
+    "隐患",
+    "受限",
+    "缺口",
+    "不足",
+    "严重",
+    "可能",
+    "潜在",
+    "试图",
+    "资源",
+    "资产",
+    "外部",
+    "核心",
+    "首要",
+)
+_INFERENCE_GENERIC_BIGRAMS = set().union(
+    *(_cjk_ngrams(term, 2) for term in _INFERENCE_GENERIC_ANCHOR_TERMS)
+)
+
+
 def _inferential_relabel_allowed(task: str, body: str) -> bool:
     """Allow label-only repair only for task-anchored inferential synthesis."""
     if not _INFERENTIAL_FACT_RE.search(body):
@@ -176,10 +203,29 @@ def _inferential_relabel_allowed(task: str, body: str) -> bool:
     body_bigrams = _cjk_ngrams(body, 2)
     task_fourgrams = _cjk_ngrams(task, 4)
     body_fourgrams = _cjk_ngrams(body, 4)
-    return (
+    strict_overlap = (
         len(task_bigrams & body_bigrams) >= 6
         and len(task_fourgrams & body_fourgrams) >= 1
     )
+    if strict_overlap:
+        return True
+
+    task_anchors = task_bigrams - _INFERENCE_GENERIC_BIGRAMS
+    body_anchors = body_bigrams - _INFERENCE_GENERIC_BIGRAMS
+    shared_anchors = task_anchors & body_anchors
+    clauses = [
+        clause.strip()
+        for clause in _INFERENCE_CLAUSE_RE.split(str(body or ""))
+        if clause.strip()
+    ]
+    anchored_clauses = sum(
+        bool(
+            (_cjk_ngrams(clause, 2) - _INFERENCE_GENERIC_BIGRAMS)
+            & task_anchors
+        )
+        for clause in clauses
+    )
+    return len(shared_anchors) >= 3 and anchored_clauses >= 2
 
 
 def _relabel_inferential_fact_labels(
