@@ -108,6 +108,39 @@ class ClaudeRedTeamAdviceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "functions contains duplicates"):
             build_claude_red_team_request(payload)
 
+    def test_unicode_advisory_target_is_valid_and_normalized(self) -> None:
+        result = parse_claude_red_team_advice(
+            json.dumps(
+                {
+                    "suggestions": [
+                        {
+                            "code": "CONTRACT_MISMATCH",
+                            "target": "  最终建议部分  ",
+                            "change": "给出唯一推荐并列出两条题面内理由。",
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        )
+        self.assertEqual("最终建议部分", result["suggestions"][0]["target"])
+
+    def test_advisory_target_control_character_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "target contains control characters"):
+            parse_claude_red_team_advice(
+                json.dumps(
+                    {
+                        "suggestions": [
+                            {
+                                "code": "CONTRACT_MISMATCH",
+                                "target": "final\u0001section",
+                                "change": "修复交付合同。",
+                            }
+                        ]
+                    }
+                )
+            )
+
     def test_empty_advice_is_valid_and_not_approval(self) -> None:
         result = parse_claude_red_team_advice('{"suggestions":[]}')
         self.assertEqual([], result["suggestions"])

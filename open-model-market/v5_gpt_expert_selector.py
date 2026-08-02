@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from hashlib import sha256
 from typing import Any, Mapping
 
@@ -16,6 +17,21 @@ GPT_MAX_EDGES = 64
 GPT_MAX_RECOVERY_PER_NODE = 2
 GPT_MAX_FUNCTIONS_PER_NODE = 12
 GPT_MAX_OUTPUT_FIELDS_PER_WORK = 16
+
+GPT_IDENTIFIER_PATTERN = r"^[A-Za-z0-9_.~:@/+-]{1,160}$"
+GPT_NODE_ID_PATTERN = r"^[A-Za-z0-9_.:-]{1,64}$"
+GPT_WORK_ID_PATTERN = r"^[A-Za-z0-9_.:-]{1,96}$"
+GPT_RELATION_TYPES = (
+    "dependency",
+    "review",
+    "adversarial",
+    "supplement",
+    "correction",
+    "comparison",
+    "synthesis",
+    "adjudication",
+    "formatting",
+)
 
 PROPOSAL_PROMPT = (
     "你是专家团中心唯一的动态任务拆解与专家编组器。你必须直接阅读原始任务和硬约束，"
@@ -54,15 +70,15 @@ def _fixed(prompt: str, expected: str) -> str:
 def _schema(name: str) -> dict[str, Any]:
     identifier = {
         "type": "string",
-        "pattern": "^[A-Za-z0-9_.~:@/+-]{1,160}$",
+        "pattern": GPT_IDENTIFIER_PATTERN,
     }
     node_id = {
         "type": "string",
-        "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+        "pattern": GPT_NODE_ID_PATTERN,
     }
     work_id = {
         "type": "string",
-        "pattern": "^[A-Za-z0-9_.:-]{1,96}$",
+        "pattern": GPT_WORK_ID_PATTERN,
     }
     bounded_text = {
         "type": "string",
@@ -170,17 +186,7 @@ def _schema(name: str) -> dict[str, Any]:
             "target": node_id,
             "relation_type": {
                 "type": "string",
-                "enum": [
-                    "dependency",
-                    "review",
-                    "adversarial",
-                    "supplement",
-                    "correction",
-                    "comparison",
-                    "synthesis",
-                    "adjudication",
-                    "formatting",
-                ],
+                "enum": list(GPT_RELATION_TYPES),
             },
         },
         "required": ["source", "target", "relation_type"],
@@ -373,22 +379,40 @@ def _bounded_text(value: Any, field: str, maximum: int) -> str:
     return value
 
 
+def _identifier(value: Any, field: str, pattern: str) -> str:
+    if not isinstance(value, str) or re.fullmatch(pattern, value) is None:
+        raise GPTSelectorError(f"{field} must be a bounded identifier")
+    return value
+
+
 def _validate_work_item(work: Any, index: int) -> str:
     expected = {"work_id", "objective", "dependencies", "required_outputs"}
     if not isinstance(work, Mapping) or set(work) != expected:
         raise GPTSelectorError(f"work_items[{index}] has invalid fields")
-    work_id = _bounded_text(work["work_id"], f"work_items[{index}].work_id", 96)
+    work_id = _identifier(
+        work["work_id"],
+        f"work_items[{index}].work_id",
+        GPT_WORK_ID_PATTERN,
+    )
     _bounded_text(work["objective"], f"work_items[{index}].objective", 320)
     dependencies = work["dependencies"]
     outputs = work["required_outputs"]
     if not isinstance(dependencies, list) or len(dependencies) > GPT_MAX_WORK_ITEMS:
         raise GPTSelectorError("work dependencies are invalid")
-    if len(dependencies) != len(set(dependencies)):
+    normalized_dependencies = [
+        _identifier(value, "work dependency", GPT_WORK_ID_PATTERN)
+        for value in dependencies
+    ]
+    if len(normalized_dependencies) != len(set(normalized_dependencies)):
         raise GPTSelectorError("work dependencies contain duplicates")
     if not isinstance(outputs, list) or not 1 <= len(outputs) <= GPT_MAX_OUTPUT_FIELDS_PER_WORK:
         raise GPTSelectorError("work required_outputs are invalid")
-    for output in outputs:
+    normalized_outputs = [
         _bounded_text(output, "required_output", 160)
+        for output in outputs
+    ]
+    if len(normalized_outputs) != len(set(normalized_outputs)):
+        raise GPTSelectorError("work required_outputs contain duplicates")
     return work_id
 
 
@@ -400,8 +424,8 @@ def _validate_work_items(work_items: Any) -> set[str]:
         raise GPTSelectorError("GPT proposal has duplicate work ids")
     known_work = set(work_ids)
     for work in work_items:
-        dependencies = {str(value) for value in work["dependencies"]}
-        if str(work["work_id"]) in dependencies or not dependencies.issubset(known_work):
+        dependencies = set(work["dependencies"])
+        if work["work_id"] in dependencies or not dependencies.issubset(known_work):
             raise GPTSelectorError("work dependency references are invalid")
     return known_work
 
@@ -412,8 +436,8 @@ def _validate_recovery_rows(recovery: Any) -> None:
     for row in recovery:
         if not isinstance(row, Mapping) or set(row) != {"model", "provider"}:
             raise GPTSelectorError("recovery row has invalid fields")
-        _bounded_text(row["model"], "recovery model", 160)
-        _bounded_text(row["provider"], "recovery provider", 160)
+        _identifier(row["model"], "recovery model", GPT_IDENTIFIER_PATTERN)
+        _identifier(row["provider"], "recovery provider", GPT_IDENTIFIER_PATTERN)
 
 
 def _validate_node(node: Any, index: int, known_work: set[str]) -> str:
@@ -423,22 +447,35 @@ def _validate_node(node: Any, index: int, known_work: set[str]) -> str:
     }
     if not isinstance(node, Mapping) or set(node) != expected:
         raise GPTSelectorError(f"nodes[{index}] has invalid fields")
-    node_id = _bounded_text(node["node_id"], f"nodes[{index}].node_id", 64)
+    node_id = _identifier(
+        node["node_id"],
+        f"nodes[{index}].node_id",
+        GPT_NODE_ID_PATTERN,
+    )
     assigned = node["work_ids"]
     functions = node["functions"]
     if not isinstance(assigned, list) or not assigned or len(assigned) > GPT_MAX_WORK_ITEMS:
         raise GPTSelectorError("node work_ids are invalid")
-    if len(assigned) != len(set(assigned)) or not set(assigned).issubset(known_work):
+    normalized_assigned = [
+        _identifier(value, "node work_id", GPT_WORK_ID_PATTERN)
+        for value in assigned
+    ]
+    if (
+        len(normalized_assigned) != len(set(normalized_assigned))
+        or not set(normalized_assigned).issubset(known_work)
+    ):
         raise GPTSelectorError("node work_ids contain duplicates or unknown work")
     _bounded_text(node["role"], f"nodes[{index}].role", 320)
     if not isinstance(functions, list) or not 1 <= len(functions) <= GPT_MAX_FUNCTIONS_PER_NODE:
         raise GPTSelectorError("node functions are invalid")
-    if len(functions) != len(set(functions)):
-        raise GPTSelectorError("node functions contain duplicates")
-    for function in functions:
+    normalized_functions = [
         _bounded_text(function, "node function", 96)
-    _bounded_text(node["model"], f"nodes[{index}].model", 160)
-    _bounded_text(node["provider"], f"nodes[{index}].provider", 160)
+        for function in functions
+    ]
+    if len(normalized_functions) != len(set(normalized_functions)):
+        raise GPTSelectorError("node functions contain duplicates")
+    _identifier(node["model"], f"nodes[{index}].model", GPT_IDENTIFIER_PATTERN)
+    _identifier(node["provider"], f"nodes[{index}].provider", GPT_IDENTIFIER_PATTERN)
     if node["reasoning_effort"] not in {"low", "medium", "high"}:
         raise GPTSelectorError("node reasoning_effort is invalid")
     maximum = node["max_output_tokens"]
@@ -462,17 +499,33 @@ def _validate_nodes(nodes: Any, known_work: set[str]) -> set[str]:
 def _validate_edges(edges: Any, known_nodes: set[str]) -> None:
     if not isinstance(edges, list) or len(edges) > GPT_MAX_EDGES:
         raise GPTSelectorError("GPT proposal edges are invalid")
-    for edge in edges:
+    for index, edge in enumerate(edges):
         if not isinstance(edge, Mapping) or set(edge) != {"source", "target", "relation_type"}:
             raise GPTSelectorError("edge has invalid fields")
-        if edge["source"] not in known_nodes or edge["target"] not in known_nodes:
+        source = _identifier(
+            edge["source"],
+            f"edges[{index}].source",
+            GPT_NODE_ID_PATTERN,
+        )
+        target = _identifier(
+            edge["target"],
+            f"edges[{index}].target",
+            GPT_NODE_ID_PATTERN,
+        )
+        if source not in known_nodes or target not in known_nodes:
             raise GPTSelectorError("edge references unknown node")
+        if edge["relation_type"] not in GPT_RELATION_TYPES:
+            raise GPTSelectorError("edge relation_type is invalid")
 
 
 def _validate_final_nodes(final_nodes: Any, known_nodes: set[str]) -> None:
     if not isinstance(final_nodes, list) or not final_nodes:
         raise GPTSelectorError("GPT proposal final_nodes are invalid")
-    if len(final_nodes) != len(set(final_nodes)) or not set(final_nodes).issubset(known_nodes):
+    normalized = [
+        _identifier(value, "final_node", GPT_NODE_ID_PATTERN)
+        for value in final_nodes
+    ]
+    if len(normalized) != len(set(normalized)) or not set(normalized).issubset(known_nodes):
         raise GPTSelectorError("GPT proposal final_nodes contain duplicates or unknown nodes")
 
 

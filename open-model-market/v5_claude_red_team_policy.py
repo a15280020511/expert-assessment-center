@@ -356,7 +356,8 @@ def advice_json_schema() -> dict[str, Any]:
                                 },
                                 "target": {
                                     "type": "string",
-                                    "pattern": "^[A-Za-z0-9_.~:@/+-]{1,160}$",
+                                    "minLength": 1,
+                                    "maxLength": 160,
                                 },
                                 "change": {
                                     "type": "string",
@@ -423,10 +424,10 @@ def parse_claude_red_team_advice(text: str) -> dict[str, Any]:
         code = str(suggestion["code"])
         if code not in RED_TEAM_CODES:
             raise ValueError(f"suggestions[{index}].code is invalid")
-        target = _identifier(suggestion["target"], f"suggestions[{index}].target")
+        target = _text(suggestion["target"], f"suggestions[{index}].target", 160)
         change = _text(suggestion["change"], f"suggestions[{index}].change", 240)
         normalized.append(
-            {"code": code, "target": target, "change": change.strip()}
+            {"code": code, "target": target.strip(), "change": change.strip()}
         )
     return {
         "suggestions": normalized,
