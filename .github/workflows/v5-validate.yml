@@ -71,11 +71,32 @@ jobs:
           ! grep -R --line-number --exclude-dir=.git \
             -E 'ortools|cp_model|google-or-tools-cp-sat|optimize_execution_graph|pareto_prune' \
             open-model-market requirements-runtime.txt
-          grep -q '~openai/gpt-latest' open-model-market/v5_gpt_expert_selector.py
-          grep -q '~anthropic/claude-opus-latest' open-model-market/v5_claude_red_team_policy.py
-          grep -q 'claude_is_advisory_only' open-model-market/v5_governance_runtime.py
-          grep -q 'claude_gatekeeping_allowed.*False' open-model-market/v5_governance_runtime.py
-          grep -q 'gpt_synthesis_calls.*1' open-model-market/v5_governance_runtime.py
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, "open-model-market")
+          from v5_claude_red_team_policy import (
+              CLAUDE_RED_TEAM_GOVERNANCE_CALLS,
+              CLAUDE_RED_TEAM_MAX_CALLS_PER_TASK,
+              CLAUDE_RED_TEAM_MODEL,
+              GPT_SYNTHESIS_CALLS_MAX,
+          )
+          from v5_gpt_expert_selector import GPT_SELECTOR_MODEL
+
+          assert GPT_SELECTOR_MODEL == "~openai/gpt-latest"
+          assert CLAUDE_RED_TEAM_MODEL == "~anthropic/claude-opus-latest"
+          assert CLAUDE_RED_TEAM_MAX_CALLS_PER_TASK == 1
+          assert GPT_SYNTHESIS_CALLS_MAX == 1
+          assert CLAUDE_RED_TEAM_GOVERNANCE_CALLS == 3
+          source = Path(
+              "open-model-market/v5_governance_runtime.py"
+          ).read_text(encoding="utf-8")
+          assert "claude_is_advisory_only" in source
+          assert "claude_gatekeeping_allowed" in source
+          assert "final_authority" in source
+          assert "deterministic-constitutional-validator" in source
+          PY
       - name: Run static and constitutional tests
         shell: bash
         run: |
