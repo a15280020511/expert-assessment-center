@@ -58,6 +58,7 @@ _QUANTITY_RE = re.compile(
     r"(?<![A-Za-z0-9_.])(?:第\s*)?(?P<lo>\d+(?:\.\d+)?)"
     r"(?:\s*(?:-|–|—|~|至|到)\s*(?P<hi>\d+(?:\.\d+)?))?"
     r"\s*(?:个)?\s*(?P<unit>SLA|秒|分钟|小时|天|周|月|年|米|公里|千米|公斤|克|人|名|位|次|%|％|"
+    r"件|台|部|套|支|辆|本|份|箱|包|瓶|枚|张|把|只|艘|架|"
     r"seconds?|minutes?|hours?|days?|weeks?|months?|years?|meters?|"
     r"kilometers?|kg|people|times?|元|块|人民币|rmb|cny|yuan|美元|美金|usd)"
     r"(?![A-Za-z0-9_])",
@@ -178,6 +179,23 @@ def normalized_quantities(text: str) -> set[tuple[str, str, str]]:
         "名": "people",
         "位": "people",
         "people": "people",
+        "件": "item",
+        "台": "item",
+        "部": "item",
+        "套": "item",
+        "支": "item",
+        "辆": "item",
+        "本": "item",
+        "份": "item",
+        "箱": "item",
+        "包": "item",
+        "瓶": "item",
+        "枚": "item",
+        "张": "item",
+        "把": "item",
+        "只": "item",
+        "艘": "item",
+        "架": "item",
         "次": "times",
         "times": "times",
         "sla": "sla",
@@ -314,6 +332,106 @@ def _ngram_coverage(needle: str, haystack: str, size: int) -> float:
     return len(needle_grams & haystack_grams) / len(needle_grams)
 
 
+_QUANTITY_MAJOR_FRAGMENT_RE = re.compile(
+    r"[。！？!?；;\n]+|(?:但是|但|然而|却|不过)",
+    re.IGNORECASE,
+)
+_QUANTITY_MINOR_FRAGMENT_RE = re.compile(r"[，,、|]+")
+
+
+def _quantity_mentions(value: str) -> list[dict[str, Any]]:
+    """Bind each normalized quantity to local and enclosing clause context."""
+    rendered = str(value or "")
+    mentions: list[dict[str, Any]] = []
+    major_fragments = [
+        fragment.strip()
+        for fragment in _QUANTITY_MAJOR_FRAGMENT_RE.split(rendered)
+        if fragment.strip()
+    ]
+    for major in major_fragments:
+        major_context = _quantity_skeleton(major)
+        minor_fragments = [
+            fragment.strip()
+            for fragment in _QUANTITY_MINOR_FRAGMENT_RE.split(major)
+            if fragment.strip()
+        ]
+        for minor in minor_fragments or [major]:
+            quantities = normalized_quantities(minor)
+            if not quantities:
+                continue
+            contexts = list(
+                dict.fromkeys(
+                    context
+                    for context in (_quantity_skeleton(minor), major_context)
+                    if context
+                )
+            )
+            for quantity in sorted(quantities):
+                mentions.append(
+                    {
+                        "quantity": quantity,
+                        "contexts": contexts,
+                        "raw": minor,
+                    }
+                )
+    return mentions
+
+
+def _quantity_contexts_match(
+    claim_contexts: Sequence[str],
+    source_contexts: Sequence[str],
+) -> bool:
+    for claim_context in claim_contexts:
+        if len(claim_context) < 2:
+            continue
+        for source_context in source_contexts:
+            if not source_context:
+                continue
+            if claim_context in source_context:
+                return True
+            if SequenceMatcher(None, claim_context, source_context).ratio() >= 0.72:
+                return True
+            if (
+                _ngram_coverage(claim_context, source_context, 2) >= 0.85
+                and _ngram_coverage(claim_context, source_context, 3) >= 0.60
+            ):
+                return True
+    return False
+
+
+def _quantity_bindings_supported(claim: str, task: str) -> bool:
+    """Require a distinct task-local semantic binding for every claim quantity."""
+    claim_mentions = _quantity_mentions(claim)
+    source_mentions = _quantity_mentions(task)
+    if not claim_mentions or not source_mentions:
+        return False
+    edges: list[list[int]] = []
+    for claim_mention in claim_mentions:
+        matches = [
+            index
+            for index, source_mention in enumerate(source_mentions)
+            if claim_mention["quantity"] == source_mention["quantity"]
+            and _quantity_contexts_match(
+                claim_mention["contexts"],
+                source_mention["contexts"],
+            )
+        ]
+        if not matches:
+            return False
+        edges.append(matches)
+
+    def assign(position: int, used: set[int]) -> bool:
+        if position >= len(edges):
+            return True
+        return any(
+            source_index not in used
+            and assign(position + 1, used | {source_index})
+            for source_index in edges[position]
+        )
+
+    return assign(0, set())
+
+
 def _evidence_fragments(value: str, *, include_whole: bool) -> list[str]:
     rendered = str(value or "").strip()
     if not rendered:
@@ -361,41 +479,27 @@ def _claim_supported(claim: str, task: str) -> bool:
             for row in source_rows
             if row["normalized"] and polarity == row["polarity"]
         ]
-        if any(normalized in str(row["normalized"]) for row in compatible):
+        generic_quantities = normalized_quantities(fragment)
+        generic_compatible = [
+            row
+            for row in compatible
+            if not generic_quantities
+            or generic_quantities.issubset(set(row["quantities"]))
+        ]
+        if any(
+            normalized in str(row["normalized"])
+            for row in generic_compatible
+        ):
             continue
         if any(
             SequenceMatcher(None, normalized, str(row["normalized"])).ratio() >= 0.72
-            for row in compatible
+            for row in generic_compatible
         ):
             continue
 
-        claim_quantities = normalized_quantities(fragment)
-        if claim_quantities:
-            claim_skeleton = _quantity_skeleton(fragment)
-            quantity_supported = any(
-                claim_quantities.issubset(set(row["quantities"]))
-                and bool(claim_skeleton)
-                and (
-                    claim_skeleton in str(row["quantity_skeleton"])
-                    or SequenceMatcher(
-                        None,
-                        claim_skeleton,
-                        str(row["quantity_skeleton"]),
-                    ).ratio()
-                    >= 0.78
-                )
-                for row in compatible
-            )
-            if not quantity_supported:
-                task_skeleton = _quantity_skeleton(task)
-                quantity_supported = (
-                    claim_quantities.issubset(normalized_quantities(task))
-                    and len(claim_skeleton) >= 4
-                    and _ngram_coverage(claim_skeleton, task_skeleton, 2) >= 0.85
-                    and _ngram_coverage(claim_skeleton, task_skeleton, 3) >= 0.60
-                )
-            if quantity_supported:
-                continue
+        claim_quantities = generic_quantities
+        if claim_quantities and _quantity_bindings_supported(fragment, task):
+            continue
 
         if polarity in {"unknown", "absence", "negative"}:
             claim_core = _semantic_core(fragment, polarity)

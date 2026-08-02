@@ -54,6 +54,26 @@ class V5FactProvenanceSemanticNormalizationTests(unittest.TestCase):
             any(value.startswith("unsupported-fact-label:") for value in violations)
         )
 
+    def test_multiple_item_quantities_bind_to_their_local_meaning(self) -> None:
+        supported = (
+            "反光背心已领用4件，现场只能确认3件",
+            "现场只能确认3件，登记表显示已领用4件反光背心",
+        )
+        for claim in supported:
+            with self.subTest(claim=claim):
+                self.assertTrue(fact_claim_supported(TASK, claim))
+                self.assertEqual(
+                    [],
+                    validate_answer_evidence(TASK, f"事实：{claim}。\n"),
+                )
+        rejected = (
+            "现场确认4件反光背心",
+            "登记表显示3件反光背心已领用",
+        )
+        for claim in rejected:
+            with self.subTest(claim=claim):
+                self.assertFalse(fact_claim_supported(TASK, claim))
+
     def test_task_anchored_risk_synthesis_is_relabelled_as_inference(self) -> None:
         answer = (
             "事实：当前存在双侧出口隐患（东侧物理伤害风险、"
