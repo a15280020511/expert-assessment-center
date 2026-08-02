@@ -29,7 +29,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Collect sanitized live catalog eligibility evidence
+      - name: Collect model and exact-endpoint evidence without chat calls
         shell: bash
         run: |
           set -euo pipefail
@@ -44,7 +44,14 @@ jobs:
 
           sys.path.insert(0, "open-model-market")
           import model_market
-          from v5_catalog_view import GOVERNANCE_COMPANIES, stable_model_id
+          from openrouter_api import request_json
+          from v5_catalog_view import (
+              GOVERNANCE_COMPANIES,
+              _endpoint_rows,
+              _provider_slug,
+              endpoint_url,
+              stable_model_id,
+          )
           from v5_model_company import canonical_model_company
 
           args = argparse.Namespace(
@@ -67,6 +74,7 @@ jobs:
           totals = Counter()
           rows = []
           eligible_by_limit = {str(limit): [] for limit in limits}
+          endpoint_probe_ids = []
 
           for model in models.values():
               model_id = str(model.id or "")
@@ -96,6 +104,11 @@ jobs:
                   for limit in limits:
                       if rank <= limit:
                           eligible_by_limit[str(limit)].append(model_id)
+              non_completion_reasons = [
+                  reason for reason in reasons if reason != "missing-max-completion"
+              ]
+              if rank <= 24 and not non_completion_reasons:
+                  endpoint_probe_ids.append(model_id)
               if rank <= 40:
                   rows.append(
                       {
@@ -112,26 +125,59 @@ jobs:
                       }
                   )
 
+          endpoint_probes = []
+          for model_id in endpoint_probe_ids:
+              payload = request_json(
+                  endpoint_url(model_id),
+                  run.api_key,
+                  run.catalog_timeout_seconds,
+                  0,
+              )
+              endpoint_rows = []
+              for endpoint in _endpoint_rows(payload):
+                  pricing = endpoint.get("pricing") if isinstance(endpoint.get("pricing"), dict) else {}
+                  endpoint_rows.append(
+                      {
+                          "provider": _provider_slug(endpoint),
+                          "context_length": int(endpoint.get("context_length") or 0),
+                          "max_completion_tokens": int(endpoint.get("max_completion_tokens") or 0),
+                          "supported_parameters": sorted(str(value) for value in (endpoint.get("supported_parameters") or [])),
+                          "has_prompt_price": pricing.get("prompt") not in (None, ""),
+                          "has_completion_price": pricing.get("completion") not in (None, ""),
+                      }
+                  )
+              endpoint_probes.append(
+                  {
+                      "model": model_id,
+                      "model_rank": int(models[model_id].ranks["intelligence-high-to-low"]),
+                      "model_level_max_completion_tokens": int(models[model_id].max_completion_tokens or 0),
+                      "endpoint_count": len(endpoint_rows),
+                      "endpoints": endpoint_rows,
+                  }
+              )
+
           report = {
-              "schema_version": "v5-live-catalog-diagnostic-1",
+              "schema_version": "v5-live-catalog-diagnostic-2",
               "status": "PASS",
-              "model_calls": 0,
+              "chat_model_calls": 0,
               "catalog_source": source,
               "catalog_models": len(models),
               "context_floor": context_floor,
+              "run_maximum_replacements_when_requested_zero": run.maximum_replacements,
               "rejection_counts": dict(sorted(totals.items())),
               "eligible_counts_by_official_rank_ceiling": {
                   limit: len(values) for limit, values in eligible_by_limit.items()
               },
               "eligible_models_by_official_rank_ceiling": eligible_by_limit,
               "top_40_filter_trace": sorted(rows, key=lambda row: (row["rank"], row["model"])),
+              "exact_endpoint_probes_top_24": endpoint_probes,
           }
           Path("catalog-diagnostic/report.json").write_text(
               json.dumps(report, ensure_ascii=False, indent=2),
               encoding="utf-8",
           )
           print(json.dumps(report, ensure_ascii=False, sort_keys=True))
-          assert report["model_calls"] == 0
+          assert report["chat_model_calls"] == 0
           PY
 
       - name: Upload diagnostic evidence
