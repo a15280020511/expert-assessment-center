@@ -95,6 +95,7 @@ jobs:
             tests/test_v5_constitutional_runtime.py
             tests/test_v5_independent_artifact_revalidation.py
             tests/test_v5_failure_evidence_persistence.py
+            tests/test_v5_live_delivery_consistency.py
             tests/test_v5_critical_delivery_reliability.py
             tests/test_v5_v4_contract_isolation.py
             tests/test_v5_deterministic_answer_normalization.py
@@ -195,11 +196,12 @@ jobs:
           grep -q "REGISTERED ActualCompanyAuditTests: 2" validation-logs/p0-regressions.log
           grep -q "REGISTERED IndependentArtifactRevalidationTests: 4" validation-logs/p0-regressions.log
           grep -q "REGISTERED FailureEvidencePersistenceTests: 1" validation-logs/p0-regressions.log
+          grep -q "REGISTERED V5LiveDeliveryConsistencyTests: 6" validation-logs/p0-regressions.log
           grep -q "REGISTERED V5CriticalDeliveryReliabilityTests: 4" validation-logs/p0-regressions.log
           grep -q "REGISTERED V5V4ContractIsolationTests: 7" validation-logs/p0-regressions.log
           grep -q "REGISTERED V5DeterministicAnswerNormalizationTests: 5" validation-logs/p0-regressions.log
-          grep -q "REGISTERED TOTAL: 52" validation-logs/p0-regressions.log
-          grep -q "P0 REGRESSION RESULT: run=52, passed=52, failures=0, errors=0, skipped=0" \
+          grep -q "REGISTERED TOTAL: 58" validation-logs/p0-regressions.log
+          grep -q "P0 REGRESSION RESULT: run=58, passed=58, failures=0, errors=0, skipped=0" \
             validation-logs/p0-regressions.log
       - name: Run deterministic constitutional V5 end-to-end dry-run
         shell: bash
