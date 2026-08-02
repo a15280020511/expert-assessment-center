@@ -30,4 +30,5 @@ jobs:
           name: verified-workflow-remediation-${{ github.run_id }}
           path: workflow-remediation/
           if-no-files-found: error
+          include-hidden-files: true
           retention-days: 7
