@@ -33,135 +33,130 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Wait for exact paid Run
-        id: paid
+      - name: Wait for exact paid Run and collect diagnostics
         shell: bash
         run: |
           set -euo pipefail
           run_id=""
+          status=""
+          conclusion=""
           for attempt in $(seq 1 50); do
-            gh api \
-              -H "Accept: application/vnd.github+json" \
+            gh api -H "Accept: application/vnd.github+json" \
               "/repos/$REPOSITORY/actions/workflows/pr227-one-time-paid-acceptance.yml/runs?branch=$ACCEPTANCE_BRANCH&event=push&per_page=20" \
               > paid-runs.json
-            run_id=$(jq -r --arg sha "$PAID_HEAD_SHA" '
-              [.workflow_runs[] | select(.head_sha == $sha)]
-              | sort_by(.run_number)
-              | if length > 0 then .[-1].id else empty end
-            ' paid-runs.json)
+            run_id=$(jq -r --arg sha "$PAID_HEAD_SHA" '[.workflow_runs[] | select(.head_sha == $sha)] | sort_by(.run_number) | if length > 0 then .[-1].id else empty end' paid-runs.json)
             if [[ -n "$run_id" ]]; then
               status=$(jq -r --argjson id "$run_id" '.workflow_runs[] | select(.id == $id) | .status' paid-runs.json)
               conclusion=$(jq -r --argjson id "$run_id" '.workflow_runs[] | select(.id == $id) | (.conclusion // "")' paid-runs.json)
               echo "paid_run_id=$run_id status=$status conclusion=$conclusion"
-              if [[ "$status" == "completed" ]]; then
-                break
-              fi
+              [[ "$status" == "completed" ]] && break
             else
               echo "paid Run not registered yet"
             fi
             sleep 20
           done
           test -n "$run_id"
-          status=$(jq -r --argjson id "$run_id" '.workflow_runs[] | select(.id == $id) | .status' paid-runs.json)
-          conclusion=$(jq -r --argjson id "$run_id" '.workflow_runs[] | select(.id == $id) | (.conclusion // "")' paid-runs.json)
           test "$status" = "completed"
-          {
-            echo "run_id=$run_id"
-            echo "conclusion=$conclusion"
-          } >> "$GITHUB_OUTPUT"
-          test "$conclusion" = "success"
 
-      - name: Resolve exact Run Artifacts
-        id: artifacts
-        env:
-          PAID_RUN_ID: ${{ steps.paid.outputs.run_id }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          gh api \
-            -H "Accept: application/vnd.github+json" \
-            "/repos/$REPOSITORY/actions/runs/$PAID_RUN_ID/artifacts?per_page=100" \
+          gh api -H "Accept: application/vnd.github+json" \
+            "/repos/$REPOSITORY/actions/runs/$run_id/jobs?per_page=100" \
+            > paid-jobs.json
+          gh api -H "Accept: application/vnd.github+json" \
+            "/repos/$REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" \
             > paid-artifacts.json
-          primitive_name="v5-pr227-paid-acceptance-$PAID_RUN_ID"
-          attestation_name="v5-pr227-paid-attestation-$PAID_RUN_ID"
-          primitive_id=$(jq -er --arg name "$primitive_name" '[.artifacts[] | select(.name == $name and .expired == false)] | if length == 1 then .[0].id else error("primitive artifact count mismatch") end' paid-artifacts.json)
-          attestation_id=$(jq -er --arg name "$attestation_name" '[.artifacts[] | select(.name == $name and .expired == false)] | if length == 1 then .[0].id else error("attestation artifact count mismatch") end' paid-artifacts.json)
-          primitive_digest=$(jq -er --argjson id "$primitive_id" '.artifacts[] | select(.id == $id) | .digest' paid-artifacts.json)
-          attestation_digest=$(jq -er --argjson id "$attestation_id" '.artifacts[] | select(.id == $id) | .digest' paid-artifacts.json)
-          {
-            echo "primitive_id=$primitive_id"
-            echo "primitive_digest=$primitive_digest"
-            echo "attestation_id=$attestation_id"
-            echo "attestation_digest=$attestation_digest"
-          } >> "$GITHUB_OUTPUT"
 
-      - name: Download and verify final Attestation
-        env:
-          PAID_RUN_ID: ${{ steps.paid.outputs.run_id }}
-          PRIMITIVE_ID: ${{ steps.artifacts.outputs.primitive_id }}
-          PRIMITIVE_DIGEST: ${{ steps.artifacts.outputs.primitive_digest }}
-          ATTESTATION_ID: ${{ steps.artifacts.outputs.attestation_id }}
-          ATTESTATION_DIGEST: ${{ steps.artifacts.outputs.attestation_digest }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          gh api -H "Accept: application/vnd.github+json" "/repos/$REPOSITORY/actions/artifacts/$PRIMITIVE_ID/zip" > primitive.zip
-          gh api -H "Accept: application/vnd.github+json" "/repos/$REPOSITORY/actions/artifacts/$ATTESTATION_ID/zip" > attestation.zip
-          rm -rf primitive attestation
-          mkdir primitive attestation
-          unzip -q primitive.zip -d primitive
-          unzip -q attestation.zip -d attestation
-          jq -e --arg run "$PAID_RUN_ID" --arg sha "$TARGET_SHA" '
-            .status == "PASS" and
-            .paid_workflow_run_id == $run and
-            .paid_target_sha == $sha and
-            .paid_receipt.status == "PASS" and
-            .paid_receipt.total_model_calls == 4 and
-            .paid_receipt.governance_sequence == ["gpt_proposal", "claude_red_team", "gpt_synthesis"] and
-            (.paid_receipt.actual_cost_usd | tonumber) <= 0.25 and
-            .independent_revalidation.status == "PASS" and
-            .independent_revalidation.recomputed_from_primitive_evidence == true and
-            .independently_recomputed_from_primitive_evidence == true and
-            .paid_acceptance_verdict_used_as_source == false
-          ' attestation/paid-acceptance-attestation.json >/dev/null
-          test "$(sha256sum primitive.zip | awk '{print "sha256:" $1}')" = "$PRIMITIVE_DIGEST"
-          test "$(sha256sum attestation.zip | awk '{print "sha256:" $1}')" = "$ATTESTATION_DIGEST"
+          verdict="FAIL"
+          verification_error="paid workflow conclusion is $conclusion"
+          primitive_id="null"
+          primitive_digest=""
+          attestation_id="null"
+          attestation_digest=""
 
-      - name: Persist durable zero-call collection receipt
-        env:
-          PAID_RUN_ID: ${{ steps.paid.outputs.run_id }}
-          PRIMITIVE_ID: ${{ steps.artifacts.outputs.primitive_id }}
-          PRIMITIVE_DIGEST: ${{ steps.artifacts.outputs.primitive_digest }}
-          ATTESTATION_ID: ${{ steps.artifacts.outputs.attestation_id }}
-          ATTESTATION_DIGEST: ${{ steps.artifacts.outputs.attestation_digest }}
-        shell: bash
-        run: |
-          set -euo pipefail
+          if [[ "$conclusion" == "success" ]]; then
+            primitive_name="v5-pr227-paid-acceptance-$run_id"
+            attestation_name="v5-pr227-paid-attestation-$run_id"
+            primitive_id=$(jq -r --arg name "$primitive_name" '[.artifacts[] | select(.name == $name and .expired == false)] | if length == 1 then .[0].id else empty end' paid-artifacts.json)
+            attestation_id=$(jq -r --arg name "$attestation_name" '[.artifacts[] | select(.name == $name and .expired == false)] | if length == 1 then .[0].id else empty end' paid-artifacts.json)
+            if [[ -n "$primitive_id" && -n "$attestation_id" ]]; then
+              primitive_digest=$(jq -r --argjson id "$primitive_id" '.artifacts[] | select(.id == $id) | .digest' paid-artifacts.json)
+              attestation_digest=$(jq -r --argjson id "$attestation_id" '.artifacts[] | select(.id == $id) | .digest' paid-artifacts.json)
+              gh api -H "Accept: application/vnd.github+json" "/repos/$REPOSITORY/actions/artifacts/$PRIMITIVE_ID/zip" >/dev/null 2>&1 || true
+              gh api -H "Accept: application/vnd.github+json" "/repos/$REPOSITORY/actions/artifacts/$primitive_id/zip" > primitive.zip
+              gh api -H "Accept: application/vnd.github+json" "/repos/$REPOSITORY/actions/artifacts/$attestation_id/zip" > attestation.zip
+              rm -rf primitive attestation
+              mkdir primitive attestation
+              unzip -q primitive.zip -d primitive
+              unzip -q attestation.zip -d attestation
+              set +e
+              jq -e --arg run "$run_id" --arg sha "$TARGET_SHA" '
+                .status == "PASS" and
+                .paid_workflow_run_id == $run and
+                .paid_target_sha == $sha and
+                .paid_receipt.status == "PASS" and
+                .paid_receipt.total_model_calls == 4 and
+                .paid_receipt.governance_sequence == ["gpt_proposal", "claude_red_team", "gpt_synthesis"] and
+                (.paid_receipt.actual_cost_usd | tonumber) <= 0.25 and
+                .independent_revalidation.status == "PASS" and
+                .independent_revalidation.recomputed_from_primitive_evidence == true and
+                .independently_recomputed_from_primitive_evidence == true and
+                .paid_acceptance_verdict_used_as_source == false
+              ' attestation/paid-acceptance-attestation.json >/dev/null
+              attestation_ok=$?
+              primitive_hash_ok=1
+              attestation_hash_ok=1
+              [[ "$(sha256sum primitive.zip | awk '{print "sha256:" $1}')" == "$primitive_digest" ]] && primitive_hash_ok=0
+              [[ "$(sha256sum attestation.zip | awk '{print "sha256:" $1}')" == "$attestation_digest" ]] && attestation_hash_ok=0
+              set -e
+              if [[ $attestation_ok -eq 0 && $primitive_hash_ok -eq 0 && $attestation_hash_ok -eq 0 ]]; then
+                verdict="PASS"
+                verification_error=""
+              else
+                verification_error="attestation or artifact digest verification failed"
+              fi
+            else
+              primitive_id="null"
+              attestation_id="null"
+              verification_error="required paid Artifacts are missing"
+            fi
+          fi
+
           mkdir -p acceptance-evidence
           jq -n \
-            --arg paid_run_id "$PAID_RUN_ID" \
+            --arg status "$verdict" \
+            --arg paid_run_id "$run_id" \
+            --arg paid_run_status "$status" \
+            --arg paid_run_conclusion "$conclusion" \
             --arg target_sha "$TARGET_SHA" \
-            --argjson primitive_artifact_id "$PRIMITIVE_ID" \
-            --arg primitive_artifact_digest "$PRIMITIVE_DIGEST" \
-            --argjson attestation_artifact_id "$ATTESTATION_ID" \
-            --arg attestation_artifact_digest "$ATTESTATION_DIGEST" \
-            --slurpfile attestation attestation/paid-acceptance-attestation.json \
+            --arg verification_error "$verification_error" \
+            --argjson primitive_artifact_id "$primitive_id" \
+            --arg primitive_artifact_digest "$primitive_digest" \
+            --argjson attestation_artifact_id "$attestation_id" \
+            --arg attestation_artifact_digest "$attestation_digest" \
+            --slurpfile jobs paid-jobs.json \
+            --slurpfile artifacts paid-artifacts.json \
+            --slurpfile attestation <(if [[ -f attestation/paid-acceptance-attestation.json ]]; then cat attestation/paid-acceptance-attestation.json; else echo '{}'; fi) \
             '{
-              schema_version: "pr227-paid-acceptance-collection-1",
-              status: $attestation[0].status,
+              schema_version: "pr227-paid-acceptance-diagnostic-2",
+              status: $status,
               paid_run_id: $paid_run_id,
+              paid_run_status: $paid_run_status,
+              paid_run_conclusion: $paid_run_conclusion,
               target_sha: $target_sha,
+              verification_error: $verification_error,
               primitive_artifact_id: $primitive_artifact_id,
               primitive_artifact_digest: $primitive_artifact_digest,
               attestation_artifact_id: $attestation_artifact_id,
               attestation_artifact_digest: $attestation_artifact_digest,
+              failed_jobs: [$jobs[0].jobs[] | select(.conclusion != "success") | {id, name, status, conclusion, steps}],
+              artifacts: [$artifacts[0].artifacts[] | {id, name, digest, expired}],
               attestation: $attestation[0],
               collection_model_calls: 0,
               production_ref_moved: false
             }' > acceptance-evidence/pr227-paid-acceptance-result.json
+
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add acceptance-evidence/pr227-paid-acceptance-result.json
           git diff --cached --check
-          git commit -m "test: persist PR227 paid acceptance result"
+          git commit -m "test: persist PR227 paid acceptance diagnostic"
           git push origin HEAD:acceptance/pr227-final-paid-20260803
