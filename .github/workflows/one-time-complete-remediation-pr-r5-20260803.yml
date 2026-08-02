@@ -1,4 +1,4 @@
-name: One-Time Complete Remediation PR R5 2026-08-03
+name: Export Verified Workflow Remediation 2026-08-03
 
 on:
   pull_request:
@@ -6,154 +6,200 @@ on:
       - ".github/workflows/one-time-complete-remediation-pr-r5-20260803.yml"
 
 permissions:
-  contents: write
-
-concurrency:
-  group: one-time-complete-remediation-pr-r5-20260803
-  cancel-in-progress: false
+  contents: read
 
 jobs:
-  remediate-verify-and-commit:
+  export-verified-workflows:
     if: github.actor == github.repository_owner && github.event.pull_request.head.ref == 'fix/v5-claude-unified-red-team-cleanup-20260803'
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    env:
-      OPENROUTER_API_KEY: ""
-      ANTHROPIC_API_KEY: ""
-      MODEL_MAX_RETRIES: "0"
-      PARALLEL_WORKERS: "1"
+    timeout-minutes: 10
     steps:
       - name: Check out exact PR head
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
-      - name: Verify authorization and patch generated regression lint
+      - name: Generate verified workflow replacements
         shell: bash
         run: |
           set -euo pipefail
-          test "$(cat .repair-all-20260803)" = "RUN-ONCE-AND-SELF-DELETE"
+          mkdir -p workflow-remediation/.github/workflows
           python - <<'PY'
           from pathlib import Path
-          path = Path("tools/one_time_complete_remediation_20260803.py")
-          text = path.read_text(encoding="utf-8")
-          old = "from text_normalization import normalize_heading_key\n\n\nclass CompleteCleanupRegressionTests"
-          new = "from text_normalization import normalize_heading_key  # noqa: E402\n\n\nclass CompleteCleanupRegressionTests"
-          if old not in text:
-              raise SystemExit("generated regression import anchor missing")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
-          PY
+
+          source = Path('.github/workflows/execution-ticket.yml').read_text(encoding='utf-8')
+          for exact in (
+              '      quality_tier: ${{ steps.ticket.outputs.quality_tier }}\n',
+              '            --expected-quality-tier "${{ needs.admit-ticket.outputs.quality_tier }}" \\\n',
+              '            --quality-tier "${{ needs.admit-ticket.outputs.quality_tier }}"\n',
+          ):
+              if exact not in source:
+                  raise SystemExit(f'execution workflow anchor missing: {exact!r}')
+              source = source.replace(exact, '', 1)
+          Path('workflow-remediation/.github/workflows/execution-ticket.yml').write_text(source, encoding='utf-8')
+
+          def expr(name: str) -> str:
+              return '$' + '{{' + f' {name} ' + '}}'
+
+          paid = '''name: V5 Final Paid Claude Acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type RUN-EXACTLY-ONCE to authorize the bounded paid acceptance
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v5-final-paid-claude-acceptance
+  cancel-in-progress: false
+
+jobs:
+  paid-acceptance:
+    if: __ACTOR__ == __OWNER__
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      OPENROUTER_API_KEY: __OPENROUTER_SECRET__
+      MODEL_MAX_RETRIES: "0"
+      MODEL_TIMEOUT_SECONDS: "240"
+      PARALLEL_WORKERS: "1"
+      OPENROUTER_SITE_URL: https://github.com/__REPOSITORY__
+      OPENROUTER_APP_NAME: expert-center-final-paid-acceptance
+    steps:
+      - name: Check explicit authorization
+        run: test "__CONFIRM__" = "RUN-EXACTLY-ONCE"
+
+      - name: Check out exact dispatched source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: __SHA__
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up pinned Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: |
-            requirements-runtime.txt
-            requirements-dev.txt
+          cache-dependency-path: requirements-runtime.txt
 
-      - name: Install pinned verification dependencies
+      - name: Install pinned runtime
         run: |
-          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          set -euo pipefail
+          test -n "$OPENROUTER_API_KEY"
+          python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
           python -m pip check
 
-      - name: Apply remediation and synchronize obsolete test fixtures
-        shell: bash
+      - name: Execute one bounded real task
         run: |
           set -euo pipefail
-          python tools/one_time_r4_prepare.py
-          python tools/one_time_complete_remediation_20260803.py
-          python - <<'PY'
+          task='仅依据以下题面，不得调用外部工具，不得补充外部事实：A方案月费20元、月流量100GB；B方案月费30元、月流量150GB。请严格按顺序输出两个Markdown二级标题：已知事实、最终建议。最终建议必须给出唯一推荐和两条理由，明确区分事实与推断，不得新增题面外数字。'
+          python open-model-market/v5_pipeline.py \
+            --task "$task" \
+            --output-dir paid-acceptance-artifacts \
+            --ranking-limit 12 \
+            --maximum-total-calls 4 \
+            --maximum-recovery-calls 0 \
+            --cost-anomaly-usd 0.25 \
+            --max-completion-tokens 512 \
+            --reasoning-effort low \
+            --require-live-catalog
+
+      - name: Verify paid-call constitution
+        env:
+          ACCEPTANCE_SHA: __SHA__
+          ACCEPTANCE_RUN_ID: __RUN_ID__
+        run: |
+          python - <<'PY_VERIFY'
+          import json
+          import os
           from pathlib import Path
 
-          def replace_once(path: str, old: str, new: str) -> None:
-              target = Path(path)
-              text = target.read_text(encoding="utf-8")
-              if old not in text:
-                  raise SystemExit(f"compatibility anchor missing in {path}: {old!r}")
-              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+          root = Path('paid-acceptance-artifacts')
+          calls = json.loads((root / 'v5-governance-calls.json').read_text())
+          governance = json.loads((root / 'v5-governance-result.json').read_text())
+          resolution = json.loads((root / 'v5-governance-models.json').read_text())
+          result = json.loads((root / 'v5-result.json').read_text())
+          audit = json.loads((root / 'v5-request-audit.json').read_text())
+          selection = json.loads((root / 'v5-selection.json').read_text())
+          kinds = [row['kind'] for row in calls['calls']]
+          assert resolution['status'] == 'PASS'
+          assert resolution['provider_fallback_allowed'] is False
+          assert resolution['gpt']['logical_model'] == '~openai/gpt-latest'
+          assert resolution['claude']['logical_model'] == '~anthropic/claude-opus-latest'
+          assert kinds == ['gpt_proposal', 'claude_red_team', 'gpt_synthesis']
+          assert calls['actual_governance_calls'] == 3
+          assert governance['claude_review_count'] == 1
+          assert governance['gpt_synthesis_count'] == 1
+          assert governance['claude_is_advisory_only'] is True
+          assert governance['claude_gatekeeping_allowed'] is False
+          assert governance['second_claude_review_allowed'] is False
+          assert governance['model_loop_allowed'] is False
+          assert selection['local_task_classification_used'] is False
+          assert selection['local_atomic_work_generation_used'] is False
+          assert selection['local_resource_matrix_used'] is False
+          assert selection['local_scoring_used'] is False
+          assert selection['optimizer_used'] is False
+          assert result['total_model_calls'] == 4
+          assert result['actual_cost_usd'] <= 0.25 + 1e-12
+          assert audit['status'] == 'PASS'
+          assert audit['request_count'] == 4
+          assert audit['external_tools_allowed'] is False
+          receipt = {
+              'schema_version': 'v5-final-paid-claude-acceptance-3',
+              'status': 'PASS',
+              'commit_sha': os.environ['ACCEPTANCE_SHA'],
+              'workflow_run_id': os.environ['ACCEPTANCE_RUN_ID'],
+              'governance_sequence': kinds,
+              'governance_calls': 3,
+              'claude_calls': 1,
+              'expert_calls': 1,
+              'total_model_calls': result['total_model_calls'],
+              'actual_cost_usd': result['actual_cost_usd'],
+              'claude_is_advisory_only': True,
+              'claude_gatekeeping_allowed': False,
+              'old_local_planner_used': False,
+              'optimizer_used': False,
+          }
+          (root / 'paid-acceptance-receipt.json').write_text(
+              json.dumps(receipt, ensure_ascii=False, indent=2),
+              encoding='utf-8',
+          )
+          PY_VERIFY
 
-          replace_once(
-              "tests/test_ticket_jsonschema.py",
-              '        self.assertEqual(validated["quality_tier"], "value")\n',
-              "",
-          )
-          replace_once(
-              "tests/test_v5_command_trigger.py",
-              '            "quality_tier": "value",\n',
-              "",
-          )
-          replace_once(
-              "tests/test_v5_p0_governance.py",
-              '            "quality_tier": "value",\n',
-              "",
-          )
-          replace_once(
-              "tests/test_v5_full_load_stability.py",
-              '                        "--quality-tier",\n                        "value",\n',
-              "",
-          )
+      - name: Upload paid acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: v5-final-paid-claude-acceptance-__RUN_ID__
+          path: paid-acceptance-artifacts/
+          if-no-files-found: error
+          retention-days: 30
+'''
+          replacements = {
+              '__ACTOR__': expr('github.actor'),
+              '__OWNER__': expr('github.repository_owner'),
+              '__OPENROUTER_SECRET__': expr('secrets.OPENROUTER_API_KEY'),
+              '__REPOSITORY__': expr('github.repository'),
+              '__CONFIRM__': expr('inputs.confirm'),
+              '__SHA__': expr('github.sha'),
+              '__RUN_ID__': expr('github.run_id'),
+          }
+          for token, value in replacements.items():
+              paid = paid.replace(token, value)
+          Path('workflow-remediation/.github/workflows/v5-final-paid-claude-acceptance-20260803.yml').write_text(paid, encoding='utf-8')
           PY
 
-      - name: Remove all one-time machinery before validation
-        run: |
-          rm -f .repair-all-20260803
-          rm -f tools/one_time_complete_remediation_20260803.py
-          rm -f tools/one_time_r4_prepare.py
-          rm -f .github/workflows/one-time-complete-remediation-20260803.yml
-          rm -f .github/workflows/one-time-complete-remediation-pr-20260803.yml
-          rm -f .github/workflows/one-time-complete-remediation-pr-r2-20260803.yml
-          rm -f .github/workflows/one-time-complete-remediation-pr-r3-20260803.yml
-          rm -f .github/workflows/one-time-complete-remediation-pr-r4-20260803.yml
-          rm -f .github/workflows/one-time-complete-remediation-pr-r5-20260803.yml
-          rm -f .github/workflows/one-time-complete-remediation-pr-r6-20260803.yml
-
-      - name: Verify cleaned architecture, interfaces, and synchronized tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          test ! -e .github/workflows/v5-one-time-paid-claude-acceptance-20260803.yml
-          ! grep -R --line-number --exclude-dir=.git \
-            -E 'ortools|cp_model|google-or-tools-cp-sat|optimize_execution_graph|pareto_prune|compile_v5_task_resources|compile_task_semantics' \
-            open-model-market requirements-runtime.txt
-          ! grep -R --line-number -E 'quality_tier|--quality-tier|expected-quality-tier' \
-            open-model-market/v5_issue_ticket.py \
-            open-model-market/v5_production_ticket.py \
-            open-model-market/v5_ticket_gate.py \
-            open-model-market/execution-ticket.schema.json \
-            .github/workflows/execution-ticket.yml \
-            tests/test_v5_ticket_gate.py \
-            tests/test_ticket_jsonschema.py \
-            tests/test_v5_command_trigger.py \
-            tests/test_v5_p0_governance.py \
-            tests/test_v5_full_load_stability.py
-          grep -q 'workflow_dispatch' .github/workflows/v5-final-paid-claude-acceptance-20260803.yml
-          grep -q 'inputs.confirm' .github/workflows/v5-final-paid-claude-acceptance-20260803.yml
-          ! grep -q 'hashFiles(' .github/workflows/v5-final-paid-claude-acceptance-20260803.yml
-          ! grep -q 'pull_request' .github/workflows/v5-final-paid-claude-acceptance-20260803.yml
-          test "$(grep -R --include='*.py' -l 'def normalize_heading_key' open-model-market | wc -l)" -eq 1
-
-      - name: Run static, compile, full regression and P0 gates
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m ruff check .
-          python -m compileall -q open-model-market tests tools
-          python -m unittest discover -s tests -p 'test*.py' -v
-          python tools/run_v5_p0_regressions.py
-          git diff --check
-
-      - name: Commit verified non-workflow remediation
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A -- . ':(exclude).github/workflows/**'
-          test -n "$(git diff --cached --name-only)"
-          test -z "$(git diff --cached --name-only | grep '^.github/workflows/' || true)"
-          git commit -m "fix: remove dead expert controls and consolidate deterministic contracts"
-          git push origin HEAD:fix/v5-claude-unified-red-team-cleanup-20260803
+      - name: Upload exact workflow replacements
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verified-workflow-remediation-${{ github.run_id }}
+          path: workflow-remediation/
+          if-no-files-found: error
+          retention-days: 7
