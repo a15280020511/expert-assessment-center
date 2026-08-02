@@ -1,0 +1,406 @@
+--- a/open-model-market/v5_execution_auditor.py
++++ b/open-model-market/v5_execution_auditor.py
+@@ -10,6 +10,7 @@
+ from pathlib import Path
+ from typing import Any, Mapping
+ 
++from v5_claude_red_team_policy import CLAUDE_RED_TEAM_GOVERNANCE_CALLS
+ from v5_json_io import load_json_or_default
+ 
+ RUNTIME_VERSION = "v5-r8"
+@@ -54,12 +55,16 @@
+     def __init__(
+         self,
+         total: int,
++        governance: int,
++        expert_total: int,
+         recovery: int,
+         initial: int,
+         anomaly: float | None,
+         valid: bool,
+     ) -> None:
+         self.total = total
++        self.governance = governance
++        self.expert_total = expert_total
+         self.recovery = recovery
+         self.initial = initial
+         self.anomaly = anomaly
+@@ -98,10 +103,18 @@
+ 
+ 
+ class CallState:
+-    def __init__(self, calls: int, ledger_total: int, ledger_initial: int, actual_cost: float) -> None:
+-        self.calls = calls
+-        self.ledger_total = ledger_total
+-        self.ledger_initial = ledger_initial
++    def __init__(
++        self,
++        expert_calls: int,
++        total_calls: int,
++        runtime_expert_total: int,
++        runtime_expert_initial: int,
++        actual_cost: float,
++    ) -> None:
++        self.expert_calls = expert_calls
++        self.total_calls = total_calls
++        self.runtime_expert_total = runtime_expert_total
++        self.runtime_expert_initial = runtime_expert_initial
+         self.actual_cost = actual_cost
+ 
+ 
+@@ -172,6 +185,8 @@
+ ) -> BudgetState:
+     ticket = evidence.ticket
+     total = int(ticket.get("calls") or 0) if isinstance(ticket, Mapping) else 0
++    governance = CLAUDE_RED_TEAM_GOVERNANCE_CALLS
++    expert_total = max(0, total - governance)
+     recovery = (
+         int(ticket.get("maximum_recovery_calls") or 0)
+         if isinstance(ticket, Mapping)
+@@ -189,8 +204,9 @@
+     )
+     valid = (
+         4 <= total <= ABSOLUTE_MAX_MODEL_CALLS
+-        and 0 <= recovery < total
+-        and initial == total - recovery
++        and expert_total >= 1
++        and 0 <= recovery < expert_total
++        and initial == expert_total - recovery
+         and ticket.get("cost_policy") == "unbounded_with_anomaly_guard"
+     ) if isinstance(ticket, Mapping) else False
+     checks.update({
+@@ -202,8 +218,10 @@
+         "execute_outcome": execute_outcome,
+         "publish_outcome": publish_outcome,
+         "approved_total_calls": total,
++        "approved_governance_calls": governance,
++        "approved_expert_calls": expert_total,
+         "approved_recovery_calls": recovery,
+-        "approved_initial_calls": initial,
++        "approved_expert_initial_calls": initial,
+         "cost_anomaly_usd": anomaly,
+         "budget_contract_valid": valid,
+     })
+@@ -215,7 +233,15 @@
+         failures,
+     )
+     _runtime_envelope_failures(evidence, failures)
+-    return BudgetState(total, recovery, initial, anomaly, valid)
++    return BudgetState(
++        total,
++        governance,
++        expert_total,
++        recovery,
++        initial,
++        anomaly,
++        valid,
++    )
+ 
+ 
+ def _audit_delivery(
+@@ -373,37 +399,45 @@
+         and isinstance(summary.get("execution_budget"), Mapping)
+         else {}
+     )
+-    calls = int(budget.get("calls_reserved") or 0)
+-    ledger_total = int(budget.get("maximum_total_calls") or 0)
+-    ledger_initial = int(budget.get("maximum_initial_calls") or 0)
++    expert_calls = int(budget.get("calls_reserved") or 0)
++    runtime_expert_total = int(budget.get("maximum_total_calls") or 0)
++    runtime_expert_initial = int(budget.get("maximum_initial_calls") or 0)
++    total_calls = budget_state.governance + expert_calls
+     actual_cost = (
+         float(summary.get("actual_cost_usd") or budget.get("actual_cost_usd") or 0.0)
+         if isinstance(summary, Mapping)
+         else 0.0
+     )
+     checks.update({
+-        "model_calls": calls,
+-        "runtime_total_call_ceiling": ledger_total,
+-        "runtime_initial_call_ceiling": ledger_initial,
++        "model_calls": total_calls,
++        "governance_model_calls": budget_state.governance,
++        "expert_model_calls": expert_calls,
++        "runtime_expert_call_ceiling": runtime_expert_total,
++        "runtime_expert_initial_call_ceiling": runtime_expert_initial,
+         "absolute_maximum_model_calls": ABSOLUTE_MAX_MODEL_CALLS,
+         "actual_cost_usd": actual_cost,
+     })
+-    if calls <= 0:
+-        failures.append("V5 execution performed no model calls")
+-    elif calls > budget_state.total:
++    if expert_calls <= 0:
++        failures.append("V5 execution performed no expert model calls")
++    elif expert_calls > budget_state.expert_total:
++        failures.append(
++            "V5 expert calls exceed the approved expert bound: "
++            f"{expert_calls}/{budget_state.expert_total}"
++        )
++    if total_calls > budget_state.total:
+         failures.append(
+-            "V5 model calls exceed the approved ticket bound: "
+-            f"{calls}/{budget_state.total}"
++            "V5 total calls exceed the approved ticket bound: "
++            f"{total_calls}/{budget_state.total}"
+         )
+-    if ledger_total != budget_state.total:
++    if runtime_expert_total != budget_state.expert_total:
+         failures.append(
+-            "runtime total-call ceiling differs from approved ticket: "
+-            f"{ledger_total}/{budget_state.total}"
++            "runtime expert-call ceiling differs from approved ticket: "
++            f"{runtime_expert_total}/{budget_state.expert_total}"
+         )
+-    if ledger_initial != budget_state.initial:
++    if runtime_expert_initial != budget_state.initial:
+         failures.append(
+-            "runtime initial-call ceiling differs from approved ticket: "
+-            f"{ledger_initial}/{budget_state.initial}"
++            "runtime expert initial-call ceiling differs from approved ticket: "
++            f"{runtime_expert_initial}/{budget_state.initial}"
+         )
+     if not math.isfinite(actual_cost) or actual_cost < 0:
+         failures.append("V5 actual cost is invalid")
+@@ -415,7 +449,13 @@
+             "V5 actual cost exceeded the approved anomaly stop: "
+             f"{actual_cost}/{budget_state.anomaly}"
+         )
+-    return CallState(calls, ledger_total, ledger_initial, actual_cost)
++    return CallState(
++        expert_calls,
++        total_calls,
++        runtime_expert_total,
++        runtime_expert_initial,
++        actual_cost,
++    )
+ 
+ 
+ def _audit_requests(
+@@ -426,25 +466,68 @@
+     failures: list[str],
+ ) -> RequestState:
+     audit = evidence.request_audit
+-    status = str(audit.get("status") or "missing") if isinstance(audit, Mapping) else "missing"
+-    expected = int(audit.get("expected_request_count") or 0) if isinstance(audit, Mapping) else 0
+-    captured = int(audit.get("captured_request_count") or 0) if isinstance(audit, Mapping) else 0
+-    ceiling = int(audit.get("approved_total_call_ceiling") or 0) if isinstance(audit, Mapping) else 0
++    status = (
++        str(audit.get("status") or "missing")
++        if isinstance(audit, Mapping)
++        else "missing"
++    )
++    expected = calls.total_calls
++    captured = (
++        int(
++            audit.get("request_count")
++            or audit.get("captured_request_count")
++            or 0
++        )
++        if isinstance(audit, Mapping)
++        else 0
++    )
++    ceiling = (
++        int(audit.get("approved_total_call_ceiling") or 0)
++        if isinstance(audit, Mapping)
++        else 0
++    )
++    governance_count = (
++        int(audit.get("governance_request_count") or 0)
++        if isinstance(audit, Mapping)
++        else 0
++    )
++    expert_count = (
++        int(audit.get("expert_request_count") or 0)
++        if isinstance(audit, Mapping)
++        else 0
++    )
++    requests = (
++        audit.get("requests", [])
++        if isinstance(audit, Mapping)
++        and isinstance(audit.get("requests"), list)
++        else []
++    )
+     tools_allowed = audit.get("external_tools_allowed") if isinstance(audit, Mapping) else None
+     checks.update({
+         "request_audit_status": status,
+         "expected_request_count": expected,
+         "captured_request_count": captured,
++        "governance_request_count": governance_count,
++        "expert_request_count": expert_count,
++        "request_row_count": len(requests),
+         "request_approved_total_call_ceiling": ceiling,
+         "external_tools_allowed": tools_allowed,
+     })
+     if status != "PASS":
+         failures.append(f"V5 request audit status is {status}")
+-    if expected != calls.calls or captured != expected:
++    if captured != expected:
+         failures.append(
+             "V5 request evidence is incomplete: "
+-            f"captured={captured}, expected={expected}, calls={calls.calls}"
++            f"captured={captured}, expected={expected}"
++        )
++    if governance_count != budget.governance:
++        failures.append(
++            "governance request count differs from approved governance calls"
+         )
++    if expert_count != calls.expert_calls:
++        failures.append("expert request count differs from expert attempts")
++    if requests and len(requests) != captured:
++        failures.append("request detail rows differ from captured request count")
+     if captured > budget.total or ceiling != budget.total:
+         failures.append(
+             "request audit does not prove compliance with the approved total-call ceiling"
+@@ -467,8 +550,12 @@
+         and isinstance(evidence.ledger.get("summary"), Mapping)
+         else {}
+     )
+-    if int(summary.get("call_count") or 0) != calls.calls:
+-        failures.append("V5 call ledger does not match execution budget")
++    if int(summary.get("call_count") or 0) != calls.total_calls:
++        failures.append("V5 call ledger total does not match execution evidence")
++    if int(summary.get("governance_calls") or 0) != budget.governance:
++        failures.append("V5 call ledger governance count is inconsistent")
++    if int(summary.get("expert_calls") or 0) != calls.expert_calls:
++        failures.append("V5 call ledger expert count is inconsistent")
+     if int(summary.get("approved_total_call_ceiling") or 0) != budget.total:
+         failures.append(
+             "V5 call ledger does not preserve the approved total-call ceiling"
+@@ -579,7 +666,7 @@
+         "requests": (
+             "PASS"
+             if requests.status == "PASS"
+-            and requests.captured == requests.expected == calls.calls
++            and requests.captured == requests.expected == calls.total_calls
+             and requests.captured <= budget.total
+             else "FAIL"
+         ),
+--- a/tests/test_v5_native_audit_contract.py
++++ b/tests/test_v5_native_audit_contract.py
+@@ -31,7 +31,7 @@
+             "ticket-status.json",
+             {
+                 "accepted": True,
+-                "calls": 4,
++                "calls": 7,
+                 "maximum_recovery_calls": 1,
+                 "maximum_initial_calls": 3,
+                 "cost_policy": "unbounded_with_anomaly_guard",
+@@ -211,10 +211,13 @@
+             "request-audit.json",
+             {
+                 "status": "PASS",
+-                "approved_total_call_ceiling": 4,
+-                "expected_request_count": 4,
+-                "captured_request_count": 4,
++                "approved_total_call_ceiling": 7,
++                "request_count": 7,
++                "governance_request_count": 3,
++                "expert_request_count": 4,
++                "requests": [{} for _ in range(7)],
+                 "external_tools_allowed": False,
++                "provider_fallback_allowed": False,
+             },
+         )
+         self._write(
+@@ -222,8 +225,10 @@
+             "call-ledger.json",
+             {
+                 "summary": {
+-                    "call_count": 4,
+-                    "approved_total_call_ceiling": 4,
++                    "call_count": 7,
++                    "governance_calls": 3,
++                    "expert_calls": 4,
++                    "approved_total_call_ceiling": 7,
+                     "approved_recovery_call_ceiling": 1,
+                     "provider_actual_cost_usd": 0.09615135,
+                     "substantive_provider_count": 2,
+@@ -283,7 +288,9 @@
+                 result["checks"]["native_contract_status"],
+             )
+             self.assertEqual(3, result["checks"]["strict_node_count"])
+-            self.assertEqual(4, result["checks"]["model_calls"])
++            self.assertEqual(7, result["checks"]["model_calls"])
++            self.assertEqual(3, result["checks"]["governance_model_calls"])
++            self.assertEqual(4, result["checks"]["expert_model_calls"])
+             self.assertEqual(
+                 "PASS",
+                 result["checks"]["actual_model_company_audit_status"],
+--- a/tests/test_v5_production_cutover.py
++++ b/tests/test_v5_production_cutover.py
+@@ -33,8 +33,8 @@
+             {
+                 "accepted": True,
+                 "task_id": "task-v5-production",
+-                "calls": 7,
+-                "maximum_recovery_calls": 2,
++                "calls": 8,
++                "maximum_recovery_calls": 0,
+                 "maximum_initial_calls": 5,
+                 "cost_policy": "unbounded_with_anomaly_guard",
+                 "cost_anomaly_usd": 1.0,
+@@ -46,8 +46,8 @@
+             {
+                 "fallback_policy": "fail-closed-no-alternate-runtime",
+                 "legacy_runtime_present": False,
+-                "maximum_model_calls": 7,
+-                "maximum_recovery_calls": 2,
++                "maximum_model_calls": 8,
++                "maximum_recovery_calls": 0,
+                 "maximum_initial_calls": 5,
+             },
+         )
+@@ -75,7 +75,7 @@
+                 "actual_cost_usd": 0.12,
+                 "execution_budget": {
+                     "calls_reserved": 5,
+-                    "maximum_total_calls": 7,
++                    "maximum_total_calls": 5,
+                     "maximum_initial_calls": 5,
+                     "actual_cost_usd": 0.12,
+                 },
+@@ -123,10 +123,13 @@
+             "request-audit.json",
+             {
+                 "status": "PASS",
+-                "approved_total_call_ceiling": 7,
+-                "expected_request_count": 5,
+-                "captured_request_count": 5,
++                "approved_total_call_ceiling": 8,
++                "request_count": 8,
++                "governance_request_count": 3,
++                "expert_request_count": 5,
++                "requests": [{} for _ in range(8)],
+                 "external_tools_allowed": False,
++                "provider_fallback_allowed": False,
+             },
+         )
+         self._write(
+@@ -134,9 +137,11 @@
+             "call-ledger.json",
+             {
+                 "summary": {
+-                    "call_count": 5,
+-                    "approved_total_call_ceiling": 7,
+-                    "approved_recovery_call_ceiling": 2,
++                    "call_count": 8,
++                    "governance_calls": 3,
++                    "expert_calls": 5,
++                    "approved_total_call_ceiling": 8,
++                    "approved_recovery_call_ceiling": 0,
+                     "provider_actual_cost_usd": 0.12,
+                     "substantive_provider_count": 5,
+                     "substantive_providers": [
+@@ -182,9 +187,9 @@
+                 publish_outcome="success",
+             )
+             self.assertEqual(result["status"], "PASS", result["failures"])
+-            self.assertEqual(result["checks"]["model_calls"], 5)
++            self.assertEqual(result["checks"]["model_calls"], 8)
+             self.assertEqual(result["checks"]["node_count"], 5)
+-            self.assertEqual(result["checks"]["approved_total_calls"], 7)
++            self.assertEqual(result["checks"]["approved_total_calls"], 8)
+             self.assertEqual(
+                 result["checks"]["actual_model_company_audit_status"],
+                 "PASS",
