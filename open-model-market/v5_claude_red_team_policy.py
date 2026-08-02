@@ -148,7 +148,7 @@ def _mapping(value: Any, field: str) -> Mapping[str, Any]:
     return value
 
 
-def _validate_payload(payload: Mapping[str, Any]) -> None:
+def _validate_payload_header(payload: Mapping[str, Any]) -> tuple[int, int, int]:
     expected = {
         "task_digest",
         "proposal_digest",
@@ -211,43 +211,46 @@ def _validate_payload(payload: Mapping[str, Any]) -> None:
         raise ValueError("task_constraints are oversized")
     if len(json.dumps(contract, ensure_ascii=False, default=str)) > 8_000:
         raise ValueError("explicit_delivery_contract is oversized")
+    return total, governance, recovery
 
-    work_items = payload["work_items"]
-    if not isinstance(work_items, list) or not 1 <= len(work_items) <= CLAUDE_RED_TEAM_MAX_ITEMS:
-        raise ValueError("work_items must be a non-empty bounded list")
+
+def _validate_work_item(work: Any, index: int) -> str:
     work_fields = {"work_id", "objective", "dependencies", "required_outputs"}
-    work_ids: list[str] = []
-    for index, work in enumerate(work_items):
-        if not isinstance(work, Mapping) or set(work) != work_fields:
-            raise ValueError(f"work_items[{index}] has missing or extra fields")
-        work_ids.append(_identifier(work["work_id"], f"work_items[{index}].work_id"))
-        _text(work["objective"], f"work_items[{index}].objective", 320)
-        _id_list(
-            work["dependencies"],
-            f"work_items[{index}].dependencies",
-            CLAUDE_RED_TEAM_MAX_ITEMS,
-        )
-        _text_list(
-            work["required_outputs"],
-            f"work_items[{index}].required_outputs",
-            16,
-            160,
-        )
+    if not isinstance(work, Mapping) or set(work) != work_fields:
+        raise ValueError(f"work_items[{index}] has missing or extra fields")
+    work_id = _identifier(work["work_id"], f"work_items[{index}].work_id")
+    _text(work["objective"], f"work_items[{index}].objective", 320)
+    _id_list(
+        work["dependencies"],
+        f"work_items[{index}].dependencies",
+        CLAUDE_RED_TEAM_MAX_ITEMS,
+    )
+    _text_list(
+        work["required_outputs"],
+        f"work_items[{index}].required_outputs",
+        16,
+        160,
+    )
+    return work_id
+
+
+def _validate_work_items(payload: Mapping[str, Any]) -> set[str]:
+    work_items = payload["work_items"]
+    if not isinstance(work_items, list):
+        raise ValueError("work_items must be a non-empty bounded list")
+    if not 1 <= len(work_items) <= CLAUDE_RED_TEAM_MAX_ITEMS:
+        raise ValueError("work_items must be a non-empty bounded list")
+    work_ids = [_validate_work_item(work, index) for index, work in enumerate(work_items)]
     if len(work_ids) != len(set(work_ids)):
         raise ValueError("work_items contain duplicate work ids")
     known_work = set(work_ids)
     for work in work_items:
         if not set(work["dependencies"]).issubset(known_work):
             raise ValueError("work dependency references unknown work")
+    return known_work
 
-    nodes = payload["nodes"]
-    maximum_nodes = total - governance - recovery
-    if (
-        not isinstance(nodes, list)
-        or not nodes
-        or len(nodes) > min(CLAUDE_RED_TEAM_MAX_ITEMS, maximum_nodes)
-    ):
-        raise ValueError("nodes exceed expert-call capacity")
+
+def _validate_node(node: Any, index: int) -> None:
     node_fields = {
         "node_id",
         "candidate_id",
@@ -261,28 +264,39 @@ def _validate_payload(payload: Mapping[str, Any]) -> None:
         "contract_kind",
         "recovery_candidate_ids",
     }
-    for index, node in enumerate(nodes):
-        if not isinstance(node, Mapping) or set(node) != node_fields:
-            raise ValueError(f"nodes[{index}] has missing or extra fields")
-        for field in (
-            "node_id",
-            "candidate_id",
-            "model",
-            "company",
-            "provider",
-            "contract_kind",
-        ):
-            _identifier(node[field], f"nodes[{index}].{field}")
-        _text(node["role"], f"nodes[{index}].role", 320)
-        _id_list(node["work_ids"], f"nodes[{index}].work_ids", CLAUDE_RED_TEAM_MAX_ITEMS)
-        _id_list(node["functions"], f"nodes[{index}].functions", 12)
-        _id_list(
-            node["recovery_candidate_ids"],
-            f"nodes[{index}].recovery_candidate_ids",
-            4,
-        )
-        _number(node["estimated_cost_usd"], f"nodes[{index}].estimated_cost_usd")
+    if not isinstance(node, Mapping) or set(node) != node_fields:
+        raise ValueError(f"nodes[{index}] has missing or extra fields")
+    for field in (
+        "node_id",
+        "candidate_id",
+        "model",
+        "company",
+        "provider",
+        "contract_kind",
+    ):
+        _identifier(node[field], f"nodes[{index}].{field}")
+    _text(node["role"], f"nodes[{index}].role", 320)
+    _id_list(node["work_ids"], f"nodes[{index}].work_ids", CLAUDE_RED_TEAM_MAX_ITEMS)
+    _id_list(node["functions"], f"nodes[{index}].functions", 12)
+    _id_list(
+        node["recovery_candidate_ids"],
+        f"nodes[{index}].recovery_candidate_ids",
+        4,
+    )
+    _number(node["estimated_cost_usd"], f"nodes[{index}].estimated_cost_usd")
 
+
+def _validate_nodes(payload: Mapping[str, Any], maximum_nodes: int) -> None:
+    nodes = payload["nodes"]
+    if not isinstance(nodes, list) or not nodes:
+        raise ValueError("nodes exceed expert-call capacity")
+    if len(nodes) > min(CLAUDE_RED_TEAM_MAX_ITEMS, maximum_nodes):
+        raise ValueError("nodes exceed expert-call capacity")
+    for index, node in enumerate(nodes):
+        _validate_node(node, index)
+
+
+def _validate_edges(payload: Mapping[str, Any]) -> None:
     edges = payload["edges"]
     if not isinstance(edges, list) or len(edges) > CLAUDE_RED_TEAM_MAX_EDGES:
         raise ValueError("edges must be bounded")
@@ -291,6 +305,13 @@ def _validate_payload(payload: Mapping[str, Any]) -> None:
             raise ValueError(f"edges[{index}] has missing or extra fields")
         _identifier(edge["source"], f"edges[{index}].source")
         _identifier(edge["target"], f"edges[{index}].target")
+
+
+def _validate_payload(payload: Mapping[str, Any]) -> None:
+    total, governance, recovery = _validate_payload_header(payload)
+    _validate_work_items(payload)
+    _validate_nodes(payload, total - governance - recovery)
+    _validate_edges(payload)
 
 
 def canonical_review_input(payload: Mapping[str, Any]) -> str:

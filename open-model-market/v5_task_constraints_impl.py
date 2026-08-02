@@ -570,69 +570,103 @@ def _semantic_reorder_supported(fragment: str, row: Mapping[str, Any]) -> bool:
     )
 
 
+def _compatible_evidence_rows(
+    fragment: str,
+    polarity: str,
+    source_rows: list[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    return [
+        row
+        for row in source_rows
+        if row["normalized"]
+        and polarity == row["polarity"]
+        and _spatially_compatible(fragment, str(row["context_raw"]))
+    ]
+
+
+def _quantity_compatible_rows(
+    rows: list[Mapping[str, Any]],
+    quantities: set[str],
+) -> list[Mapping[str, Any]]:
+    if not quantities:
+        return rows
+    return [
+        row
+        for row in rows
+        if quantities.issubset(
+            set(row["quantities"]) | set(row["contextual_quantities"])
+        )
+    ]
+
+
+def _normalized_match(
+    normalized: str,
+    rows: list[Mapping[str, Any]],
+) -> bool:
+    for row in rows:
+        candidates = (
+            str(row["normalized"]),
+            str(row["contextual_normalized"]),
+        )
+        if any(normalized in candidate for candidate in candidates):
+            return True
+        if any(
+            candidate
+            and SequenceMatcher(None, normalized, candidate).ratio() >= 0.72
+            for candidate in candidates
+        ):
+            return True
+    return False
+
+
+def _polarity_match(
+    fragment: str,
+    polarity: str,
+    rows: list[Mapping[str, Any]],
+) -> bool:
+    if polarity not in {"unknown", "absence", "negative"}:
+        return False
+    claim_core = _semantic_core(fragment, polarity)
+    if not claim_core:
+        return False
+    for row in rows:
+        source_core = _semantic_core(str(row["raw"]), polarity)
+        if not source_core:
+            continue
+        if claim_core in source_core or source_core in claim_core:
+            return True
+        if SequenceMatcher(None, claim_core, source_core).ratio() >= 0.82:
+            return True
+    return False
+
+
+def _fragment_supported(
+    fragment: str,
+    task: str,
+    source_rows: list[Mapping[str, Any]],
+) -> bool:
+    normalized = _normalize_claim(fragment)
+    if not normalized:
+        return True
+    polarity = _negation_polarity(fragment)
+    compatible = _compatible_evidence_rows(fragment, polarity, source_rows)
+    quantities = normalized_quantities(fragment)
+    rows = _quantity_compatible_rows(compatible, quantities)
+    if quantities and not _quantity_bindings_supported(fragment, task):
+        return False
+    if _normalized_match(normalized, rows):
+        return True
+    if any(_semantic_reorder_supported(fragment, row) for row in rows):
+        return True
+    return _polarity_match(fragment, polarity, compatible)
+
+
 def _claim_supported(claim: str, task: str) -> bool:
     source_rows = _source_evidence_rows(task)
-    for fragment in _evidence_fragments(claim, include_whole=False):
-        normalized = _normalize_claim(fragment)
-        if not normalized:
-            continue
-        polarity = _negation_polarity(fragment)
-        compatible = [
-            row
-            for row in source_rows
-            if row["normalized"]
-            and polarity == row["polarity"]
-            and _spatially_compatible(fragment, str(row["context_raw"]))
-        ]
-        generic_quantities = normalized_quantities(fragment)
-        generic_compatible = [
-            row
-            for row in compatible
-            if not generic_quantities
-            or generic_quantities.issubset(
-                set(row["quantities"]) | set(row["contextual_quantities"])
-            )
-        ]
-        if generic_quantities and not _quantity_bindings_supported(fragment, task):
-            return False
-        if any(
-            normalized in str(row["normalized"])
-            or normalized in str(row["contextual_normalized"])
-            for row in generic_compatible
-        ):
-            continue
-        if any(
-            SequenceMatcher(None, normalized, candidate).ratio() >= 0.72
-            for row in generic_compatible
-            for candidate in (
-                str(row["normalized"]),
-                str(row["contextual_normalized"]),
-            )
-            if candidate
-        ):
-            continue
-        if any(
-            _semantic_reorder_supported(fragment, row)
-            for row in generic_compatible
-        ):
-            continue
-
-        if polarity in {"unknown", "absence", "negative"}:
-            claim_core = _semantic_core(fragment, polarity)
-            polarity_supported = any(
-                bool(claim_core)
-                and bool(source_core := _semantic_core(str(row["raw"]), polarity))
-                and (
-                    claim_core in source_core
-                    or source_core in claim_core
-                    or SequenceMatcher(None, claim_core, source_core).ratio() >= 0.82
-                )
-                for row in compatible
-            )
-            if polarity_supported:
-                continue
-        return False
-    return True
+    return all(
+        _fragment_supported(fragment, task, source_rows)
+        for fragment in _evidence_fragments(claim, include_whole=False)
+    )
 
 
 def fact_claim_supported(task: str, claim: str) -> bool:

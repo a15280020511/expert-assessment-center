@@ -118,19 +118,24 @@ def build_final_status_record(
     }
 
 
-def render_final_status_markdown(record: Mapping[str, Any]) -> str:
-    status = str(record.get("status") or "FAIL")
-    heading = {
+def _status_heading(status: str) -> str:
+    return {
         "PASS": "EXECUTION_COMPLETED",
         "DEGRADED": "EXECUTION_DEGRADED",
         "FAIL": "EXECUTION_FAILED",
     }.get(status, "EXECUTION_FAILED")
-    artifact = record.get("primary_artifact")
-    artifact = artifact if isinstance(artifact, Mapping) else {}
-    providers = record.get("substantive_providers")
-    providers = providers if isinstance(providers, list) else []
-    lines = [
-        f"## {heading}",
+
+
+def _base_status_lines(
+    record: Mapping[str, Any],
+    status: str,
+    artifact: Mapping[str, Any],
+    providers: list[Any],
+) -> list[str]:
+    anomaly = record.get("cost_anomaly_usd")
+    anomaly_label = anomaly if anomaly is not None else "account/estimate guard only"
+    return [
+        f"## {_status_heading(status)}",
         "",
         "- Runtime: `V5 native production runtime`",
         f"- Deterministic audit status: `{status}`",
@@ -143,7 +148,7 @@ def render_final_status_markdown(record: Mapping[str, Any]) -> str:
         f"- Completion mode: `{record.get('completion_mode') or ''}`",
         f"- Quality status: `{record.get('quality_status') or ''}`",
         f"- Provider-reported/reconciled cost: `${record.get('provider_actual_cost_usd', 0)}`",
-        f"- Cost anomaly stop: `{record.get('cost_anomaly_usd') if record.get('cost_anomaly_usd') is not None else 'account/estimate guard only'}`",
+        f"- Cost anomaly stop: `{anomaly_label}`",
         f"- Provider count: `{record.get('substantive_provider_count', 0)}`",
         f"- Providers: `{', '.join(str(item) for item in providers) or 'unavailable'}`",
         "- External tools: `forbidden`",
@@ -154,32 +159,51 @@ def render_final_status_markdown(record: Mapping[str, Any]) -> str:
         f"- Primary Artifact digest: `{artifact.get('artifact_digest') or 'unavailable'}`",
         "- Final evidence: `a separate post-upload final-attestation Artifact is required before the Job can pass`",
     ]
-    if artifact.get("artifact_url"):
-        lines.append(f"- Primary Artifact: {artifact['artifact_url']}")
+
+
+def _diagnosis_lines(record: Mapping[str, Any]) -> list[str]:
     primary = record.get("primary_failure")
     primary = primary if isinstance(primary, Mapping) else {}
-    if primary.get("code") or primary.get("message"):
-        lines.extend([
-            "",
-            "### Primary diagnosis",
-            "",
-            f"- Error code: `{primary.get('code') or 'NONE'}`",
-            f"- Stage: `{primary.get('stage') or 'v5-production'}`",
-            f"- Message: {primary.get('message') or 'No direct error message was recorded.'}",
-            f"- Retryable: `{str(bool(primary.get('retryable'))).lower()}`",
-        ])
-    failures = record.get("failures")
-    if isinstance(failures, list) and failures:
-        lines.extend(["", "### Failure reasons", ""] + [f"- {row}" for row in failures])
-    degradations = record.get("degradations")
-    if isinstance(degradations, list) and degradations:
-        lines.extend(["", "### Degradation reasons", ""] + [f"- {row}" for row in degradations])
-    if status == "PASS":
-        lines.extend(["", "V5 动态专家图已完成生产任务；业务证据在主 Artifact 上传前已冻结，上传后只注入 Artifact 身份并生成最终证明。"])
-    elif status == "DEGRADED":
-        lines.extend(["", "V5 已交付，但发生受控降级。不得表述为完整正常 PASS；系统不会调用其他运行时。"])
-    else:
-        lines.extend(["", "本次 V5 运行不得表述为成功。系统已失败关闭，不调用其他运行时。"])
+    if not (primary.get("code") or primary.get("message")):
+        return []
+    return [
+        "",
+        "### Primary diagnosis",
+        "",
+        f"- Error code: `{primary.get('code') or 'NONE'}`",
+        f"- Stage: `{primary.get('stage') or 'v5-production'}`",
+        f"- Message: {primary.get('message') or 'No direct error message was recorded.'}",
+        f"- Retryable: `{str(bool(primary.get('retryable'))).lower()}`",
+    ]
+
+
+def _reason_lines(record: Mapping[str, Any], key: str, heading: str) -> list[str]:
+    rows = record.get(key)
+    if not isinstance(rows, list) or not rows:
+        return []
+    return ["", heading, "", *[f"- {row}" for row in rows]]
+
+
+def _terminal_status_line(status: str) -> str:
+    return {
+        "PASS": "V5 动态专家图已完成生产任务；业务证据在主 Artifact 上传前已冻结，上传后只注入 Artifact 身份并生成最终证明。",
+        "DEGRADED": "V5 已交付，但发生受控降级。不得表述为完整正常 PASS；系统不会调用其他运行时。",
+    }.get(status, "本次 V5 运行不得表述为成功。系统已失败关闭，不调用其他运行时。")
+
+
+def render_final_status_markdown(record: Mapping[str, Any]) -> str:
+    status = str(record.get("status") or "FAIL")
+    artifact = record.get("primary_artifact")
+    artifact = artifact if isinstance(artifact, Mapping) else {}
+    providers = record.get("substantive_providers")
+    providers = providers if isinstance(providers, list) else []
+    lines = _base_status_lines(record, status, artifact, providers)
+    if artifact.get("artifact_url"):
+        lines.append(f"- Primary Artifact: {artifact['artifact_url']}")
+    lines.extend(_diagnosis_lines(record))
+    lines.extend(_reason_lines(record, "failures", "### Failure reasons"))
+    lines.extend(_reason_lines(record, "degradations", "### Degradation reasons"))
+    lines.extend(["", _terminal_status_line(status)])
     return "\n".join(lines) + "\n"
 
 

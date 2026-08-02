@@ -25,10 +25,7 @@ class V5NativeAuditContractTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-    def _fixture(self, root: Path) -> None:
-        answer = "# 完整生产报告\n\n" + (
-            "事实、假设、推断、风险、执行步骤和否决条件。" * 30
-        )
+    def _write_execution_fixture(self, root: Path, answer: str) -> None:
         self._write(
             root,
             "ticket-status.json",
@@ -117,6 +114,8 @@ class V5NativeAuditContractTests(unittest.TestCase):
                 },
             ],
         )
+
+    def _write_constraint_fixture(self, root: Path) -> None:
         constraints = {
             "schema_version": "v5-task-constraints-1",
             "degradation_authorization": "default_denied",
@@ -144,12 +143,10 @@ class V5NativeAuditContractTests(unittest.TestCase):
                 "upstream_model_claims_are_not_promoted_to_user_facts": True,
             },
         )
+
+    def _write_company_fixture(self, root: Path) -> None:
         successful = [
-            {
-                "node_id": "node-a",
-                "model": "openai/model-a",
-                "company": "openai",
-            },
+            {"node_id": "node-a", "model": "openai/model-a", "company": "openai"},
             {
                 "node_id": "node-b",
                 "model": "anthropic/model-b",
@@ -207,6 +204,8 @@ class V5NativeAuditContractTests(unittest.TestCase):
                 "cross_task_history_used": False,
             },
         )
+
+    def _write_request_fixture(self, root: Path) -> None:
         self._write(
             root,
             "request-audit.json",
@@ -228,13 +227,12 @@ class V5NativeAuditContractTests(unittest.TestCase):
                     "approved_recovery_call_ceiling": 1,
                     "provider_actual_cost_usd": 0.09615135,
                     "substantive_provider_count": 2,
-                    "substantive_providers": [
-                        "Amazon Bedrock",
-                        "OpenAI",
-                    ],
+                    "substantive_providers": ["Amazon Bedrock", "OpenAI"],
                 }
             },
         )
+
+    def _write_publication_fixture(self, root: Path, answer: str) -> None:
         self._write(root, "expert-team-report.md", answer)
         run_url = (
             "https://github.com/a15280020511/expert-assessment-center/"
@@ -251,14 +249,22 @@ class V5NativeAuditContractTests(unittest.TestCase):
             "report-comments/report-comments-manifest.json",
             {
                 "version": 2,
-                "report_sha256": hashlib.sha256(
-                    answer.encode("utf-8")
-                ).hexdigest(),
+                "report_sha256": hashlib.sha256(answer.encode("utf-8")).hexdigest(),
                 "run_url": run_url,
                 "run_id": "30619634773",
                 "files": ["report-comment-001.md"],
             },
         )
+
+    def _fixture(self, root: Path) -> None:
+        answer = "# 完整生产报告\n\n" + (
+            "事实、假设、推断、风险、执行步骤和否决条件。" * 30
+        )
+        self._write_execution_fixture(root, answer)
+        self._write_constraint_fixture(root)
+        self._write_company_fixture(root)
+        self._write_request_fixture(root)
+        self._write_publication_fixture(root, answer)
 
     def test_real_native_success_shape_passes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

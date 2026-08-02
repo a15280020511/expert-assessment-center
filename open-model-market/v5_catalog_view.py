@@ -154,6 +154,152 @@ def _ppm(value: Any, fallback: float = 0.0) -> float:
     return number * 1_000_000 if number < 0.1 else number
 
 
+def _synthetic_endpoint(model: Any, model_id: str) -> Mapping[str, Any]:
+    return {
+        "tag": f"fixture/{model_id.split('/', 1)[0]}",
+        "context_length": getattr(model, "context_length", 0),
+        "max_completion_tokens": getattr(model, "max_completion_tokens", 0),
+        "pricing": {
+            "prompt": getattr(model, "prompt_price_per_million", 0.0),
+            "completion": getattr(model, "completion_price_per_million", 0.0),
+        },
+        "supported_parameters": list(
+            getattr(model, "supported_parameters", []) or []
+        ),
+        "synthetic_fixture_only": True,
+    }
+
+
+def _model_endpoints(
+    model: Any,
+    model_id: str,
+    endpoint_payloads: Mapping[str, Mapping[str, Any]],
+    allow_synthetic_fixture: bool,
+) -> list[Mapping[str, Any]]:
+    endpoints = _endpoint_rows(endpoint_payloads.get(model_id, {}))
+    if endpoints or not allow_synthetic_fixture:
+        return endpoints
+    return [_synthetic_endpoint(model, model_id)]
+
+
+def _endpoint_numbers(
+    model: Any,
+    endpoint: Mapping[str, Any],
+) -> tuple[int, int, float, float]:
+    context_length = int(
+        endpoint.get("context_length")
+        or getattr(model, "context_length", 0)
+        or 0
+    )
+    completion_tokens = int(
+        endpoint.get("max_completion_tokens")
+        or getattr(model, "max_completion_tokens", 0)
+        or 0
+    )
+    pricing = (
+        endpoint.get("pricing")
+        if isinstance(endpoint.get("pricing"), Mapping)
+        else {}
+    )
+    prompt = _ppm(
+        pricing.get("prompt"),
+        _finite(getattr(model, "prompt_price_per_million", 0.0)),
+    )
+    completion = _ppm(
+        pricing.get("completion"),
+        _finite(getattr(model, "completion_price_per_million", 0.0)),
+    )
+    return context_length, completion_tokens, prompt, completion
+
+
+def _supported_parameters(model: Any, endpoint: Mapping[str, Any]) -> list[str]:
+    return sorted(
+        {
+            str(value)
+            for value in (
+                endpoint.get("supported_parameters")
+                or getattr(model, "supported_parameters", [])
+                or []
+            )
+        }
+    )
+
+
+def _endpoint_rejection_reason(
+    provider: str,
+    context_length: int,
+    completion_tokens: int,
+    supported: Sequence[str],
+    prompt: float,
+    completion: float,
+    *,
+    context_floor: int,
+    completion_floor: int,
+) -> str:
+    if not provider:
+        return "endpoint-missing-provider"
+    if context_length < context_floor:
+        return "endpoint-insufficient-context"
+    if completion_tokens < completion_floor:
+        return "endpoint-missing-completion-limit"
+    supported_folded = {value.casefold() for value in supported}
+    if not OUTPUT_LIMIT_PARAMETERS.intersection(supported_folded):
+        return "endpoint-cannot-enforce-output-limit"
+    if prompt < 0 or completion < 0:
+        return "invalid-pricing"
+    return ""
+
+
+def _catalog_endpoint_row(
+    model: Any,
+    model_id: str,
+    endpoint: Mapping[str, Any],
+    *,
+    context_floor: int,
+    completion_floor: int,
+) -> tuple[dict[str, Any] | None, str]:
+    provider = _provider_slug(endpoint)
+    context_length, completion_tokens, prompt, completion = _endpoint_numbers(
+        model, endpoint
+    )
+    supported = _supported_parameters(model, endpoint)
+    reason = _endpoint_rejection_reason(
+        provider,
+        context_length,
+        completion_tokens,
+        supported,
+        prompt,
+        completion,
+        context_floor=context_floor,
+        completion_floor=completion_floor,
+    )
+    if reason:
+        return None, reason
+    return {
+        "model": model_id,
+        "company": canonical_model_company(model_id),
+        "official_intelligence_rank": int(
+            (getattr(model, "ranks", {}) or {}).get(
+                "intelligence-high-to-low", MAX_VISIBLE_MODELS + 1
+            )
+        ),
+        "provider": provider,
+        "provider_endpoint": f"{model_id}@{provider}",
+        "context_length": context_length,
+        "max_completion_tokens": completion_tokens,
+        "prompt_price_per_million": round(prompt, 8),
+        "completion_price_per_million": round(completion, 8),
+        "supported_parameters": supported,
+        "input_modalities": list(
+            getattr(model, "input_modalities", []) or ["text"]
+        ),
+        "output_modalities": list(
+            getattr(model, "output_modalities", []) or ["text"]
+        ),
+        "synthetic_fixture_only": bool(endpoint.get("synthetic_fixture_only")),
+    }, ""
+
+
 def compact_endpoint_catalog(
     ranked: Sequence[Any],
     endpoint_payloads: Mapping[str, Mapping[str, Any]],
@@ -172,140 +318,27 @@ def compact_endpoint_catalog(
     )
     for model in ranked:
         model_id = str(getattr(model, "id", "") or "")
-        endpoints = _endpoint_rows(endpoint_payloads.get(model_id, {}))
-        if not endpoints and allow_synthetic_fixture:
-            endpoints = [
-                {
-                    "tag": f"fixture/{model_id.split('/', 1)[0]}",
-                    "context_length": getattr(model, "context_length", 0),
-                    "max_completion_tokens": getattr(
-                        model,
-                        "max_completion_tokens",
-                        0,
-                    ),
-                    "pricing": {
-                        "prompt": getattr(
-                            model,
-                            "prompt_price_per_million",
-                            0.0,
-                        ),
-                        "completion": getattr(
-                            model,
-                            "completion_price_per_million",
-                            0.0,
-                        ),
-                    },
-                    "supported_parameters": list(
-                        getattr(model, "supported_parameters", []) or []
-                    ),
-                    "synthetic_fixture_only": True,
-                }
-            ]
+        endpoints = _model_endpoints(
+            model,
+            model_id,
+            endpoint_payloads,
+            allow_synthetic_fixture,
+        )
         if not endpoints:
-            rejected.append(
-                {"model": model_id, "reason": "no-provider-endpoint"}
-            )
+            rejected.append({"model": model_id, "reason": "no-provider-endpoint"})
             continue
         for endpoint in endpoints:
-            provider = _provider_slug(endpoint)
-            if not provider:
-                rejected.append(
-                    {"model": model_id, "reason": "endpoint-missing-provider"}
-                )
-                continue
-            context_length = int(
-                endpoint.get("context_length")
-                or getattr(model, "context_length", 0)
-                or 0
+            row, reason = _catalog_endpoint_row(
+                model,
+                model_id,
+                endpoint,
+                context_floor=context_floor,
+                completion_floor=completion_floor,
             )
-            if context_length < context_floor:
-                rejected.append(
-                    {
-                        "model": model_id,
-                        "reason": "endpoint-insufficient-context",
-                    }
-                )
-                continue
-            max_completion_tokens = int(
-                endpoint.get("max_completion_tokens")
-                or getattr(model, "max_completion_tokens", 0)
-                or 0
-            )
-            if max_completion_tokens < completion_floor:
-                rejected.append(
-                    {
-                        "model": model_id,
-                        "reason": "endpoint-missing-completion-limit",
-                    }
-                )
-                continue
-            supported = sorted(
-                {
-                    str(value)
-                    for value in (
-                        endpoint.get("supported_parameters")
-                        or getattr(model, "supported_parameters", [])
-                        or []
-                    )
-                }
-            )
-            supported_folded = {value.casefold() for value in supported}
-            if not OUTPUT_LIMIT_PARAMETERS.intersection(supported_folded):
-                rejected.append(
-                    {
-                        "model": model_id,
-                        "reason": "endpoint-cannot-enforce-output-limit",
-                    }
-                )
-                continue
-            pricing = (
-                endpoint.get("pricing")
-                if isinstance(endpoint.get("pricing"), Mapping)
-                else {}
-            )
-            prompt = _ppm(
-                pricing.get("prompt"),
-                _finite(getattr(model, "prompt_price_per_million", 0.0)),
-            )
-            completion = _ppm(
-                pricing.get("completion"),
-                _finite(
-                    getattr(model, "completion_price_per_million", 0.0)
-                ),
-            )
-            if prompt < 0 or completion < 0:
-                rejected.append(
-                    {"model": model_id, "reason": "invalid-pricing"}
-                )
-                continue
-            rows.append(
-                {
-                    "model": model_id,
-                    "company": canonical_model_company(model_id),
-                    "official_intelligence_rank": int(
-                        (getattr(model, "ranks", {}) or {}).get(
-                            "intelligence-high-to-low",
-                            MAX_VISIBLE_MODELS + 1,
-                        )
-                    ),
-                    "provider": provider,
-                    "provider_endpoint": f"{model_id}@{provider}",
-                    "context_length": context_length,
-                    "max_completion_tokens": max_completion_tokens,
-                    "prompt_price_per_million": round(prompt, 8),
-                    "completion_price_per_million": round(completion, 8),
-                    "supported_parameters": supported,
-                    "input_modalities": list(
-                        getattr(model, "input_modalities", []) or ["text"]
-                    ),
-                    "output_modalities": list(
-                        getattr(model, "output_modalities", []) or ["text"]
-                    ),
-                    "synthetic_fixture_only": bool(
-                        endpoint.get("synthetic_fixture_only")
-                    ),
-                }
-            )
+            if reason:
+                rejected.append({"model": model_id, "reason": reason})
+            elif row is not None:
+                rows.append(row)
     rows.sort(
         key=lambda row: (
             int(row["official_intelligence_rank"]),

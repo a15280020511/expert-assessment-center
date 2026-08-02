@@ -185,119 +185,98 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
     )
 
 
+def _fixture_catalog(run: RunConfig) -> tuple[dict[str, Any], str]:
+    payload = load_json(run.catalog_file).get("sorts")
+    if not isinstance(payload, dict):
+        raise ExpertTeamError("Fixture catalog must contain a sorts object")
+    return payload, f"fixture:{run.catalog_file}"
+
+
+def _live_catalog(run: RunConfig) -> tuple[dict[str, Any], str]:
+    if run.require_live_catalog and not run.api_key:
+        raise ExpertTeamError("OPENROUTER_API_KEY is required for live catalog")
+    payload: dict[str, Any] = {}
+    errors: dict[str, str] = {}
+    for sort_name in run.catalog_sorts:
+        query = urllib.parse.urlencode(
+            {"sort": sort_name, "output_modalities": "text"}
+        )
+        try:
+            payload[sort_name] = request_json(
+                f"{MODELS_URL}?{query}",
+                run.api_key,
+                run.catalog_timeout_seconds,
+                run.catalog_max_retries,
+            )
+        except Exception as exc:  # noqa: BLE001
+            errors[sort_name] = str(exc)
+    if not payload:
+        raise ExpertTeamError(f"Live catalog unavailable: {errors}")
+    return payload, "openrouter-live"
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _string_list(value: Any) -> list[str]:
+    return [str(item) for item in value] if isinstance(value, list) else []
+
+
+def _model_from_row(model_id: str, row: Mapping[str, Any]) -> ModelInfo:
+    pricing = _mapping(row.get("pricing"))
+    top = _mapping(row.get("top_provider"))
+    architecture = _mapping(row.get("architecture"))
+    reasoning = _mapping(row.get("reasoning"))
+    return ModelInfo(
+        id=model_id,
+        name=str(row.get("name") or model_id),
+        description=str(row.get("description") or ""),
+        author=model_id.split("/", 1)[0],
+        context_length=int(
+            row.get("context_length") or top.get("context_length") or 0
+        ),
+        max_completion_tokens=int(
+            top.get("max_completion_tokens")
+            or row.get("max_completion_tokens")
+            or 0
+        ),
+        prompt_price_per_million=_ppm(pricing, "prompt"),
+        completion_price_per_million=_ppm(pricing, "completion"),
+        supported_parameters=_string_list(row.get("supported_parameters")),
+        input_modalities=_string_list(architecture.get("input_modalities")),
+        output_modalities=_string_list(architecture.get("output_modalities")),
+        knowledge_cutoff=row.get("knowledge_cutoff"),
+        expiration_date=row.get("expiration_date"),
+        reasoning=dict(reasoning),
+    )
+
+
+def _merge_catalog_sort(
+    models: dict[str, ModelInfo],
+    sort_name: str,
+    sort_payload: Any,
+) -> None:
+    rows = sort_payload.get("data") if isinstance(sort_payload, Mapping) else None
+    if not isinstance(rows, list):
+        return
+    for rank, row in enumerate(rows, 1):
+        if not isinstance(row, Mapping) or not isinstance(row.get("id"), str):
+            continue
+        model_id = str(row["id"])
+        if model_id not in models:
+            models[model_id] = _model_from_row(model_id, row)
+        models[model_id].ranks[sort_name] = rank
+
+
 def fetch_catalog(run: RunConfig) -> Tuple[Dict[str, ModelInfo], str]:
-    if run.catalog_file:
-        payload = load_json(run.catalog_file).get("sorts")
-        if not isinstance(payload, dict):
-            raise ExpertTeamError(
-                "Fixture catalog must contain a sorts object"
-            )
-        source = f"fixture:{run.catalog_file}"
-    else:
-        if run.require_live_catalog and not run.api_key:
-            raise ExpertTeamError(
-                "OPENROUTER_API_KEY is required for live catalog"
-            )
-        payload: Dict[str, Any] = {}
-        errors: Dict[str, str] = {}
-        for sort_name in run.catalog_sorts:
-            query = urllib.parse.urlencode(
-                {
-                    "sort": sort_name,
-                    "output_modalities": "text",
-                }
-            )
-            try:
-                payload[sort_name] = request_json(
-                    f"{MODELS_URL}?{query}",
-                    run.api_key,
-                    run.catalog_timeout_seconds,
-                    run.catalog_max_retries,
-                )
-            except Exception as exc:  # noqa: BLE001
-                errors[sort_name] = str(exc)
-        if not payload:
-            raise ExpertTeamError(f"Live catalog unavailable: {errors}")
-        source = "openrouter-live"
+    payload, source = (
+        _fixture_catalog(run) if run.catalog_file else _live_catalog(run)
+    )
 
     models: Dict[str, ModelInfo] = {}
     for sort_name, sort_payload in payload.items():
-        rows = (
-            sort_payload.get("data")
-            if isinstance(sort_payload, Mapping)
-            else None
-        )
-        if not isinstance(rows, list):
-            continue
-        for rank, row in enumerate(rows, 1):
-            if not isinstance(row, Mapping) or not isinstance(
-                row.get("id"), str
-            ):
-                continue
-            model_id = str(row["id"])
-            pricing = (
-                row.get("pricing")
-                if isinstance(row.get("pricing"), Mapping)
-                else {}
-            )
-            top = (
-                row.get("top_provider")
-                if isinstance(row.get("top_provider"), Mapping)
-                else {}
-            )
-            architecture = (
-                row.get("architecture")
-                if isinstance(row.get("architecture"), Mapping)
-                else {}
-            )
-            reasoning = (
-                row.get("reasoning")
-                if isinstance(row.get("reasoning"), Mapping)
-                else {}
-            )
-            if model_id not in models:
-                models[model_id] = ModelInfo(
-                    id=model_id,
-                    name=str(row.get("name") or model_id),
-                    description=str(row.get("description") or ""),
-                    author=model_id.split("/", 1)[0],
-                    context_length=int(
-                        row.get("context_length")
-                        or top.get("context_length")
-                        or 0
-                    ),
-                    max_completion_tokens=int(
-                        top.get("max_completion_tokens")
-                        or row.get("max_completion_tokens")
-                        or 0
-                    ),
-                    prompt_price_per_million=_ppm(pricing, "prompt"),
-                    completion_price_per_million=_ppm(
-                        pricing, "completion"
-                    ),
-                    supported_parameters=[
-                        str(value)
-                        for value in row.get(
-                            "supported_parameters", []
-                        )
-                    ],
-                    input_modalities=[
-                        str(value)
-                        for value in architecture.get(
-                            "input_modalities", []
-                        )
-                    ],
-                    output_modalities=[
-                        str(value)
-                        for value in architecture.get(
-                            "output_modalities", []
-                        )
-                    ],
-                    knowledge_cutoff=row.get("knowledge_cutoff"),
-                    expiration_date=row.get("expiration_date"),
-                    reasoning=dict(reasoning),
-                )
-            models[model_id].ranks[sort_name] = rank
+        _merge_catalog_sort(models, sort_name, sort_payload)
     if not models:
         raise ExpertTeamError("No usable direct models in catalog")
     return models, source

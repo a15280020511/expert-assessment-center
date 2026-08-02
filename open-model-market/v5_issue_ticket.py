@@ -168,6 +168,95 @@ def _is_rejected_only(state: Mapping[str, Any]) -> bool:
     )
 
 
+def _current_issue_submission_reason(
+    state: Mapping[str, Any],
+    *,
+    is_retry: bool,
+    retry_id: str,
+) -> str:
+    if not is_retry:
+        if any(state.get(key) for key in ("accepted", "completed", "failed", "rejected")):
+            return (
+                "this Issue was already submitted; update the original Issue "
+                "and use a controlled retry"
+            )
+        return ""
+    if state["completed"]:
+        return "this Issue already completed; successful tasks cannot be retried"
+    if not (state["failed"] or state["rejected"]):
+        return (
+            "controlled retry is allowed only after an EXECUTION_FAILED, "
+            "EXECUTION_DEGRADED, or EXECUTION_REJECTED result"
+        )
+    if state["retry_count"] >= MAXIMUM_RETRIES_PER_ISSUE:
+        return (
+            f"this Issue already used the maximum "
+            f"{MAXIMUM_RETRIES_PER_ISSUE} controlled retries"
+        )
+    if retry_id in state["retry_ids"]:
+        return f"retry_id {retry_id} was already used"
+    return ""
+
+
+def _execution_issue_rows(repo: str) -> Iterable[Mapping[str, Any]]:
+    for page in range(1, 11):
+        url = (
+            f"https://api.github.com/repos/{repo}/issues"
+            f"?state=all&per_page=100&page={page}"
+        )
+        rows = _api_json(url)
+        if not isinstance(rows, list):
+            return
+        for row in rows:
+            if isinstance(row, Mapping):
+                yield row
+        if len(rows) < 100:
+            return
+
+
+def _issue_ticket_packet(row: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    try:
+        packet = json.loads(
+            str(row.get("body") or ""),
+            parse_constant=_reject_constant,
+        )
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return packet if isinstance(packet, Mapping) else None
+
+
+def _duplicate_row_reason(
+    repo: str,
+    row: Mapping[str, Any],
+    *,
+    current_issue: int,
+    task_id: str,
+    fingerprint: str,
+) -> str:
+    prior_issue = int(row.get("number") or 0)
+    if (
+        row.get("pull_request")
+        or prior_issue == current_issue
+        or not str(row.get("title") or "").startswith("[execution]")
+    ):
+        return ""
+    packet = _issue_ticket_packet(row)
+    if packet is None:
+        return ""
+    same_id = str(packet.get("task_id") or "") == task_id
+    same_fingerprint = task_fingerprint(packet) == fingerprint
+    if not (same_id or same_fingerprint):
+        return ""
+    prior_state = _execution_state(_issue_comments(repo, prior_issue))
+    if _is_rejected_only(prior_state):
+        return ""
+    reason = "task_id" if same_id else "task fingerprint"
+    return (
+        f"duplicate {reason}; previously submitted in Issue #{prior_issue}; "
+        "do not create a new Issue"
+    )
+
+
 def duplicate_reason(
     repo: str,
     current_issue: int,
@@ -180,58 +269,23 @@ def duplicate_reason(
     if not repo or not os.getenv("GITHUB_TOKEN"):
         return ""
     current = _execution_state(_issue_comments(repo, current_issue))
-    if is_retry:
-        if current["completed"]:
-            return "this Issue already completed; successful tasks cannot be retried"
-        if not (current["failed"] or current["rejected"]):
-            return (
-                "controlled retry is allowed only after an EXECUTION_FAILED, "
-                "EXECUTION_DEGRADED, or EXECUTION_REJECTED result"
-            )
-        if current["retry_count"] >= MAXIMUM_RETRIES_PER_ISSUE:
-            return (
-                f"this Issue already used the maximum "
-                f"{MAXIMUM_RETRIES_PER_ISSUE} controlled retries"
-            )
-        if retry_id in current["retry_ids"]:
-            return f"retry_id {retry_id} was already used"
-    elif any(current.get(key) for key in ("accepted", "completed", "failed", "rejected")):
-        return "this Issue was already submitted; update the original Issue and use a controlled retry"
-
-    for page in range(1, 11):
-        url = f"https://api.github.com/repos/{repo}/issues?state=all&per_page=100&page={page}"
-        rows = _api_json(url)
-        if not isinstance(rows, list):
-            break
-        for row in rows:
-            if (
-                not isinstance(row, Mapping)
-                or row.get("pull_request")
-                or int(row.get("number") or 0) == current_issue
-                or not str(row.get("title") or "").startswith("[execution]")
-            ):
-                continue
-            try:
-                packet = json.loads(str(row.get("body") or ""), parse_constant=_reject_constant)
-            except (json.JSONDecodeError, ValueError):
-                continue
-            if not isinstance(packet, Mapping):
-                continue
-            same_id = str(packet.get("task_id") or "") == task_id
-            same_fingerprint = task_fingerprint(packet) == fingerprint
-            if not (same_id or same_fingerprint):
-                continue
-            prior_issue = int(row.get("number") or 0)
-            prior_state = _execution_state(_issue_comments(repo, prior_issue))
-            if _is_rejected_only(prior_state):
-                continue
-            reason = "task_id" if same_id else "task fingerprint"
-            return (
-                f"duplicate {reason}; previously submitted in Issue #{prior_issue}; "
-                "do not create a new Issue"
-            )
-        if len(rows) < 100:
-            break
+    current_reason = _current_issue_submission_reason(
+        current,
+        is_retry=is_retry,
+        retry_id=retry_id,
+    )
+    if current_reason:
+        return current_reason
+    for row in _execution_issue_rows(repo):
+        reason = _duplicate_row_reason(
+            repo,
+            row,
+            current_issue=current_issue,
+            task_id=task_id,
+            fingerprint=fingerprint,
+        )
+        if reason:
+            return reason
     return ""
 
 
@@ -250,61 +304,92 @@ def _unexpected_fields(error: ValidationError) -> list[str]:
     return sorted(set(error.instance) - allowed)
 
 
-def _format_schema_error(error: ValidationError) -> str:
-    path = _path_text(error.absolute_path)
-    validator = error.validator
-    if validator == "additionalProperties":
-        fields = _unexpected_fields(error)
-        if not path:
-            return f"Unknown ticket fields: {fields}"
-        if path == "task":
-            return f"Unknown task fields: {fields}"
-        if path == "approved_budget":
-            return (
-                "approved_budget may contain only calls, maximum_recovery_calls, "
-                "cost_policy, and optional cost_anomaly_usd."
-            )
-        if path == "evidence" or path.startswith("evidence["):
-            return f"Unknown {path} fields: {fields}"
-    if validator == "required" and isinstance(error.instance, Mapping):
-        missing = [name for name in error.validator_value if name not in error.instance]
-        if missing:
-            return "; ".join(
-                f"{path + '.' if path else ''}{name} is required."
-                for name in missing
-            )
-    if path == "route" and validator == "const":
-        return "route must be expert-team."
-    if path == "task_id":
-        return "task_id must be 8-128 safe characters and start with a letter or number."
+def _additional_properties_message(error: ValidationError, path: str) -> str:
+    fields = _unexpected_fields(error)
+    if not path:
+        return f"Unknown ticket fields: {fields}"
+    if path == "task":
+        return f"Unknown task fields: {fields}"
+    if path == "approved_budget":
+        return (
+            "approved_budget may contain only calls, maximum_recovery_calls, "
+            "cost_policy, and optional cost_anomaly_usd."
+        )
+    if path == "evidence" or path.startswith("evidence["):
+        return f"Unknown {path} fields: {fields}"
+    return ""
+
+
+def _required_fields_message(error: ValidationError, path: str) -> str:
+    if not isinstance(error.instance, Mapping):
+        return ""
+    missing = [name for name in error.validator_value if name not in error.instance]
+    return "; ".join(
+        f"{path + '.' if path else ''}{name} is required." for name in missing
+    )
+
+
+def _fixed_schema_message(path: str, validator: str) -> str:
+    messages = {
+        ("route", "const"): "route must be expert-team.",
+        ("task_id", "type"): "task_id must be 8-128 safe characters and start with a letter or number.",
+        ("task_id", "minLength"): "task_id must be 8-128 safe characters and start with a letter or number.",
+        ("task_id", "maxLength"): "task_id must be 8-128 safe characters and start with a letter or number.",
+        ("task_id", "pattern"): "task_id must be 8-128 safe characters and start with a letter or number.",
+        ("task.question", "minLength"): "task.question is required.",
+        ("task", "type"): "task must be an object.",
+        ("task.requirements", "type"): "task.requirements must be an array with at most 20 entries.",
+        ("task.requirements", "maxItems"): "task.requirements must be an array with at most 20 entries.",
+        ("evidence", "oneOf"): "evidence must be an object or an array.",
+        ("evidence", "type"): "evidence must be an object or an array.",
+        ("approved_budget", "type"): "approved_budget must be a V5 budget object.",
+        ("approved_budget.cost_policy", "const"): "approved_budget.cost_policy must be unbounded_with_anomaly_guard.",
+        ("approved_budget.cost_anomaly_usd", "type"): "approved_budget.cost_anomaly_usd must be a finite positive number at most 100.",
+        ("approved_budget.cost_anomaly_usd", "exclusiveMinimum"): "approved_budget.cost_anomaly_usd must be a finite positive number at most 100.",
+        ("approved_budget.cost_anomaly_usd", "maximum"): "approved_budget.cost_anomaly_usd must be a finite positive number at most 100.",
+    }
+    return messages.get((path, validator), "")
+
+
+def _path_schema_message(error: ValidationError, path: str, validator: str) -> str:
+    fixed = _fixed_schema_message(path, validator)
+    if fixed:
+        return fixed
     if path == "task.question":
-        return "task.question is required." if validator == "minLength" else "task.question must be a string with at most 20000 characters."
-    if path == "task" and validator == "type":
-        return "task must be an object."
-    if path == "task.requirements":
-        return "task.requirements must be an array with at most 20 entries."
+        return "task.question must be a string with at most 20000 characters."
     if path.startswith("task.requirements["):
         return f"{path} must be a string with at most 2000 characters."
-    if path == "evidence" and validator in {"oneOf", "type"}:
-        return "evidence must be an object or an array."
-    if path == "approved_budget" and validator == "type":
-        return "approved_budget must be a V5 budget object."
     if path == "approved_budget.calls":
-        return "approved_budget.calls must be an integer." if validator == "type" else "approved_budget.calls must be between 4 and 16."
+        if validator == "type":
+            return "approved_budget.calls must be an integer."
+        return "approved_budget.calls must be between 4 and 16."
     if path == "approved_budget.maximum_recovery_calls":
-        return "approved_budget.maximum_recovery_calls must be an integer." if validator == "type" else "approved_budget.maximum_recovery_calls must be between 0 and 4."
-    if path == "approved_budget.cost_policy":
-        return "approved_budget.cost_policy must be unbounded_with_anomaly_guard."
-    if path == "approved_budget.cost_anomaly_usd":
-        return "approved_budget.cost_anomaly_usd must be a finite positive number at most 100."
+        if validator == "type":
+            return "approved_budget.maximum_recovery_calls must be an integer."
+        return "approved_budget.maximum_recovery_calls must be between 0 and 4."
     if path == "private_output":
         if validator == "const" and isinstance(error.instance, bool):
             return (
-                "private_output=true is unsupported: this repository and its Issue comments are public, "
-                "and no private delivery channel is implemented"
+                "private_output=true is unsupported: this repository and its Issue comments "
+                "are public, and no private delivery channel is implemented"
             )
         return "private_output must be boolean."
-    return f"{path or 'ticket'}: {error.message}"
+    return ""
+
+
+def _format_schema_error(error: ValidationError) -> str:
+    path = _path_text(error.absolute_path)
+    validator = str(error.validator)
+    if validator == "additionalProperties":
+        message = _additional_properties_message(error, path)
+        if message:
+            return message
+    if validator == "required":
+        message = _required_fields_message(error, path)
+        if message:
+            return message
+    message = _path_schema_message(error, path, validator)
+    return message or f"{path or 'ticket'}: {error.message}"
 
 
 def _schema_errors(packet: Mapping[str, Any]) -> list[str]:
@@ -483,17 +568,26 @@ def _rewrite_outputs(status: Mapping[str, Any]) -> None:
         _write_output(key, str(value).lower() if isinstance(value, bool) else value)
 
 
-def prepare(args: argparse.Namespace) -> int:
-    output = Path(args.output_dir)
-    output.mkdir(parents=True, exist_ok=True)
+def _prepare_context(args: argparse.Namespace) -> tuple[str, str, int, str, str, str]:
     if args.event_path:
-        title, body, issue_number, actor, association, comment_body = _read_event(args.event_path)
-    else:
-        title, body, issue_number = args.issue_title, args.issue_body, args.issue_number
-        actor = args.actor or ""
-        association = args.author_association or ""
-        comment_body = args.comment_body or ""
-    status: dict[str, Any] = {
+        return _read_event(args.event_path)
+    return (
+        args.issue_title,
+        args.issue_body,
+        args.issue_number,
+        args.actor or "",
+        args.author_association or "",
+        args.comment_body or "",
+    )
+
+
+def _base_ticket_status(
+    title: str,
+    issue_number: int,
+    actor: str,
+    association: str,
+) -> dict[str, Any]:
+    return {
         "accepted": False,
         "title": title,
         "issue_number": issue_number,
@@ -509,103 +603,226 @@ def prepare(args: argparse.Namespace) -> int:
         "claude_is_advisory_only": True,
         "claude_gatekeeping_allowed": False,
     }
+
+
+def _validate_trigger(
+    *,
+    title: str,
+    body: str,
+    actor: str,
+    association: str,
+) -> None:
+    repository_owner = os.getenv("GITHUB_REPOSITORY_OWNER", "")
+    if repository_owner and actor != repository_owner:
+        raise ValueError("only the repository owner may trigger paid expert execution")
+    if association and association != "OWNER":
+        raise ValueError("trigger author_association must be OWNER")
+    if not title.startswith("[execution]"):
+        raise ValueError("Issue title must start with [execution].")
+    if len(body) > MAX_BODY_CHARS:
+        raise ValueError(f"Issue body exceeds {MAX_BODY_CHARS} characters.")
+
+
+def _load_packet(body: str) -> Mapping[str, Any]:
+    packet = json.loads(body, parse_constant=_reject_constant)
+    if not isinstance(packet, Mapping):
+        raise ValueError("Issue body must be one JSON object.")
+    return packet
+
+
+def _identity_reasons(
+    packet: Mapping[str, Any],
+    validated: Mapping[str, Any],
+    *,
+    command_mode: str,
+    command_id: str,
+    issue_number: int,
+) -> tuple[list[str], str, bool, str]:
+    reasons: list[str] = []
+    task_id = str(validated["task_id"])
+    is_retry = command_mode == "retry"
+    retry_id = command_id if is_retry else ""
+    if command_mode == "run" and command_id != task_id:
+        reasons.append("run execution_id must exactly equal ticket task_id")
+    fingerprint = (
+        task_fingerprint(packet) if task_id and validated["question"] else ""
+    )
+    if fingerprint:
+        duplicate = duplicate_reason(
+            os.getenv("GITHUB_REPOSITORY", ""),
+            issue_number,
+            task_id,
+            fingerprint,
+            is_retry=is_retry,
+            retry_id=retry_id,
+        )
+        if duplicate:
+            reasons.append(duplicate)
+    return reasons, fingerprint, is_retry, retry_id
+
+
+def _budget_reasons(
+    packet: Mapping[str, Any],
+    validated: Mapping[str, Any],
+) -> list[str]:
+    reasons: list[str] = []
+    total_calls = int(validated["calls"])
+    recovery_calls = int(validated["maximum_recovery_calls"])
+    if not 4 <= total_calls <= V5_MAXIMUM_MODEL_CALLS:
+        reasons.append("approved_budget.calls must be between 4 and 16")
+    if not 0 <= recovery_calls <= V5_MAXIMUM_RECOVERY_CALLS:
+        reasons.append("approved_budget.maximum_recovery_calls must be between 0 and 4")
+    elif recovery_calls >= total_calls - 3:
+        reasons.append(
+            "approved recovery calls must leave at least one initial expert call "
+            "after three governance calls"
+        )
+    if validated["cost_policy"] != "unbounded_with_anomaly_guard":
+        reasons.append(
+            "approved_budget.cost_policy must be unbounded_with_anomaly_guard"
+        )
+    if packet.get("private_output") is True:
+        reasons.append(
+            "private_output=true is unsupported: this repository and its Issue comments "
+            "are public, and no private delivery channel is implemented"
+        )
+    return reasons
+
+
+def _busy_reason() -> str:
+    return _active_lower_run_reason(
+        os.getenv("GITHUB_REPOSITORY", ""),
+        int(os.getenv("GITHUB_RUN_ID") or 0),
+    )
+
+
+def _accepted_status_fields(
+    packet: Mapping[str, Any],
+    validated: Mapping[str, Any],
+    *,
+    reasons: list[str],
+    fingerprint: str,
+    is_retry: bool,
+    retry_id: str,
+    command_mode: str,
+    command_id: str,
+) -> dict[str, Any]:
+    total_calls = int(validated["calls"])
+    recovery_calls = int(validated["maximum_recovery_calls"])
+    recovery_reserve = max(0, recovery_calls)
+    return {
+        "task_id": validated["task_id"],
+        "task_fingerprint": fingerprint,
+        "calls": total_calls,
+        "maximum_recovery_calls": recovery_reserve,
+        "maximum_replacements": recovery_reserve,
+        "maximum_initial_calls": max(0, total_calls - 3 - recovery_reserve),
+        "max_cost_usd": validated["cost_anomaly_usd"],
+        "cost_anomaly_usd": validated["cost_anomaly_usd"],
+        "cost_policy": validated["cost_policy"] or "invalid",
+        "private_output": bool(packet.get("private_output", False)),
+        "is_retry": is_retry,
+        "retry_id": retry_id,
+        "trigger_mode": command_mode,
+        "execution_id": command_id if command_mode == "run" else "",
+        "call_policy": (
+            "approved-total-includes-gpt-claude-governance-experts-and-recovery"
+        ),
+        "fallback_policy": "disabled-fail-closed",
+        "accepted": not reasons,
+        "errors": reasons,
+        "reason": (
+            "; ".join(reasons)
+            if reasons
+            else "explicit command, ticket, authorization, uniqueness, governance reserve, "
+            "expert reserve, recovery reserve, anomaly guard, and fail-closed policy accepted"
+        ),
+    }
+
+
+def _write_ticket_artifacts(
+    output: Path,
+    packet: Mapping[str, Any],
+    status: Mapping[str, Any],
+) -> None:
+    (output / "ticket.json").write_text(
+        json.dumps(packet, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    if status["accepted"]:
+        (output / "task.txt").write_text(
+            _substantive_task_text(packet),
+            encoding="utf-8",
+        )
+
+
+def _record_prepare_error(
+    status: dict[str, Any],
+    exc: Exception,
+    *,
+    command_mode: str,
+    command_id: str,
+) -> None:
+    status["errors"] = [str(exc)]
+    status["reason"] = str(exc)
+    status["trigger_mode"] = command_mode
+    status["execution_id"] = command_id if command_mode == "run" else ""
+    status["retry_id"] = command_id if command_mode == "retry" else ""
+
+
+def prepare(args: argparse.Namespace) -> int:
+    output = Path(args.output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    title, body, issue_number, actor, association, comment_body = _prepare_context(args)
+    status = _base_ticket_status(title, issue_number, actor, association)
     command_mode = "invalid"
     command_id = ""
     try:
         command_mode, command_id = _command(comment_body)
-        repository_owner = os.getenv("GITHUB_REPOSITORY_OWNER", "")
-        if repository_owner and actor != repository_owner:
-            raise ValueError("only the repository owner may trigger paid expert execution")
-        if association and association != "OWNER":
-            raise ValueError("trigger author_association must be OWNER")
-        if not title.startswith("[execution]"):
-            raise ValueError("Issue title must start with [execution].")
-        if len(body) > MAX_BODY_CHARS:
-            raise ValueError(f"Issue body exceeds {MAX_BODY_CHARS} characters.")
-        packet = json.loads(body, parse_constant=_reject_constant)
-        if not isinstance(packet, Mapping):
-            raise ValueError("Issue body must be one JSON object.")
-        validated, reasons = _validate_ticket(packet)
-        task_id = validated["task_id"]
-        is_retry = command_mode == "retry"
-        retry_id = command_id if is_retry else ""
-        if command_mode == "run" and command_id != task_id:
-            reasons.append("run execution_id must exactly equal ticket task_id")
-        fingerprint = task_fingerprint(packet) if task_id and validated["question"] else ""
-        if fingerprint:
-            duplicate = duplicate_reason(
-                os.getenv("GITHUB_REPOSITORY", ""),
-                issue_number,
-                task_id,
-                fingerprint,
-                is_retry=is_retry,
-                retry_id=retry_id,
-            )
-            if duplicate:
-                reasons.append(duplicate)
-        total_calls = validated["calls"]
-        recovery_calls = validated["maximum_recovery_calls"]
-        if not 4 <= total_calls <= V5_MAXIMUM_MODEL_CALLS:
-            reasons.append("approved_budget.calls must be between 4 and 16")
-        if not 0 <= recovery_calls <= V5_MAXIMUM_RECOVERY_CALLS:
-            reasons.append("approved_budget.maximum_recovery_calls must be between 0 and 4")
-        elif recovery_calls >= total_calls - 3:
-            reasons.append(
-                "approved recovery calls must leave at least one initial expert call after three governance calls"
-            )
-        if validated["cost_policy"] != "unbounded_with_anomaly_guard":
-            reasons.append("approved_budget.cost_policy must be unbounded_with_anomaly_guard")
-        if packet.get("private_output") is True:
-            reasons.append(
-                "private_output=true is unsupported: this repository and its Issue comments are public, and no private delivery channel is implemented"
-            )
-        busy = _active_lower_run_reason(
-            os.getenv("GITHUB_REPOSITORY", ""),
-            int(os.getenv("GITHUB_RUN_ID") or 0),
+        _validate_trigger(
+            title=title,
+            body=body,
+            actor=actor,
+            association=association,
         )
+        packet = _load_packet(body)
+        validated, reasons = _validate_ticket(packet)
+        identity, fingerprint, is_retry, retry_id = _identity_reasons(
+            packet,
+            validated,
+            command_mode=command_mode,
+            command_id=command_id,
+            issue_number=issue_number,
+        )
+        reasons.extend(identity)
+        reasons.extend(_budget_reasons(packet, validated))
+        busy = _busy_reason()
         if busy:
             reasons.append(busy)
         reasons = list(dict.fromkeys(reasons))
         status.update(
-            {
-                "task_id": task_id,
-                "task_fingerprint": fingerprint,
-                "calls": total_calls,
-                "maximum_recovery_calls": max(0, recovery_calls),
-                "maximum_replacements": max(0, recovery_calls),
-                "maximum_initial_calls": max(0, total_calls - 3 - max(0, recovery_calls)),
-                "max_cost_usd": validated["cost_anomaly_usd"],
-                "cost_anomaly_usd": validated["cost_anomaly_usd"],
-                "cost_policy": validated["cost_policy"] or "invalid",
-                "private_output": bool(packet.get("private_output", False)),
-                "is_retry": is_retry,
-                "retry_id": retry_id,
-                "trigger_mode": command_mode,
-                "execution_id": command_id if command_mode == "run" else "",
-                "call_policy": "approved-total-includes-gpt-claude-governance-experts-and-recovery",
-                "fallback_policy": "disabled-fail-closed",
-                "accepted": not reasons,
-                "errors": reasons,
-                "reason": "; ".join(reasons)
-                if reasons
-                else "explicit command, ticket, authorization, uniqueness, governance reserve, expert reserve, recovery reserve, anomaly guard, and fail-closed policy accepted",
-            }
-        )
-        (output / "ticket.json").write_text(
-            json.dumps(packet, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        if status["accepted"]:
-            (output / "task.txt").write_text(
-                _substantive_task_text(packet), encoding="utf-8"
+            _accepted_status_fields(
+                packet,
+                validated,
+                reasons=reasons,
+                fingerprint=fingerprint,
+                is_retry=is_retry,
+                retry_id=retry_id,
+                command_mode=command_mode,
+                command_id=command_id,
             )
+        )
+        _write_ticket_artifacts(output, packet, status)
     except (ValueError, TypeError, json.JSONDecodeError, OSError) as exc:
-        status["errors"] = [str(exc)]
-        status["reason"] = str(exc)
-        status["trigger_mode"] = command_mode
-        status["execution_id"] = command_id if command_mode == "run" else ""
-        status["retry_id"] = command_id if command_mode == "retry" else ""
+        _record_prepare_error(
+            status,
+            exc,
+            command_mode=command_mode,
+            command_id=command_id,
+        )
     (output / "ticket-status.json").write_text(
-        json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps(status, ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
     _rewrite_outputs(status)
     return 0

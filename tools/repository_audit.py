@@ -99,6 +99,143 @@ def target_names(target: ast.expr) -> list[str]:
     return []
 
 
+def _function_findings(
+    rel: str,
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    metrics: dict[str, int],
+) -> list[Finding]:
+    metrics["functions"] += 1
+    score = complexity(node)
+    length = int(getattr(node, "end_lineno", node.lineno)) - int(node.lineno) + 1
+    metrics["max_complexity"] = max(metrics["max_complexity"], score)
+    metrics["max_function_lines"] = max(metrics["max_function_lines"], length)
+    findings: list[Finding] = []
+    if score > 20:
+        findings.append(
+            Finding(
+                "medium",
+                "PY-COMPLEXITY",
+                rel,
+                node.lineno,
+                f"function {node.name!r} complexity={score}",
+            )
+        )
+    if length > 180:
+        findings.append(
+            Finding(
+                "medium",
+                "PY-FUNCTION-SIZE",
+                rel,
+                node.lineno,
+                f"function {node.name!r} spans {length} lines",
+            )
+        )
+    return findings
+
+
+def _exception_findings(rel: str, node: ast.ExceptHandler) -> list[Finding]:
+    if node.type is None:
+        return [
+            Finding(
+                "high",
+                "PY-BARE-EXCEPT",
+                rel,
+                node.lineno,
+                "bare except hides termination and programming errors",
+            )
+        ]
+    if isinstance(node.type, ast.Name) and node.type.id == "BaseException":
+        return [
+            Finding(
+                "high",
+                "PY-BASE-EXCEPTION",
+                rel,
+                node.lineno,
+                "BaseException handler catches process termination",
+            )
+        ]
+    return []
+
+
+def _call_findings(rel: str, node: ast.Call) -> list[Finding]:
+    findings: list[Finding] = []
+    func = node.func
+    if isinstance(func, ast.Name) and func.id in {"eval", "exec"}:
+        findings.append(
+            Finding("critical", "PY-DYNAMIC-CODE", rel, node.lineno, f"use of {func.id}()")
+        )
+    if not isinstance(func, ast.Attribute) or not isinstance(func.value, ast.Name):
+        return findings
+    owner, name = func.value.id, func.attr
+    if owner == "os" and name == "system":
+        findings.append(
+            Finding("critical", "PY-OS-SYSTEM", rel, node.lineno, "os.system executes a shell")
+        )
+    shell_true = owner == "subprocess" and any(
+        keyword.arg == "shell"
+        and isinstance(keyword.value, ast.Constant)
+        and keyword.value.value is True
+        for keyword in node.keywords
+    )
+    if shell_true:
+        findings.append(
+            Finding(
+                "critical",
+                "PY-SHELL-TRUE",
+                rel,
+                node.lineno,
+                "subprocess call uses shell=True",
+            )
+        )
+    if owner in {"pickle", "dill"} and name in {"load", "loads"}:
+        findings.append(
+            Finding(
+                "high",
+                "PY-UNSAFE-DESERIALIZE",
+                rel,
+                node.lineno,
+                f"{owner}.{name} can execute untrusted input",
+            )
+        )
+    return findings
+
+
+def _assignment_findings(
+    rel: str,
+    node: ast.Assign | ast.AnnAssign,
+) -> list[Finding]:
+    if "tests" in Path(rel).parts or rel == "tools/repository_audit.py":
+        return []
+    targets = list(node.targets) if isinstance(node, ast.Assign) else [node.target]
+    value = node.value
+    if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
+        return []
+    names = [name for target in targets for name in target_names(target)]
+    if not (
+        names
+        and any(SECRET_NAME.search(name) for name in names)
+        and len(value.value) >= 12
+        and not PLACEHOLDER.search(value.value)
+    ):
+        return []
+    return [
+        Finding(
+            "critical",
+            "PY-HARDCODED-CREDENTIAL",
+            rel,
+            int(getattr(node, "lineno", 1)),
+            f"sensitive variable {names[0]!r} contains a literal value",
+        )
+    ]
+
+
+def _register_import(node: ast.AST, imports: set[str]) -> None:
+    if isinstance(node, ast.Import):
+        imports.update(alias.name.split(".")[0] for alias in node.names)
+    elif isinstance(node, ast.ImportFrom) and node.module:
+        imports.add(node.module.split(".")[0])
+
+
 def audit_python(rel: str, text: str) -> tuple[list[Finding], set[str], dict[str, int]]:
     findings: list[Finding] = []
     imports: set[str] = set()
@@ -117,286 +254,203 @@ def audit_python(rel: str, text: str) -> tuple[list[Finding], set[str], dict[str
             metrics,
         )
     for node in ast.walk(tree):
+        _register_import(node, imports)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            metrics["functions"] += 1
-            score = complexity(node)
-            length = (
-                int(getattr(node, "end_lineno", node.lineno)) - int(node.lineno) + 1
-            )
-            metrics["max_complexity"] = max(metrics["max_complexity"], score)
-            metrics["max_function_lines"] = max(metrics["max_function_lines"], length)
-            if score > 20:
-                findings.append(
-                    Finding(
-                        "medium",
-                        "PY-COMPLEXITY",
-                        rel,
-                        node.lineno,
-                        f"function {node.name!r} complexity={score}",
-                    )
-                )
-            if length > 180:
-                findings.append(
-                    Finding(
-                        "medium",
-                        "PY-FUNCTION-SIZE",
-                        rel,
-                        node.lineno,
-                        f"function {node.name!r} spans {length} lines",
-                    )
-                )
+            findings.extend(_function_findings(rel, node, metrics))
         elif isinstance(node, ast.ClassDef):
             metrics["classes"] += 1
-        elif isinstance(node, ast.Import):
-            imports.update(alias.name.split(".")[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imports.add(node.module.split(".")[0])
         elif isinstance(node, ast.ExceptHandler):
-            if node.type is None:
-                findings.append(
-                    Finding(
-                        "high",
-                        "PY-BARE-EXCEPT",
-                        rel,
-                        node.lineno,
-                        "bare except hides termination and programming errors",
-                    )
-                )
-            elif isinstance(node.type, ast.Name) and node.type.id == "BaseException":
-                findings.append(
-                    Finding(
-                        "high",
-                        "PY-BASE-EXCEPTION",
-                        rel,
-                        node.lineno,
-                        "BaseException handler catches process termination",
-                    )
-                )
+            findings.extend(_exception_findings(rel, node))
         elif isinstance(node, ast.Call):
-            func = node.func
-            if isinstance(func, ast.Name) and func.id in {"eval", "exec"}:
-                findings.append(
-                    Finding(
-                        "critical",
-                        "PY-DYNAMIC-CODE",
-                        rel,
-                        node.lineno,
-                        f"use of {func.id}()",
-                    )
-                )
-            if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-                owner, name = func.value.id, func.attr
-                if owner == "os" and name == "system":
-                    findings.append(
-                        Finding(
-                            "critical",
-                            "PY-OS-SYSTEM",
-                            rel,
-                            node.lineno,
-                            "os.system executes a shell",
-                        )
-                    )
-                if owner == "subprocess" and any(
-                    k.arg == "shell"
-                    and isinstance(k.value, ast.Constant)
-                    and k.value.value is True
-                    for k in node.keywords
-                ):
-                    findings.append(
-                        Finding(
-                            "critical",
-                            "PY-SHELL-TRUE",
-                            rel,
-                            node.lineno,
-                            "subprocess call uses shell=True",
-                        )
-                    )
-                if owner in {"pickle", "dill"} and name in {"load", "loads"}:
-                    findings.append(
-                        Finding(
-                            "high",
-                            "PY-UNSAFE-DESERIALIZE",
-                            rel,
-                            node.lineno,
-                            f"{owner}.{name} can execute untrusted input",
-                        )
-                    )
-        elif (
-            isinstance(node, (ast.Assign, ast.AnnAssign))
-            and "tests" not in Path(rel).parts
-            and rel != "tools/repository_audit.py"
-        ):
-            targets = (
-                list(node.targets) if isinstance(node, ast.Assign) else [node.target]
-            )
-            value = node.value
-            if isinstance(value, ast.Constant) and isinstance(value.value, str):
-                names = [name for target in targets for name in target_names(target)]
-                if (
-                    names
-                    and any(SECRET_NAME.search(name) for name in names)
-                    and len(value.value) >= 12
-                    and not PLACEHOLDER.search(value.value)
-                ):
-                    findings.append(
-                        Finding(
-                            "critical",
-                            "PY-HARDCODED-CREDENTIAL",
-                            rel,
-                            int(getattr(node, "lineno", 1)),
-                            f"sensitive variable {names[0]!r} contains a literal value",
-                        )
-                    )
+            findings.extend(_call_findings(rel, node))
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            findings.extend(_assignment_findings(rel, node))
     return findings, imports, metrics
 
 
-def audit(root: Path) -> dict[str, Any]:
-    findings: list[Finding] = []
-    files: list[dict[str, Any]] = []
-    hashes: dict[str, list[str]] = defaultdict(list)
-    imports_by_file: dict[str, set[str]] = {}
-    metrics: dict[str, dict[str, int]] = {}
-    requirements: dict[str, str] = {}
-    workflow_entrypoints: set[str] = set()
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
-            continue
-        rel_path = path.relative_to(root)
-        if any(part in IGNORED for part in rel_path.parts):
-            continue
-        rel = rel_path.as_posix()
-        data = path.read_bytes()
-        digest = hashlib.sha256(data).hexdigest()
-        hashes[digest].append(rel)
-        try:
-            text = data.decode("utf-8") if b"\x00" not in data else None
-        except UnicodeDecodeError:
-            text = None
-        kind = file_kind(path)
-        files.append(
-            {
-                "path": rel,
-                "size_bytes": len(data),
-                "sha256": digest,
-                "line_count": None if text is None else len(text.splitlines()),
-                "kind": kind,
-            }
+@dataclass
+class AuditState:
+    findings: list[Finding]
+    files: list[dict[str, Any]]
+    hashes: dict[str, list[str]]
+    imports_by_file: dict[str, set[str]]
+    metrics: dict[str, dict[str, int]]
+    requirements: dict[str, str]
+    workflow_entrypoints: set[str]
+
+    @classmethod
+    def empty(cls) -> "AuditState":
+        return cls(
+            findings=[],
+            files=[],
+            hashes=defaultdict(list),
+            imports_by_file={},
+            metrics={},
+            requirements={},
+            workflow_entrypoints=set(),
         )
-        if len(data) > 2_000_000:
+
+
+def _repository_files(root: Path) -> list[Path]:
+    return [
+        path
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+        and not any(part in IGNORED for part in path.relative_to(root).parts)
+    ]
+
+
+def _decode_utf8(data: bytes) -> str | None:
+    if b"\x00" in data:
+        return None
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _line_findings(rel: str, kind: str, text: str) -> list[Finding]:
+    findings: list[Finding] = []
+    for index, line in enumerate(text.splitlines(), 1):
+        if line.rstrip(" \t") != line:
+            findings.append(
+                Finding("low", "TXT-TRAILING-WHITESPACE", rel, index, "trailing whitespace")
+            )
+        if "\t" in line and kind in {"python", "yaml", "json"}:
+            findings.append(
+                Finding("low", "TXT-TAB", rel, index, "tab character in structured source")
+            )
+        if rel != "tools/repository_audit.py" and re.search(
+            r"\b(TODO|FIXME|HACK|XXX)\b", line, re.I
+        ):
+            findings.append(
+                Finding("medium", "TXT-DEBT-MARKER", rel, index, line.strip()[:220])
+            )
+        if (
+            rel != "tools/repository_audit.py"
+            and LEGACY_REPOSITORY in line
+            and Path(rel).name not in HISTORICAL
+        ):
             findings.append(
                 Finding(
                     "medium",
-                    "FILE-LARGE",
+                    "ARCH-LEGACY-REPOSITORY",
                     rel,
-                    1,
-                    f"repository file size={len(data)} bytes",
+                    index,
+                    "legacy repository reference remains outside migration provenance",
                 )
             )
-        if text is None:
-            continue
-        if kind == "yaml":
-            workflow_entrypoints.update(PYTHON_WORKFLOW_ENTRYPOINT.findall(text))
-        for index, line in enumerate(text.splitlines(), 1):
-            if line.rstrip(" \t") != line:
-                findings.append(
-                    Finding(
-                        "low",
-                        "TXT-TRAILING-WHITESPACE",
-                        rel,
-                        index,
-                        "trailing whitespace",
-                    )
-                )
-            if "\t" in line and kind in {"python", "yaml", "json"}:
-                findings.append(
-                    Finding(
-                        "low",
-                        "TXT-TAB",
-                        rel,
-                        index,
-                        "tab character in structured source",
-                    )
-                )
-            if rel != "tools/repository_audit.py" and re.search(
-                r"\b(TODO|FIXME|HACK|XXX)\b", line, re.I
-            ):
-                findings.append(
-                    Finding("medium", "TXT-DEBT-MARKER", rel, index, line.strip()[:220])
-                )
-            if (
-                rel != "tools/repository_audit.py"
-                and LEGACY_REPOSITORY in line
-                and Path(rel).name not in HISTORICAL
-            ):
-                findings.append(
-                    Finding(
-                        "medium",
-                        "ARCH-LEGACY-REPOSITORY",
-                        rel,
-                        index,
-                        "legacy repository reference remains outside migration provenance",
-                    )
-                )
-            if kind == "yaml" and re.match(r"\s*repository_dispatch\s*:", line):
-                findings.append(
-                    Finding(
-                        "critical",
-                        "ARCH-CROSS-REPO-DISPATCH",
-                        rel,
-                        index,
-                        "repository_dispatch violates center isolation",
-                    )
-                )
-            if kind == "yaml" and re.match(r"\s*pull_request_target\s*:", line):
-                findings.append(
-                    Finding(
-                        "high",
-                        "GHA-PR-TARGET",
-                        rel,
-                        index,
-                        "pull_request_target expands workflow trust",
-                    )
-                )
-            if kind == "yaml" and re.search(r"\bpermissions:\s*write-all\b", line):
-                findings.append(
-                    Finding(
-                        "critical",
-                        "GHA-WRITE-ALL",
-                        rel,
-                        index,
-                        "workflow grants write-all",
-                    )
-                )
-            if kind == "yaml" and re.match(r"\s*uses:\s*", line):
-                action = line.split("uses:", 1)[1].strip()
-                if not action.startswith(
-                    ("./", "docker://")
-                ) and not PINNED_ACTION.match(action):
-                    findings.append(
-                        Finding(
-                            "high",
-                            "GHA-UNPINNED-ACTION",
-                            rel,
-                            index,
-                            f"action is not pinned to a full commit SHA: {action}",
-                        )
-                    )
-        if kind == "python":
-            py_findings, imports, py_metrics = audit_python(rel, text)
-            findings.extend(py_findings)
-            imports_by_file[rel] = imports
-            metrics[rel] = py_metrics
-        elif kind == "json":
-            try:
-                json.loads(text)
-            except json.JSONDecodeError as exc:
-                findings.append(
-                    Finding("critical", "JSON-PARSE", rel, exc.lineno, exc.msg)
-                )
-        elif kind == "requirements":
-            requirements[rel] = text
+        findings.extend(_yaml_line_findings(rel, kind, index, line))
+    return findings
+
+
+def _yaml_line_findings(rel: str, kind: str, index: int, line: str) -> list[Finding]:
+    if kind != "yaml":
+        return []
+    if re.match(r"\s*repository_dispatch\s*:", line):
+        return [
+            Finding(
+                "critical",
+                "ARCH-CROSS-REPO-DISPATCH",
+                rel,
+                index,
+                "repository_dispatch violates center isolation",
+            )
+        ]
+    if re.match(r"\s*pull_request_target\s*:", line):
+        return [
+            Finding(
+                "high",
+                "GHA-PR-TARGET",
+                rel,
+                index,
+                "pull_request_target expands workflow trust",
+            )
+        ]
+    if re.search(r"\bpermissions:\s*write-all\b", line):
+        return [
+            Finding(
+                "critical",
+                "GHA-WRITE-ALL",
+                rel,
+                index,
+                "workflow grants write-all",
+            )
+        ]
+    if not re.match(r"\s*uses:\s*", line):
+        return []
+    action = line.split("uses:", 1)[1].strip()
+    if action.startswith(("./", "docker://")) or PINNED_ACTION.match(action):
+        return []
+    return [
+        Finding(
+            "high",
+            "GHA-UNPINNED-ACTION",
+            rel,
+            index,
+            f"action is not pinned to a full commit SHA: {action}",
+        )
+    ]
+
+
+def _inspect_structured_file(
+    state: AuditState,
+    rel: str,
+    kind: str,
+    text: str,
+) -> None:
+    if kind == "python":
+        py_findings, imports, py_metrics = audit_python(rel, text)
+        state.findings.extend(py_findings)
+        state.imports_by_file[rel] = imports
+        state.metrics[rel] = py_metrics
+    elif kind == "json":
+        try:
+            json.loads(text)
+        except json.JSONDecodeError as exc:
+            state.findings.append(
+                Finding("critical", "JSON-PARSE", rel, exc.lineno, exc.msg)
+            )
+    elif kind == "requirements":
+        state.requirements[rel] = text
+
+
+def _inspect_file(root: Path, path: Path, state: AuditState) -> None:
+    rel = path.relative_to(root).as_posix()
+    data = path.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    state.hashes[digest].append(rel)
+    text = _decode_utf8(data)
+    kind = file_kind(path)
+    state.files.append({
+        "path": rel,
+        "size_bytes": len(data),
+        "sha256": digest,
+        "line_count": None if text is None else len(text.splitlines()),
+        "kind": kind,
+    })
+    if len(data) > 2_000_000:
+        state.findings.append(
+            Finding(
+                "medium",
+                "FILE-LARGE",
+                rel,
+                1,
+                f"repository file size={len(data)} bytes",
+            )
+        )
+    if text is None:
+        return
+    if kind == "yaml":
+        state.workflow_entrypoints.update(PYTHON_WORKFLOW_ENTRYPOINT.findall(text))
+    state.findings.extend(_line_findings(rel, kind, text))
+    _inspect_structured_file(state, rel, kind, text)
+
+
+def _duplicate_findings(hashes: dict[str, list[str]]) -> list[Finding]:
+    findings: list[Finding] = []
     for digest, paths in hashes.items():
-        useful = [p for p in paths if not p.endswith(("__init__.py", ".gitkeep"))]
+        useful = [path for path in paths if not path.endswith(("__init__.py", ".gitkeep"))]
         if len(useful) > 1:
             findings.append(
                 Finding(
@@ -407,6 +461,11 @@ def audit(root: Path) -> dict[str, Any]:
                     f"identical content shared by {useful}; sha256={digest}",
                 )
             )
+    return findings
+
+
+def _requirement_findings(requirements: dict[str, str]) -> list[Finding]:
+    findings: list[Finding] = []
     package_specs: dict[str, list[tuple[str, int, str]]] = defaultdict(list)
     for rel, text in requirements.items():
         for index, raw in enumerate(text.splitlines(), 1):
@@ -440,9 +499,18 @@ def audit(root: Path) -> dict[str, Any]:
                     f"{package} has multiple constraints: {sorted(values)}",
                 )
             )
+    return findings
+
+
+def _orphan_findings(
+    metrics: dict[str, dict[str, int]],
+    imports_by_file: dict[str, set[str]],
+    workflow_entrypoints: set[str],
+) -> tuple[list[str], list[Finding]]:
     imported = set().union(*imports_by_file.values()) if imports_by_file else set()
     reachable_modules = imported | workflow_entrypoints
-    orphan_candidates = []
+    candidates: list[str] = []
+    findings: list[Finding] = []
     for rel in sorted(metrics):
         path = Path(rel)
         if (
@@ -451,32 +519,46 @@ def audit(root: Path) -> dict[str, Any]:
             or path.parts[0] == "tools"
         ):
             continue
-        if path.stem not in reachable_modules and not path.name.endswith(
-            ("_task.py", "_runner.py")
-        ):
-            orphan_candidates.append(rel)
-            findings.append(
-                Finding(
-                    "info",
-                    "PY-ORPHAN-CANDIDATE",
-                    rel,
-                    1,
-                    "module is not imported or referenced by a workflow; verify other CLI use before removal",
-                )
+        if path.stem in reachable_modules or path.name.endswith(("_task.py", "_runner.py")):
+            continue
+        candidates.append(rel)
+        findings.append(
+            Finding(
+                "info",
+                "PY-ORPHAN-CANDIDATE",
+                rel,
+                1,
+                "module is not imported or referenced by a workflow; verify other CLI use before removal",
             )
-    findings.sort(
+        )
+    return candidates, findings
+
+
+def audit(root: Path) -> dict[str, Any]:
+    state = AuditState.empty()
+    for path in _repository_files(root):
+        _inspect_file(root, path, state)
+    state.findings.extend(_duplicate_findings(state.hashes))
+    state.findings.extend(_requirement_findings(state.requirements))
+    orphan_candidates, orphan_findings = _orphan_findings(
+        state.metrics,
+        state.imports_by_file,
+        state.workflow_entrypoints,
+    )
+    state.findings.extend(orphan_findings)
+    state.findings.sort(
         key=lambda item: (SEVERITY[item.severity], item.path, item.line, item.rule)
     )
-    counts = Counter(item.severity for item in findings)
+    counts = Counter(item.severity for item in state.findings)
     return {
         "schema_version": "repository-audit-v4",
-        "file_count": len(files),
-        "total_lines": sum(item["line_count"] or 0 for item in files),
+        "file_count": len(state.files),
+        "total_lines": sum(item["line_count"] or 0 for item in state.files),
         "finding_counts": {name: counts.get(name, 0) for name in SEVERITY},
-        "findings": [asdict(item) for item in findings],
-        "files": files,
-        "python_metrics": metrics,
-        "workflow_entrypoints": sorted(workflow_entrypoints),
+        "findings": [asdict(item) for item in state.findings],
+        "files": state.files,
+        "python_metrics": state.metrics,
+        "workflow_entrypoints": sorted(state.workflow_entrypoints),
         "orphan_candidates": orphan_candidates,
     }
 
@@ -514,7 +596,7 @@ def main() -> int:
     parser.add_argument("--root", default=".")
     parser.add_argument("--output-dir", default="audit-artifacts")
     parser.add_argument(
-        "--fail-on", choices=("none", "critical", "high"), default="high"
+        "--fail-on", choices=("none", *SEVERITY), default="high"
     )
     args = parser.parse_args()
     output = Path(args.output_dir)

@@ -170,6 +170,66 @@ def _sse_event_payloads(text: str) -> list[str]:
     return events
 
 
+def _choice_index(raw_choice: Mapping[str, Any], position: int) -> int:
+    try:
+        return int(raw_choice.get("index", position))
+    except (TypeError, ValueError):
+        return position
+
+
+def _choice_shell(index: int) -> dict[str, Any]:
+    return {
+        "index": index,
+        "message": {"role": "assistant", "content": ""},
+        "finish_reason": None,
+    }
+
+
+def _merge_message(choice: dict[str, Any], source: Any) -> None:
+    if not isinstance(source, Mapping):
+        return
+    message = choice["message"]
+    role = source.get("role")
+    if role:
+        message["role"] = str(role)
+    for field in ("content", "reasoning", "reasoning_content"):
+        value = source.get(field)
+        if isinstance(value, str):
+            message[field] = str(message.get(field) or "") + value
+    for field in ("tool_calls", "annotations"):
+        value = source.get(field)
+        if isinstance(value, list):
+            message.setdefault(field, []).extend(value)
+
+
+def _merge_choice(
+    choices_by_index: dict[int, dict[str, Any]],
+    raw_choice: Mapping[str, Any],
+    position: int,
+) -> None:
+    index = _choice_index(raw_choice, position)
+    choice = choices_by_index.setdefault(index, _choice_shell(index))
+    direct_message = raw_choice.get("message")
+    source = direct_message if isinstance(direct_message, Mapping) else raw_choice.get("delta")
+    _merge_message(choice, source)
+    if raw_choice.get("finish_reason") is not None:
+        choice["finish_reason"] = raw_choice["finish_reason"]
+    if "logprobs" in raw_choice:
+        choice["logprobs"] = raw_choice.get("logprobs")
+
+
+def _merge_payload_choices(
+    choices_by_index: dict[int, dict[str, Any]],
+    payload: Mapping[str, Any],
+) -> None:
+    choices = payload.get("choices")
+    if not isinstance(choices, list):
+        return
+    for position, raw_choice in enumerate(choices):
+        if isinstance(raw_choice, Mapping):
+            _merge_choice(choices_by_index, raw_choice, position)
+
+
 def _merge_streaming_choices(payloads: list[Mapping[str, Any]]) -> dict[str, Any]:
     base: dict[str, Any] = {}
     choices_by_index: dict[int, dict[str, Any]] = {}
@@ -180,46 +240,7 @@ def _merge_streaming_choices(payloads: list[Mapping[str, Any]]) -> dict[str, Any
                 base[key] = value
         if isinstance(payload.get("usage"), Mapping):
             usage = dict(payload["usage"])
-        choices = payload.get("choices")
-        if not isinstance(choices, list):
-            continue
-        for position, raw_choice in enumerate(choices):
-            if not isinstance(raw_choice, Mapping):
-                continue
-            raw_index = raw_choice.get("index", position)
-            try:
-                index = int(raw_index)
-            except (TypeError, ValueError):
-                index = position
-            choice = choices_by_index.setdefault(
-                index,
-                {
-                    "index": index,
-                    "message": {"role": "assistant", "content": ""},
-                    "finish_reason": None,
-                },
-            )
-            direct_message = raw_choice.get("message")
-            delta = raw_choice.get("delta")
-            source = direct_message if isinstance(direct_message, Mapping) else delta
-            if isinstance(source, Mapping):
-                message = choice["message"]
-                role = source.get("role")
-                if role:
-                    message["role"] = str(role)
-                for field in ("content", "reasoning", "reasoning_content"):
-                    value = source.get(field)
-                    if isinstance(value, str):
-                        message[field] = str(message.get(field) or "") + value
-                for field in ("tool_calls", "annotations"):
-                    value = source.get(field)
-                    if isinstance(value, list):
-                        message.setdefault(field, []).extend(value)
-            finish_reason = raw_choice.get("finish_reason")
-            if finish_reason is not None:
-                choice["finish_reason"] = finish_reason
-            if "logprobs" in raw_choice:
-                choice["logprobs"] = raw_choice.get("logprobs")
+        _merge_payload_choices(choices_by_index, payload)
     if not choices_by_index:
         if len(payloads) == 1:
             return dict(payloads[0])

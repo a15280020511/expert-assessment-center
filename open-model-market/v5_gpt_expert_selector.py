@@ -372,35 +372,29 @@ def _bounded_text(value: Any, field: str, maximum: int) -> str:
     return value
 
 
-def _validate_proposal(value: Mapping[str, Any]) -> None:
-    required = {"work_items", "nodes", "edges", "final_nodes"}
-    if set(value) != required:
-        raise GPTSelectorError("GPT proposal has missing or extra fields")
-    work_items = value["work_items"]
-    nodes = value["nodes"]
-    edges = value["edges"]
-    final_nodes = value["final_nodes"]
+def _validate_work_item(work: Any, index: int) -> str:
+    expected = {"work_id", "objective", "dependencies", "required_outputs"}
+    if not isinstance(work, Mapping) or set(work) != expected:
+        raise GPTSelectorError(f"work_items[{index}] has invalid fields")
+    work_id = _bounded_text(work["work_id"], f"work_items[{index}].work_id", 96)
+    _bounded_text(work["objective"], f"work_items[{index}].objective", 320)
+    dependencies = work["dependencies"]
+    outputs = work["required_outputs"]
+    if not isinstance(dependencies, list) or len(dependencies) > GPT_MAX_WORK_ITEMS:
+        raise GPTSelectorError("work dependencies are invalid")
+    if len(dependencies) != len(set(dependencies)):
+        raise GPTSelectorError("work dependencies contain duplicates")
+    if not isinstance(outputs, list) or not 1 <= len(outputs) <= GPT_MAX_OUTPUT_FIELDS_PER_WORK:
+        raise GPTSelectorError("work required_outputs are invalid")
+    for output in outputs:
+        _bounded_text(output, "required_output", 160)
+    return work_id
+
+
+def _validate_work_items(work_items: Any) -> set[str]:
     if not isinstance(work_items, list) or not 1 <= len(work_items) <= GPT_MAX_WORK_ITEMS:
         raise GPTSelectorError("GPT proposal work_items are invalid")
-    work_ids: list[str] = []
-    for index, work in enumerate(work_items):
-        if not isinstance(work, Mapping) or set(work) != {
-            "work_id", "objective", "dependencies", "required_outputs"
-        }:
-            raise GPTSelectorError(f"work_items[{index}] has invalid fields")
-        work_id = _bounded_text(work["work_id"], f"work_items[{index}].work_id", 96)
-        work_ids.append(work_id)
-        _bounded_text(work["objective"], f"work_items[{index}].objective", 320)
-        dependencies = work["dependencies"]
-        outputs = work["required_outputs"]
-        if not isinstance(dependencies, list) or len(dependencies) > GPT_MAX_WORK_ITEMS:
-            raise GPTSelectorError("work dependencies are invalid")
-        if len(dependencies) != len(set(dependencies)):
-            raise GPTSelectorError("work dependencies contain duplicates")
-        if not isinstance(outputs, list) or not 1 <= len(outputs) <= GPT_MAX_OUTPUT_FIELDS_PER_WORK:
-            raise GPTSelectorError("work required_outputs are invalid")
-        for output in outputs:
-            _bounded_text(output, "required_output", 160)
+    work_ids = [_validate_work_item(work, index) for index, work in enumerate(work_items)]
     if len(work_ids) != len(set(work_ids)):
         raise GPTSelectorError("GPT proposal has duplicate work ids")
     known_work = set(work_ids)
@@ -408,51 +402,63 @@ def _validate_proposal(value: Mapping[str, Any]) -> None:
         dependencies = {str(value) for value in work["dependencies"]}
         if str(work["work_id"]) in dependencies or not dependencies.issubset(known_work):
             raise GPTSelectorError("work dependency references are invalid")
+    return known_work
 
+
+def _validate_recovery_rows(recovery: Any) -> None:
+    if not isinstance(recovery, list) or len(recovery) > GPT_MAX_RECOVERY_PER_NODE:
+        raise GPTSelectorError("node recovery is invalid")
+    for row in recovery:
+        if not isinstance(row, Mapping) or set(row) != {"model", "provider"}:
+            raise GPTSelectorError("recovery row has invalid fields")
+        _bounded_text(row["model"], "recovery model", 160)
+        _bounded_text(row["provider"], "recovery provider", 160)
+
+
+def _validate_node(node: Any, index: int, known_work: set[str]) -> str:
+    expected = {
+        "node_id", "work_ids", "role", "functions", "model", "provider",
+        "reasoning_effort", "max_output_tokens", "recovery",
+    }
+    if not isinstance(node, Mapping) or set(node) != expected:
+        raise GPTSelectorError(f"nodes[{index}] has invalid fields")
+    node_id = _bounded_text(node["node_id"], f"nodes[{index}].node_id", 64)
+    assigned = node["work_ids"]
+    functions = node["functions"]
+    if not isinstance(assigned, list) or not assigned or len(assigned) > GPT_MAX_WORK_ITEMS:
+        raise GPTSelectorError("node work_ids are invalid")
+    if len(assigned) != len(set(assigned)) or not set(assigned).issubset(known_work):
+        raise GPTSelectorError("node work_ids contain duplicates or unknown work")
+    _bounded_text(node["role"], f"nodes[{index}].role", 320)
+    if not isinstance(functions, list) or not 1 <= len(functions) <= GPT_MAX_FUNCTIONS_PER_NODE:
+        raise GPTSelectorError("node functions are invalid")
+    if len(functions) != len(set(functions)):
+        raise GPTSelectorError("node functions contain duplicates")
+    for function in functions:
+        _bounded_text(function, "node function", 96)
+    _bounded_text(node["model"], f"nodes[{index}].model", 160)
+    _bounded_text(node["provider"], f"nodes[{index}].provider", 160)
+    if node["reasoning_effort"] not in {"low", "medium", "high"}:
+        raise GPTSelectorError("node reasoning_effort is invalid")
+    maximum = node["max_output_tokens"]
+    if isinstance(maximum, bool) or not isinstance(maximum, int):
+        raise GPTSelectorError("node max_output_tokens must be an integer")
+    if not 256 <= maximum <= 32768:
+        raise GPTSelectorError("node max_output_tokens is outside hard limits")
+    _validate_recovery_rows(node["recovery"])
+    return node_id
+
+
+def _validate_nodes(nodes: Any, known_work: set[str]) -> set[str]:
     if not isinstance(nodes, list) or not 1 <= len(nodes) <= GPT_MAX_NODES:
         raise GPTSelectorError("GPT proposal nodes are invalid")
-    node_ids: list[str] = []
-    for index, node in enumerate(nodes):
-        expected = {
-            "node_id", "work_ids", "role", "functions", "model", "provider",
-            "reasoning_effort", "max_output_tokens", "recovery"
-        }
-        if not isinstance(node, Mapping) or set(node) != expected:
-            raise GPTSelectorError(f"nodes[{index}] has invalid fields")
-        node_ids.append(_bounded_text(node["node_id"], f"nodes[{index}].node_id", 64))
-        assigned = node["work_ids"]
-        functions = node["functions"]
-        recovery = node["recovery"]
-        if not isinstance(assigned, list) or not assigned or len(assigned) > GPT_MAX_WORK_ITEMS:
-            raise GPTSelectorError("node work_ids are invalid")
-        if len(assigned) != len(set(assigned)) or not set(assigned).issubset(known_work):
-            raise GPTSelectorError("node work_ids contain duplicates or unknown work")
-        _bounded_text(node["role"], f"nodes[{index}].role", 320)
-        if not isinstance(functions, list) or not 1 <= len(functions) <= GPT_MAX_FUNCTIONS_PER_NODE:
-            raise GPTSelectorError("node functions are invalid")
-        if len(functions) != len(set(functions)):
-            raise GPTSelectorError("node functions contain duplicates")
-        for function in functions:
-            _bounded_text(function, "node function", 96)
-        _bounded_text(node["model"], f"nodes[{index}].model", 160)
-        _bounded_text(node["provider"], f"nodes[{index}].provider", 160)
-        if node["reasoning_effort"] not in {"low", "medium", "high"}:
-            raise GPTSelectorError("node reasoning_effort is invalid")
-        if isinstance(node["max_output_tokens"], bool) or not isinstance(node["max_output_tokens"], int):
-            raise GPTSelectorError("node max_output_tokens must be an integer")
-        if not 256 <= node["max_output_tokens"] <= 32768:
-            raise GPTSelectorError("node max_output_tokens is outside hard limits")
-        if not isinstance(recovery, list) or len(recovery) > GPT_MAX_RECOVERY_PER_NODE:
-            raise GPTSelectorError("node recovery is invalid")
-        for row in recovery:
-            if not isinstance(row, Mapping) or set(row) != {"model", "provider"}:
-                raise GPTSelectorError("recovery row has invalid fields")
-            _bounded_text(row["model"], "recovery model", 160)
-            _bounded_text(row["provider"], "recovery provider", 160)
+    node_ids = [_validate_node(node, index, known_work) for index, node in enumerate(nodes)]
     if len(node_ids) != len(set(node_ids)):
         raise GPTSelectorError("GPT proposal has duplicate node ids")
-    known_nodes = set(node_ids)
+    return set(node_ids)
 
+
+def _validate_edges(edges: Any, known_nodes: set[str]) -> None:
     if not isinstance(edges, list) or len(edges) > GPT_MAX_EDGES:
         raise GPTSelectorError("GPT proposal edges are invalid")
     for edge in edges:
@@ -460,10 +466,23 @@ def _validate_proposal(value: Mapping[str, Any]) -> None:
             raise GPTSelectorError("edge has invalid fields")
         if edge["source"] not in known_nodes or edge["target"] not in known_nodes:
             raise GPTSelectorError("edge references unknown node")
+
+
+def _validate_final_nodes(final_nodes: Any, known_nodes: set[str]) -> None:
     if not isinstance(final_nodes, list) or not final_nodes:
         raise GPTSelectorError("GPT proposal final_nodes are invalid")
     if len(final_nodes) != len(set(final_nodes)) or not set(final_nodes).issubset(known_nodes):
         raise GPTSelectorError("GPT proposal final_nodes contain duplicates or unknown nodes")
+
+
+def _validate_proposal(value: Mapping[str, Any]) -> None:
+    required = {"work_items", "nodes", "edges", "final_nodes"}
+    if set(value) != required:
+        raise GPTSelectorError("GPT proposal has missing or extra fields")
+    known_work = _validate_work_items(value["work_items"])
+    known_nodes = _validate_nodes(value["nodes"], known_work)
+    _validate_edges(value["edges"], known_nodes)
+    _validate_final_nodes(value["final_nodes"], known_nodes)
 
 
 def parse_proposal(text: str) -> dict[str, Any]:

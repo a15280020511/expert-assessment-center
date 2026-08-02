@@ -59,57 +59,68 @@ def _planning_failure(root: Path) -> dict[str, Any] | None:
     }
 
 
+def _gate_failures(row: Mapping[str, Any]) -> list[dict[str, Any]]:
+    attempts = row.get("attempts", [])
+    if not isinstance(attempts, list):
+        return []
+    failures: list[dict[str, Any]] = []
+    for attempt in attempts:
+        if not isinstance(attempt, Mapping):
+            continue
+        raw_reasons = attempt.get("gate_reasons", [])
+        reasons = [str(value) for value in raw_reasons] if isinstance(raw_reasons, list) else []
+        status = str(attempt.get("status") or "")
+        if status == "quality_gate_failed" or reasons:
+            failures.append(
+                {
+                    "attempt_index": int(attempt.get("attempt_index") or 0),
+                    "status": status,
+                    "gate_reasons": reasons,
+                    "quality_score": float(attempt.get("quality_score") or 0.0),
+                }
+            )
+    return failures
+
+
+def _classify_quality_row(
+    row: Mapping[str, Any],
+) -> tuple[str, str | dict[str, Any]]:
+    node_id = str(row.get("node_id") or "")
+    status = str(row.get("status") or "")
+    contract = row.get("contract", {})
+    contract_complete = (
+        isinstance(contract, Mapping)
+        and contract.get("required_fields_complete") is True
+    )
+    if status in STRICT_SUCCESS_STATUSES and contract_complete:
+        return "strict", node_id
+    if status in DEGRADED_SUCCESS_STATUSES or status.startswith("success"):
+        return "degraded", {
+            "node_id": node_id,
+            "status": status,
+            "quality_score": float(row.get("quality_score") or 0.0),
+            "gate_failures": _gate_failures(row),
+            "contract_incomplete": not contract_complete,
+        }
+    return "failed", node_id
+
+
 def _node_quality(root: Path) -> dict[str, Any]:
-    rows = _load(root / "v5-node-results.json", [])
-    rows = rows if isinstance(rows, list) else []
+    raw_rows = _load(root / "v5-node-results.json", [])
+    rows = raw_rows if isinstance(raw_rows, list) else []
     strict: list[str] = []
     degraded: list[dict[str, Any]] = []
     failed: list[str] = []
     for row in rows:
         if not isinstance(row, Mapping):
             continue
-        node_id = str(row.get("node_id") or "")
-        status = str(row.get("status") or "")
-        contract = row.get("contract", {})
-        contract_complete = (
-            isinstance(contract, Mapping)
-            and contract.get("required_fields_complete") is True
-        )
-        if status in STRICT_SUCCESS_STATUSES and contract_complete:
-            strict.append(node_id)
-        elif status in DEGRADED_SUCCESS_STATUSES or status.startswith("success"):
-            gate_failures = []
-            attempts = row.get("attempts", [])
-            if isinstance(attempts, list):
-                for attempt in attempts:
-                    if not isinstance(attempt, Mapping):
-                        continue
-                    reasons = attempt.get("gate_reasons", [])
-                    reasons = (
-                        [str(value) for value in reasons]
-                        if isinstance(reasons, list)
-                        else []
-                    )
-                    if str(attempt.get("status") or "") == "quality_gate_failed" or reasons:
-                        gate_failures.append(
-                            {
-                                "attempt_index": int(attempt.get("attempt_index") or 0),
-                                "status": str(attempt.get("status") or ""),
-                                "gate_reasons": reasons,
-                                "quality_score": float(attempt.get("quality_score") or 0.0),
-                            }
-                        )
-            degraded.append(
-                {
-                    "node_id": node_id,
-                    "status": status,
-                    "quality_score": float(row.get("quality_score") or 0.0),
-                    "gate_failures": gate_failures,
-                    "contract_incomplete": not contract_complete,
-                }
-            )
+        kind, value = _classify_quality_row(row)
+        if kind == "strict":
+            strict.append(str(value))
+        elif kind == "degraded":
+            degraded.append(dict(value))
         else:
-            failed.append(node_id)
+            failed.append(str(value))
     return {
         "node_result_count": len(rows),
         "strict_node_ids": strict,
@@ -122,35 +133,38 @@ def _node_quality(root: Path) -> dict[str, Any]:
     }
 
 
-def _apply_native_contract(
+def _native_contract_evidence(
     root: Path,
-    result: dict[str, Any],
-    planning_failure: Mapping[str, Any] | None,
-) -> dict[str, Any]:
+) -> tuple[set[str], str]:
     envelope = _load(root / "expert-team-result.json", {})
     envelope = envelope if isinstance(envelope, Mapping) else {}
     summary = _load(root / "v5-execution-summary.json", {})
     summary = summary if isinstance(summary, Mapping) else {}
     runtime = _load(root / "production-runtime.json", {})
     runtime = runtime if isinstance(runtime, Mapping) else {}
-
     runtime_versions = {
         str(envelope.get("runtime_version") or ""),
         str(runtime.get("runtime_version") or ""),
     }
     runtime_versions.discard("")
     executor = str(summary.get("executor") or envelope.get("executor") or "")
-    failures = list(result.get("failures") or [])
+    return runtime_versions, executor
+
+
+def _native_contract_failures(
+    failures: list[str],
+    runtime_versions: set[str],
+    executor: str,
+    executor_required: bool,
+) -> tuple[list[str], bool, bool]:
     runtime_valid = runtime_versions == {NATIVE_RUNTIME_VERSION}
     if runtime_valid:
         failures = [reason for reason in failures if reason != LEGACY_RUNTIME_FAILURE]
     else:
+        observed = ", ".join(sorted(runtime_versions)) if runtime_versions else "missing"
         failures.append(
-            "native runtime version evidence is missing or inconsistent: "
-            + (", ".join(sorted(runtime_versions)) if runtime_versions else "missing")
+            "native runtime version evidence is missing or inconsistent: " + observed
         )
-
-    executor_required = planning_failure is None
     executor_valid = executor == NATIVE_EXECUTOR
     if executor_valid:
         failures = [reason for reason in failures if reason != LEGACY_EXECUTOR_FAILURE]
@@ -160,6 +174,32 @@ def _apply_native_contract(
         )
     else:
         failures = [reason for reason in failures if reason != LEGACY_EXECUTOR_FAILURE]
+    return failures, runtime_valid, executor_valid
+
+
+def _native_contract_status(
+    runtime_valid: bool,
+    executor_valid: bool,
+    executor_required: bool,
+) -> str:
+    if runtime_valid and executor_valid:
+        return "PASS"
+    if runtime_valid and not executor_required:
+        return "PASS_PRE_EXECUTION"
+    return "FAIL"
+
+
+def _apply_native_contract(
+    root: Path,
+    result: dict[str, Any],
+    planning_failure: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    runtime_versions, executor = _native_contract_evidence(root)
+    failures = list(result.get("failures") or [])
+    executor_required = planning_failure is None
+    failures, runtime_valid, executor_valid = _native_contract_failures(
+        failures, runtime_versions, executor, executor_required
+    )
 
     checks = dict(result.get("checks") or {})
     checks.update(
@@ -169,12 +209,8 @@ def _apply_native_contract(
             "native_executor": NATIVE_EXECUTOR,
             "observed_executor": executor,
             "native_executor_required": executor_required,
-            "native_contract_status": (
-                "PASS"
-                if runtime_valid and executor_valid
-                else "PASS_PRE_EXECUTION"
-                if runtime_valid and not executor_required
-                else "FAIL"
+            "native_contract_status": _native_contract_status(
+                runtime_valid, executor_valid, executor_required
             ),
         }
     )
@@ -291,6 +327,94 @@ def _constitutional_evidence(root: Path) -> dict[str, Any]:
     }
 
 
+def _quality_evidence_updates(
+    node_evidence: Mapping[str, Any],
+    completion_mode: str,
+    quality_status: str,
+    integrity: Mapping[str, Any],
+) -> tuple[list[str], list[str]]:
+    failures: list[str] = []
+    degradations: list[str] = []
+    if node_evidence["contract_incomplete_node_ids"]:
+        degradations.append(
+            "one or more usable nodes did not satisfy the deterministic output contract"
+        )
+    if node_evidence["failed_node_ids"]:
+        failures.append(
+            "node-level execution failures are present: "
+            + ", ".join(node_evidence["failed_node_ids"])
+        )
+    if node_evidence["degraded_nodes"]:
+        if completion_mode != "degraded" or quality_status != "degraded_success":
+            failures.append("degraded node output was incorrectly represented as full success")
+        else:
+            degradations.append(
+                "one or more nodes delivered usable output after failing a quality gate"
+            )
+        if integrity.get("status") != "DEGRADED":
+            failures.append("run-level quality integrity evidence is missing or inconsistent")
+    elif node_evidence["all_nodes_strict"]:
+        if completion_mode == "full" and quality_status != "full_success":
+            failures.append("strict full completion is missing full_success quality status")
+        if completion_mode == "full" and integrity.get("status") not in {"PASS", None}:
+            failures.append("strict node success conflicts with run-level quality integrity")
+    if quality_status == "full_success" and node_evidence["degraded_nodes"]:
+        failures.append("full_success is forbidden when a node is success_degraded")
+    return failures, degradations
+
+
+def _quality_checks(
+    quality_status: str,
+    integrity: Mapping[str, Any],
+    node_evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "quality_status": quality_status,
+        "quality_integrity_status": integrity.get("status"),
+        "strict_node_count": len(node_evidence["strict_node_ids"]),
+        "degraded_node_count": len(node_evidence["degraded_nodes"]),
+        "failed_node_count": len(node_evidence["failed_node_ids"]),
+        "contract_incomplete_node_count": len(
+            node_evidence["contract_incomplete_node_ids"]
+        ),
+        "node_quality_evidence": node_evidence,
+    }
+
+
+def _finalize_audit_result(
+    result: dict[str, Any],
+    failures: list[str],
+    degradations: list[str],
+) -> dict[str, Any]:
+    result["failures"] = list(dict.fromkeys(failures))
+    result["degradations"] = list(dict.fromkeys(degradations))
+    if result["failures"]:
+        result["status"] = "FAIL"
+        result["primary_failure"] = {
+            "code": "V5_PRODUCTION_AUDIT_FAILED",
+            "stage": "v5-production-audit",
+            "message": result["failures"][0],
+            "retryable": False,
+        }
+    elif result["degradations"]:
+        result["status"] = "DEGRADED"
+        result["primary_failure"] = {
+            "code": "DEGRADED_SUCCESS",
+            "stage": "quality-integrity",
+            "message": result["degradations"][0],
+            "retryable": False,
+        }
+    else:
+        result["status"] = "PASS"
+        result["primary_failure"] = {
+            "code": "NONE",
+            "stage": "completed",
+            "message": "",
+            "retryable": False,
+        }
+    return result
+
+
 def audit(
     root: Path,
     *,
@@ -323,79 +447,17 @@ def audit(
     integrity = summary.get("quality_integrity", {})
     integrity = integrity if isinstance(integrity, Mapping) else {}
 
-    if node_evidence["contract_incomplete_node_ids"]:
-        degradations.append(
-            "one or more usable nodes did not satisfy the deterministic output contract"
-        )
-    if node_evidence["failed_node_ids"]:
-        failures.append(
-            "node-level execution failures are present: "
-            + ", ".join(node_evidence["failed_node_ids"])
-        )
-    if node_evidence["degraded_nodes"]:
-        if completion_mode != "degraded" or quality_status != "degraded_success":
-            failures.append("degraded node output was incorrectly represented as full success")
-        else:
-            degradations.append(
-                "one or more nodes delivered usable output after failing a quality gate"
-            )
-        if integrity.get("status") != "DEGRADED":
-            failures.append("run-level quality integrity evidence is missing or inconsistent")
-    elif node_evidence["all_nodes_strict"]:
-        if completion_mode == "full" and quality_status != "full_success":
-            failures.append("strict full completion is missing full_success quality status")
-        if completion_mode == "full" and integrity.get("status") not in {"PASS", None}:
-            failures.append("strict node success conflicts with run-level quality integrity")
-    if quality_status == "full_success" and node_evidence["degraded_nodes"]:
-        failures.append("full_success is forbidden when a node is success_degraded")
+    quality_failures, quality_degradations = _quality_evidence_updates(
+        node_evidence, completion_mode, quality_status, integrity
+    )
+    failures.extend(quality_failures)
+    degradations.extend(quality_degradations)
 
     checks = dict(result.get("checks") or {})
     checks.update(constitutional["checks"])
-    checks.update(
-        {
-            "quality_status": quality_status,
-            "quality_integrity_status": integrity.get("status"),
-            "strict_node_count": len(node_evidence["strict_node_ids"]),
-            "degraded_node_count": len(node_evidence["degraded_nodes"]),
-            "failed_node_count": len(node_evidence["failed_node_ids"]),
-            "contract_incomplete_node_count": len(
-                node_evidence["contract_incomplete_node_ids"]
-            ),
-            "node_quality_evidence": node_evidence,
-        }
-    )
+    checks.update(_quality_checks(quality_status, integrity, node_evidence))
     result["checks"] = checks
-    result["failures"] = list(dict.fromkeys(failures))
-    result["degradations"] = list(dict.fromkeys(degradations))
-    result["status"] = (
-        "FAIL"
-        if result["failures"]
-        else "DEGRADED"
-        if result["degradations"]
-        else "PASS"
-    )
-    if result["status"] == "PASS":
-        result["primary_failure"] = {
-            "code": "NONE",
-            "stage": "completed",
-            "message": "",
-            "retryable": False,
-        }
-    elif result["status"] == "DEGRADED":
-        result["primary_failure"] = {
-            "code": "DEGRADED_SUCCESS",
-            "stage": "quality-integrity",
-            "message": result["degradations"][0],
-            "retryable": False,
-        }
-    else:
-        result["primary_failure"] = {
-            "code": "V5_PRODUCTION_AUDIT_FAILED",
-            "stage": "v5-production-audit",
-            "message": result["failures"][0],
-            "retryable": False,
-        }
-    return result
+    return _finalize_audit_result(result, failures, degradations)
 
 
 def main() -> int:

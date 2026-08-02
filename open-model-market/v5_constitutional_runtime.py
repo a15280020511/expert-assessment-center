@@ -293,80 +293,76 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
 
 
     @staticmethod
-    def _actual_company_audit(
+    def _resolved_node_row(node: Mapping[str, Any]) -> tuple[dict[str, str], bool]:
+        model = str(node.get("resolved_model") or node.get("selected_model") or "")
+        status = str(node.get("status") or "")
+        row = {
+            "node_id": str(node.get("node_id") or ""),
+            "model": model,
+            "company": canonical_model_company(model),
+            "status": status,
+        }
+        return row, status.startswith("success") and bool(model)
+
+    @staticmethod
+    def _attempt_model_rows(node: Mapping[str, Any]) -> list[dict[str, str]]:
+        node_id = str(node.get("node_id") or "")
+        attempts = node.get("attempts", [])
+        if not isinstance(attempts, list):
+            return []
+        rows: list[dict[str, str]] = []
+        for attempt in attempts:
+            if not isinstance(attempt, Mapping):
+                continue
+            model = str(attempt.get("response_model") or attempt.get("model") or "")
+            if not model:
+                continue
+            rows.append(
+                {
+                    "node_id": node_id,
+                    "attempt_kind": str(attempt.get("attempt_kind") or ""),
+                    "model": model,
+                    "company": canonical_model_company(model),
+                    "status": str(attempt.get("status") or ""),
+                }
+            )
+        return rows
+
+    @classmethod
+    def _collect_company_rows(
+        cls,
         result: Mapping[str, Any],
-    ) -> dict[str, Any]:
+    ) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
         strict_successful: list[dict[str, str]] = []
         degraded: list[dict[str, str]] = []
         resolved_nodes: list[dict[str, str]] = []
         called: list[dict[str, str]] = []
-        strict_statuses = {
-            "success",
-            "success_retried",
-            "success_recovered",
-        }
+        strict_statuses = {"success", "success_retried", "success_recovered"}
         for node in result.get("node_results", []):
             if not isinstance(node, Mapping):
                 continue
-            node_id = str(node.get("node_id") or "")
-            resolved = str(
-                node.get("resolved_model")
-                or node.get("selected_model")
-                or ""
-            )
-            status = str(node.get("status") or "")
-            resolved_node = status.startswith("success") and bool(resolved)
-            row = {
-                "node_id": node_id,
-                "model": resolved,
-                "company": canonical_model_company(resolved),
-                "status": status,
-            }
-            if resolved_node:
+            row, resolved = cls._resolved_node_row(node)
+            if resolved:
                 resolved_nodes.append(row)
-            if status in strict_statuses and resolved:
+            if row["status"] in strict_statuses and row["model"]:
                 strict_successful.append(row)
-            elif status.startswith("success_degraded") and resolved:
+            elif row["status"].startswith("success_degraded") and row["model"]:
                 degraded.append(row)
-
-            node_attempt_models: list[str] = []
-            attempts = node.get("attempts", [])
-            if not isinstance(attempts, list):
-                attempts = []
-            for attempt in attempts:
-                if not isinstance(attempt, Mapping):
-                    continue
-                model = str(
-                    attempt.get("response_model")
-                    or attempt.get("model")
-                    or ""
-                )
-                if not model:
-                    continue
-                node_attempt_models.append(model)
+            attempt_rows = cls._attempt_model_rows(node)
+            called.extend(attempt_rows)
+            if resolved and not attempt_rows:
                 called.append(
                     {
-                        "node_id": node_id,
-                        "attempt_kind": str(
-                            attempt.get("attempt_kind") or ""
-                        ),
-                        "model": model,
-                        "company": canonical_model_company(model),
-                        "status": str(attempt.get("status") or ""),
-                    }
-                )
-
-            if resolved_node and not node_attempt_models:
-                called.append(
-                    {
-                        "node_id": node_id,
+                        **row,
                         "attempt_kind": "resolved-model-evidence-fallback",
-                        "model": resolved,
-                        "company": canonical_model_company(resolved),
-                        "status": status,
                     }
                 )
+        return strict_successful, degraded, resolved_nodes, called
 
+    @staticmethod
+    def _company_conflicts(
+        called: Sequence[Mapping[str, str]],
+    ) -> tuple[dict[str, list[str]], list[Mapping[str, str]]]:
         by_company: dict[str, set[str]] = {}
         for row in called:
             by_company.setdefault(row["company"], set()).add(row["node_id"])
@@ -376,17 +372,24 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
             if len(nodes) > 1
         }
         unresolved = [
-            row
-            for row in called
-            if not row["company"] or row["company"] == "unknown"
+            row for row in called if not row["company"] or row["company"] == "unknown"
         ]
+        return duplicates, unresolved
+
+    @classmethod
+    def _actual_company_audit(
+        cls,
+        result: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        strict, degraded, resolved, called = cls._collect_company_rows(result)
+        duplicates, unresolved = cls._company_conflicts(called)
         return {
             "status": "FAIL" if duplicates or unresolved else "PASS",
             "policy": "recompute-from-all-actual-called-models",
-            "successful_node_models": strict_successful,
-            "strict_successful_node_models": strict_successful,
+            "successful_node_models": strict,
+            "strict_successful_node_models": strict,
             "degraded_node_models": degraded,
-            "resolved_node_models": resolved_nodes,
+            "resolved_node_models": resolved,
             "all_called_models": called,
             "duplicate_called_companies_across_nodes": duplicates,
             "duplicate_successful_companies": duplicates,
@@ -412,146 +415,175 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
             allow_degraded_success=False,
         )
 
-    def execute_graph(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        original_task = str(
-            kwargs.get("original_task")
-            or (args[2] if len(args) > 2 else "")
-            or ""
-        )
+    @staticmethod
+    def _execution_task(args: Sequence[Any], kwargs: Mapping[str, Any]) -> str:
+        return str(kwargs.get("original_task") or (args[2] if len(args) > 2 else "") or "")
+
+    @classmethod
+    def _prepare_execution_root(
+        cls,
+        args: Sequence[Any],
+        kwargs: dict[str, Any],
+    ) -> tuple[str, TaskConstraints, Path | None]:
+        original_task = cls._execution_task(args, kwargs)
         constraints = compile_task_constraints(original_task)
         if "limits" in kwargs:
-            kwargs["limits"] = self._strict_limits(
-                kwargs.get("limits"),
-                constraints,
-            )
+            kwargs["limits"] = cls._strict_limits(kwargs.get("limits"), constraints)
         output_dir = kwargs.get("output_dir")
         root = Path(output_dir) if output_dir is not None else None
         if root is not None:
             root.mkdir(parents=True, exist_ok=True)
-            self._write_json(
-                root / "task-constraints.json",
-                constraints.to_dict(),
-            )
+            cls._write_json(root / "task-constraints.json", constraints.to_dict())
+        return original_task, constraints, root
 
+    @staticmethod
+    def _read_json_or_default(path: Path, default: Any) -> Any:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return default
+        return value
+
+    @staticmethod
+    def _evidence_audit(
+        original_task: str,
+        answer: str,
+        constraints: TaskConstraints,
+        *,
+        after_failure: bool = False,
+    ) -> dict[str, Any]:
+        violations = validate_answer_evidence(original_task, answer, constraints)
+        payload = {
+            "schema_version": "v5-evidence-integrity-1",
+            "status": "FAIL" if violations else "PASS",
+            "constraints": constraints.to_dict(),
+            "violations": violations,
+            "fact_truth_not_inferred_from_structure": True,
+            "upstream_model_claims_are_not_promoted_to_user_facts": True,
+        }
+        if after_failure:
+            payload["written_after_execution_failure"] = True
+        return payload
+
+    @classmethod
+    def _write_failure_evidence(
+        cls,
+        root: Path | None,
+        original_task: str,
+        constraints: TaskConstraints,
+    ) -> None:
+        if root is None:
+            return
+        node_results = cls._read_json_or_default(root / "v5-node-results.json", [])
+        if not isinstance(node_results, list):
+            node_results = []
+        summary = cls._read_json_or_default(root / "v5-execution-summary.json", {})
+        if not isinstance(summary, Mapping):
+            summary = {}
+        cls._write_json(
+            root / "actual-model-company-audit.json",
+            cls._actual_company_audit({"node_results": node_results}),
+        )
+        cls._write_json(
+            root / "evidence-integrity.json",
+            cls._evidence_audit(
+                original_task,
+                str(summary.get("final_answer") or ""),
+                constraints,
+                after_failure=True,
+            ),
+        )
+
+    @staticmethod
+    def _constitutional_failure_reason(
+        result: Mapping[str, Any],
+        company_audit: Mapping[str, Any],
+        evidence_audit: Mapping[str, Any],
+        constraints: TaskConstraints,
+    ) -> str | None:
+        if company_audit["status"] != "PASS":
+            return "actual-model-company-uniqueness-violation"
+        if evidence_audit["status"] != "PASS":
+            return "unsupported-evidence-or-quantity"
+        if result.get("completion_mode") == "degraded" and not constraints.allow_degraded_success:
+            return "degradation-not-authorized-by-user"
+        return None
+
+    @classmethod
+    def _write_constitutional_audits(
+        cls,
+        root: Path | None,
+        company_audit: Mapping[str, Any],
+        evidence_audit: Mapping[str, Any],
+    ) -> None:
+        if root is None:
+            return
+        cls._write_json(root / "actual-model-company-audit.json", company_audit)
+        cls._write_json(root / "evidence-integrity.json", evidence_audit)
+
+    @classmethod
+    def _write_execution_summary(
+        cls,
+        root: Path | None,
+        result: Mapping[str, Any],
+    ) -> None:
+        if root is None:
+            return
+        cls._write_json(
+            root / "v5-execution-summary.json",
+            {key: value for key, value in result.items() if key != "node_results"},
+        )
+
+    @classmethod
+    def _fail_constitutional_result(
+        cls,
+        result: dict[str, Any],
+        root: Path | None,
+        reason: str,
+    ) -> None:
+        result.update(
+            {
+                "status": "failed",
+                "completion_mode": "none",
+                "quality_status": "failed",
+                "final_answer": None,
+                "stop_reason": reason,
+            }
+        )
+        cls._write_execution_summary(root, result)
+        if root is not None:
+            (root / "v5-final-report.md").write_text(
+                "# V5 execution failed\n\n"
+                f"Constitutional final gate: {reason}.\n",
+                encoding="utf-8",
+            )
+        raise RuntimeError(reason)
+
+    def execute_graph(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        original_task, constraints, root = self._prepare_execution_root(args, kwargs)
         try:
             result = super().execute_graph(*args, **kwargs)
         except Exception:
-            if root is not None:
-                try:
-                    node_results = json.loads(
-                        (root / "v5-node-results.json").read_text(encoding="utf-8")
-                    )
-                except (FileNotFoundError, json.JSONDecodeError, OSError):
-                    node_results = []
-                if not isinstance(node_results, list):
-                    node_results = []
-                try:
-                    summary = json.loads(
-                        (root / "v5-execution-summary.json").read_text(
-                            encoding="utf-8"
-                        )
-                    )
-                except (FileNotFoundError, json.JSONDecodeError, OSError):
-                    summary = {}
-                if not isinstance(summary, Mapping):
-                    summary = {}
-                company_audit = self._actual_company_audit(
-                    {"node_results": node_results}
-                )
-                evidence_violations = validate_answer_evidence(
-                    original_task,
-                    str(summary.get("final_answer") or ""),
-                    constraints,
-                )
-                evidence_audit = {
-                    "schema_version": "v5-evidence-integrity-1",
-                    "status": "FAIL" if evidence_violations else "PASS",
-                    "constraints": constraints.to_dict(),
-                    "violations": evidence_violations,
-                    "fact_truth_not_inferred_from_structure": True,
-                    "upstream_model_claims_are_not_promoted_to_user_facts": True,
-                    "written_after_execution_failure": True,
-                }
-                self._write_json(
-                    root / "actual-model-company-audit.json",
-                    company_audit,
-                )
-                self._write_json(
-                    root / "evidence-integrity.json",
-                    evidence_audit,
-                )
+            self._write_failure_evidence(root, original_task, constraints)
             raise
         company_audit = self._actual_company_audit(result)
-        evidence_violations = validate_answer_evidence(
+        evidence_audit = self._evidence_audit(
             original_task,
             str(result.get("final_answer") or ""),
             constraints,
         )
-        evidence_audit = {
-            "schema_version": "v5-evidence-integrity-1",
-            "status": "FAIL" if evidence_violations else "PASS",
-            "constraints": constraints.to_dict(),
-            "violations": evidence_violations,
-            "fact_truth_not_inferred_from_structure": True,
-            "upstream_model_claims_are_not_promoted_to_user_facts": True,
-        }
         result["actual_model_company_audit"] = company_audit
         result["evidence_integrity"] = evidence_audit
         result["task_constraints"] = constraints.to_dict()
-
-        failed_reason = None
-        if company_audit["status"] != "PASS":
-            failed_reason = "actual-model-company-uniqueness-violation"
-        elif evidence_audit["status"] != "PASS":
-            failed_reason = "unsupported-evidence-or-quantity"
-        elif (
-            result.get("completion_mode") == "degraded"
-            and not constraints.allow_degraded_success
-        ):
-            failed_reason = "degradation-not-authorized-by-user"
-
-        if root is not None:
-            self._write_json(
-                root / "actual-model-company-audit.json",
-                company_audit,
-            )
-            self._write_json(
-                root / "evidence-integrity.json",
-                evidence_audit,
-            )
-
-        if failed_reason:
-            result["status"] = "failed"
-            result["completion_mode"] = "none"
-            result["quality_status"] = "failed"
-            result["final_answer"] = None
-            result["stop_reason"] = failed_reason
-            if root is not None:
-                self._write_json(
-                    root / "v5-execution-summary.json",
-                    {
-                        key: value
-                        for key, value in result.items()
-                        if key != "node_results"
-                    },
-                )
-                (root / "v5-final-report.md").write_text(
-                    "# V5 execution failed\n\n"
-                    f"Constitutional final gate: {failed_reason}.\n",
-                    encoding="utf-8",
-                )
-            raise RuntimeError(failed_reason)
-
-        if root is not None:
-            self._write_json(
-                root / "v5-execution-summary.json",
-                {
-                    key: value
-                    for key, value in result.items()
-                    if key != "node_results"
-                },
-            )
+        self._write_constitutional_audits(root, company_audit, evidence_audit)
+        reason = self._constitutional_failure_reason(
+            result, company_audit, evidence_audit, constraints
+        )
+        if reason:
+            self._fail_constitutional_result(result, root, reason)
+        self._write_execution_summary(root, result)
         return result
+
 
 
 def harden_runtime(runtime: ProductionRuntime) -> ProductionRuntime:

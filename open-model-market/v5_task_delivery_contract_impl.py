@@ -446,6 +446,86 @@ def apply_explicit_contract(
     return result
 
 
+def _top_level_contract_violations(
+    parsed: Mapping[str, Any],
+    contract: Mapping[str, Any],
+) -> list[str]:
+    violations: list[str] = []
+    required = [str(value) for value in contract.get("exact_top_level_fields", [])]
+    keys = [str(value) for value in parsed.keys()]
+    missing = [field for field in required if field not in parsed]
+    if missing:
+        violations.append("missing-exact-top-level-keys:" + ",".join(missing))
+    if contract.get("forbid_extra_top_level_fields"):
+        extras = sorted(set(keys) - set(required))
+        if extras:
+            violations.append("unexpected-top-level-keys:" + ",".join(extras))
+    if contract.get("all_required_fields_nonempty"):
+        empty = [
+            field
+            for field in required
+            if field in parsed and not _nonempty(parsed[field])
+        ]
+        if empty:
+            violations.append("empty-required-fields:" + ",".join(empty))
+    return violations
+
+
+def _nested_field_violations(
+    field: str,
+    expected_values: Any,
+    parsed: Mapping[str, Any],
+    object_fields: set[str],
+) -> list[str]:
+    expected = [str(value) for value in expected_values]
+    value = parsed.get(field)
+    if not isinstance(value, Mapping):
+        return [f"nested-field-not-object:{field}"]
+    violations: list[str] = []
+    actual = [str(key) for key in value.keys()]
+    nested_missing = [key for key in expected if key not in value]
+    nested_extra = sorted(set(actual) - set(expected))
+    empty_nested = [
+        key for key in expected if key in value and not _nonempty(value[key])
+    ]
+    non_objects = [
+        key
+        for key in expected
+        if key in value and not isinstance(value[key], Mapping)
+    ]
+    if nested_missing:
+        violations.append(f"missing-nested-keys:{field}:" + ",".join(nested_missing))
+    if nested_extra:
+        violations.append(f"unexpected-nested-keys:{field}:" + ",".join(nested_extra))
+    if empty_nested:
+        violations.append(f"empty-nested-values:{field}:" + ",".join(empty_nested))
+    if field in object_fields and non_objects:
+        violations.append(f"nested-values-not-objects:{field}:" + ",".join(non_objects))
+    return violations
+
+
+def _nested_contract_violations(
+    parsed: Mapping[str, Any],
+    contract: Mapping[str, Any],
+) -> list[str]:
+    nested = contract.get("nested_exact_fields", {})
+    nested = nested if isinstance(nested, Mapping) else {}
+    object_fields = {
+        str(value) for value in contract.get("nested_values_must_be_objects", [])
+    }
+    violations: list[str] = []
+    for field, expected_values in nested.items():
+        violations.extend(
+            _nested_field_violations(
+                str(field),
+                expected_values,
+                parsed,
+                object_fields,
+            )
+        )
+    return violations
+
+
 def validate_parsed_contract(
     parsed: Any,
     contract: Mapping[str, Any],
@@ -455,77 +535,8 @@ def validate_parsed_contract(
     if not isinstance(parsed, Mapping):
         return ["explicit-contract-requires-json-object"]
 
-    violations: list[str] = []
-    required = [
-        str(value)
-        for value in contract.get("exact_top_level_fields", [])
-    ]
-    keys = [str(value) for value in parsed.keys()]
-    missing = [field for field in required if field not in parsed]
-    if missing:
-        violations.append(
-            "missing-exact-top-level-keys:" + ",".join(missing)
-        )
-    if contract.get("forbid_extra_top_level_fields"):
-        extras = sorted(set(keys) - set(required))
-        if extras:
-            violations.append(
-                "unexpected-top-level-keys:" + ",".join(extras)
-            )
-    if contract.get("all_required_fields_nonempty"):
-        empty = [
-            field
-            for field in required
-            if field in parsed and not _nonempty(parsed[field])
-        ]
-        if empty:
-            violations.append(
-                "empty-required-fields:" + ",".join(empty)
-            )
-
-    nested = contract.get("nested_exact_fields", {})
-    nested = nested if isinstance(nested, Mapping) else {}
-    object_fields = {
-        str(value)
-        for value in contract.get("nested_values_must_be_objects", [])
-    }
-    for field, expected_values in nested.items():
-        expected = [str(value) for value in expected_values]
-        value = parsed.get(field)
-        if not isinstance(value, Mapping):
-            violations.append(f"nested-field-not-object:{field}")
-            continue
-        actual = [str(key) for key in value.keys()]
-        nested_missing = [key for key in expected if key not in value]
-        nested_extra = sorted(set(actual) - set(expected))
-        if nested_missing:
-            violations.append(
-                f"missing-nested-keys:{field}:" + ",".join(nested_missing)
-            )
-        if nested_extra:
-            violations.append(
-                f"unexpected-nested-keys:{field}:" + ",".join(nested_extra)
-            )
-        empty_nested = [
-            key
-            for key in expected
-            if key in value and not _nonempty(value[key])
-        ]
-        if empty_nested:
-            violations.append(
-                f"empty-nested-values:{field}:" + ",".join(empty_nested)
-            )
-        if field in object_fields:
-            non_objects = [
-                key
-                for key in expected
-                if key in value and not isinstance(value[key], Mapping)
-            ]
-            if non_objects:
-                violations.append(
-                    f"nested-values-not-objects:{field}:"
-                    + ",".join(non_objects)
-                )
+    violations = _top_level_contract_violations(parsed, contract)
+    violations.extend(_nested_contract_violations(parsed, contract))
     return violations
 
 

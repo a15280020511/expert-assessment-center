@@ -112,6 +112,346 @@ class EvidenceInputs:
         )
 
 
+@dataclass(frozen=True)
+class PreparedEvidence:
+    requests: tuple[Mapping[str, Any], ...]
+    request_count: int
+    governance_calls: int
+    expert_budget: Mapping[str, Any]
+    expert_calls: int
+    call_count: int
+    actual_cost: float
+    nodes: tuple[Mapping[str, Any], ...]
+    answer: str
+    governance_rows: tuple[Mapping[str, Any], ...]
+    governance_models: tuple[str, ...]
+    expert_models: tuple[str, ...]
+    providers: tuple[str, ...]
+
+
+def _mapping_rows(value: Any) -> tuple[Mapping[str, Any], ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(row for row in value if isinstance(row, Mapping))
+
+
+def _validated_call_context(
+    inputs: EvidenceInputs,
+    approved: ApprovedRun,
+) -> tuple[tuple[Mapping[str, Any], ...], int, int, Mapping[str, Any], int, int]:
+    requests = _mapping_rows(inputs.request_audit.get("requests", []))
+    request_count = int(
+        inputs.request_audit.get("request_count") or len(requests)
+    )
+    governance_calls = int(
+        inputs.governance_ledger.get("actual_governance_calls") or 0
+    )
+    raw_budget = inputs.execution_summary.get("execution_budget", {})
+    expert_budget = dict(raw_budget) if isinstance(raw_budget, Mapping) else {}
+    expert_calls = int(expert_budget.get("calls_reserved") or 0)
+    call_count = governance_calls + expert_calls
+    if request_count != call_count:
+        raise RuntimeError(
+            "complete request audit and call ledger disagree: "
+            f"requests={request_count}, ledger={call_count}"
+        )
+    if call_count > approved.total_calls:
+        raise RuntimeError("approved total paid-call ceiling exceeded")
+    if governance_calls != CLAUDE_RED_TEAM_GOVERNANCE_CALLS:
+        raise RuntimeError(
+            "governance must use exactly GPT proposal, Claude once, and GPT synthesis"
+        )
+    if int(inputs.governance_ledger.get("claude_red_team_calls") or 0) != 1:
+        raise RuntimeError("Claude red-team call count must equal one")
+    if int(inputs.governance_ledger.get("gpt_synthesis_calls") or 0) != 1:
+        raise RuntimeError("GPT synthesis call count must equal one")
+    if inputs.governance_result.get("claude_covers_internal_selection") is not True:
+        raise RuntimeError("Claude evidence must cover internal expert selection")
+    if inputs.governance_result.get("claude_covers_external_information") is not True:
+        raise RuntimeError("Claude evidence must cover external information review")
+    return (
+        requests,
+        request_count,
+        governance_calls,
+        expert_budget,
+        expert_calls,
+        call_count,
+    )
+
+
+def _validated_actual_cost(inputs: EvidenceInputs, approved: ApprovedRun) -> float:
+    actual_cost = float(inputs.execution_summary.get("actual_cost_usd") or 0.0)
+    if not math.isfinite(actual_cost) or actual_cost < 0:
+        raise RuntimeError("actual total cost is invalid")
+    if (
+        approved.cost_anomaly_usd is not None
+        and actual_cost > approved.cost_anomaly_usd + 1e-12
+    ):
+        raise RuntimeError("approved cost anomaly guard exceeded")
+    return actual_cost
+
+
+def _validated_nodes(
+    inputs: EvidenceInputs,
+    approved: ApprovedRun,
+) -> tuple[Mapping[str, Any], ...]:
+    nodes = _mapping_rows(inputs.execution_graph.get("nodes", []))
+    if len(nodes) > approved.expert_initial_calls:
+        raise RuntimeError("GPT proposal exceeds expert initial-call capacity")
+    if inputs.selection.get("optimizer_used") is not False:
+        raise RuntimeError("selection evidence must prove optimizer absent")
+    materialization = inputs.selection.get("materialization", {})
+    obsolete_keys = (
+        "local_scoring_used",
+        "optimizer_used",
+        "cp_sat_used",
+        "pareto_pruning_used",
+        "heuristic_ranking_used",
+    )
+    if (
+        isinstance(materialization, Mapping)
+        and any(materialization.get(key) is not False for key in obsolete_keys)
+    ):
+        raise RuntimeError("obsolete selection algorithm evidence detected")
+    return nodes
+
+
+def _validated_answer(inputs: EvidenceInputs, require_report: bool) -> str:
+    answer = str(inputs.execution_summary.get("final_answer") or "").strip()
+    if require_report and (not inputs.final_report.strip() or not answer):
+        raise RuntimeError("V5 did not produce a final report")
+    return answer
+
+
+def _models_and_providers(
+    governance_rows: tuple[Mapping[str, Any], ...],
+    nodes: tuple[Mapping[str, Any], ...],
+    requests: tuple[Mapping[str, Any], ...],
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    governance_models = tuple(sorted({
+        str(row.get("resolved_model") or row.get("requested_model") or "")
+        for row in governance_rows
+        if row.get("resolved_model") or row.get("requested_model")
+    }))
+    expert_models = tuple(sorted({
+        str(row.get("model")) for row in nodes if row.get("model")
+    }))
+    providers = {
+        str(row.get("provider"))
+        for row in governance_rows
+        if row.get("provider")
+    }
+    for request in requests:
+        provider = request.get("provider")
+        if not isinstance(provider, Mapping):
+            continue
+        only = provider.get("only")
+        if isinstance(only, list) and only:
+            providers.add(str(only[0]))
+    return governance_models, expert_models, tuple(sorted(value for value in providers if value))
+
+
+def _prepare_evidence(
+    inputs: EvidenceInputs,
+    approved: ApprovedRun,
+    *,
+    require_report: bool,
+) -> PreparedEvidence:
+    (
+        requests,
+        request_count,
+        governance_calls,
+        expert_budget,
+        expert_calls,
+        call_count,
+    ) = _validated_call_context(inputs, approved)
+    actual_cost = _validated_actual_cost(inputs, approved)
+    nodes = _validated_nodes(inputs, approved)
+    answer = _validated_answer(inputs, require_report)
+    governance_rows = _mapping_rows(inputs.governance_ledger.get("calls", []))
+    governance_models, expert_models, providers = _models_and_providers(
+        governance_rows,
+        nodes,
+        requests,
+    )
+    return PreparedEvidence(
+        requests=requests,
+        request_count=request_count,
+        governance_calls=governance_calls,
+        expert_budget=expert_budget,
+        expert_calls=expert_calls,
+        call_count=call_count,
+        actual_cost=actual_cost,
+        nodes=nodes,
+        answer=answer,
+        governance_rows=governance_rows,
+        governance_models=governance_models,
+        expert_models=expert_models,
+        providers=providers,
+    )
+
+
+def _request_audit_document(
+    inputs: EvidenceInputs,
+    approved: ApprovedRun,
+    prepared: PreparedEvidence,
+) -> dict[str, Any]:
+    document = {
+        **dict(inputs.request_audit),
+        "runtime_version": RUNTIME_VERSION,
+        "status": (
+            "PASS"
+            if inputs.request_audit.get("status") == "PASS"
+            and prepared.request_count == prepared.call_count
+            else "FAIL"
+        ),
+        "approved_total_call_ceiling": approved.total_calls,
+        "governance_call_count": prepared.governance_calls,
+        "expert_call_count": prepared.expert_calls,
+    }
+    if document["status"] != "PASS":
+        raise RuntimeError("complete request audit did not pass")
+    return document
+
+
+def _ledger_document(
+    inputs: EvidenceInputs,
+    approved: ApprovedRun,
+    prepared: PreparedEvidence,
+) -> dict[str, Any]:
+    return {
+        "version": 5,
+        "runtime_version": RUNTIME_VERSION,
+        "summary": {
+            "call_count": prepared.call_count,
+            "governance_calls": prepared.governance_calls,
+            "expert_calls": prepared.expert_calls,
+            "approved_total_call_ceiling": approved.total_calls,
+            "approved_recovery_call_ceiling": approved.recovery_calls,
+            "provider_actual_cost_usd": round(prepared.actual_cost, 8),
+            "conservative_cost_usd": round(prepared.actual_cost, 8),
+            "cost_anomaly_usd": approved.cost_anomaly_usd,
+            "substantive_providers": list(prepared.providers),
+            "substantive_provider_count": len(prepared.providers),
+            "replacement_calls": int(
+                prepared.expert_budget.get("replacements_reserved") or 0
+            ),
+            "retry_calls": int(
+                prepared.expert_budget.get("retries_reserved") or 0
+            ),
+            "recovery_calls": int(
+                prepared.expert_budget.get("recovery_calls_reserved") or 0
+            ),
+        },
+        "governance": dict(inputs.governance_ledger),
+        "node_results": list(inputs.node_results),
+    }
+
+
+def _selection_document(
+    inputs: EvidenceInputs,
+    prepared: PreparedEvidence,
+) -> dict[str, Any]:
+    return {
+        "version": 5,
+        "runtime_version": RUNTIME_VERSION,
+        "selection_authority": "~openai/gpt-latest",
+        "red_team_authority": "~anthropic/claude-opus-latest",
+        "claude_red_team_calls": 1,
+        "gpt_synthesis_calls": int(
+            inputs.governance_ledger.get("gpt_synthesis_calls") or 0
+        ),
+        "expert_models": list(prepared.expert_models),
+        "governance_models": list(prepared.governance_models),
+        "node_count": len(prepared.nodes),
+        "catalog_snapshot_id": inputs.catalog_snapshot.get("catalog_snapshot_id"),
+        "local_scoring_used": False,
+        "optimizer_used": False,
+        "cp_sat_used": False,
+        "pareto_pruning_used": False,
+        "cross_task_history_used": False,
+    }
+
+
+def _routing_document(prepared: PreparedEvidence) -> dict[str, Any]:
+    return {
+        "version": 5,
+        "runtime_version": RUNTIME_VERSION,
+        "status": "PASS" if prepared.nodes else "FAIL",
+        "mode": "gpt-direct-single-claude-red-team",
+        "model_loop_allowed": False,
+    }
+
+
+def _execution_summary_document(
+    builder: "EvidenceBundleBuilder",
+    prepared: PreparedEvidence,
+) -> dict[str, Any]:
+    inputs = builder.inputs
+    return {
+        **dict(inputs.execution_summary),
+        "runtime_version": RUNTIME_VERSION,
+        "approved_budget": builder.approved.to_dict(),
+        "catalog_snapshot_id": inputs.catalog_snapshot.get("catalog_snapshot_id"),
+        "evidence_input_sha256": builder.input_sha256(),
+    }
+
+
+def _result_document(
+    builder: "EvidenceBundleBuilder",
+    prepared: PreparedEvidence,
+) -> dict[str, Any]:
+    inputs = builder.inputs
+    return {
+        "version": 5,
+        "runtime_version": RUNTIME_VERSION,
+        "status": str(inputs.execution_summary.get("status") or "failed"),
+        "completion_mode": str(
+            inputs.execution_summary.get("completion_mode") or "none"
+        ),
+        "quality_status": str(
+            inputs.execution_summary.get("quality_status") or "failed"
+        ),
+        "quality_integrity": inputs.execution_summary.get("quality_integrity"),
+        "final_answer": prepared.answer,
+        "actual_cost_usd": round(prepared.actual_cost, 8),
+        "executor": inputs.execution_summary.get("executor"),
+        "work_coverage": inputs.execution_summary.get("work_coverage"),
+        "degradation": inputs.execution_summary.get("degradation"),
+        "execution_budget": prepared.expert_budget,
+        "approved_budget": builder.approved.to_dict(),
+        "governance": inputs.execution_summary.get("governance"),
+        "catalog_snapshot_id": inputs.catalog_snapshot.get("catalog_snapshot_id"),
+        "node_count": len(prepared.nodes),
+        "model_count": len(prepared.expert_models),
+        "governance_model_count": len(prepared.governance_models),
+        "provider_count": len(prepared.providers),
+        "production_entrypoint": True,
+        "fallback_used": False,
+        "legacy_runtime_present": False,
+        "ticket_task_id": inputs.ticket.get("task_id"),
+        "evidence_input_sha256": builder.input_sha256(),
+    }
+
+
+def _runtime_document(approved: ApprovedRun) -> dict[str, Any]:
+    return {
+        "runtime_version": RUNTIME_VERSION,
+        "entrypoint": "v5_production_ticket.py",
+        "architecture": (
+            "gpt-latest-once -> claude-opus-latest-once -> "
+            "gpt-synthesis-once -> deterministic-validator"
+        ),
+        **approved.to_dict(),
+        "selection_authority": "gpt-direct",
+        "local_planner_present": False,
+        "optimizer_present": False,
+        "fallback_policy": "fail-closed-no-alternate-runtime",
+        "legacy_runtime_present": False,
+        "cross_task_history_used": False,
+    }
+
+
 class EvidenceBundleBuilder:
     def __init__(
         self,
@@ -144,337 +484,30 @@ class EvidenceBundleBuilder:
         })
 
     def build(self, *, require_report: bool) -> dict[str, Any]:
-        inputs = self.inputs
-        approved = self.approved
-        requests = inputs.request_audit.get("requests", [])
-        requests = (
-            [row for row in requests if isinstance(row, Mapping)]
-            if isinstance(requests, list)
-            else []
+        prepared = _prepare_evidence(
+            self.inputs,
+            self.approved,
+            require_report=require_report,
         )
-        request_count = int(
-            inputs.request_audit.get("request_count") or len(requests)
-        )
-        governance_calls = int(
-            inputs.governance_ledger.get(
-                "actual_governance_calls"
-            ) or 0
-        )
-        expert_budget = inputs.execution_summary.get(
-            "execution_budget",
-            {},
-        )
-        expert_budget = (
-            dict(expert_budget)
-            if isinstance(expert_budget, Mapping)
-            else {}
-        )
-        expert_calls = int(expert_budget.get("calls_reserved") or 0)
-        call_count = governance_calls + expert_calls
-        if request_count != call_count:
-            raise RuntimeError(
-                "complete request audit and call ledger disagree: "
-                f"requests={request_count}, ledger={call_count}"
-            )
-        if call_count > approved.total_calls:
-            raise RuntimeError(
-                "approved total paid-call ceiling exceeded"
-            )
-        if governance_calls != CLAUDE_RED_TEAM_GOVERNANCE_CALLS:
-            raise RuntimeError(
-                "governance must use exactly GPT proposal, Claude once, and GPT synthesis"
-            )
-        if int(
-            inputs.governance_ledger.get(
-                "claude_red_team_calls"
-            ) or 0
-        ) != 1:
-            raise RuntimeError(
-                "Claude red-team call count must equal one"
-            )
-        if int(
-            inputs.governance_ledger.get(
-                "gpt_synthesis_calls"
-            ) or 0
-        ) != 1:
-            raise RuntimeError(
-                "GPT synthesis call count must equal one"
-            )
-        if inputs.governance_result.get("claude_covers_internal_selection") is not True:
-            raise RuntimeError("Claude evidence must cover internal expert selection")
-        if inputs.governance_result.get("claude_covers_external_information") is not True:
-            raise RuntimeError("Claude evidence must cover external information review")
-
-        actual_cost = float(
-            inputs.execution_summary.get("actual_cost_usd") or 0.0
-        )
-        if not math.isfinite(actual_cost) or actual_cost < 0:
-            raise RuntimeError("actual total cost is invalid")
-        if (
-            approved.cost_anomaly_usd is not None
-            and actual_cost > approved.cost_anomaly_usd + 1e-12
-        ):
-            raise RuntimeError(
-                "approved cost anomaly guard exceeded"
-            )
-
-        nodes = inputs.execution_graph.get("nodes", [])
-        nodes = (
-            [row for row in nodes if isinstance(row, Mapping)]
-            if isinstance(nodes, list)
-            else []
-        )
-        if len(nodes) > approved.expert_initial_calls:
-            raise RuntimeError(
-                "GPT proposal exceeds expert initial-call capacity"
-            )
-        if inputs.selection.get("optimizer_used") is not False:
-            raise RuntimeError(
-                "selection evidence must prove optimizer absent"
-            )
-        materialization = inputs.selection.get(
-            "materialization",
-            {},
-        )
-        if (
-            isinstance(materialization, Mapping)
-            and any(
-                materialization.get(key) is not False
-                for key in (
-                    "local_scoring_used",
-                    "optimizer_used",
-                    "cp_sat_used",
-                    "pareto_pruning_used",
-                    "heuristic_ranking_used",
-                )
-            )
-        ):
-            raise RuntimeError(
-                "obsolete selection algorithm evidence detected"
-            )
-
-        answer = str(
-            inputs.execution_summary.get("final_answer") or ""
-        ).strip()
-        if require_report and (
-            not inputs.final_report.strip() or not answer
-        ):
-            raise RuntimeError("V5 did not produce a final report")
-
-        governance_rows = inputs.governance_ledger.get("calls", [])
-        governance_rows = (
-            [
-                row
-                for row in governance_rows
-                if isinstance(row, Mapping)
-            ]
-            if isinstance(governance_rows, list)
-            else []
-        )
-        governance_models = sorted({
-            str(
-                row.get("resolved_model")
-                or row.get("requested_model")
-                or ""
-            )
-            for row in governance_rows
-            if row.get("resolved_model")
-            or row.get("requested_model")
-        })
-        expert_models = sorted({
-            str(row.get("model"))
-            for row in nodes
-            if row.get("model")
-        })
-        providers = sorted({
-            str(row.get("provider"))
-            for row in governance_rows
-            if row.get("provider")
-        } | {
-            str(request.get("provider", {}).get("only", [""])[0])
-            for request in requests
-            if isinstance(request.get("provider"), Mapping)
-            and isinstance(
-                request["provider"].get("only"),
-                list,
-            )
-            and request["provider"].get("only")
-        })
-        providers = [value for value in providers if value]
-
-        request_audit = {
-            **dict(inputs.request_audit),
-            "runtime_version": RUNTIME_VERSION,
-            "status": (
-                "PASS"
-                if inputs.request_audit.get("status") == "PASS"
-                and request_count == call_count
-                else "FAIL"
-            ),
-            "approved_total_call_ceiling": approved.total_calls,
-            "governance_call_count": governance_calls,
-            "expert_call_count": expert_calls,
-        }
-        if request_audit["status"] != "PASS":
-            raise RuntimeError(
-                "complete request audit did not pass"
-            )
-
-        ledger = {
-            "version": 5,
-            "runtime_version": RUNTIME_VERSION,
-            "summary": {
-                "call_count": call_count,
-                "governance_calls": governance_calls,
-                "expert_calls": expert_calls,
-                "approved_total_call_ceiling": (
-                    approved.total_calls
-                ),
-                "approved_recovery_call_ceiling": (
-                    approved.recovery_calls
-                ),
-                "provider_actual_cost_usd": round(
-                    actual_cost,
-                    8,
-                ),
-                "conservative_cost_usd": round(actual_cost, 8),
-                "cost_anomaly_usd": approved.cost_anomaly_usd,
-                "substantive_providers": providers,
-                "substantive_provider_count": len(providers),
-                "replacement_calls": int(
-                    expert_budget.get("replacements_reserved") or 0
-                ),
-                "retry_calls": int(
-                    expert_budget.get("retries_reserved") or 0
-                ),
-                "recovery_calls": int(
-                    expert_budget.get(
-                        "recovery_calls_reserved"
-                    ) or 0
-                ),
-            },
-            "governance": dict(inputs.governance_ledger),
-            "node_results": list(inputs.node_results),
-        }
-        selection = {
-            "version": 5,
-            "runtime_version": RUNTIME_VERSION,
-            "selection_authority": "~openai/gpt-latest",
-            "red_team_authority": (
-                "~anthropic/claude-opus-latest"
-            ),
-            "claude_red_team_calls": 1,
-            "gpt_synthesis_calls": int(
-                inputs.governance_ledger.get(
-                    "gpt_synthesis_calls"
-                ) or 0
-            ),
-            "expert_models": expert_models,
-            "governance_models": governance_models,
-            "node_count": len(nodes),
-            "catalog_snapshot_id": (
-                inputs.catalog_snapshot.get(
-                    "catalog_snapshot_id"
-                )
-            ),
-            "local_scoring_used": False,
-            "optimizer_used": False,
-            "cp_sat_used": False,
-            "pareto_pruning_used": False,
-            "cross_task_history_used": False,
-        }
-        routing = {
-            "version": 5,
-            "runtime_version": RUNTIME_VERSION,
-            "status": "PASS" if nodes else "FAIL",
-            "mode": "gpt-direct-single-claude-red-team",
-            "model_loop_allowed": False,
-        }
-        execution_summary = {
-            **dict(inputs.execution_summary),
-            "runtime_version": RUNTIME_VERSION,
-            "approved_budget": approved.to_dict(),
-            "catalog_snapshot_id": (
-                inputs.catalog_snapshot.get(
-                    "catalog_snapshot_id"
-                )
-            ),
-            "evidence_input_sha256": self.input_sha256(),
-        }
-        result = {
-            "version": 5,
-            "runtime_version": RUNTIME_VERSION,
-            "status": str(
-                inputs.execution_summary.get("status") or "failed"
-            ),
-            "completion_mode": str(
-                inputs.execution_summary.get(
-                    "completion_mode"
-                ) or "none"
-            ),
-            "quality_status": str(
-                inputs.execution_summary.get(
-                    "quality_status"
-                ) or "failed"
-            ),
-            "quality_integrity": (
-                inputs.execution_summary.get("quality_integrity")
-            ),
-            "final_answer": answer,
-            "actual_cost_usd": round(actual_cost, 8),
-            "executor": inputs.execution_summary.get("executor"),
-            "work_coverage": inputs.execution_summary.get(
-                "work_coverage"
-            ),
-            "degradation": inputs.execution_summary.get(
-                "degradation"
-            ),
-            "execution_budget": expert_budget,
-            "approved_budget": approved.to_dict(),
-            "governance": inputs.execution_summary.get(
-                "governance"
-            ),
-            "catalog_snapshot_id": (
-                inputs.catalog_snapshot.get(
-                    "catalog_snapshot_id"
-                )
-            ),
-            "node_count": len(nodes),
-            "model_count": len(expert_models),
-            "governance_model_count": len(governance_models),
-            "provider_count": len(providers),
-            "production_entrypoint": True,
-            "fallback_used": False,
-            "legacy_runtime_present": False,
-            "ticket_task_id": inputs.ticket.get("task_id"),
-            "evidence_input_sha256": self.input_sha256(),
-        }
-        runtime = {
-            "runtime_version": RUNTIME_VERSION,
-            "entrypoint": "v5_production_ticket.py",
-            "architecture": (
-                "gpt-latest-once -> claude-opus-latest-once -> "
-                "gpt-synthesis-once -> "
-                "deterministic-validator"
-            ),
-            **approved.to_dict(),
-            "selection_authority": "gpt-direct",
-            "local_planner_present": False,
-            "optimizer_present": False,
-            "fallback_policy": (
-                "fail-closed-no-alternate-runtime"
-            ),
-            "legacy_runtime_present": False,
-            "cross_task_history_used": False,
-        }
         return {
-            "request-audit.json": request_audit,
-            "call-ledger.json": ledger,
-            "model-selection.json": selection,
-            "task-routing.json": routing,
-            "execution-summary.json": execution_summary,
-            "expert-team-result.json": result,
-            "production-runtime.json": runtime,
+            "request-audit.json": _request_audit_document(
+                self.inputs,
+                self.approved,
+                prepared,
+            ),
+            "call-ledger.json": _ledger_document(
+                self.inputs,
+                self.approved,
+                prepared,
+            ),
+            "model-selection.json": _selection_document(
+                self.inputs,
+                prepared,
+            ),
+            "task-routing.json": _routing_document(prepared),
+            "execution-summary.json": _execution_summary_document(self, prepared),
+            "expert-team-result.json": _result_document(self, prepared),
+            "production-runtime.json": _runtime_document(self.approved),
         }
 
     def write(

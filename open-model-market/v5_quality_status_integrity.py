@@ -43,14 +43,12 @@ def _attempt_quality_failures(row: Mapping[str, Any]) -> list[dict[str, Any]]:
     return failures
 
 
-def enforce_result_integrity(result: Mapping[str, Any]) -> dict[str, Any]:
-    normalized = dict(result)
-    rows = normalized.get("node_results", [])
-    rows = rows if isinstance(rows, list) else []
+def _classify_node_rows(
+    rows: list[Any],
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
     degraded_nodes: list[dict[str, Any]] = []
     strict_nodes: list[str] = []
     failed_nodes: list[str] = []
-
     for row in rows:
         if not isinstance(row, Mapping):
             continue
@@ -76,36 +74,55 @@ def enforce_result_integrity(result: Mapping[str, Any]) -> dict[str, Any]:
             )
         else:
             failed_nodes.append(node_id)
+    return degraded_nodes, strict_nodes, failed_nodes
+
+
+def _apply_degradation(
+    normalized: dict[str, Any],
+    degraded_nodes: list[dict[str, Any]],
+) -> None:
+    normalized["completion_mode"] = "degraded"
+    normalized["quality_status"] = "degraded_success"
+    normalized["stop_reason"] = "usable-output-with-node-quality-or-contract-degradation"
+    degradation = dict(normalized.get("degradation") or {})
+    degradation.update(
+        {
+            "used": True,
+            "mode": "usable-node-output-after-quality-or-contract-degradation",
+            "extra_model_calls": int(degradation.get("extra_model_calls") or 0),
+            "degraded_node_ids": [row["node_id"] for row in degraded_nodes],
+        }
+    )
+    normalized["degradation"] = degradation
+
+
+def _integrity_status(
+    degraded_nodes: list[dict[str, Any]],
+    failed_nodes: list[str],
+    all_nodes_strict: bool,
+) -> str:
+    if degraded_nodes:
+        return "DEGRADED"
+    if failed_nodes:
+        return "FAIL"
+    return "PASS" if all_nodes_strict else "UNKNOWN"
+
+
+def enforce_result_integrity(result: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(result)
+    raw_rows = normalized.get("node_results", [])
+    rows = raw_rows if isinstance(raw_rows, list) else []
+    degraded_nodes, strict_nodes, failed_nodes = _classify_node_rows(rows)
 
     all_nodes_strict = bool(rows) and len(strict_nodes) == len(rows)
     if degraded_nodes:
-        normalized["completion_mode"] = "degraded"
-        normalized["quality_status"] = "degraded_success"
-        normalized["stop_reason"] = "usable-output-with-node-quality-or-contract-degradation"
-        degradation = dict(normalized.get("degradation") or {})
-        degradation.update(
-            {
-                "used": True,
-                "mode": "usable-node-output-after-quality-or-contract-degradation",
-                "extra_model_calls": int(degradation.get("extra_model_calls") or 0),
-                "degraded_node_ids": [row["node_id"] for row in degraded_nodes],
-            }
-        )
-        normalized["degradation"] = degradation
+        _apply_degradation(normalized, degraded_nodes)
     elif all_nodes_strict and normalized.get("status") == "success":
         normalized["completion_mode"] = "full"
         normalized["quality_status"] = "full_success"
 
     normalized["quality_integrity"] = {
-        "status": (
-            "DEGRADED"
-            if degraded_nodes
-            else "FAIL"
-            if failed_nodes
-            else "PASS"
-            if all_nodes_strict
-            else "UNKNOWN"
-        ),
+        "status": _integrity_status(degraded_nodes, failed_nodes, all_nodes_strict),
         "strict_success_statuses": sorted(STRICT_SUCCESS_STATUSES),
         "strict_node_ids": strict_nodes,
         "degraded_nodes": degraded_nodes,

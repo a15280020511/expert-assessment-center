@@ -283,6 +283,290 @@ def _dependency_violations(
     return violations
 
 
+def _proposal_collections(
+    proposal: Mapping[str, Any],
+    *,
+    approved_total_calls: int,
+    governance_calls_reserved: int,
+    approved_recovery_calls: int,
+) -> tuple[list[Any], list[Any], tuple[str, ...], set[str], int]:
+    raw_nodes = proposal.get("nodes")
+    raw_edges = proposal.get("edges")
+    raw_final = proposal.get("final_nodes")
+    if not isinstance(raw_nodes, list) or not raw_nodes:
+        raise ProposalValidationError("proposal nodes are missing")
+    if not isinstance(raw_edges, list) or not isinstance(raw_final, list):
+        raise ProposalValidationError("proposal edges/final_nodes are invalid")
+    if len(raw_edges) > MAX_EDGE_COUNT:
+        raise ProposalValidationError("proposal exceeds edge limit")
+    maximum_initial = (
+        int(approved_total_calls)
+        - int(governance_calls_reserved)
+        - int(approved_recovery_calls)
+    )
+    if maximum_initial < 1 or len(raw_nodes) > maximum_initial:
+        raise ProposalValidationError("proposal exceeds expert initial-call capacity")
+    raw_node_ids = {
+        str(row.get("node_id") or "")
+        for row in raw_nodes
+        if isinstance(row, Mapping)
+    }
+    final_nodes = tuple(str(value) for value in raw_final)
+    if not final_nodes or not set(final_nodes).issubset(raw_node_ids):
+        raise ProposalValidationError("final_nodes reference unknown nodes")
+    return raw_nodes, raw_edges, final_nodes, raw_node_ids, maximum_initial
+
+
+def _exact_endpoint(
+    endpoints: Mapping[tuple[str, str], Mapping[str, Any]],
+    raw: Mapping[str, Any],
+    *,
+    recovery: bool = False,
+) -> tuple[tuple[str, str], Mapping[str, Any], str]:
+    key = (str(raw.get("model") or ""), str(raw.get("provider") or ""))
+    endpoint = endpoints.get(key)
+    label = "recovery endpoint" if recovery else "endpoint"
+    if endpoint is None:
+        raise ProposalValidationError(f"unknown exact {label}: {key}")
+    company = canonical_model_company(key[0])
+    if company in GOVERNANCE_COMPANIES:
+        role = "recovery expert" if recovery else "expert"
+        raise ProposalValidationError(f"governance company cannot be a {role}")
+    return key, endpoint, company
+
+
+def _materialize_recoveries(
+    raw: Mapping[str, Any],
+    selected: SelectedNode,
+    endpoints: Mapping[tuple[str, str], Mapping[str, Any]],
+    task_envelope: Mapping[str, Any],
+    work_map: Mapping[str, Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    rows: list[dict[str, Any]] = []
+    companies: list[str] = []
+    for recovery in raw.get("recovery", []):
+        if not isinstance(recovery, Mapping):
+            raise ProposalValidationError("recovery row must be an object")
+        _, endpoint, company = _exact_endpoint(endpoints, recovery, recovery=True)
+        companies.append(company)
+        rows.append(
+            _recovery_row(
+                recovery,
+                endpoint,
+                selected,
+                task_envelope,
+                work_map,
+            )
+        )
+    return rows, companies
+
+
+def _materialize_nodes(
+    raw_nodes: Sequence[Any],
+    final_nodes: tuple[str, ...],
+    endpoints: Mapping[tuple[str, str], Mapping[str, Any]],
+    work_map: Mapping[str, Mapping[str, Any]],
+    task: str,
+    task_envelope: Mapping[str, Any],
+) -> tuple[list[SelectedNode], list[str], dict[str, list[dict[str, Any]]], list[str], list[str]]:
+    selected: list[SelectedNode] = []
+    selected_companies: list[str] = []
+    recovery_pool: dict[str, list[dict[str, Any]]] = {}
+    recovery_companies: list[str] = []
+    covered: list[str] = []
+    for raw in raw_nodes:
+        if not isinstance(raw, Mapping):
+            raise ProposalValidationError("node must be an object")
+        work_ids = [str(value) for value in raw.get("work_ids", [])]
+        if not work_ids or any(work_id not in work_map for work_id in work_ids):
+            raise ProposalValidationError("node references unknown work")
+        _, endpoint, company = _exact_endpoint(endpoints, raw)
+        node = _selected_node(
+            raw,
+            endpoint,
+            work_map,
+            task,
+            task_envelope,
+            final_node=str(raw.get("node_id") or "") in final_nodes,
+        )
+        recovery_rows, companies = _materialize_recoveries(
+            raw,
+            node,
+            endpoints,
+            task_envelope,
+            work_map,
+        )
+        selected.append(node)
+        selected_companies.append(company)
+        covered.extend(work_ids)
+        recovery_companies.extend(companies)
+        recovery_pool[node.node_id] = recovery_rows
+    return selected, selected_companies, recovery_pool, recovery_companies, covered
+
+
+def _validate_materialized_assignment(
+    covered: Sequence[str],
+    work_map: Mapping[str, Mapping[str, Any]],
+    selected_companies: Sequence[str],
+    recovery_companies: Sequence[str],
+    approved_recovery_calls: int,
+) -> None:
+    if any(count != 1 for count in Counter(covered).values()):
+        raise ProposalValidationError("each required work must be assigned once")
+    if set(covered) != set(work_map):
+        raise ProposalValidationError("proposal does not cover exact required work")
+    all_companies = list(selected_companies) + list(recovery_companies)
+    if len(all_companies) != len(set(all_companies)):
+        raise ProposalValidationError("expert and recovery companies must be globally unique")
+    if len(recovery_companies) > int(approved_recovery_calls):
+        raise ProposalValidationError("recovery proposal exceeds approved reserve")
+
+
+def _selected_edges(raw_edges: Sequence[Any]) -> tuple[SelectedEdge, ...]:
+    return tuple(
+        SelectedEdge(
+            source=str(row.get("source") or ""),
+            target=str(row.get("target") or ""),
+            relation_type=str(row.get("relation_type") or ""),
+            payload_type="structured-node-result",
+            visibility_policy="declared-edge-only",
+        )
+        for row in raw_edges
+        if isinstance(row, Mapping)
+    )
+
+
+def _graph_metadata(
+    proposal: Mapping[str, Any],
+    recovery_pool: Mapping[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    return {
+        "work_items": [dict(row) for row in proposal.get("work_items", [])],
+        "recovery_pool": dict(recovery_pool),
+        "selection_authority": "gpt-direct",
+        "local_task_classification_used": False,
+        "local_atomic_work_generation_used": False,
+        "local_resource_matrix_used": False,
+        "local_scoring_used": False,
+        "optimizer_used": False,
+        "cp_sat_used": False,
+        "pareto_pruning_used": False,
+        "heuristic_ranking_used": False,
+    }
+
+
+def _materialized_graph(
+    proposal: Mapping[str, Any],
+    selected: Sequence[SelectedNode],
+    edges: tuple[SelectedEdge, ...],
+    raw_node_ids: set[str],
+    final_nodes: tuple[str, ...],
+    work_map: Mapping[str, Mapping[str, Any]],
+    recovery_pool: Mapping[str, list[dict[str, Any]]],
+) -> ExecutionGraph:
+    cost = round(sum(node.estimated_cost for node in selected), 8)
+    provisional = ExecutionGraph(
+        nodes=tuple(selected),
+        edges=edges,
+        execution_stages=(tuple(sorted(raw_node_ids)),),
+        entry_nodes=(),
+        final_nodes=final_nodes,
+        required_work=tuple(work_map),
+        estimated_quality=0.0,
+        quality_floor=0.0,
+        estimated_total_cost=cost,
+        metadata=_graph_metadata(proposal, recovery_pool),
+    )
+    incoming = {edge.target for edge in edges}
+    return ExecutionGraph(
+        nodes=tuple(selected),
+        edges=edges,
+        execution_stages=derive_execution_stages(provisional),
+        entry_nodes=tuple(sorted(raw_node_ids - incoming)),
+        final_nodes=final_nodes,
+        required_work=tuple(work_map),
+        estimated_quality=0.0,
+        quality_floor=0.0,
+        estimated_total_cost=cost,
+        metadata=dict(provisional.metadata),
+    )
+
+
+def _proposal_limits(
+    maximum_initial: int,
+    approved_recovery_calls: int,
+    cost_anomaly_usd: float | None,
+) -> GraphLimits:
+    return GraphLimits(
+        max_nodes=maximum_initial,
+        max_edges=MAX_EDGE_COUNT,
+        max_stages=16,
+        max_model_calls=maximum_initial,
+        max_retries=0,
+        max_replacements=int(approved_recovery_calls),
+        max_budget_usd=cost_anomaly_usd,
+        min_required_work_coverage=1.0,
+        min_successful_content_nodes=1,
+        allow_degraded_success=False,
+        cost_risk_multiplier=COST_RISK_MULTIPLIER,
+    )
+
+
+def _validate_materialized_graph(
+    graph: ExecutionGraph,
+    limits: GraphLimits,
+    work_map: Mapping[str, Mapping[str, Any]],
+) -> None:
+    issues = list(validate_execution_graph(graph, limits))
+    dependency_issues = _dependency_violations(graph, work_map)
+    if issues or dependency_issues:
+        messages = [f"{issue.code}:{issue.message}" for issue in issues]
+        messages.extend(dependency_issues)
+        raise ProposalValidationError("; ".join(messages))
+
+
+def _risk_adjusted_cost(
+    graph: ExecutionGraph,
+    recovery_pool: Mapping[str, list[dict[str, Any]]],
+    cost_anomaly_usd: float | None,
+) -> float:
+    total = graph.estimated_total_cost * COST_RISK_MULTIPLIER
+    total += sum(
+        float(row.get("estimated_cost", 0.0)) * COST_RISK_MULTIPLIER
+        for rows in recovery_pool.values()
+        for row in rows
+    )
+    if cost_anomaly_usd is not None and total > float(cost_anomaly_usd) + 1e-12:
+        raise ProposalValidationError("proposal exceeds risk-adjusted cost guard")
+    return total
+
+
+def _materialization_audit(
+    work_map: Mapping[str, Mapping[str, Any]],
+    selected: Sequence[SelectedNode],
+    selected_companies: Sequence[str],
+    recovery_companies: Sequence[str],
+    maximum_initial: int,
+    total_risk_cost: float,
+) -> dict[str, Any]:
+    return {
+        "schema_version": "v5-gpt-proposal-materialization-2",
+        "status": "PASS",
+        "work_item_count": len(work_map),
+        "selected_node_count": len(selected),
+        "selected_companies": list(selected_companies),
+        "recovery_companies": list(recovery_companies),
+        "maximum_expert_initial_calls": maximum_initial,
+        "risk_adjusted_reserved_cost_usd": round(total_risk_cost, 8),
+        "local_task_classification_used": False,
+        "local_atomic_work_generation_used": False,
+        "local_resource_matrix_used": False,
+        "local_scoring_used": False,
+        "optimizer_used": False,
+        "proposal_repaired_by_validator": False,
+    }
+
+
 def materialize_proposal(
     proposal: Mapping[str, Any],
     task: str,
@@ -296,205 +580,51 @@ def materialize_proposal(
 ) -> tuple[ExecutionGraph, GraphLimits, dict[str, Any]]:
     work_map = _work_map(proposal)
     endpoints = catalog_index(catalog)
-    raw_nodes = proposal.get("nodes")
-    raw_edges = proposal.get("edges")
-    raw_final = proposal.get("final_nodes")
-    if not isinstance(raw_nodes, list) or not raw_nodes:
-        raise ProposalValidationError("proposal nodes are missing")
-    if not isinstance(raw_edges, list) or not isinstance(raw_final, list):
-        raise ProposalValidationError("proposal edges/final_nodes are invalid")
-    if len(raw_edges) > MAX_EDGE_COUNT:
-        raise ProposalValidationError("proposal exceeds edge limit")
-
-    maximum_initial = (
-        int(approved_total_calls)
-        - int(governance_calls_reserved)
-        - int(approved_recovery_calls)
+    raw_nodes, raw_edges, final_nodes, node_ids, maximum_initial = _proposal_collections(
+        proposal,
+        approved_total_calls=approved_total_calls,
+        governance_calls_reserved=governance_calls_reserved,
+        approved_recovery_calls=approved_recovery_calls,
     )
-    if maximum_initial < 1 or len(raw_nodes) > maximum_initial:
-        raise ProposalValidationError("proposal exceeds expert initial-call capacity")
-
-    raw_node_ids = {
-        str(row.get("node_id") or "")
-        for row in raw_nodes
-        if isinstance(row, Mapping)
-    }
-    final_nodes = tuple(str(value) for value in raw_final)
-    if not final_nodes or not set(final_nodes).issubset(raw_node_ids):
-        raise ProposalValidationError("final_nodes reference unknown nodes")
-
-    selected: list[SelectedNode] = []
-    selected_companies: list[str] = []
-    recovery_pool: dict[str, list[dict[str, Any]]] = {}
-    recovery_companies: list[str] = []
-    covered: list[str] = []
-    for raw in raw_nodes:
-        if not isinstance(raw, Mapping):
-            raise ProposalValidationError("node must be an object")
-        work_ids = [str(value) for value in raw.get("work_ids", [])]
-        if not work_ids or any(work_id not in work_map for work_id in work_ids):
-            raise ProposalValidationError("node references unknown work")
-        key = (str(raw.get("model") or ""), str(raw.get("provider") or ""))
-        endpoint = endpoints.get(key)
-        if endpoint is None:
-            raise ProposalValidationError(f"unknown exact endpoint: {key}")
-        company = canonical_model_company(key[0])
-        if company in GOVERNANCE_COMPANIES:
-            raise ProposalValidationError("governance company cannot be an expert")
-        selected_companies.append(company)
-        node = _selected_node(
-            raw,
-            endpoint,
-            work_map,
-            task,
-            task_envelope,
-            final_node=str(raw.get("node_id") or "") in final_nodes,
-        )
-        selected.append(node)
-        covered.extend(work_ids)
-
-        recovery_rows: list[dict[str, Any]] = []
-        for recovery in raw.get("recovery", []):
-            if not isinstance(recovery, Mapping):
-                raise ProposalValidationError("recovery row must be an object")
-            recovery_key = (
-                str(recovery.get("model") or ""),
-                str(recovery.get("provider") or ""),
-            )
-            recovery_endpoint = endpoints.get(recovery_key)
-            if recovery_endpoint is None:
-                raise ProposalValidationError(
-                    f"unknown exact recovery endpoint: {recovery_key}"
-                )
-            recovery_company = canonical_model_company(recovery_key[0])
-            if recovery_company in GOVERNANCE_COMPANIES:
-                raise ProposalValidationError(
-                    "governance company cannot be a recovery expert"
-                )
-            recovery_companies.append(recovery_company)
-            recovery_rows.append(
-                _recovery_row(
-                    recovery,
-                    recovery_endpoint,
-                    node,
-                    task_envelope,
-                    work_map,
-                )
-            )
-        recovery_pool[node.node_id] = recovery_rows
-
-    if any(count != 1 for count in Counter(covered).values()):
-        raise ProposalValidationError("each required work must be assigned once")
-    if set(covered) != set(work_map):
-        raise ProposalValidationError("proposal does not cover exact required work")
-    all_companies = selected_companies + recovery_companies
-    if len(all_companies) != len(set(all_companies)):
-        raise ProposalValidationError(
-            "expert and recovery companies must be globally unique"
-        )
-    if len(recovery_companies) > int(approved_recovery_calls):
-        raise ProposalValidationError("recovery proposal exceeds approved reserve")
-
-    edges = tuple(
-        SelectedEdge(
-            source=str(row.get("source") or ""),
-            target=str(row.get("target") or ""),
-            relation_type=str(row.get("relation_type") or ""),
-            payload_type="structured-node-result",
-            visibility_policy="declared-edge-only",
-        )
-        for row in raw_edges
-        if isinstance(row, Mapping)
+    selected, selected_companies, recovery_pool, recovery_companies, covered = _materialize_nodes(
+        raw_nodes,
+        final_nodes,
+        endpoints,
+        work_map,
+        task,
+        task_envelope,
     )
-    provisional = ExecutionGraph(
-        nodes=tuple(selected),
-        edges=edges,
-        execution_stages=(tuple(sorted(raw_node_ids)),),
-        entry_nodes=(),
-        final_nodes=final_nodes,
-        required_work=tuple(work_map),
-        estimated_quality=0.0,
-        quality_floor=0.0,
-        estimated_total_cost=round(
-            sum(node.estimated_cost for node in selected), 8
-        ),
-        metadata={
-            "work_items": [dict(row) for row in proposal.get("work_items", [])],
-            "recovery_pool": recovery_pool,
-            "selection_authority": "gpt-direct",
-            "local_task_classification_used": False,
-            "local_atomic_work_generation_used": False,
-            "local_resource_matrix_used": False,
-            "local_scoring_used": False,
-            "optimizer_used": False,
-            "cp_sat_used": False,
-            "pareto_pruning_used": False,
-            "heuristic_ranking_used": False,
-        },
+    _validate_materialized_assignment(
+        covered,
+        work_map,
+        selected_companies,
+        recovery_companies,
+        approved_recovery_calls,
     )
-    stages = derive_execution_stages(provisional)
-    incoming = {edge.target for edge in edges}
-    graph = ExecutionGraph(
-        nodes=tuple(selected),
-        edges=edges,
-        execution_stages=stages,
-        entry_nodes=tuple(sorted(raw_node_ids - incoming)),
-        final_nodes=final_nodes,
-        required_work=tuple(work_map),
-        estimated_quality=0.0,
-        quality_floor=0.0,
-        estimated_total_cost=provisional.estimated_total_cost,
-        metadata=dict(provisional.metadata),
+    graph = _materialized_graph(
+        proposal,
+        selected,
+        _selected_edges(raw_edges),
+        node_ids,
+        final_nodes,
+        work_map,
+        recovery_pool,
     )
-    limits = GraphLimits(
-        max_nodes=maximum_initial,
-        max_edges=MAX_EDGE_COUNT,
-        max_stages=16,
-        max_model_calls=maximum_initial,
-        max_retries=0,
-        max_replacements=int(approved_recovery_calls),
-        max_budget_usd=cost_anomaly_usd,
-        min_required_work_coverage=1.0,
-        min_successful_content_nodes=1,
-        allow_degraded_success=False,
-        cost_risk_multiplier=COST_RISK_MULTIPLIER,
+    limits = _proposal_limits(
+        maximum_initial,
+        approved_recovery_calls,
+        cost_anomaly_usd,
     )
-    issues = list(validate_execution_graph(graph, limits))
-    dependency_issues = _dependency_violations(graph, work_map)
-    if issues or dependency_issues:
-        messages = [f"{issue.code}:{issue.message}" for issue in issues]
-        messages.extend(dependency_issues)
-        raise ProposalValidationError("; ".join(messages))
-
-    total_risk_cost = graph.estimated_total_cost * COST_RISK_MULTIPLIER
-    total_risk_cost += sum(
-        float(row.get("estimated_cost", 0.0)) * COST_RISK_MULTIPLIER
-        for rows in recovery_pool.values()
-        for row in rows
+    _validate_materialized_graph(graph, limits, work_map)
+    risk_cost = _risk_adjusted_cost(graph, recovery_pool, cost_anomaly_usd)
+    return graph, limits, _materialization_audit(
+        work_map,
+        selected,
+        selected_companies,
+        recovery_companies,
+        maximum_initial,
+        risk_cost,
     )
-    if (
-        cost_anomaly_usd is not None
-        and total_risk_cost > float(cost_anomaly_usd) + 1e-12
-    ):
-        raise ProposalValidationError("proposal exceeds risk-adjusted cost guard")
-
-    audit = {
-        "schema_version": "v5-gpt-proposal-materialization-2",
-        "status": "PASS",
-        "work_item_count": len(work_map),
-        "selected_node_count": len(selected),
-        "selected_companies": selected_companies,
-        "recovery_companies": recovery_companies,
-        "maximum_expert_initial_calls": maximum_initial,
-        "risk_adjusted_reserved_cost_usd": round(total_risk_cost, 8),
-        "local_task_classification_used": False,
-        "local_atomic_work_generation_used": False,
-        "local_resource_matrix_used": False,
-        "local_scoring_used": False,
-        "optimizer_used": False,
-        "proposal_repaired_by_validator": False,
-    }
-    return graph, limits, audit
 
 
 def deterministic_violations(
@@ -527,6 +657,79 @@ def _bounded_task_excerpt(task: str) -> tuple[str, bool]:
     return text[:head] + "\n[...task excerpt truncated...]\n" + text[-tail:], True
 
 
+def _claude_work_items(
+    work_map: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "work_id": work_id,
+            "objective": str(row.get("objective") or ""),
+            "dependencies": [str(value) for value in row.get("dependencies", [])],
+            "required_outputs": [str(value) for value in row.get("required_outputs", [])],
+        }
+        for work_id, row in work_map.items()
+    ]
+
+
+def _claude_node_row(
+    raw: Mapping[str, Any],
+    endpoints: Mapping[tuple[str, str], Mapping[str, Any]],
+    task_envelope: Mapping[str, Any],
+    work_map: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    model = str(raw.get("model") or "unknown")
+    provider = str(raw.get("provider") or "unknown")
+    endpoint = endpoints.get((model, provider), {})
+    work_ids = [str(value) for value in raw.get("work_ids", [])]
+    maximum = int(raw.get("max_output_tokens") or 0)
+    estimated = (
+        _estimated_cost(endpoint, task_envelope, work_map, work_ids, maximum)
+        if endpoint and all(value in work_map for value in work_ids)
+        else 0.0
+    )
+    return {
+        "node_id": str(raw.get("node_id") or "unknown"),
+        "candidate_id": f"{model}@{provider}",
+        "work_ids": work_ids,
+        "role": str(raw.get("role") or ""),
+        "functions": [str(value) for value in raw.get("functions", [])],
+        "model": model,
+        "company": canonical_model_company(model),
+        "provider": provider,
+        "estimated_cost_usd": estimated,
+        "contract_kind": "gpt-authored-expert-node",
+        "recovery_candidate_ids": [
+            f"{row.get('model')}@{row.get('provider')}"
+            for row in raw.get("recovery", [])
+            if isinstance(row, Mapping)
+        ],
+    }
+
+
+def _claude_nodes(
+    proposal: Mapping[str, Any],
+    endpoints: Mapping[tuple[str, str], Mapping[str, Any]],
+    task_envelope: Mapping[str, Any],
+    work_map: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        _claude_node_row(raw, endpoints, task_envelope, work_map)
+        for raw in proposal.get("nodes", [])
+        if isinstance(raw, Mapping)
+    ]
+
+
+def _claude_edges(proposal: Mapping[str, Any]) -> list[dict[str, str]]:
+    return [
+        {
+            "source": str(row.get("source") or "unknown"),
+            "target": str(row.get("target") or "unknown"),
+        }
+        for row in proposal.get("edges", [])
+        if isinstance(row, Mapping)
+    ]
+
+
 def claude_unified_review_payload(
     proposal: Mapping[str, Any],
     task: str,
@@ -542,64 +745,6 @@ def claude_unified_review_payload(
     """Build one bounded Claude input for selection and information review."""
     endpoints = catalog_index(catalog)
     work_map = _work_map(proposal)
-    work_items = [
-        {
-            "work_id": work_id,
-            "objective": str(row.get("objective") or ""),
-            "dependencies": [str(value) for value in row.get("dependencies", [])],
-            "required_outputs": [
-                str(value) for value in row.get("required_outputs", [])
-            ],
-        }
-        for work_id, row in work_map.items()
-    ]
-    nodes: list[dict[str, Any]] = []
-    for raw in proposal.get("nodes", []):
-        if not isinstance(raw, Mapping):
-            continue
-        model = str(raw.get("model") or "unknown")
-        provider = str(raw.get("provider") or "unknown")
-        endpoint = endpoints.get((model, provider), {})
-        work_ids = [str(value) for value in raw.get("work_ids", [])]
-        maximum = int(raw.get("max_output_tokens") or 0)
-        estimated = (
-            _estimated_cost(
-                endpoint,
-                task_envelope,
-                work_map,
-                work_ids,
-                maximum,
-            )
-            if endpoint and all(value in work_map for value in work_ids)
-            else 0.0
-        )
-        nodes.append(
-            {
-                "node_id": str(raw.get("node_id") or "unknown"),
-                "candidate_id": f"{model}@{provider}",
-                "work_ids": work_ids,
-                "role": str(raw.get("role") or ""),
-                "functions": [str(value) for value in raw.get("functions", [])],
-                "model": model,
-                "company": canonical_model_company(model),
-                "provider": provider,
-                "estimated_cost_usd": estimated,
-                "contract_kind": "gpt-authored-expert-node",
-                "recovery_candidate_ids": [
-                    f"{row.get('model')}@{row.get('provider')}"
-                    for row in raw.get("recovery", [])
-                    if isinstance(row, Mapping)
-                ],
-            }
-        )
-    edges = [
-        {
-            "source": str(row.get("source") or "unknown"),
-            "target": str(row.get("target") or "unknown"),
-        }
-        for row in proposal.get("edges", [])
-        if isinstance(row, Mapping)
-    ]
     excerpt, truncated = _bounded_task_excerpt(task)
     return {
         "task_digest": task_digest,
@@ -615,9 +760,9 @@ def claude_unified_review_payload(
         "explicit_delivery_contract": dict(
             task_envelope.get("explicit_delivery_contract") or {}
         ),
-        "work_items": work_items,
-        "nodes": nodes,
-        "edges": edges,
+        "work_items": _claude_work_items(work_map),
+        "nodes": _claude_nodes(proposal, endpoints, task_envelope, work_map),
+        "edges": _claude_edges(proposal),
     }
 
 
