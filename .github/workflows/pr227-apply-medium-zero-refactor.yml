@@ -88,27 +88,37 @@ jobs:
           from pathlib import Path
 
           path = Path("open-model-market/v5_runtime.py")
-          text = path.read_text(encoding="utf-8")
-          old = '''        call = lambda node, kind: self._recorded_call(
-              selected, attempts, original_task, upstream, run, call_fn, budget, node, kind
+          lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+          matches = [
+              index
+              for index, line in enumerate(lines)
+              if line.strip() == "call = lambda node, kind: self._recorded_call("
+          ]
+          if len(matches) != 1:
+              raise SystemExit(f"expected one runtime call lambda, found {len(matches)}")
+          index = matches[0]
+          expected_arguments = (
+              "selected, attempts, original_task, upstream, run, call_fn, budget, node, kind"
           )
-          '''
-          new = '''        def call(node: SelectedNode, kind: str) -> RuntimeAttempt | None:
-              return self._recorded_call(
-                  selected,
-                  attempts,
-                  original_task,
-                  upstream,
-                  run,
-                  call_fn,
-                  budget,
-                  node,
-                  kind,
-              )
-          '''
-          if text.count(old) != 1:
-              raise SystemExit("expected exactly one v5_runtime call lambda")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          if lines[index + 1].strip() != expected_arguments or lines[index + 2].strip() != ")":
+              raise SystemExit("runtime call lambda body changed unexpectedly")
+          indent = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
+          replacement = [
+              f"{indent}def call(node: SelectedNode, kind: str) -> RuntimeAttempt | None:\n",
+              f"{indent}    return self._recorded_call(\n",
+              f"{indent}        selected,\n",
+              f"{indent}        attempts,\n",
+              f"{indent}        original_task,\n",
+              f"{indent}        upstream,\n",
+              f"{indent}        run,\n",
+              f"{indent}        call_fn,\n",
+              f"{indent}        budget,\n",
+              f"{indent}        node,\n",
+              f"{indent}        kind,\n",
+              f"{indent}    )\n",
+          ]
+          lines[index : index + 3] = replacement
+          path.write_text("".join(lines), encoding="utf-8")
           PY
           git diff --check
           git diff --stat > /tmp/pr227-evidence/refactor-diff-stat.txt
