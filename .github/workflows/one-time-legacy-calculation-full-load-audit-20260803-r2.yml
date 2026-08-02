@@ -1,0 +1,369 @@
+name: One-Time Legacy Calculation and Full Load Audit 2026-08-03 R2
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: legacy-calculation-full-load-audit-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: false
+
+env:
+  OPENROUTER_API_KEY: ""
+  ANTHROPIC_API_KEY: ""
+  MODEL_MAX_RETRIES: "0"
+
+jobs:
+  source-binding:
+    name: Bind audit to frozen main and production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify immutable production baseline and audit-only diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          production="$(git ls-remote origin refs/heads/production | awk '{print $1}')"
+          test "$base" = "$main"
+          test "$main" = "$production"
+          changed="$(git diff --name-only "$base"...HEAD)"
+          test "$changed" = ".github/workflows/one-time-legacy-calculation-full-load-audit-20260803-r2.yml"
+
+  legacy-architecture-audit:
+    name: Detect production-reachable legacy calculation and missing Claude red team
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Build production reachability, duplication and mutation inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p audit-artifacts
+          python - <<'PY'
+          from __future__ import annotations
+          import ast
+          import hashlib
+          import json
+          import re
+          import subprocess
+          from collections import defaultdict, deque
+          from pathlib import Path
+
+          root = Path('.')
+          market = root / 'open-model-market'
+          tracked = subprocess.check_output(['git', 'ls-files'], text=True).splitlines()
+          production_py = sorted(market.glob('*.py'))
+          module_paths = {p.stem: p for p in production_py}
+          graph: dict[str, set[str]] = {name: set() for name in module_paths}
+          parse_errors: list[dict[str, str]] = []
+          large_functions: list[dict[str, object]] = []
+          imported_attr_mutations: list[dict[str, object]] = []
+          duplicate_bodies: defaultdict[str, list[dict[str, object]]] = defaultdict(list)
+
+          for module, path in module_paths.items():
+              try:
+                  tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+              except Exception as exc:
+                  parse_errors.append({'path': str(path), 'error': repr(exc)})
+                  continue
+              imported_names: set[str] = set()
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Import):
+                      for alias in node.names:
+                          root_name = (alias.asname or alias.name.split('.')[0])
+                          imported_names.add(root_name)
+                          target = alias.name.split('.')[0]
+                          if target in module_paths:
+                              graph[module].add(target)
+                  elif isinstance(node, ast.ImportFrom) and node.module:
+                      target = node.module.split('.')[0]
+                      if target in module_paths:
+                          graph[module].add(target)
+                      for alias in node.names:
+                          imported_names.add(alias.asname or alias.name)
+              for node in ast.walk(tree):
+                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                      end = getattr(node, 'end_lineno', node.lineno)
+                      size = int(end - node.lineno + 1)
+                      if size >= 180:
+                          large_functions.append({'path': str(path), 'function': node.name, 'lines': size, 'line': node.lineno})
+                      body = list(node.body)
+                      if body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], 'value', None), ast.Constant) and isinstance(body[0].value.value, str):
+                          body = body[1:]
+                      if len(body) >= 4:
+                          digest = hashlib.sha256(ast.dump(ast.Module(body=body, type_ignores=[]), include_attributes=False).encode()).hexdigest()
+                          duplicate_bodies[digest].append({'path': str(path), 'function': node.name, 'line': node.lineno, 'lines': size})
+                  if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                      targets = []
+                      if isinstance(node, ast.Assign):
+                          targets = node.targets
+                      else:
+                          targets = [node.target]
+                      for target in targets:
+                          if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) and target.value.id in imported_names:
+                              imported_attr_mutations.append({'path': str(path), 'line': node.lineno, 'target': f'{target.value.id}.{target.attr}'})
+
+          entrypoints = ['v5_production_ticket', 'v5_issue_ticket']
+          reachable: set[str] = set()
+          queue = deque(name for name in entrypoints if name in graph)
+          while queue:
+              current = queue.popleft()
+              if current in reachable:
+                  continue
+              reachable.add(current)
+              queue.extend(sorted(graph.get(current, set()) - reachable))
+
+          forbidden_modules = {
+              'v5_value_optimizer',
+              'v5_planner',
+              'v5_planning_runtime',
+              'v5_constitutional_pipeline',
+              'v5_cross_endpoint_planner_impl',
+              'v5_company_diversity',
+              'v5_endpoint_catalog',
+              'model_market',
+          }
+          reachable_forbidden = sorted(reachable & forbidden_modules)
+          present_forbidden = sorted(forbidden_modules & set(module_paths))
+
+          marker_patterns = {
+              'ortools_cp_sat': re.compile(r'\b(?:ortools|cp_model|CpSolver|CpModel)\b'),
+              'optimizer_entry': re.compile(r'\b(?:optimize_execution_graph|v5_value_optimizer)\b'),
+              'candidate_graph': re.compile(r'\b(?:compile_model_endpoint_market|generate_candidate_graph|maximum_candidates_per_work)\b'),
+              'solver_cli': re.compile(r'--solver-timeout-seconds|solver_timeout_seconds'),
+              'ranking_and_tiers': re.compile(r'\b(?:ranking_limit|quality_tier|cost-performance|estimated_quality)\b'),
+              'known_global_patch': re.compile(r'_install_schema_messages|\._format_schema_error\s*=|\._issue_comments\s*=|\._execution_state\s*=|\.task_fingerprint\s*='),
+          }
+          marker_hits: dict[str, list[dict[str, object]]] = {key: [] for key in marker_patterns}
+          text_scope = [Path(p) for p in tracked if p.startswith('open-model-market/') or p in {'requirements-runtime.txt', 'requirements-dev.txt', 'pyproject.toml'}]
+          for path in text_scope:
+              if not path.is_file():
+                  continue
+              try:
+                  lines = path.read_text(encoding='utf-8').splitlines()
+              except UnicodeDecodeError:
+                  continue
+              for line_no, line in enumerate(lines, 1):
+                  for key, pattern in marker_patterns.items():
+                      if pattern.search(line):
+                          marker_hits[key].append({'path': str(path), 'line': line_no, 'text': line.strip()[:240]})
+
+          all_prod_text = '\n'.join(p.read_text(encoding='utf-8', errors='replace') for p in production_py)
+          red_team_contract = {
+              'claude_opus_latest_present': 'claude-opus-latest' in all_prod_text,
+              'red_team_present': bool(re.search(r'red[-_ ]team', all_prod_text, re.I)),
+              'single_pass_present': bool(re.search(r'(?:single|one)[-_ ]pass|exactly once|run once', all_prod_text, re.I)),
+              'advisory_non_gate_present': bool(re.search(r'advisory|non[-_ ]blocking|not.{0,20}gate|recommendation', all_prod_text, re.I | re.S)),
+          }
+
+          duplicate_groups = [rows for rows in duplicate_bodies.values() if len({row['path'] for row in rows}) > 1]
+          duplicate_groups.sort(key=lambda rows: (-len(rows), str(rows[0]['path']), str(rows[0]['function'])))
+
+          blocking_reasons = []
+          if reachable_forbidden:
+              blocking_reasons.append('production-reachable legacy calculation modules remain')
+          if marker_hits['ortools_cp_sat']:
+              blocking_reasons.append('OR-Tools/CP-SAT calculation code remains in production scope')
+          if not red_team_contract['claude_opus_latest_present']:
+              blocking_reasons.append('claude-opus-latest is absent from production code')
+          if not red_team_contract['red_team_present']:
+              blocking_reasons.append('no production Claude red-team implementation detected')
+          if imported_attr_mutations or marker_hits['known_global_patch']:
+              blocking_reasons.append('module/global runtime mutation remains')
+
+          report = {
+              'baseline_sha': subprocess.check_output(['git', 'rev-parse', '${{ github.event.pull_request.base.sha }}'], text=True).strip(),
+              'audited_head_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+              'production_python_files': len(production_py),
+              'entrypoints': entrypoints,
+              'reachable_module_count': len(reachable),
+              'reachable_modules': sorted(reachable),
+              'present_forbidden_modules': present_forbidden,
+              'reachable_forbidden_modules': reachable_forbidden,
+              'marker_hit_counts': {key: len(value) for key, value in marker_hits.items()},
+              'marker_hits': marker_hits,
+              'red_team_contract': red_team_contract,
+              'imported_module_attribute_mutations': imported_attr_mutations,
+              'large_functions': sorted(large_functions, key=lambda x: (-int(x['lines']), str(x['path']), str(x['function']))),
+              'cross_file_duplicate_function_bodies': duplicate_groups,
+              'parse_errors': parse_errors,
+              'blocking_reasons': blocking_reasons,
+              'status': 'FAIL' if blocking_reasons else 'PASS',
+          }
+          Path('audit-artifacts/legacy-architecture-audit.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+          Path('audit-artifacts/legacy-architecture-summary.txt').write_text(
+              '\n'.join([
+                  f"status={report['status']}",
+                  f"reachable_forbidden={','.join(reachable_forbidden)}",
+                  f"claude_opus_latest_present={red_team_contract['claude_opus_latest_present']}",
+                  f"red_team_present={red_team_contract['red_team_present']}",
+                  f"global_mutations={len(imported_attr_mutations) + len(marker_hits['known_global_patch'])}",
+                  f"duplicate_groups={len(duplicate_groups)}",
+                  f"large_functions={len(large_functions)}",
+                  *[f"blocking={reason}" for reason in blocking_reasons],
+              ]) + '\n', encoding='utf-8')
+          print(Path('audit-artifacts/legacy-architecture-summary.txt').read_text(encoding='utf-8'))
+          PY
+      - name: Upload architecture evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: legacy-architecture-audit-${{ github.run_id }}
+          path: audit-artifacts/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Enforce no-legacy-calculation and Claude-red-team contract
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('audit-artifacts/legacy-architecture-audit.json').read_text(encoding='utf-8'))
+          if report['status'] != 'PASS':
+              raise SystemExit('ARCHITECTURE_CONTRACT_FAILED: ' + '; '.join(report['blocking_reasons']))
+          PY
+
+  full-repository-suite:
+    name: Full regression, static, compile and repository audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned development dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+      - name: Ruff and full Python compilation
+        run: |
+          ruff check .
+          python -m compileall -q open-model-market tests tools
+      - name: Run complete unit test suite
+        run: python -m unittest discover -s tests -p 'test*.py' -v
+      - name: Run repository line audit at high threshold
+        run: python tools/repository_audit.py --root . --output-dir repository-audit-artifacts --fail-on high
+      - name: Upload full-suite evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: full-suite-audit-${{ github.run_id }}
+          path: repository-audit-artifacts/
+          if-no-files-found: warn
+          retention-days: 30
+
+  runtime-full-load:
+    name: Runtime full load seed ${{ matrix.seed }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [0, 1, 7, 42, 31337, 65535]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned development dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+      - name: Run concurrent budget, recovery, evidence and isolation load
+        env:
+          PYTHONHASHSEED: ${{ matrix.seed }}
+        run: |
+          set -euo pipefail
+          python -m unittest -v \
+            tests.test_v5_full_load_stability \
+            tests.test_v5_stress_stability \
+            tests.test_v5_cross_endpoint_recovery \
+            tests.test_v5_critical_delivery_reliability \
+            tests.test_v5_v4_contract_isolation \
+            tests.test_v5_failure_evidence_chain \
+            tests.test_v5_failure_evidence_persistence \
+            tests.test_v5_admission_task_isolation \
+            tests.test_v5_final_contract_runtime_isolation \
+            tests.test_objective_isolation \
+            tests.test_v5_operational_resilience \
+            tests.test_v5_operational_resilience_scope \
+            tests.test_v5_reasoning_saturation_recovery \
+            tests.test_v5_recovery_absolute_budget_feasibility \
+            tests.test_v5_recovery_guard_production_regression \
+            tests.test_v5_budget_runtime_parity \
+            tests.test_v5_general_task_full_planning
+
+  ticket-single-process-pollution:
+    name: Ticket parser same-process randomized repetition
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned development dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+      - name: Re-run ticket and issue tests repeatedly in one interpreter
+        shell: bash
+        run: |
+          python - <<'PY'
+          import random
+          import unittest
+
+          def flatten(suite):
+              for item in suite:
+                  if isinstance(item, unittest.TestSuite):
+                      yield from flatten(item)
+                  else:
+                      yield item
+
+          loader = unittest.TestLoader()
+          patterns = ['*ticket*.py', '*issue*.py']
+          seeds = [0, 1, 7, 42, 31337, 65535, 99991, 104729]
+          total = 0
+          for seed in seeds:
+              cases = []
+              for pattern in patterns:
+                  cases.extend(flatten(loader.discover('tests', pattern=pattern)))
+              unique = {case.id(): case for case in cases}
+              cases = list(unique.values())
+              random.Random(seed).shuffle(cases)
+              result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(cases))
+              total += result.testsRun
+              if result.failures or result.errors or result.unexpectedSuccesses:
+                  raise SystemExit(f'same-process ticket pollution failure at seed={seed}')
+          if total == 0:
+              raise SystemExit('no ticket/issue tests discovered')
+          print(f'same_process_randomized_tests={total}')
+          PY
