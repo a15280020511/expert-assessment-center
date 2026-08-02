@@ -82,3 +82,5 @@ jobs:
           test -n "$(git status --porcelain)"
           git commit -m 'fix(runtime): unify Claude red-team and remove legacy planning residue'
           git push origin HEAD:fix/v5-claude-unified-red-team-cleanup-20260803
+
+# retry: shared task identity module is now present
