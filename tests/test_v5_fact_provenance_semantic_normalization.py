@@ -97,7 +97,10 @@ class V5FactProvenanceSemanticNormalizationTests(unittest.TestCase):
         )
 
     def test_clause_context_cannot_stitch_spatial_facts(self) -> None:
-        task = "东门外有2名访客等待核验。西门外有维修人员要求进入。"
+        task = (
+            "仅依据题面：东门外有2名访客等待核验。"
+            "西门外有维修人员要求进入。禁止编造题面外事实。"
+        )
         self.assertTrue(fact_claim_supported(task, "西门外有维修人员要求进入"))
         self.assertFalse(fact_claim_supported(task, "东门外有维修人员要求进入"))
         self.assertTrue(
