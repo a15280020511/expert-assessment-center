@@ -84,14 +84,22 @@ class RecoveryGuardProductionRegressionTests(unittest.TestCase):
         ok, reason = budget.reserve("initial", 0.01, "initial")
         self.assertTrue(ok, reason)
         budget.reconcile(0.01)
+        multiplier = 1.18 * 1.22
         ok, reason = budget.reserve(
             "replacement",
             0.27289742,
             "final",
-            risk_multiplier=1.18 * 1.22,
+            risk_multiplier=multiplier,
         )
         self.assertFalse(ok)
         self.assertEqual("risk-adjusted-cost-anomaly-limit-exhausted", reason)
+        denial = budget.snapshot()["denials"][-1]
+        self.assertAlmostEqual(multiplier, denial["risk_multiplier"], places=8)
+        self.assertAlmostEqual(
+            0.27289742 * multiplier,
+            denial["risk_adjusted_cost_usd"],
+            places=8,
+        )
 
     def test_explicit_contract_uses_completion_token_floor_for_deadline(self) -> None:
         candidate = SimpleNamespace(
