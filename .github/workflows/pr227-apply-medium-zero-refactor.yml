@@ -41,6 +41,25 @@ jobs:
             requirements-runtime.txt
             requirements-dev.txt
 
+      - name: Verify every staged patch chunk
+        run: |
+          set -euo pipefail
+          wc -c tools/.pr227-patch/chunk-*
+          sha256sum tools/.pr227-patch/chunk-*
+          cat > /tmp/pr227-chunks.sha256 <<'EOF'
+          bac8f441cb6937a626dd3654b2ef12de2593dc4d2ace5229197c2501dce7861b  tools/.pr227-patch/chunk-00
+          cfb0caa05e3e999880c7677bd865308a0cd37697506db581ff1ebc18fd146e20  tools/.pr227-patch/chunk-01
+          5edd1c8639bd5d204f70860f3f49d9d2eaed44208c81cc5ff97a8e9ea1be2b1b  tools/.pr227-patch/chunk-02
+          fc43296487704ba930fefcdc043f147ea99fc326bfdb07bf6dd436a4b37666e6  tools/.pr227-patch/chunk-03
+          cd0e26864568cb63b56f1c9b19410f9faa5f293f3988039609bf20acb8b18c6a  tools/.pr227-patch/chunk-04
+          EOF
+          sha256sum --check /tmp/pr227-chunks.sha256
+          test "$(wc -c < tools/.pr227-patch/chunk-00)" -eq 8000
+          test "$(wc -c < tools/.pr227-patch/chunk-01)" -eq 20000
+          test "$(wc -c < tools/.pr227-patch/chunk-02)" -eq 20000
+          test "$(wc -c < tools/.pr227-patch/chunk-03)" -eq 20000
+          test "$(wc -c < tools/.pr227-patch/chunk-04)" -eq 19928
+
       - name: Reconstruct and verify refactor patch
         run: |
           set -euo pipefail
