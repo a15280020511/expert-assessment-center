@@ -129,7 +129,8 @@ def _schema(name: str) -> dict[str, Any]:
                 "uniqueItems": True,
                 "items": {
                     "type": "string",
-                    "pattern": "^[A-Za-z0-9_.:-]{1,96}$",
+                    "minLength": 1,
+                    "maxLength": 96,
                 },
             },
             "model": identifier,

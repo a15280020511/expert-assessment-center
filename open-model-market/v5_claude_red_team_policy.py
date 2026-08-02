@@ -277,7 +277,10 @@ def _validate_node(node: Any, index: int) -> None:
         _identifier(node[field], f"nodes[{index}].{field}")
     _text(node["role"], f"nodes[{index}].role", 320)
     _id_list(node["work_ids"], f"nodes[{index}].work_ids", CLAUDE_RED_TEAM_MAX_ITEMS)
-    _id_list(node["functions"], f"nodes[{index}].functions", 12)
+    functions = node["functions"]
+    _text_list(functions, f"nodes[{index}].functions", 12, 96)
+    if len(functions) != len(set(functions)):
+        raise ValueError(f"nodes[{index}].functions contains duplicates")
     _id_list(
         node["recovery_candidate_ids"],
         f"nodes[{index}].recovery_candidate_ids",

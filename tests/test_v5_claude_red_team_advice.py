@@ -92,6 +92,22 @@ class ClaudeRedTeamAdviceTests(unittest.TestCase):
         self.assertNotIn("REJECT", json.dumps(schema))
         self.assertFalse(request["provider"]["allow_fallbacks"])
 
+    def test_unicode_function_descriptions_are_valid_and_bounded(self) -> None:
+        payload = unified_payload()
+        payload["nodes"][0]["functions"] = ["对比月费与流量", "形成唯一建议"]
+        request = build_claude_red_team_request(payload)
+        user = json.loads(request["messages"][1]["content"])
+        self.assertEqual(
+            ["对比月费与流量", "形成唯一建议"],
+            user["payload"]["nodes"][0]["functions"],
+        )
+
+    def test_duplicate_function_descriptions_are_rejected(self) -> None:
+        payload = unified_payload()
+        payload["nodes"][0]["functions"] = ["分析", "分析"]
+        with self.assertRaisesRegex(ValueError, "functions contains duplicates"):
+            build_claude_red_team_request(payload)
+
     def test_empty_advice_is_valid_and_not_approval(self) -> None:
         result = parse_claude_red_team_advice('{"suggestions":[]}')
         self.assertEqual([], result["suggestions"])
