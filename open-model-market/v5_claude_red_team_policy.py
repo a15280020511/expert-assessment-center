@@ -11,10 +11,11 @@ from typing import Any, Mapping
 CLAUDE_RED_TEAM_MODEL = "~anthropic/claude-opus-latest"
 CLAUDE_RED_TEAM_PROVIDER = "anthropic"
 CLAUDE_RED_TEAM_REASONING_EFFORT = "low"
-CLAUDE_RED_TEAM_MAX_INPUT_CHARS = 12_000
+CLAUDE_RED_TEAM_MAX_INPUT_CHARS = 24_000
 CLAUDE_RED_TEAM_MAX_OUTPUT_CHARS = 4_000
 CLAUDE_RED_TEAM_MAX_OUTPUT_TOKENS = 512
-CLAUDE_RED_TEAM_MAX_ITEMS = 16
+CLAUDE_RED_TEAM_MAX_ITEMS = 32
+CLAUDE_RED_TEAM_MAX_EDGES = 64
 CLAUDE_RED_TEAM_MAX_SUGGESTIONS = 8
 GPT_PROPOSAL_CALLS = 1
 CLAUDE_RED_TEAM_MAX_CALLS_PER_TASK = 1
@@ -34,6 +35,7 @@ INTERNAL_CODES = frozenset({
     "UNKNOWN_CANDIDATE",
     "WORK_UNCOVERED",
     "WORK_DUPLICATED",
+    "WORK_DEPENDENCY_INVALID",
     "DUPLICATE_COMPANY",
     "CALL_LIMIT_EXCEEDED",
     "RECOVERY_LIMIT_EXCEEDED",
@@ -86,7 +88,11 @@ _PROMPTS = {
 
 
 def _codes(scope: RedTeamScope) -> frozenset[str]:
-    return INTERNAL_CODES if scope is RedTeamScope.INTERNAL_SELECTION else EXTERNAL_CODES
+    return (
+        INTERNAL_CODES
+        if scope is RedTeamScope.INTERNAL_SELECTION
+        else EXTERNAL_CODES
+    )
 
 
 def fixed_prompt(scope: RedTeamScope | str) -> str:
@@ -105,6 +111,17 @@ def fixed_prompt_sha256(scope: RedTeamScope | str) -> str:
 def _identifier(value: Any, field: str) -> str:
     if not isinstance(value, str) or not _ID_RE.fullmatch(value):
         raise ValueError(f"{field} must be a bounded identifier")
+    return value
+
+
+def _text(value: Any, field: str, maximum: int) -> str:
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or len(value) > maximum
+        or any(ord(character) < 32 for character in value)
+    ):
+        raise ValueError(f"{field} is invalid")
     return value
 
 
@@ -134,24 +151,20 @@ def _number(value: Any, field: str) -> float:
     return number
 
 
-def _id_list(value: Any, field: str, maximum: int = CLAUDE_RED_TEAM_MAX_ITEMS) -> None:
+def _id_list(value: Any, field: str, maximum: int) -> None:
     if not isinstance(value, list) or len(value) > maximum:
         raise ValueError(f"{field} must be a bounded list")
+    if len(value) != len(set(value)):
+        raise ValueError(f"{field} contains duplicates")
     for index, item in enumerate(value):
         _identifier(item, f"{field}[{index}]")
 
 
-def _semantic_list(value: Any, field: str) -> None:
-    if not isinstance(value, list) or len(value) > CLAUDE_RED_TEAM_MAX_ITEMS:
+def _text_list(value: Any, field: str, maximum: int, item_maximum: int) -> None:
+    if not isinstance(value, list) or len(value) > maximum:
         raise ValueError(f"{field} must be a bounded list")
     for index, item in enumerate(value):
-        if (
-            not isinstance(item, str)
-            or not item.strip()
-            or len(item) > 64
-            or any(ord(character) < 32 for character in item)
-        ):
-            raise ValueError(f"{field}[{index}] is invalid")
+        _text(item, f"{field}[{index}]", item_maximum)
 
 
 def _validate_internal(payload: Mapping[str, Any]) -> None:
@@ -162,7 +175,7 @@ def _validate_internal(payload: Mapping[str, Any]) -> None:
         "governance_calls_reserved",
         "approved_recovery_calls",
         "cost_anomaly_usd",
-        "required_work",
+        "work_items",
         "nodes",
         "edges",
     }
@@ -186,7 +199,35 @@ def _validate_internal(payload: Mapping[str, Any]) -> None:
     if payload["cost_anomaly_usd"] is not None:
         if _number(payload["cost_anomaly_usd"], "cost_anomaly_usd") <= 0:
             raise ValueError("cost_anomaly_usd must be positive")
-    _id_list(payload["required_work"], "required_work")
+
+    work_items = payload["work_items"]
+    if not isinstance(work_items, list) or not 1 <= len(work_items) <= CLAUDE_RED_TEAM_MAX_ITEMS:
+        raise ValueError("work_items must be a non-empty bounded list")
+    work_fields = {"work_id", "objective", "dependencies", "required_outputs"}
+    work_ids: list[str] = []
+    for index, work in enumerate(work_items):
+        if not isinstance(work, Mapping) or set(work) != work_fields:
+            raise ValueError(f"work_items[{index}] has missing or extra fields")
+        work_ids.append(_identifier(work["work_id"], f"work_items[{index}].work_id"))
+        _text(work["objective"], f"work_items[{index}].objective", 320)
+        _id_list(
+            work["dependencies"],
+            f"work_items[{index}].dependencies",
+            CLAUDE_RED_TEAM_MAX_ITEMS,
+        )
+        _text_list(
+            work["required_outputs"],
+            f"work_items[{index}].required_outputs",
+            16,
+            160,
+        )
+    if len(work_ids) != len(set(work_ids)):
+        raise ValueError("work_items contain duplicate work ids")
+    known_work = set(work_ids)
+    for work in work_items:
+        if not set(work["dependencies"]).issubset(known_work):
+            raise ValueError("work dependency references unknown work")
+
     nodes = payload["nodes"]
     maximum_nodes = total - governance - recovery
     if (
@@ -199,6 +240,8 @@ def _validate_internal(payload: Mapping[str, Any]) -> None:
         "node_id",
         "candidate_id",
         "work_ids",
+        "role",
+        "functions",
         "model",
         "company",
         "provider",
@@ -218,15 +261,17 @@ def _validate_internal(payload: Mapping[str, Any]) -> None:
             "contract_kind",
         ):
             _identifier(node[field], f"nodes[{index}].{field}")
-        _id_list(node["work_ids"], f"nodes[{index}].work_ids")
+        _text(node["role"], f"nodes[{index}].role", 320)
+        _id_list(node["work_ids"], f"nodes[{index}].work_ids", CLAUDE_RED_TEAM_MAX_ITEMS)
+        _id_list(node["functions"], f"nodes[{index}].functions", 12)
         _id_list(
             node["recovery_candidate_ids"],
             f"nodes[{index}].recovery_candidate_ids",
-            maximum=4,
+            4,
         )
         _number(node["estimated_cost_usd"], f"nodes[{index}].estimated_cost_usd")
     edges = payload["edges"]
-    if not isinstance(edges, list) or len(edges) > CLAUDE_RED_TEAM_MAX_ITEMS:
+    if not isinstance(edges, list) or len(edges) > CLAUDE_RED_TEAM_MAX_EDGES:
         raise ValueError("edges must be bounded")
     for index, edge in enumerate(edges):
         if not isinstance(edge, Mapping) or set(edge) != {"source", "target"}:
@@ -248,11 +293,7 @@ def _validate_external(payload: Mapping[str, Any]) -> None:
     _digest(payload["information_digest"], "information_digest")
     _identifier(payload["contract_kind"], "contract_kind")
     claims = payload["claims"]
-    if (
-        not isinstance(claims, list)
-        or not claims
-        or len(claims) > CLAUDE_RED_TEAM_MAX_ITEMS
-    ):
+    if not isinstance(claims, list) or not 1 <= len(claims) <= CLAUDE_RED_TEAM_MAX_ITEMS:
         raise ValueError("claims must be a non-empty bounded list")
     fields = {
         "claim_id",
@@ -267,11 +308,19 @@ def _validate_external(payload: Mapping[str, Any]) -> None:
             raise ValueError(f"claims[{index}] has missing or extra fields")
         for field in ("claim_id", "label", "source"):
             _identifier(claim[field], f"claims[{index}].{field}")
-        text = claim["text"]
-        if not isinstance(text, str) or not text.strip() or len(text) > 240:
-            raise ValueError(f"claims[{index}].text is invalid")
-        _semantic_list(claim["quantity_tokens"], f"claims[{index}].quantity_tokens")
-        _semantic_list(claim["location_tokens"], f"claims[{index}].location_tokens")
+        _text(claim["text"], f"claims[{index}].text", 240)
+        _text_list(
+            claim["quantity_tokens"],
+            f"claims[{index}].quantity_tokens",
+            CLAUDE_RED_TEAM_MAX_ITEMS,
+            64,
+        )
+        _text_list(
+            claim["location_tokens"],
+            f"claims[{index}].location_tokens",
+            CLAUDE_RED_TEAM_MAX_ITEMS,
+            64,
+        )
 
 
 def canonical_review_input(
@@ -395,15 +444,12 @@ def parse_claude_red_team_advice(
         if code not in _codes(scope):
             raise ValueError(f"suggestions[{index}].code is invalid")
         target = _identifier(suggestion["target"], f"suggestions[{index}].target")
-        change = suggestion["change"]
-        if (
-            not isinstance(change, str)
-            or not change.strip()
-            or len(change) > 240
-            or any(ord(character) < 32 for character in change)
-        ):
-            raise ValueError(f"suggestions[{index}].change is invalid")
-        normalized.append({"code": code, "target": target, "change": change.strip()})
+        change = _text(suggestion["change"], f"suggestions[{index}].change", 240)
+        normalized.append({
+            "code": code,
+            "target": target,
+            "change": change.strip(),
+        })
     return {
         "suggestions": normalized,
         "scope": scope.value,
