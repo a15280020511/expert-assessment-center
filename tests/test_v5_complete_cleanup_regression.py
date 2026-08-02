@@ -36,6 +36,8 @@ class CompleteCleanupRegressionTests(unittest.TestCase):
     def test_paid_acceptance_is_explicit_and_not_a_green_noop(self) -> None:
         dead = ROOT / ".github/workflows/v5-one-time-paid-claude-acceptance-20260803.yml"
         self.assertFalse(dead.exists())
+        self.assertFalse((ROOT / ".github/v5-paid-acceptance-request.json").exists())
+        self.assertFalse((ROOT / ".github/v5-paid-acceptance-attestation.json").exists())
         paid = (ROOT / ".github/workflows/v5-final-paid-claude-acceptance-20260803.yml").read_text()
         self.assertIn("workflow_dispatch", paid)
         self.assertIn("inputs.confirm", paid)
