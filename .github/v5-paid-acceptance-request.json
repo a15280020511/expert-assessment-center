@@ -1,0 +1,20 @@
+{
+  "schema_version": "pr227-paid-acceptance-1",
+  "authorization": "RUN-EXACTLY-ONCE",
+  "purpose": "final-pr227-production-qualification",
+  "target_sha": "6cf0661580d59bd62dc37a6a948920757bf70e41",
+  "maximum_total_calls": 4,
+  "maximum_recovery_calls": 0,
+  "cost_cap_usd": 0.25,
+  "task": {
+    "question": "仅依据以下题面：A方案月费20元、月流量100GB；B方案月费30元、月流量150GB。应选择哪个方案？",
+    "requirements": [
+      "不得调用外部工具或补充外部事实",
+      "严格按顺序输出两个Markdown二级标题：已知事实、最终建议",
+      "最终建议必须给出唯一推荐和两条理由",
+      "明确区分事实与推断",
+      "不得新增题面外数字"
+    ],
+    "language": "zh-CN"
+  }
+}
