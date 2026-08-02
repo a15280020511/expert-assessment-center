@@ -42,6 +42,7 @@ class V5QuantityBindingContextTests(unittest.TestCase):
             "4只",
             "4艘",
             "4架",
+            "4顶",
         ):
             with self.subTest(rendered=rendered):
                 self.assertEqual({("4", "", "item")}, normalized_quantities(rendered))

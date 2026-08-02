@@ -58,7 +58,7 @@ _QUANTITY_RE = re.compile(
     r"(?<![A-Za-z0-9_.])(?:第\s*)?(?P<lo>\d+(?:\.\d+)?)"
     r"(?:\s*(?:-|–|—|~|至|到)\s*(?P<hi>\d+(?:\.\d+)?))?"
     r"\s*(?:个)?\s*(?P<unit>SLA|秒|分钟|小时|天|周|月|年|米|公里|千米|公斤|克|人|名|位|次|%|％|"
-    r"件|台|部|套|支|辆|本|份|箱|包|瓶|枚|张|把|只|艘|架|"
+    r"件|台|部|套|支|辆|本|份|箱|包|瓶|枚|张|把|只|艘|架|顶|"
     r"seconds?|minutes?|hours?|days?|weeks?|months?|years?|meters?|"
     r"kilometers?|kg|people|times?|元|块|人民币|rmb|cny|yuan|美元|美金|usd)"
     r"(?![A-Za-z0-9_])",
@@ -196,6 +196,7 @@ def normalized_quantities(text: str) -> set[tuple[str, str, str]]:
         "只": "item",
         "艘": "item",
         "架": "item",
+        "顶": "item",
         "次": "times",
         "times": "times",
         "sla": "sla",

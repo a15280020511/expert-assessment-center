@@ -76,6 +76,7 @@ class ExecutionFailure:
     usage_received: bool = False
     actual_cost_usd: float = 0.0
     message: str = ""
+    response_diagnostics: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         value = asdict(self)
@@ -663,6 +664,9 @@ class ExecutionEngine:
             request_sent=bool(getattr(exc, "request_sent", True)),
             response_received=bool(getattr(exc, "response_received", status is not None)),
             message=str(exc),
+            response_diagnostics=dict(
+                getattr(exc, "response_diagnostics", {}) or {}
+            ),
         )
 
     @staticmethod
@@ -799,6 +803,7 @@ class ExecutionEngine:
         payload: Mapping[str, Any] = {}
         response: Mapping[str, Any] = {}
         latency = 0.0
+        started_at = time.monotonic()
         try:
             payload = self.prompt_policy.build_payload(node, original_task, upstream)
             response, latency = call_fn(run, payload)
@@ -891,6 +896,8 @@ class ExecutionEngine:
                 failure.to_dict() if failure else None,
             )
         except Exception as exc:  # noqa: BLE001 - converted into structured evidence
+            if latency <= 0.0:
+                latency = max(0.0, time.monotonic() - started_at)
             budget.reconcile(0.0)
             failure = self._failure_from_exception(exc, node)
             return RuntimeAttempt(
