@@ -80,14 +80,14 @@ jobs:
               CLAUDE_RED_TEAM_GOVERNANCE_CALLS,
               CLAUDE_RED_TEAM_MAX_CALLS_PER_TASK,
               CLAUDE_RED_TEAM_MODEL,
-              GPT_SYNTHESIS_CALLS_MAX,
+              GPT_SYNTHESIS_CALLS,
           )
           from v5_gpt_expert_selector import GPT_SELECTOR_MODEL
 
           assert GPT_SELECTOR_MODEL == "~openai/gpt-latest"
           assert CLAUDE_RED_TEAM_MODEL == "~anthropic/claude-opus-latest"
           assert CLAUDE_RED_TEAM_MAX_CALLS_PER_TASK == 1
-          assert GPT_SYNTHESIS_CALLS_MAX == 1
+          assert GPT_SYNTHESIS_CALLS == 1
           assert CLAUDE_RED_TEAM_GOVERNANCE_CALLS == 3
           source = Path(
               "open-model-market/v5_governance_runtime.py"
