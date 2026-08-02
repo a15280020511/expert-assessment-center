@@ -1,0 +1,230 @@
+name: One-Time PR227 Architecture Audit R2 2026-08-03
+
+on:
+  pull_request:
+    branches:
+      - fix/v5-claude-unified-red-team-cleanup-20260803
+
+permissions:
+  contents: read
+
+env:
+  OPENROUTER_API_KEY: ""
+  ANTHROPIC_API_KEY: ""
+
+jobs:
+  architecture-r2:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Verify frozen source and corrected architecture contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ github.event.pull_request.base.sha }}" = "c30f4052341785f93415a295e066edcc42e3f6f0"
+          changed="$(git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD)"
+          test "$changed" = ".github/workflows/one-time-pr227-architecture-r2-20260803.yml"
+          mkdir -p architecture-r2-artifacts
+          python - <<'PY'
+          from __future__ import annotations
+          import ast
+          import hashlib
+          import json
+          import re
+          import subprocess
+          from collections import defaultdict, deque
+          from pathlib import Path
+
+          prod = Path('open-model-market')
+          paths = sorted(prod.glob('*.py'))
+          modules = {path.stem: path for path in paths}
+          imports = {name: set() for name in modules}
+          imported_attr_assignments = []
+          large_functions = []
+          bodies = defaultdict(list)
+          parse_errors = []
+
+          for name, path in modules.items():
+              try:
+                  tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+              except Exception as exc:
+                  parse_errors.append({'path': str(path), 'error': repr(exc)})
+                  continue
+              aliases = set()
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Import):
+                      for alias in node.names:
+                          aliases.add(alias.asname or alias.name.split('.')[0])
+                          target = alias.name.split('.')[0]
+                          if target in modules:
+                              imports[name].add(target)
+                  elif isinstance(node, ast.ImportFrom) and node.module:
+                      target = node.module.split('.')[0]
+                      if target in modules:
+                          imports[name].add(target)
+                      for alias in node.names:
+                          aliases.add(alias.asname or alias.name)
+              for node in ast.walk(tree):
+                  if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                      targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                      for target in targets:
+                          if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) and target.value.id in aliases:
+                              imported_attr_assignments.append({'path': str(path), 'line': node.lineno, 'target': f'{target.value.id}.{target.attr}'})
+                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                      end = int(getattr(node, 'end_lineno', node.lineno))
+                      size = end - node.lineno + 1
+                      if size >= 180:
+                          large_functions.append({'path': str(path), 'function': node.name, 'line': node.lineno, 'lines': size})
+                      body = list(node.body)
+                      if body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], 'value', None), ast.Constant) and isinstance(body[0].value.value, str):
+                          body = body[1:]
+                      if len(body) >= 4:
+                          digest = hashlib.sha256(ast.dump(ast.Module(body=body, type_ignores=[]), include_attributes=False).encode()).hexdigest()
+                          bodies[digest].append({'path': str(path), 'function': node.name, 'line': node.lineno, 'lines': size})
+
+          entrypoints = ['v5_issue_ticket', 'v5_production_ticket', 'v5_pipeline']
+          reachable = set()
+          queue = deque(name for name in entrypoints if name in modules)
+          while queue:
+              current = queue.popleft()
+              if current in reachable:
+                  continue
+              reachable.add(current)
+              queue.extend(sorted(imports.get(current, set()) - reachable))
+
+          forbidden_names = {
+              'issue_ticket', 'issue_ticket_hardened', 'v5_value_optimizer',
+              'v5_planner', 'v5_planning_runtime', 'v5_constitutional_pipeline',
+              'v5_cross_endpoint_planner', 'v5_cross_endpoint_planner_impl',
+              'v5_operational_resilience', 'v5_general_task_planning',
+              'task_semantic_compiler', 'resource_matrix', 'atomic_work_graph',
+              'v5_company_diversity',
+          }
+          forbidden_files = [
+              'open-model-market/issue_ticket.py',
+              'open-model-market/issue_ticket_hardened.py',
+              'open-model-market/v5_value_optimizer.py',
+              'open-model-market/v5_planner.py',
+              'open-model-market/v5_planning_runtime.py',
+              'open-model-market/v5_constitutional_pipeline.py',
+              'open-model-market/v5_cross_endpoint_planner.py',
+              'open-model-market/v5_cross_endpoint_planner_impl.py',
+              'open-model-market/v5_operational_resilience.py',
+              'open-model-market/v5_general_task_planning.py',
+              'open-model-market/task_semantic_compiler.py',
+              'open-model-market/resource_matrix.py',
+              'open-model-market/atomic_work_graph.py',
+              'open-model-market/team_policy.json',
+          ]
+          present_forbidden = [value for value in forbidden_files if Path(value).exists()]
+          reachable_forbidden = sorted(reachable & forbidden_names)
+
+          code_and_requirements = []
+          for path in [*paths, Path('requirements-runtime.txt')]:
+              if path.is_file():
+                  code_and_requirements.append((path, path.read_text(encoding='utf-8')))
+          patterns = {
+              'optimizer': re.compile(r'\b(?:ortools|cp_model|CpSolver|CpModel|optimize_execution_graph|pareto_prune)\b', re.I),
+              'local_planning': re.compile(r'\b(?:compile_v5_task_resources|compile_task_semantics|resource_matrix|atomic_work_graph)\b'),
+              'actual_patch_assignment': re.compile(r'\._format_schema_error\s*=|\._issue_comments\s*=|\._execution_state\s*=|\.task_fingerprint\s*=|\b_install_schema_messages\b'),
+              'numeric_dependency': re.compile(r'^\s*(?:google-or-tools|ortools|numpy|scipy|pandas)(?:[<>=!~]|\s|$)', re.I | re.M),
+          }
+          marker_hits = {name: [] for name in patterns}
+          for path, text in code_and_requirements:
+              for name, pattern in patterns.items():
+                  for match in pattern.finditer(text):
+                      line = text.count('\n', 0, match.start()) + 1
+                      marker_hits[name].append({'path': str(path), 'line': line, 'match': match.group(0)})
+
+          contracts = {
+              'gpt_model': ('open-model-market/v5_gpt_expert_selector.py', '~openai/gpt-latest'),
+              'claude_model': ('open-model-market/v5_claude_red_team_policy.py', '~anthropic/claude-opus-latest'),
+              'claude_once': ('open-model-market/v5_claude_red_team_policy.py', 'CLAUDE_RED_TEAM_MAX_CALLS_PER_TASK = 1'),
+              'advisory_only': ('open-model-market/v5_governance_runtime.py', '"claude_is_advisory_only": True'),
+              'not_gate': ('open-model-market/v5_governance_runtime.py', '"claude_gatekeeping_allowed": False'),
+              'no_second_review': ('open-model-market/v5_governance_runtime.py', '"second_claude_review_allowed": False'),
+              'no_model_loop': ('open-model-market/v5_governance_runtime.py', '"model_loop_allowed": False'),
+              'single_ticket_entry': ('open-model-market/v5_issue_ticket.py', 'Single deterministic V5 execution-ticket entrypoint'),
+          }
+          contract_presence = {
+              key: Path(path).is_file() and marker in Path(path).read_text(encoding='utf-8')
+              for key, (path, marker) in contracts.items()
+          }
+
+          duplicate_groups = [rows for rows in bodies.values() if len({row['path'] for row in rows}) > 1]
+          duplicate_groups.sort(key=lambda rows: (-len(rows), rows[0]['path'], rows[0]['function']))
+
+          blocking = []
+          if parse_errors:
+              blocking.append('parse errors')
+          if present_forbidden:
+              blocking.append('legacy files remain')
+          if reachable_forbidden:
+              blocking.append('legacy modules are production-reachable')
+          if imported_attr_assignments:
+              blocking.append('imported module attribute assignments remain')
+          for name, rows in marker_hits.items():
+              if rows:
+                  blocking.append(f'forbidden production marker: {name}')
+          missing = sorted(key for key, present in contract_presence.items() if not present)
+          if missing:
+              blocking.append('missing governance contracts: ' + ','.join(missing))
+
+          report = {
+              'baseline_sha': '${{ github.event.pull_request.base.sha }}',
+              'head_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+              'status': 'FAIL' if blocking else 'PASS',
+              'production_python_files': len(paths),
+              'reachable_module_count': len(reachable),
+              'reachable_modules': sorted(reachable),
+              'present_forbidden_files': present_forbidden,
+              'reachable_forbidden_modules': reachable_forbidden,
+              'imported_module_attribute_assignments': imported_attr_assignments,
+              'forbidden_marker_counts': {key: len(rows) for key, rows in marker_hits.items()},
+              'forbidden_marker_hits': marker_hits,
+              'contract_presence': contract_presence,
+              'cross_file_duplicate_function_bodies': duplicate_groups,
+              'large_functions': sorted(large_functions, key=lambda row: (-row['lines'], row['path'], row['function'])),
+              'parse_errors': parse_errors,
+              'blocking_reasons': blocking,
+              'nonblocking_observations': {
+                  'quality_tier_is_accepted_but_runtime_is_fixed_value': True,
+                  'large_function_count': len(large_functions),
+                  'duplicate_function_body_group_count': len(duplicate_groups),
+              },
+          }
+          out = Path('architecture-r2-artifacts')
+          (out / 'architecture-r2.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+          (out / 'summary.txt').write_text('\n'.join([
+              f"status={report['status']}",
+              f"forbidden_files={len(present_forbidden)}",
+              f"reachable_forbidden={len(reachable_forbidden)}",
+              f"imported_attribute_assignments={len(imported_attr_assignments)}",
+              f"optimizer_markers={len(marker_hits['optimizer'])}",
+              f"local_planning_markers={len(marker_hits['local_planning'])}",
+              f"actual_patch_markers={len(marker_hits['actual_patch_assignment'])}",
+              f"numeric_dependencies={len(marker_hits['numeric_dependency'])}",
+              f"duplicate_groups={len(duplicate_groups)}",
+              f"large_functions={len(large_functions)}",
+              *[f"blocking={value}" for value in blocking],
+          ]) + '\n', encoding='utf-8')
+          print((out / 'summary.txt').read_text(encoding='utf-8'))
+          if blocking:
+              raise SystemExit('ARCHITECTURE_R2_FAILED')
+          PY
+      - name: Upload corrected architecture evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr227-architecture-r2-${{ github.run_id }}
+          path: architecture-r2-artifacts/
+          if-no-files-found: error
+          retention-days: 30
