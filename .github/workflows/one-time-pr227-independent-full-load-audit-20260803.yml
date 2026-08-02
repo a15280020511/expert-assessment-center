@@ -1,0 +1,385 @@
+name: One-Time PR227 Independent Full Load Audit 2026-08-03
+
+on:
+  pull_request:
+    branches:
+      - fix/v5-claude-unified-red-team-cleanup-20260803
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr227-independent-audit-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: false
+
+env:
+  OPENROUTER_API_KEY: ""
+  ANTHROPIC_API_KEY: ""
+  MODEL_MAX_RETRIES: "0"
+  PARALLEL_WORKERS: "1"
+
+jobs:
+  source-binding:
+    name: Bind independent audit to PR227 head
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify immutable audited parent and audit-only diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          remote_base="$(git ls-remote origin refs/heads/fix/v5-claude-unified-red-team-cleanup-20260803 | awk '{print $1}')"
+          test "$base" = "c30f4052341785f93415a295e066edcc42e3f6f0"
+          test "$base" = "$remote_base"
+          changed="$(git diff --name-only "$base"...HEAD)"
+          test "$changed" = ".github/workflows/one-time-pr227-independent-full-load-audit-20260803.yml"
+
+  independent-architecture-audit:
+    name: Independent no-legacy and governance architecture audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Build independent architecture inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p independent-audit-artifacts
+          python - <<'PY'
+          from __future__ import annotations
+          import ast
+          import hashlib
+          import json
+          import re
+          import subprocess
+          from collections import defaultdict, deque
+          from pathlib import Path
+
+          root = Path('.')
+          prod = root / 'open-model-market'
+          paths = sorted(prod.glob('*.py'))
+          modules = {path.stem: path for path in paths}
+          graph = {name: set() for name in modules}
+          parse_errors = []
+          imported_attribute_assignments = []
+          large_functions = []
+          bodies = defaultdict(list)
+
+          for name, path in modules.items():
+              try:
+                  tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+              except Exception as exc:
+                  parse_errors.append({'path': str(path), 'error': repr(exc)})
+                  continue
+              imported_aliases = set()
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Import):
+                      for alias in node.names:
+                          local = alias.asname or alias.name.split('.')[0]
+                          imported_aliases.add(local)
+                          target = alias.name.split('.')[0]
+                          if target in modules:
+                              graph[name].add(target)
+                  elif isinstance(node, ast.ImportFrom) and node.module:
+                      target = node.module.split('.')[0]
+                      if target in modules:
+                          graph[name].add(target)
+                      for alias in node.names:
+                          imported_aliases.add(alias.asname or alias.name)
+              for node in ast.walk(tree):
+                  if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                      targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                      for target in targets:
+                          if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) and target.value.id in imported_aliases:
+                              imported_attribute_assignments.append({
+                                  'path': str(path),
+                                  'line': node.lineno,
+                                  'target': f'{target.value.id}.{target.attr}',
+                              })
+                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                      end = int(getattr(node, 'end_lineno', node.lineno))
+                      size = end - node.lineno + 1
+                      if size >= 180:
+                          large_functions.append({
+                              'path': str(path), 'function': node.name,
+                              'line': node.lineno, 'lines': size,
+                          })
+                      body = list(node.body)
+                      if body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], 'value', None), ast.Constant) and isinstance(body[0].value.value, str):
+                          body = body[1:]
+                      if len(body) >= 4:
+                          digest = hashlib.sha256(ast.dump(ast.Module(body=body, type_ignores=[]), include_attributes=False).encode()).hexdigest()
+                          bodies[digest].append({'path': str(path), 'function': node.name, 'line': node.lineno, 'lines': size})
+
+          entrypoints = ['v5_issue_ticket', 'v5_production_ticket', 'v5_pipeline']
+          reachable = set()
+          queue = deque(name for name in entrypoints if name in modules)
+          while queue:
+              current = queue.popleft()
+              if current in reachable:
+                  continue
+              reachable.add(current)
+              queue.extend(sorted(graph.get(current, set()) - reachable))
+
+          forbidden_modules = {
+              'issue_ticket', 'issue_ticket_hardened',
+              'v5_value_optimizer', 'v5_planner', 'v5_planning_runtime',
+              'v5_constitutional_pipeline', 'v5_cross_endpoint_planner',
+              'v5_cross_endpoint_planner_impl', 'v5_operational_resilience',
+              'v5_general_task_planning', 'task_semantic_compiler',
+              'resource_matrix', 'atomic_work_graph', 'v5_company_diversity',
+          }
+          forbidden_paths = [
+              'open-model-market/issue_ticket.py',
+              'open-model-market/issue_ticket_hardened.py',
+              'open-model-market/v5_value_optimizer.py',
+              'open-model-market/v5_planner.py',
+              'open-model-market/v5_planning_runtime.py',
+              'open-model-market/v5_constitutional_pipeline.py',
+              'open-model-market/v5_cross_endpoint_planner.py',
+              'open-model-market/v5_cross_endpoint_planner_impl.py',
+              'open-model-market/v5_operational_resilience.py',
+              'open-model-market/v5_general_task_planning.py',
+              'open-model-market/task_semantic_compiler.py',
+              'open-model-market/resource_matrix.py',
+              'open-model-market/atomic_work_graph.py',
+              'open-model-market/team_policy.json',
+          ]
+          present_forbidden_paths = [path for path in forbidden_paths if Path(path).exists()]
+          reachable_forbidden = sorted(reachable & forbidden_modules)
+
+          tracked = subprocess.check_output(['git', 'ls-files'], text=True).splitlines()
+          scan_paths = [Path(p) for p in tracked if p.startswith('open-model-market/') or p in {'requirements-runtime.txt', 'requirements-dev.txt'}]
+          forbidden_patterns = {
+              'numeric_optimizer': re.compile(r'\b(?:ortools|cp_model|CpSolver|CpModel|optimize_execution_graph|pareto_prune)\b', re.I),
+              'local_planning': re.compile(r'\b(?:compile_v5_task_resources|compile_task_semantics|resource_matrix|atomic_work_graph)\b'),
+              'monkey_patch': re.compile(r'\b(?:monkey.?patch|_install_schema_messages)\b|\._format_schema_error\s*=|\._issue_comments\s*=|\._execution_state\s*=|\.task_fingerprint\s*=', re.I),
+              'numeric_dependency': re.compile(r'^\s*(?:google-or-tools|ortools|numpy|scipy|pandas)(?:[<>=!~]|\s|$)', re.I),
+          }
+          hits = {name: [] for name in forbidden_patterns}
+          for path in scan_paths:
+              if not path.is_file():
+                  continue
+              try:
+                  lines = path.read_text(encoding='utf-8').splitlines()
+              except UnicodeDecodeError:
+                  continue
+              for line_no, line in enumerate(lines, 1):
+                  for name, pattern in forbidden_patterns.items():
+                      if pattern.search(line):
+                          hits[name].append({'path': str(path), 'line': line_no, 'text': line.strip()[:240]})
+
+          required_contracts = {
+              'gpt_selector_model': ('open-model-market/v5_gpt_expert_selector.py', '~openai/gpt-latest'),
+              'claude_model': ('open-model-market/v5_claude_red_team_policy.py', '~anthropic/claude-opus-latest'),
+              'claude_one_call': ('open-model-market/v5_claude_red_team_policy.py', 'CLAUDE_RED_TEAM_MAX_CALLS_PER_TASK = 1'),
+              'advisory_only': ('open-model-market/v5_governance_runtime.py', '"claude_is_advisory_only": True'),
+              'not_gate': ('open-model-market/v5_governance_runtime.py', '"claude_gatekeeping_allowed": False'),
+              'no_second_claude': ('open-model-market/v5_governance_runtime.py', '"second_claude_review_allowed": False'),
+              'no_loop': ('open-model-market/v5_governance_runtime.py', '"model_loop_allowed": False'),
+              'single_ticket': ('open-model-market/v5_issue_ticket.py', 'Single deterministic V5 execution-ticket entrypoint'),
+          }
+          contract_presence = {}
+          for name, (path, marker) in required_contracts.items():
+              target = Path(path)
+              contract_presence[name] = target.is_file() and marker in target.read_text(encoding='utf-8')
+
+          duplicate_groups = [rows for rows in bodies.values() if len({row['path'] for row in rows}) > 1]
+          duplicate_groups.sort(key=lambda rows: (-len(rows), str(rows[0]['path']), str(rows[0]['function'])))
+
+          blocking = []
+          if parse_errors:
+              blocking.append('production Python parse errors exist')
+          if present_forbidden_paths:
+              blocking.append('forbidden legacy files remain')
+          if reachable_forbidden:
+              blocking.append('legacy modules remain production-reachable')
+          if imported_attribute_assignments:
+              blocking.append('assignments to imported module attributes remain')
+          for name in ('numeric_optimizer', 'local_planning', 'monkey_patch', 'numeric_dependency'):
+              if hits[name]:
+                  blocking.append(f'forbidden marker remains: {name}')
+          missing_contracts = sorted(name for name, present in contract_presence.items() if not present)
+          if missing_contracts:
+              blocking.append('required governance contracts missing: ' + ','.join(missing_contracts))
+
+          report = {
+              'audited_base_sha': '${{ github.event.pull_request.base.sha }}',
+              'audited_head_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+              'production_python_files': len(paths),
+              'entrypoints': entrypoints,
+              'reachable_module_count': len(reachable),
+              'reachable_modules': sorted(reachable),
+              'present_forbidden_paths': present_forbidden_paths,
+              'reachable_forbidden_modules': reachable_forbidden,
+              'forbidden_marker_counts': {name: len(rows) for name, rows in hits.items()},
+              'forbidden_marker_hits': hits,
+              'contract_presence': contract_presence,
+              'imported_module_attribute_assignments': imported_attribute_assignments,
+              'large_functions': sorted(large_functions, key=lambda row: (-row['lines'], row['path'], row['function'])),
+              'cross_file_duplicate_function_bodies': duplicate_groups,
+              'parse_errors': parse_errors,
+              'blocking_reasons': blocking,
+              'status': 'FAIL' if blocking else 'PASS',
+          }
+          out = Path('independent-audit-artifacts')
+          (out / 'architecture-audit.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+          summary = [
+              f"status={report['status']}",
+              f"production_python_files={report['production_python_files']}",
+              f"reachable_modules={report['reachable_module_count']}",
+              f"forbidden_paths={len(present_forbidden_paths)}",
+              f"reachable_forbidden={len(reachable_forbidden)}",
+              f"imported_attribute_assignments={len(imported_attribute_assignments)}",
+              f"duplicate_groups={len(duplicate_groups)}",
+              f"large_functions={len(large_functions)}",
+              *[f"blocking={reason}" for reason in blocking],
+          ]
+          (out / 'architecture-summary.txt').write_text('\n'.join(summary) + '\n', encoding='utf-8')
+          print('\n'.join(summary))
+          if blocking:
+              raise SystemExit('INDEPENDENT_ARCHITECTURE_AUDIT_FAILED')
+          PY
+      - name: Upload independent architecture evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr227-independent-architecture-${{ github.run_id }}
+          path: independent-audit-artifacts/
+          if-no-files-found: error
+          retention-days: 30
+
+  full-suite:
+    name: Complete suite, static, compile, dependencies and line audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned development dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+      - name: Static and compile
+        run: |
+          ruff check .
+          python -m compileall -q open-model-market tests tools
+      - name: Complete unit suite
+        run: python -m unittest discover -s tests -p 'test*.py' -v
+      - name: Repository line audit
+        run: python tools/repository_audit.py --root . --output-dir independent-line-audit --fail-on high
+      - name: Upload full-suite evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr227-independent-full-suite-${{ github.run_id }}
+          path: independent-line-audit/
+          if-no-files-found: warn
+          retention-days: 30
+
+  full-load-matrix:
+    name: Independent full load seed ${{ matrix.seed }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [0, 1, 7, 42, 31337, 65535, 99991, 104729]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned development dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+      - name: Run governance, concurrency, residue, ticket and validator stress
+        env:
+          PYTHONHASHSEED: ${{ matrix.seed }}
+        run: |
+          python -m unittest -v \
+            tests.test_v5_claude_red_team_advice \
+            tests.test_v5_extreme_advisory_stress \
+            tests.test_v5_full_load_stability \
+            tests.test_v5_repository_residue_audit \
+            tests.test_v5_governance_model_resolution \
+            tests.test_v5_catalog_endpoint_eligibility \
+            tests.test_v5_structured_output_compat \
+            tests.test_execution_graph_validator \
+            tests.test_v5_admission_task_isolation \
+            tests.test_v5_p0_governance \
+            tests.test_v5_ticket_gate \
+            tests.test_v5_command_trigger \
+            tests.test_v5_release_advisory_regression
+
+  same-process-order-randomization:
+    name: Same-process randomized governance and ticket repetitions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned development dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+      - name: Repeat all governance and ticket tests in one interpreter
+        shell: bash
+        run: |
+          python - <<'PY'
+          import random
+          import unittest
+
+          def flatten(suite):
+              for item in suite:
+                  if isinstance(item, unittest.TestSuite):
+                      yield from flatten(item)
+                  else:
+                      yield item
+
+          loader = unittest.TestLoader()
+          patterns = ['*ticket*.py', '*governance*.py', '*claude*.py', '*advisory*.py']
+          seeds = [0, 1, 7, 42, 31337, 65535, 99991, 104729]
+          total = 0
+          for seed in seeds:
+              cases = {}
+              for pattern in patterns:
+                  for case in flatten(loader.discover('tests', pattern=pattern)):
+                      cases[case.id()] = case
+              ordered = list(cases.values())
+              random.Random(seed).shuffle(ordered)
+              result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(ordered))
+              total += result.testsRun
+              if result.failures or result.errors or result.unexpectedSuccesses:
+                  raise SystemExit(f'same-process randomized failure at seed={seed}')
+          if total == 0:
+              raise SystemExit('no governance or ticket tests discovered')
+          print(f'same_process_randomized_tests={total}')
+          PY
