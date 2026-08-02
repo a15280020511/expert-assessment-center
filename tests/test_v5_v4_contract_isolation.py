@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import json
-import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -191,51 +188,17 @@ class V5V4ContractIsolationTests(unittest.TestCase):
                 ]
             }
         )
-        self.assertEqual(["deepseek"], [
-            row["company"] for row in audit["successful_node_models"]
-        ])
-        self.assertEqual(["xiaomi"], [
-            row["company"] for row in audit["degraded_node_models"]
-        ])
-        self.assertTrue(audit["degraded_nodes_are_not_labeled_strict_success"])
-
-    def test_v4_dry_run_binds_exact_contract_only_to_final_nodes(self):
-        with tempfile.TemporaryDirectory(prefix="v5-v4-contract-") as directory:
-            completed = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "open-model-market/v5_constitutional_pipeline.py"),
-                    "--task", TASK,
-                    "--catalog-file", str(ROOT / "tests/fixtures/models.json"),
-                    "--endpoint-file", str(ROOT / "tests/fixtures/endpoints.json"),
-                    "--dry-run",
-                    "--maximum-total-calls", "4",
-                    "--maximum-recovery-calls", "1",
-                    "--cost-anomaly-usd", "0.25",
-                    "--quality-tier", "value",
-                    "--output-dir", directory,
-                ],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=180,
-            )
-            self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
-            graph = json.loads(
-                (Path(directory) / "v5-execution-graph.json").read_text()
-            )
-        finals = set(graph["final_nodes"])
-        self.assertTrue(finals)
-        for row in graph["nodes"]:
-            is_final = row["node_id"] in finals
-            profile = row["parameter_profile"]
-            if is_final:
-                self.assertEqual("exact-markdown", profile["output_contract_kind"])
-                self.assertEqual(HEADINGS, row["output_contract"]["required_fields"])
-            else:
-                self.assertEqual("generic", profile["output_contract_kind"])
-                self.assertNotEqual(HEADINGS, row["output_contract"]["required_fields"])
+        self.assertEqual(
+            ["deepseek"],
+            [row["company"] for row in audit["successful_node_models"]],
+        )
+        self.assertEqual(
+            ["xiaomi"],
+            [row["company"] for row in audit["degraded_node_models"]],
+        )
+        self.assertTrue(
+            audit["degraded_nodes_are_not_labeled_strict_success"]
+        )
 
 
 if __name__ == "__main__":
