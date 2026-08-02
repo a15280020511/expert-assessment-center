@@ -1,0 +1,58 @@
+name: Apply V5 P0 Registry Sync
+
+on:
+  push:
+    branches:
+      - fix/v5-live-acceptance-contract-20260802
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-v5-p0-registry-sync
+  cancel-in-progress: false
+
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fix/v5-live-acceptance-contract-20260802
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install pinned dependencies
+        run: python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+      - name: Apply exact registry patch
+        run: python tools/apply_v5_p0_registry_sync.py
+      - name: Verify mandatory P0 set
+        run: |
+          set -euo pipefail
+          python -m ruff check \
+            tools/run_v5_p0_regressions.py \
+            tools/apply_v5_p0_registry_sync.py \
+            tests/test_v5_failure_evidence_persistence.py \
+            tests/test_v5_independent_artifact_revalidation.py
+          python tools/run_v5_p0_regressions.py | tee p0.log
+          grep -q "REGISTERED IndependentArtifactRevalidationTests: 4" p0.log
+          grep -q "REGISTERED FailureEvidencePersistenceTests: 1" p0.log
+          grep -q "REGISTERED TOTAL: 52" p0.log
+          grep -q "P0 REGRESSION RESULT: run=52, passed=52, failures=0, errors=0, skipped=0" p0.log
+      - name: Commit verified sync and self-remove
+        env:
+          BRANCH: fix/v5-live-acceptance-contract-20260802
+        run: |
+          set -euo pipefail
+          git rm tools/apply_v5_p0_registry_sync.py
+          git rm .github/workflows/apply-v5-p0-registry-sync.yml
+          git add .github/workflows/validate.yml tools/run_v5_p0_regressions.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "test(p0): synchronize live acceptance registry"
+          git push origin "HEAD:$BRANCH"
