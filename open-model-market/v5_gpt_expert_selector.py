@@ -1,4 +1,4 @@
-"""Fixed GPT-latest proposal and mandatory one-time synthesis protocol."""
+"""Fixed GPT-latest task decomposition and expert selection protocol."""
 from __future__ import annotations
 
 import json
@@ -8,35 +8,41 @@ from typing import Any, Mapping
 GPT_SELECTOR_MODEL = "~openai/gpt-latest"
 GPT_SELECTOR_PROVIDER = "openai"
 GPT_MAX_INPUT_CHARS = 360_000
-GPT_MAX_OUTPUT_CHARS = 48_000
-GPT_MAX_OUTPUT_TOKENS = 8_000
+GPT_MAX_OUTPUT_CHARS = 64_000
+GPT_MAX_OUTPUT_TOKENS = 10_000
+GPT_MAX_WORK_ITEMS = 32
 GPT_MAX_NODES = 13
 GPT_MAX_EDGES = 64
 GPT_MAX_RECOVERY_PER_NODE = 2
+GPT_MAX_FUNCTIONS_PER_NODE = 12
+GPT_MAX_OUTPUT_FIELDS_PER_WORK = 16
 
 PROPOSAL_PROMPT = (
-    "你是专家团中心唯一的动态专家编组器。根据当前任务、原子工作、硬约束和精确模型端点目录，"
-    "直接提出最小充分的专家执行图。不得使用固定席位、固定职业、固定权重、评分公式、贪心、"
+    "你是专家团中心唯一的动态任务拆解与专家编组器。你必须直接阅读原始任务和硬约束，"
+    "自行生成最小充分的work_items、依赖关系和专家执行图；不存在本地预先生成的原子工作、"
+    "复杂度评分、领域标签、能力权重或固定职业。不得使用固定席位、固定权重、评分公式、贪心、"
     "Pareto、CP-SAT或任何预设组合。只能选择目录中存在的model+provider。专家公司必须彼此不同，"
-    "且不得选择OpenAI或Anthropic，因为它们已用于治理链。每个节点必须覆盖明确工作，Provider必须"
-    "单锁且禁止fallback，专家禁止工具。只输出严格JSON，不解释，不写报告。"
+    "且不得选择OpenAI或Anthropic，因为它们已用于治理链。每项工作必须恰好分配一次，依赖必须"
+    "由显式边表达，最终节点必须完成用户明确的交付合同。Provider必须单锁且禁止fallback，专家"
+    "禁止工具。只输出严格JSON，不解释，不写报告。"
 )
 SYNTHESIS_PROMPT = (
-    "你是专家团中心的一次性综合器。你必须根据初始GPT提案和Claude一次红队给出的结构化修改意见，"
-    "形成最终专家组合。Claude意见是咨询意见，不是批准、否决或门禁；你应逐条综合，可在硬约束下"
-    "采纳、调整或不采纳。不得再次调用或请求Claude，不得循环，不得添加目录外模型，不得绕过硬约束。"
+    "你是专家团中心的一次性综合器。你必须根据原始任务、初始GPT任务拆解与专家组合、Claude一次"
+    "红队给出的结构化修改意见和同一精确模型端点目录，形成最终work_items与专家执行图。Claude意见"
+    "是咨询意见，不是批准、否决或门禁；你应逐条综合，可在硬约束下采纳、调整或不采纳。不得再次"
+    "调用或请求Claude，不得循环，不得添加目录外模型，不得绕过硬约束，不得依赖本地评分或预设角色。"
     "只输出一份最终严格JSON提案，不解释，不写报告。"
 )
 PROPOSAL_PROMPT_SHA256 = (
-    "53d3a37962466df8df8bc47d94da75450e1b81cb5c422ea83a4808bcdac939a5"
+    "490e5cdfaa8b5b7091e9233f5913a21357b77f28e4b1b048218fccf8e815209e"
 )
 SYNTHESIS_PROMPT_SHA256 = (
-    "c5ac29fa09d2a11d6725f8156bcd51552106fd50d6ff84bee012a0586b084f05"
+    "a703315dd9ab52537d1d5166733b2961ed8804b0f04b01d896dd45b65ba9e03c"
 )
 
 
 class GPTSelectorError(RuntimeError):
-    pass
+    """Raised when the fixed GPT protocol or its output is invalid."""
 
 
 def _fixed(prompt: str, expected: str) -> str:
@@ -58,6 +64,42 @@ def _schema(name: str) -> dict[str, Any]:
         "type": "string",
         "pattern": "^[A-Za-z0-9_.:-]{1,96}$",
     }
+    bounded_text = {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 320,
+    }
+    work = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "work_id": work_id,
+            "objective": bounded_text,
+            "dependencies": {
+                "type": "array",
+                "maxItems": GPT_MAX_WORK_ITEMS,
+                "uniqueItems": True,
+                "items": work_id,
+            },
+            "required_outputs": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": GPT_MAX_OUTPUT_FIELDS_PER_WORK,
+                "uniqueItems": True,
+                "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160,
+                },
+            },
+        },
+        "required": [
+            "work_id",
+            "objective",
+            "dependencies",
+            "required_outputs",
+        ],
+    }
     recovery = {
         "type": "object",
         "additionalProperties": False,
@@ -75,14 +117,20 @@ def _schema(name: str) -> dict[str, Any]:
             "work_ids": {
                 "type": "array",
                 "minItems": 1,
-                "maxItems": 8,
+                "maxItems": GPT_MAX_WORK_ITEMS,
                 "uniqueItems": True,
                 "items": work_id,
             },
-            "role": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 160,
+            "role": bounded_text,
+            "functions": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": GPT_MAX_FUNCTIONS_PER_NODE,
+                "uniqueItems": True,
+                "items": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_.:-]{1,96}$",
+                },
             },
             "model": identifier,
             "provider": identifier,
@@ -105,6 +153,7 @@ def _schema(name: str) -> dict[str, Any]:
             "node_id",
             "work_ids",
             "role",
+            "functions",
             "model",
             "provider",
             "reasoning_effort",
@@ -144,7 +193,12 @@ def _schema(name: str) -> dict[str, Any]:
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "interpretation_id": work_id,
+                    "work_items": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": GPT_MAX_WORK_ITEMS,
+                        "items": work,
+                    },
                     "nodes": {
                         "type": "array",
                         "minItems": 1,
@@ -165,7 +219,7 @@ def _schema(name: str) -> dict[str, Any]:
                     },
                 },
                 "required": [
-                    "interpretation_id",
+                    "work_items",
                     "nodes",
                     "edges",
                     "final_nodes",
@@ -230,6 +284,8 @@ def _hard_limits(
             - int(governance_calls_reserved)
             - int(approved_recovery_calls)
         ),
+        "maximum_work_items": GPT_MAX_WORK_ITEMS,
+        "maximum_edges": GPT_MAX_EDGES,
         "cost_anomaly_usd": cost_anomaly_usd,
         "distinct_expert_companies": True,
         "governance_companies_forbidden_for_experts": [
@@ -244,7 +300,7 @@ def _hard_limits(
 def build_proposal_request(
     *,
     task: str,
-    resources: Mapping[str, Any],
+    task_envelope: Mapping[str, Any],
     catalog: Mapping[str, Any],
     approved_total_calls: int,
     governance_calls_reserved: int,
@@ -257,7 +313,7 @@ def build_proposal_request(
         "gpt_expert_team_proposal",
         {
             "task": str(task),
-            "resources": resources,
+            "task_envelope": task_envelope,
             "catalog": catalog,
             "hard_limits": _hard_limits(
                 approved_total_calls=approved_total_calls,
@@ -274,7 +330,7 @@ def build_synthesis_request(
     task: str,
     initial_proposal: Mapping[str, Any],
     claude_advice: Mapping[str, Any],
-    resources: Mapping[str, Any],
+    task_envelope: Mapping[str, Any],
     catalog: Mapping[str, Any],
     approved_total_calls: int,
     governance_calls_reserved: int,
@@ -301,11 +357,113 @@ def build_synthesis_request(
                     claude_advice.get("suggestions") or []
                 ),
             },
-            "resources": resources,
+            "task_envelope": task_envelope,
             "catalog": catalog,
             "hard_limits": hard,
         },
     )
+
+
+def _bounded_text(value: Any, field: str, maximum: int) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value) > maximum:
+        raise GPTSelectorError(f"{field} is invalid")
+    if any(ord(character) < 32 for character in value):
+        raise GPTSelectorError(f"{field} contains control characters")
+    return value
+
+
+def _validate_proposal(value: Mapping[str, Any]) -> None:
+    required = {"work_items", "nodes", "edges", "final_nodes"}
+    if set(value) != required:
+        raise GPTSelectorError("GPT proposal has missing or extra fields")
+    work_items = value["work_items"]
+    nodes = value["nodes"]
+    edges = value["edges"]
+    final_nodes = value["final_nodes"]
+    if not isinstance(work_items, list) or not 1 <= len(work_items) <= GPT_MAX_WORK_ITEMS:
+        raise GPTSelectorError("GPT proposal work_items are invalid")
+    work_ids: list[str] = []
+    for index, work in enumerate(work_items):
+        if not isinstance(work, Mapping) or set(work) != {
+            "work_id", "objective", "dependencies", "required_outputs"
+        }:
+            raise GPTSelectorError(f"work_items[{index}] has invalid fields")
+        work_id = _bounded_text(work["work_id"], f"work_items[{index}].work_id", 96)
+        work_ids.append(work_id)
+        _bounded_text(work["objective"], f"work_items[{index}].objective", 320)
+        dependencies = work["dependencies"]
+        outputs = work["required_outputs"]
+        if not isinstance(dependencies, list) or len(dependencies) > GPT_MAX_WORK_ITEMS:
+            raise GPTSelectorError("work dependencies are invalid")
+        if len(dependencies) != len(set(dependencies)):
+            raise GPTSelectorError("work dependencies contain duplicates")
+        if not isinstance(outputs, list) or not 1 <= len(outputs) <= GPT_MAX_OUTPUT_FIELDS_PER_WORK:
+            raise GPTSelectorError("work required_outputs are invalid")
+        for output in outputs:
+            _bounded_text(output, "required_output", 160)
+    if len(work_ids) != len(set(work_ids)):
+        raise GPTSelectorError("GPT proposal has duplicate work ids")
+    known_work = set(work_ids)
+    for work in work_items:
+        dependencies = {str(value) for value in work["dependencies"]}
+        if str(work["work_id"]) in dependencies or not dependencies.issubset(known_work):
+            raise GPTSelectorError("work dependency references are invalid")
+
+    if not isinstance(nodes, list) or not 1 <= len(nodes) <= GPT_MAX_NODES:
+        raise GPTSelectorError("GPT proposal nodes are invalid")
+    node_ids: list[str] = []
+    for index, node in enumerate(nodes):
+        expected = {
+            "node_id", "work_ids", "role", "functions", "model", "provider",
+            "reasoning_effort", "max_output_tokens", "recovery"
+        }
+        if not isinstance(node, Mapping) or set(node) != expected:
+            raise GPTSelectorError(f"nodes[{index}] has invalid fields")
+        node_ids.append(_bounded_text(node["node_id"], f"nodes[{index}].node_id", 64))
+        assigned = node["work_ids"]
+        functions = node["functions"]
+        recovery = node["recovery"]
+        if not isinstance(assigned, list) or not assigned or len(assigned) > GPT_MAX_WORK_ITEMS:
+            raise GPTSelectorError("node work_ids are invalid")
+        if len(assigned) != len(set(assigned)) or not set(assigned).issubset(known_work):
+            raise GPTSelectorError("node work_ids contain duplicates or unknown work")
+        _bounded_text(node["role"], f"nodes[{index}].role", 320)
+        if not isinstance(functions, list) or not 1 <= len(functions) <= GPT_MAX_FUNCTIONS_PER_NODE:
+            raise GPTSelectorError("node functions are invalid")
+        if len(functions) != len(set(functions)):
+            raise GPTSelectorError("node functions contain duplicates")
+        for function in functions:
+            _bounded_text(function, "node function", 96)
+        _bounded_text(node["model"], f"nodes[{index}].model", 160)
+        _bounded_text(node["provider"], f"nodes[{index}].provider", 160)
+        if node["reasoning_effort"] not in {"low", "medium", "high"}:
+            raise GPTSelectorError("node reasoning_effort is invalid")
+        if isinstance(node["max_output_tokens"], bool) or not isinstance(node["max_output_tokens"], int):
+            raise GPTSelectorError("node max_output_tokens must be an integer")
+        if not 256 <= node["max_output_tokens"] <= 32768:
+            raise GPTSelectorError("node max_output_tokens is outside hard limits")
+        if not isinstance(recovery, list) or len(recovery) > GPT_MAX_RECOVERY_PER_NODE:
+            raise GPTSelectorError("node recovery is invalid")
+        for row in recovery:
+            if not isinstance(row, Mapping) or set(row) != {"model", "provider"}:
+                raise GPTSelectorError("recovery row has invalid fields")
+            _bounded_text(row["model"], "recovery model", 160)
+            _bounded_text(row["provider"], "recovery provider", 160)
+    if len(node_ids) != len(set(node_ids)):
+        raise GPTSelectorError("GPT proposal has duplicate node ids")
+    known_nodes = set(node_ids)
+
+    if not isinstance(edges, list) or len(edges) > GPT_MAX_EDGES:
+        raise GPTSelectorError("GPT proposal edges are invalid")
+    for edge in edges:
+        if not isinstance(edge, Mapping) or set(edge) != {"source", "target", "relation_type"}:
+            raise GPTSelectorError("edge has invalid fields")
+        if edge["source"] not in known_nodes or edge["target"] not in known_nodes:
+            raise GPTSelectorError("edge references unknown node")
+    if not isinstance(final_nodes, list) or not final_nodes:
+        raise GPTSelectorError("GPT proposal final_nodes are invalid")
+    if len(final_nodes) != len(set(final_nodes)) or not set(final_nodes).issubset(known_nodes):
+        raise GPTSelectorError("GPT proposal final_nodes contain duplicates or unknown nodes")
 
 
 def parse_proposal(text: str) -> dict[str, Any]:
@@ -317,26 +475,10 @@ def parse_proposal(text: str) -> dict[str, Any]:
         value = json.loads(text)
     except json.JSONDecodeError as exc:
         raise GPTSelectorError("GPT proposal is not valid JSON") from exc
-    required = {"interpretation_id", "nodes", "edges", "final_nodes"}
-    if not isinstance(value, Mapping) or set(value) != required:
-        raise GPTSelectorError("GPT proposal has missing or extra fields")
-    if not isinstance(value["nodes"], list) or not value["nodes"]:
-        raise GPTSelectorError("GPT proposal has no nodes")
-    if len(value["nodes"]) > GPT_MAX_NODES:
-        raise GPTSelectorError("GPT proposal exceeds node limit")
-    if (
-        not isinstance(value["edges"], list)
-        or len(value["edges"]) > GPT_MAX_EDGES
-    ):
-        raise GPTSelectorError("GPT proposal edges are invalid")
-    if (
-        not isinstance(value["final_nodes"], list)
-        or not value["final_nodes"]
-    ):
-        raise GPTSelectorError("GPT proposal final nodes are invalid")
-    return json.loads(
-        json.dumps(value, ensure_ascii=False, allow_nan=False)
-    )
+    if not isinstance(value, Mapping):
+        raise GPTSelectorError("GPT proposal root must be an object")
+    _validate_proposal(value)
+    return json.loads(json.dumps(value, ensure_ascii=False, allow_nan=False))
 
 
 def proposal_sha256(value: Mapping[str, Any]) -> str:
