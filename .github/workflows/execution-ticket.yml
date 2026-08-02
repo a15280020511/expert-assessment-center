@@ -26,7 +26,6 @@ jobs:
       reason: ${{ steps.lock.outputs.reason }}
       accepted: ${{ steps.ticket.outputs.accepted }}
       calls: ${{ steps.ticket.outputs.calls }}
-      quality_tier: ${{ steps.ticket.outputs.quality_tier }}
       maximum_recovery_calls: ${{ steps.ticket.outputs.maximum_recovery_calls }}
       maximum_initial_calls: ${{ steps.ticket.outputs.maximum_initial_calls }}
       cost_anomaly_usd: ${{ steps.ticket.outputs.cost_anomaly_usd }}
@@ -188,7 +187,6 @@ jobs:
             --output-dir ticket-artifacts \
             --expected-calls "${{ needs.admit-ticket.outputs.calls }}" \
             --expected-recovery-calls "${{ needs.admit-ticket.outputs.maximum_recovery_calls }}" \
-            --expected-quality-tier "${{ needs.admit-ticket.outputs.quality_tier }}" \
             --expected-cost-anomaly-usd "${{ needs.admit-ticket.outputs.cost_anomaly_usd }}"
 
       - name: Execute explicit V5 production runtime
@@ -199,7 +197,6 @@ jobs:
           args=(
             --task "$task"
             --output-dir ticket-artifacts
-            --quality-tier "${{ needs.admit-ticket.outputs.quality_tier }}"
             --maximum-total-calls "${{ needs.admit-ticket.outputs.calls }}"
             --maximum-recovery-calls "${{ needs.admit-ticket.outputs.maximum_recovery_calls }}"
             --require-live-catalog
