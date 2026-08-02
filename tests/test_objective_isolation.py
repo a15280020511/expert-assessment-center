@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-import v5_issue_ticket as issue_ticket
+import v5_issue_ticket as issue_ticket  # noqa: E402
 from v5_ticket_identity import task_fingerprint  # noqa: E402
 
 
@@ -59,7 +59,10 @@ class ObjectiveIsolationTests(unittest.TestCase):
             (root / "ticket.json").write_text(json.dumps(packet), encoding="utf-8")
             text = issue_ticket._substantive_task_text(packet)
             (root / "task.txt").write_text(text, encoding="utf-8")
-            self.assertNotIn(packet["objective"], (root / "task.txt").read_text(encoding="utf-8"))
+            self.assertNotIn(
+                packet["objective"],
+                (root / "task.txt").read_text(encoding="utf-8"),
+            )
 
 
 if __name__ == "__main__":
