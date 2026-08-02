@@ -76,7 +76,7 @@ class V5FactLabelPurityNormalizationTests(unittest.TestCase):
             compile_task_constraints(TASK),
         )
         self.assertEqual(
-            "v5-deterministic-answer-normalization-2",
+            "v5-deterministic-answer-normalization-3",
             audit["schema_version"],
         )
         self.assertEqual(3, audit["structural_labels_inserted"])
