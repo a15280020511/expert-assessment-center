@@ -18,6 +18,11 @@ from v5_catalog_view import (
 )
 from v5_claude_red_team_policy import CLAUDE_RED_TEAM_GOVERNANCE_CALLS
 from v5_endpoint_catalog import fetch_live_endpoint_payloads
+from v5_governance_catalog import (
+    governance_candidate_models,
+    resolve_live_governance_models,
+    synthetic_governance_models,
+)
 from v5_governance_runtime import (
     run_single_pass_governance,
     write_governance_artifacts,
@@ -28,7 +33,7 @@ from v5_recovery_runtime import build_production_runtime
 from v5_runtime import RuntimeConfig
 from v5_task_envelope import build_task_envelope
 
-RUNTIME_VERSION = "v5-gpt-claude-runtime-2"
+RUNTIME_VERSION = "v5-gpt-claude-runtime-3"
 
 
 def _write(path: Path, value: Any) -> None:
@@ -147,7 +152,7 @@ def _merge_request_audit(
     _write(
         path,
         {
-            "schema_version": "v5-complete-request-audit-2",
+            "schema_version": "v5-complete-request-audit-3",
             "status": status,
             "request_count": len(requests),
             "approved_total_call_ceiling": approved_total_calls,
@@ -166,6 +171,33 @@ def _merge_request_audit(
     )
     if status != "PASS":
         raise RuntimeError("complete request audit failed")
+
+
+def _resolve_governance_models(
+    *,
+    models: Mapping[str, Any],
+    run: Any,
+    required_context_tokens: int,
+    governance_call_fn: Any | None,
+) -> tuple[dict[str, Any], str]:
+    synthetic_allowed = bool(
+        run.catalog_file
+        and (run.dry_run or governance_call_fn is not None)
+    )
+    if synthetic_allowed:
+        return synthetic_governance_models(), "synthetic-no-call-fixture"
+    candidates = governance_candidate_models(models)
+    payloads = fetch_live_endpoint_payloads(
+        candidates,
+        run,
+        maximum_models=len(candidates),
+    )
+    resolved = resolve_live_governance_models(
+        models,
+        payloads,
+        required_context_tokens=required_context_tokens,
+    )
+    return resolved, "openrouter-live-exact-direct-endpoints"
 
 
 def main(
@@ -198,6 +230,23 @@ def main(
         task_envelope["required_context_tokens"]
     )
     models, catalog_source = model_market.fetch_catalog(run)
+    governance_models, governance_endpoint_source = (
+        _resolve_governance_models(
+            models=models,
+            run=run,
+            required_context_tokens=required_context_tokens,
+            governance_call_fn=governance_call_fn,
+        )
+    )
+    _write(
+        output / "v5-governance-models.json",
+        {
+            **governance_models,
+            "catalog_source": catalog_source,
+            "endpoint_source": governance_endpoint_source,
+        },
+    )
+
     ranked = eligible_models(
         models,
         requested_context=required_context_tokens,
@@ -228,7 +277,7 @@ def main(
     )
     snapshot_digest = catalog_sha256(catalog)
     snapshot = {
-        "schema_version": "v5-gpt-catalog-snapshot-2",
+        "schema_version": "v5-gpt-catalog-snapshot-3",
         "catalog_snapshot_id": f"catalog-{snapshot_digest[:20]}",
         "catalog_sha256": snapshot_digest,
         "catalog_source": catalog_source,
@@ -254,8 +303,12 @@ def main(
             "expert_initial_call_limit": expert_total_calls - recovery_calls,
             "cost_anomaly_usd": args.cost_anomaly_usd,
             "selection_authority": "gpt-latest",
+            "selection_model": governance_models["gpt"]["resolved_model"],
+            "selection_provider": governance_models["gpt"]["provider"],
             "task_decomposition_authority": "gpt-latest",
             "red_team_role": "claude-opus-latest-advisory-once",
+            "red_team_model": governance_models["claude"]["resolved_model"],
+            "red_team_provider": governance_models["claude"]["provider"],
             "claude_is_advisory_only": True,
             "claude_gatekeeping_allowed": False,
             "gpt_synthesis_calls": 1,
@@ -282,11 +335,12 @@ def main(
         _write(
             output / "v5-dry-run.json",
             {
-                "schema_version": "v5-gpt-claude-advisory-dry-run-2",
+                "schema_version": "v5-gpt-claude-advisory-dry-run-3",
                 "status": "validated-not-executed",
                 "model_calls": 0,
                 "task_envelope": task_envelope,
                 "proposal_request": proposal_request,
+                "governance_model_resolution": governance_models,
                 "claude_model": "~anthropic/claude-opus-latest",
                 "claude_calls_per_task": 1,
                 "claude_is_advisory_only": True,
@@ -315,6 +369,7 @@ def main(
         governance_calls_reserved=CLAUDE_RED_TEAM_GOVERNANCE_CALLS,
         approved_recovery_calls=recovery_calls,
         cost_anomaly_usd=args.cost_anomaly_usd,
+        governance_models=governance_models,
         call_fn=governance_call_fn,
     )
     write_governance_artifacts(output, governance, governance_ledger)
@@ -344,10 +399,11 @@ def main(
     _write(
         output / "v5-selection.json",
         {
-            "schema_version": "v5-gpt-direct-selection-2",
+            "schema_version": "v5-gpt-direct-selection-3",
             "status": "PASS",
             "proposal": governance["final_proposal"],
             "claude_advice": governance["claude_advice"],
+            "governance_model_resolution": governance_models,
             "materialization": materialization,
             "selection_authority": "gpt-latest",
             "task_decomposition_authority": "gpt-latest",
@@ -391,6 +447,10 @@ def main(
         "actual_calls": governance_calls,
         "reserved_calls": CLAUDE_RED_TEAM_GOVERNANCE_CALLS,
         "actual_cost_usd": governance_cost,
+        "gpt_model": governance_models["gpt"]["resolved_model"],
+        "gpt_provider": governance_models["gpt"]["provider"],
+        "claude_model": governance_models["claude"]["resolved_model"],
+        "claude_provider": governance_models["claude"]["provider"],
         "claude_calls": 1,
         "gpt_synthesis_calls": 1,
         "claude_is_advisory_only": True,
