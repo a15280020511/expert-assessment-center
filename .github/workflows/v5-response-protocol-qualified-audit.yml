@@ -1,0 +1,275 @@
+name: V5 Response Protocol Qualified Audit
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v5-response-protocol-qualified-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  canonical:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+      - name: Canonical static and complete unit suite
+        run: |
+          set -euo pipefail
+          mkdir -p audit-logs
+          python -m ruff check . 2>&1 | tee audit-logs/ruff.log
+          python -m compileall -q open-model-market tests tools 2>&1 | tee audit-logs/compile.log
+          python -m unittest discover -s tests -p 'test*.py' -v \
+            2>&1 | tee audit-logs/full-unit.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: response-protocol-qualified-canonical-${{ github.run_id }}
+          path: audit-logs/
+          if-no-files-found: error
+          retention-days: 30
+
+  protocol-seeds:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [0, 1, 7, 42, 99, 31337]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install pinned dependencies
+        run: python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+      - name: Protocol, diagnostics, deadline and recovery matrix
+        env:
+          PYTHONHASHSEED: ${{ matrix.seed }}
+        run: |
+          set -euo pipefail
+          mkdir -p audit-logs
+          python -m unittest -v \
+            tests.test_openrouter_response_protocol \
+            tests.test_v5_response_diagnostics_evidence \
+            tests.test_openrouter_hard_deadline \
+            tests.test_v5_cross_endpoint_recovery \
+            tests.test_v5_operational_resilience \
+            tests.test_v5_quantity_binding_context \
+            tests.test_v5_task_constraints \
+            2>&1 | tee audit-logs/protocol-seed-${{ matrix.seed }}.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: response-protocol-qualified-seed-${{ matrix.seed }}-${{ github.run_id }}
+          path: audit-logs/
+          if-no-files-found: error
+          retention-days: 30
+
+  parallel-runtime-load:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [0, 42, 31337]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install pinned dependencies
+        run: python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+      - name: Concurrent budgets, circuits, DAGs and recovery
+        env:
+          PYTHONHASHSEED: ${{ matrix.seed }}
+        run: |
+          set -euo pipefail
+          mkdir -p audit-logs
+          python -m unittest -v \
+            tests.test_v5_full_load_stability \
+            tests.test_v5_stress_stability \
+            tests.test_v5_operational_resilience \
+            tests.test_v5_cross_endpoint_recovery \
+            tests.test_v5_critical_delivery_reliability \
+            tests.test_v5_recovery_company_diversity \
+            2>&1 | tee audit-logs/parallel-${{ matrix.seed }}.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: response-protocol-qualified-parallel-${{ matrix.seed }}-${{ github.run_id }}
+          path: audit-logs/
+          if-no-files-found: error
+          retention-days: 30
+
+  adversarial-properties:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install pinned dependencies
+        run: python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+      - name: Fuzz protocol framing, diagnostic bounds and helmet quantities
+        run: |
+          set -euo pipefail
+          mkdir -p audit-logs
+          PYTHONPATH=open-model-market python - <<'PY' | tee audit-logs/adversarial-properties.log
+          import hashlib
+          import json
+          import random
+          from openrouter_api import OpenRouterRequestError, _decode_response
+          from v5_task_constraints import (
+              closed_world_numeric_prompt,
+              compile_task_constraints,
+              fact_claim_supported,
+              normalized_quantities,
+          )
+
+          class Headers(dict):
+              def get(self, key, default=None):
+                  for existing, value in self.items():
+                      if existing.casefold() == key.casefold():
+                          return value
+                  return default
+
+          class Response:
+              def __init__(self, body, content_type="application/json", status=200):
+                  self.body = body
+                  self.status = status
+                  self.headers = Headers({
+                      "Content-Type": content_type,
+                      "Content-Length": str(len(body)),
+                  })
+              def read(self, _limit):
+                  return self.body
+
+          cases = 0
+          for seed in range(128):
+              rng = random.Random(seed)
+              pieces = ["北", "门", "外", "安", "全"]
+              chunks = []
+              for index, piece in enumerate(pieces):
+                  chunks.append({
+                      "id": f"gen-{seed}",
+                      "model": "example/model",
+                      "choices": [{
+                          "index": 0,
+                          "delta": {"content": piece},
+                          "finish_reason": "stop" if index == len(pieces) - 1 else None,
+                      }],
+                      **({"usage": {"prompt_tokens": 1, "completion_tokens": len(pieces)}} if index == len(pieces) - 1 else {}),
+                  })
+              separator = "\r\n\r\n" if rng.choice([True, False]) else "\n\n"
+              body = separator.join(
+                  f"data: {json.dumps(chunk, ensure_ascii=False)}"
+                  for chunk in chunks
+              ) + separator + "data: [DONE]" + separator
+              parsed = _decode_response(
+                  Response(body.encode("utf-8"), "text/event-stream"),
+                  "test",
+              )
+              assert parsed["choices"][0]["message"]["content"] == "北门外安全"
+              cases += 1
+
+          invalid_bodies = [
+              (b'{"choices": [', "application/json"),
+              (b'<!doctype html><title>gateway</title>', "text/html"),
+              (b'data: {"choices": []}\n\nnot-an-sse-field\n', "text/event-stream"),
+              (b'data: {broken}\n\ndata: [DONE]\n\n', "text/event-stream"),
+              (b'plain upstream text', "text/plain"),
+              (b'{"ok": true}{"extra": true}', "application/json"),
+          ]
+          for body, content_type in invalid_bodies:
+              try:
+                  _decode_response(Response(body, content_type), "test")
+              except OpenRouterRequestError as exc:
+                  diagnostics = exc.response_diagnostics
+                  assert diagnostics["schema_version"] == "openrouter-response-diagnostics-1"
+                  assert diagnostics["bytes_received"] == len(body)
+                  assert diagnostics["body_sha256"] == hashlib.sha256(body).hexdigest()
+                  assert len(diagnostics.get("leading_token", "")) <= 96
+                  assert body.decode("utf-8", errors="replace") not in str(exc)
+              else:
+                  raise AssertionError((body, content_type))
+              cases += 1
+
+          task = (
+              "仅依据题面：纸质库存表显示6顶应急头盔已经领用，"
+              "但现场只能确认5顶。禁止编造题面外事实。"
+          )
+          quantities = normalized_quantities(task)
+          assert ("6", "", "item") in quantities
+          assert ("5", "", "item") in quantities
+          assert fact_claim_supported(task, "应急头盔已领用6顶，现场只能确认5顶")
+          assert fact_claim_supported(task, "现场只能确认5顶，库存表显示已领用6顶应急头盔")
+          assert not fact_claim_supported(task, "应急头盔已领用5顶，现场只能确认6顶")
+          assert not fact_claim_supported(task, "库存表显示5顶应急头盔已领用")
+          prompt = closed_world_numeric_prompt(task, compile_task_constraints(task))
+          assert "5:item" in prompt and "6:item" in prompt
+          cases += 5
+
+          print(json.dumps({
+              "status": "PASS",
+              "property_cases": cases,
+              "model_calls": 0,
+              "cross_task_history_used": False,
+          }))
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: response-protocol-qualified-properties-${{ github.run_id }}
+          path: audit-logs/
+          if-no-files-found: error
+          retention-days: 30
+
+  granular-repository-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Inspect every repository file and source line
+        run: |
+          set -euo pipefail
+          python tools/repository_audit.py \
+            --root . \
+            --output-dir audit-artifacts \
+            --fail-on high
+          tar --exclude=.git --exclude=audit-artifacts \
+            -czf audit-artifacts/repository-source-${GITHUB_SHA}.tar.gz .
+          sha256sum audit-artifacts/repository-source-${GITHUB_SHA}.tar.gz \
+            > audit-artifacts/repository-source-${GITHUB_SHA}.sha256
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: response-protocol-qualified-granular-${{ github.run_id }}
+          path: audit-artifacts/
+          if-no-files-found: error
+          retention-days: 30
