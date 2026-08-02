@@ -51,6 +51,17 @@ def validate_scope_boundaries(task: str, answer: str) -> list[str]:
 class ConstitutionalPromptPolicy:
     """Build provider-locked requests without using the legacy executor module."""
 
+    @staticmethod
+    def _compact_upstream_contract(
+        contract: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Remove only the duplicate raw mirror; preserve every substantive field."""
+        return {
+            str(key): value
+            for key, value in contract.items()
+            if str(key) != "raw_fields"
+        }
+
     def build_payload(
         self,
         node: SelectedNode,
@@ -65,7 +76,7 @@ class ConstitutionalPromptPolicy:
                     {
                         "node_id": row.get("node_id"),
                         "answer": json.dumps(
-                            contract,
+                            self._compact_upstream_contract(contract),
                             ensure_ascii=False,
                             separators=(",", ":"),
                             default=str,
@@ -85,6 +96,13 @@ class ConstitutionalPromptPolicy:
         )
         constraints = compile_task_constraints(original_task)
         numeric_policy = closed_world_numeric_prompt(original_task, constraints)
+        delivery_discipline = ""
+        if bool(node.output_contract.get("explicit_markdown_contract")):
+            delivery_discipline = (
+                "\n显式长篇合同交付纪律：先按顺序生成全部指定H2标题并确保每节非空，"
+                "再补充细节。若输出空间紧张，压缩重复事实、表格和修饰语，"
+                "不得遗漏标题、改变顺序、增加其他H2或用冗长复述耗尽输出。"
+            )
         messages = payload.get("messages")
         if (
             isinstance(messages, list)
@@ -108,6 +126,7 @@ class ConstitutionalPromptPolicy:
                     "事实标签必须只承载题面事实；任何必须、禁止、建议、否决、"
                     "优先或行动要求必须另起结论或推断标签，不得与事实同句。"
                     + (("\n" + numeric_policy) if numeric_policy else "")
+                    + delivery_discipline
                 ),
             }
             payload["messages"] = messages

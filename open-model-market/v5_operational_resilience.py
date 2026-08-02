@@ -171,6 +171,27 @@ def uniform_failure_cap(
     return low
 
 
+def contract_visible_token_floor(
+    candidate: Any,
+    task_expected_tokens: int,
+) -> tuple[int, bool, int]:
+    """Raise visible-token demand to the task-derived explicit contract estimate."""
+    profile = getattr(candidate, "parameter_profile", {})
+    profile = profile if isinstance(profile, Mapping) else {}
+    completion_tokens = max(
+        0,
+        int(_float(profile.get("estimated_completion_usage_tokens"), 0.0)),
+    )
+    explicit_contract = bool(
+        profile.get("explicit_output_contract_expected")
+        or str(profile.get("output_contract_kind") or "") == "exact-markdown"
+    )
+    task_tokens = max(0, int(task_expected_tokens))
+    if not explicit_contract or completion_tokens <= task_tokens:
+        return task_tokens, False, completion_tokens
+    return completion_tokens, True, completion_tokens
+
+
 class OperationalResiliencePlannerPolicy(CrossEndpointPlannerPolicy):
     """Calibrate live endpoints and require executable recovery sufficiency."""
 
@@ -255,7 +276,7 @@ class OperationalResiliencePlannerPolicy(CrossEndpointPlannerPolicy):
             {
                 "operational_reliability": "bayesian-shrinkage-current-snapshot",
                 "uptime_percentage_normalized": True,
-                "deadline_serviceability": "expected-visible-output-over-current-throughput",
+                "deadline_serviceability": "max-task-output-and-explicit-contract-estimate-over-current-throughput",
                 "cross_task_history_used": False,
             }
         )
@@ -289,6 +310,12 @@ class OperationalResiliencePlannerPolicy(CrossEndpointPlannerPolicy):
                 * discount
             )
         )
+        task_expected_visible_tokens = expected_visible_tokens
+        (
+            expected_visible_tokens,
+            contract_token_floor_applied,
+            contract_completion_tokens,
+        ) = contract_visible_token_floor(candidate, expected_visible_tokens)
         throughput = _float(endpoint.get("throughput_p50_tps"), 0.0)
         latency_ms = _float(endpoint.get("latency_p90_ms"), 0.0)
         deadline_seconds = max(
@@ -323,6 +350,9 @@ class OperationalResiliencePlannerPolicy(CrossEndpointPlannerPolicy):
         profile["operational_serviceability"] = {
             "schema_version": "v5-operational-serviceability-1",
             "expected_visible_output_tokens": expected_visible_tokens,
+            "task_expected_visible_output_tokens": task_expected_visible_tokens,
+            "contract_completion_token_floor": contract_completion_tokens,
+            "contract_token_floor_applied": contract_token_floor_applied,
             "throughput_p50_tps": None if throughput <= 0.0 else round(throughput, 6),
             "latency_p90_ms": None if latency_ms <= 0.0 else round(latency_ms, 6),
             "estimated_visible_delivery_seconds": (

@@ -63,9 +63,32 @@ class V5RecoveryAbsoluteBudgetFeasibilityTests(unittest.TestCase):
                 {"candidates": [selected, openai, anthropic]},
             )
 
-    def test_candidate_within_absolute_cap_remains_available_for_live_ledger(self) -> None:
+    def test_risk_adjusted_remaining_guard_excludes_unexecutable_candidate(self) -> None:
         selected = candidate("node-selected", "google/selected", "google", 0.12)
         recovery = candidate("node-openai", "openai/recovery", "openai", 0.25986871)
+        optimization = {
+            "selected_initial_cost_usd": 0.12,
+            "execution_graph": {
+                "nodes": [{**selected, "node_id": "node-selected"}],
+                "final_nodes": [],
+                "metadata": {"interpretation_id": "interpretation-budget"},
+            },
+        }
+        policy = CrossEndpointPlannerPolicy(
+            RuntimeConfig(2, 1, 0.35, "value")
+        )
+        with self.assertRaisesRegex(
+            V5PlanningError,
+            "Recovery reserve is not executable",
+        ):
+            policy.rebalance_recovery_pool(
+                optimization,
+                {"candidates": [selected, recovery]},
+            )
+
+    def test_risk_adjusted_candidate_within_remaining_guard_is_frozen(self) -> None:
+        selected = candidate("node-selected", "google/selected", "google", 0.12)
+        recovery = candidate("node-openai", "openai/recovery", "openai", 0.10)
         optimization = {
             "selected_initial_cost_usd": 0.12,
             "execution_graph": {
@@ -81,17 +104,17 @@ class V5RecoveryAbsoluteBudgetFeasibilityTests(unittest.TestCase):
             optimization,
             {"candidates": [selected, recovery]},
         )
-        rows = result["execution_graph"]["metadata"]["recovery_pool"][
+        row = result["execution_graph"]["metadata"]["recovery_pool"][
             "node-selected"
-        ]
-        self.assertEqual("openai/recovery", rows[0]["model"])
-        evidence = result["recovery_pool_policy"]
-        self.assertEqual(
-            0,
-            evidence["absolute_cost_cap_excluded_by_node"]["node-selected"],
+        ][0]
+        self.assertEqual("openai/recovery", row["model"])
+        self.assertFalse(row["planning_budget_advisory_only"])
+        self.assertLessEqual(row["recovery_risk_adjusted_cost_usd"], 0.23)
+        self.assertTrue(
+            result["recovery_pool_policy"][
+                "risk_adjusted_remaining_budget_enforced_at_planning"
+            ]
         )
-        self.assertEqual(1, evidence["total_executable_recovery_options"])
-        self.assertTrue(rows[0]["estimated_cost_above_planning_remaining_budget"])
 
 
 if __name__ == "__main__":

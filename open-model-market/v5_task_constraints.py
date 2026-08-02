@@ -220,6 +220,16 @@ def normalized_quantities(text: str) -> set[tuple[str, str, str]]:
     return values
 
 
+def original_quantity_tokens(text: str) -> list[str]:
+    """Return de-duplicated quantities exactly as written for prompt display."""
+    values: list[str] = []
+    for match in _QUANTITY_RE.finditer(str(text or "")):
+        token = re.sub(r"\s+", "", match.group(0)).strip()
+        if token and token not in values:
+            values.append(token)
+    return values
+
+
 def closed_world_numeric_prompt(
     task: str,
     constraints: TaskConstraints | Mapping[str, Any] | None = None,
@@ -235,22 +245,16 @@ def closed_world_numeric_prompt(
     if precise_allowed:
         return ""
 
-    allowed = sorted(
-        normalized_quantities(task),
-        key=lambda row: (row[2], float(row[0]), float(row[1] or row[0])),
-    )
-    tokens = [
-        f"{lo}{('-' + hi) if hi else ''}:{unit}"
-        for lo, hi, unit in allowed
-    ]
-    rendered = "[" + ", ".join(tokens) + "]"
+    rendered = "[" + "，".join(original_quantity_tokens(task)) + "]"
     return (
         "封闭世界精确数量规则（不可覆盖）：允许出现的‘数值+单位’仅限"
-        f"以下规范化集合：{rendered}。除该集合外，禁止输出任何带单位的"
-        "精确数量，包括算术中间结果、示例值、替代月份或年份、敏感性阈值、"
-        "预测值和派生情景。校验题面给定结果时，只能写由清单内数量组成、且"
-        "等式结果也已在清单中的直接等式；不得展开或报告新的中间数值。"
-        "反转条件若题面未给数值阈值，只能定性表述。"
+        f"题面原样集合：{rendered}。回答必须保留题面原始单位，不得把中文"
+        "量词替换为内部归一化标签；例如不得用 people、item 或 times 代替"
+        "人/名/位、件/顶或次。除该集合外，禁止输出任何带单位的精确数量，"
+        "包括算术中间结果、示例值、替代月份或年份、敏感性阈值、预测值和"
+        "派生情景。校验题面给定结果时，只能写由清单内数量组成、且等式结果"
+        "也已在清单中的直接等式；不得展开或报告新的中间数值。反转条件若"
+        "题面未给数值阈值，只能定性表述。"
     )
 
 
