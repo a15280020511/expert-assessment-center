@@ -1,0 +1,189 @@
+name: V5 Final Delivery Replay Audit
+
+on:
+  pull_request:
+    branches:
+      - fix/v5-final-delivery-consistency-20260802
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  OPENROUTER_API_KEY: ""
+  OPENROUTER_MANAGEMENT_KEY: ""
+
+jobs:
+  replay-production-failure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+      - name: Download immutable production artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          ARTIFACT_ID: "8828782971"
+        run: |
+          set -euo pipefail
+          unset OPENROUTER_API_KEY OPENROUTER_MANAGEMENT_KEY || true
+          gh api -H "Accept: application/vnd.github+json" \
+            "/repos/$REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" \
+            > failed-production-artifact.zip
+          echo '2823d4e3b9bab5dd9aca1fa8b7d1bfc313ea135155aeff2f9b1402bd455515a1  failed-production-artifact.zip' | sha256sum -c -
+          mkdir replay-artifact
+          unzip -q failed-production-artifact.zip -d replay-artifact
+          test -f replay-artifact/expert-team-result.json
+          test ! -f replay-artifact/v5-result.json
+          test -f replay-artifact/evidence-integrity.json
+          test -f replay-artifact/actual-model-company-audit.json
+      - name: Recompile task contract and delivery capacity
+        run: |
+          set -euo pipefail
+          unset OPENROUTER_API_KEY OPENROUTER_MANAGEMENT_KEY || true
+          mkdir -p replay-evidence
+          PYTHONPATH=open-model-market python - <<'PY' | tee replay-evidence/recompiled-contract.json
+          import json
+          from pathlib import Path
+          from types import SimpleNamespace
+
+          from v5_general_task_planning import classify_task, compile_task_semantics
+          from v5_independent_artifact_revalidation import _canonical_task
+          from v5_pipeline import _planning_limits, _resource_shape
+          from v5_recovery_runtime import build_production_runtime
+          from v5_runtime import RuntimeConfig
+          from v5_task_constraints import fact_claim_supported, validate_answer_evidence
+          from v5_task_delivery_contract import apply_explicit_contract, extract_explicit_markdown_contract
+
+          root = Path("replay-artifact")
+          ticket = json.loads((root / "ticket.json").read_text(encoding="utf-8"))
+          task = _canonical_task(ticket)
+          expected_headings = [
+              "已知事实与未知", "风险与隔离", "立即行动",
+              "门禁与沟通", "物资核对与记录", "条件式移交结论",
+          ]
+
+          explicit = extract_explicit_markdown_contract(task)
+          assert explicit["explicit_markdown_contract"] is True
+          assert explicit["exact_markdown_headings"] == expected_headings
+          assert explicit["task_explicit_delivery_section_count"] == 6
+          assert explicit["contract_extraction_policy"] == "explicit-format-text-only-inline-inferred-count"
+
+          claim = "值守人员为 2 名。"
+          assert fact_claim_supported(task, claim)
+          nodes = json.loads((root / "v5-node-results.json").read_text(encoding="utf-8"))
+          degraded = next(row for row in nodes if row.get("status") == "success_degraded")
+          violations = validate_answer_evidence(task, degraded.get("answer", ""))
+          assert f"unsupported-fact-label:{claim}" not in violations, violations
+
+          graph = json.loads((root / "v5-execution-graph.json").read_text(encoding="utf-8"))
+          final_node_id = graph["final_nodes"][0]
+          old_final_contract = next(
+              node["output_contract"] for node in graph["nodes"]
+              if node["node_id"] == final_node_id
+          )
+          compiled_final = apply_explicit_contract(task, {"synthesis": 1.0}, old_final_contract)
+          assert compiled_final["explicit_markdown_contract"] is True
+          assert compiled_final["exact_markdown_headings"] == expected_headings
+          assert compiled_final["required_fields"] == expected_headings
+
+          production_run = SimpleNamespace(
+              task=task,
+              minimum_context_length=16384,
+              max_completion_tokens=10000,
+              maximum_total_calls=4,
+              maximum_recovery_calls=1,
+          )
+          profile = classify_task(task, production_run)
+          resources = compile_task_semantics(profile, production_run)
+          shape = _resource_shape(resources)
+          assert shape["explicit_output_contract"] is True, shape
+          assert int(shape["maximum_synthesis_work"]) >= 1, shape
+          runtime = build_production_runtime(RuntimeConfig(4, 1, 0.35, "value"))
+          limits = _planning_limits(
+              total_calls=4,
+              recovery_calls=1,
+              planning_nodes=3,
+              anomaly_budget=0.35,
+              runtime=runtime,
+              task=task,
+              profile=profile,
+              resource_shape=shape,
+          )
+          assert limits.max_nodes == 3
+          assert limits.min_successful_content_nodes == 2
+          assert limits.allow_degraded_success is False
+
+          print(json.dumps({
+              "status": "PASS",
+              "production_semantic_layer": "v5_general_task_planning",
+              "exact_markdown_headings": expected_headings,
+              "heading_count": 6,
+              "cardinality_claim_supported": True,
+              "degraded_node_evidence_violations": violations,
+              "old_final_contract_explicit": bool(old_final_contract.get("explicit_markdown_contract")),
+              "recompiled_final_contract_explicit": True,
+              "maximum_synthesis_work": shape["maximum_synthesis_work"],
+              "max_nodes": limits.max_nodes,
+              "minimum_successful_content_nodes": limits.min_successful_content_nodes,
+              "model_calls": 0,
+              "model_cost_usd": 0,
+          }, ensure_ascii=False, sort_keys=True))
+          PY
+      - name: Recompute immutable artifact without reclassifying history
+        run: |
+          set -euo pipefail
+          unset OPENROUTER_API_KEY OPENROUTER_MANAGEMENT_KEY || true
+          set +e
+          PYTHONPATH=open-model-market python open-model-market/v5_independent_artifact_revalidation.py \
+            --artifact-dir replay-artifact \
+            --expected-sha 94e979eb3ec9ed76a9f909c160bb2323ac116876 \
+            --expected-run-id 30733518972 \
+            --maximum-calls 4 \
+            --maximum-cost-usd 0.35 \
+            --archive failed-production-artifact.zip \
+            --expected-artifact-digest sha256:2823d4e3b9bab5dd9aca1fa8b7d1bfc313ea135155aeff2f9b1402bd455515a1 \
+            --output replay-evidence/replay-verdict.json
+          code=$?
+          set -e
+          test "$code" -ne 0
+          jq -e '.status == "FAIL"' replay-evidence/replay-verdict.json
+          jq -e '.recomputed_from_primitive_evidence == true' replay-evidence/replay-verdict.json
+          jq -e '.paid_acceptance_verdict_used_as_source == false' replay-evidence/replay-verdict.json
+          jq -e '.artifact_run_id == "30733518972"' replay-evidence/replay-verdict.json
+          jq -e '.model_calls == 4 and .actual_cost_usd == 0.00714544' replay-evidence/replay-verdict.json
+          jq -e '.revalidation_exception == null' replay-evidence/replay-verdict.json
+          jq -e '.failures | length > 0' replay-evidence/replay-verdict.json
+          jq -e '[.independently_recomputed_evidence_violations[] | select(. == "unsupported-fact-label:值守人员为 2 名。") ] | length == 0' replay-evidence/replay-verdict.json
+      - name: Run mandatory and focused zero-cost regressions
+        run: |
+          set -euo pipefail
+          unset OPENROUTER_API_KEY OPENROUTER_MANAGEMENT_KEY || true
+          python -m unittest -v \
+            tests.test_v5_live_delivery_consistency \
+            tests.test_v5_independent_artifact_revalidation \
+            tests.test_v5_failure_evidence_persistence \
+            tests.test_v5_explicit_markdown_contract_revalidation \
+            tests.test_v5_fact_provenance_semantic_normalization
+          python tools/run_v5_p0_regressions.py | tee replay-evidence/p0.log
+          grep -q 'REGISTERED TOTAL: 58' replay-evidence/p0.log
+          grep -q 'P0 REGRESSION RESULT: run=58, passed=58, failures=0, errors=0, skipped=0' replay-evidence/p0.log
+          printf '{"status":"PASS","source_run_id":"30733518972","source_artifact_id":"8828782971","historical_failure_reclassified":false,"model_calls":0,"model_cost_usd":0}\n' > replay-evidence/zero-cost-attestation.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: v5-final-delivery-replay-${{ github.run_id }}
+          path: replay-evidence/
+          if-no-files-found: error
+          retention-days: 30
