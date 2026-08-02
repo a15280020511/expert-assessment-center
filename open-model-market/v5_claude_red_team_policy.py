@@ -82,7 +82,7 @@ INTERNAL_SELECTION_PROMPT = (
     "只返回JSON Schema允许的APPROVE或REJECT、枚举codes和targets；证据不足必须REJECT。"
 )
 EXTERNAL_INFORMATION_PROMPT = (
-    "你是专家团中心的固定信息红队判定器。你只审核输入信息的事实来源、数量、位置、未知项和交付合同。"
+    "你是专家团中心的固定信息红队判定器。你只检查输入信息的事实来源、数量、位置、未知项和交付合同。"
     "你不得补充事实、改写内容、给出建议、生成报告、参与专家选择或执行任务，不得调用工具或浏览。"
     "你在每个任务中最多执行一次。只返回JSON Schema允许的APPROVE或REJECT、枚举codes和targets；"
     "证据不足必须REJECT。"
@@ -91,7 +91,7 @@ INTERNAL_SELECTION_PROMPT_SHA256 = (
     "12561265f5454459ea83764359db893fb92b9ead331b6af1502c8ef89f620790"
 )
 EXTERNAL_INFORMATION_PROMPT_SHA256 = (
-    "d56a006dc6742f5bc7e6e4c73c1cc6809e2efe3d419bedf569d1c9b2dce6a2b2"
+    "a8bbc969a9bf47fc1d23d1ac393b1637dca9794f7794adf6b1e35257ccc99647"
 )
 
 _SYSTEM_PROMPTS = {
