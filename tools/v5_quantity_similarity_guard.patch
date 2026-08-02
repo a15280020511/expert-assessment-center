@@ -1,0 +1,40 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+path = Path("open-model-market/v5_task_constraints.py")
+text = path.read_text(encoding="utf-8")
+old = '''        if any(normalized in str(row["normalized"]) for row in compatible):
+            continue
+        if any(
+            SequenceMatcher(None, normalized, str(row["normalized"])).ratio() >= 0.72
+            for row in compatible
+        ):
+            continue
+
+        claim_quantities = normalized_quantities(fragment)
+'''
+new = '''        generic_quantities = normalized_quantities(fragment)
+        generic_compatible = [
+            row
+            for row in compatible
+            if not generic_quantities
+            or generic_quantities.issubset(set(row["quantities"]))
+        ]
+        if any(
+            normalized in str(row["normalized"])
+            for row in generic_compatible
+        ):
+            continue
+        if any(
+            SequenceMatcher(None, normalized, str(row["normalized"])).ratio() >= 0.72
+            for row in generic_compatible
+        ):
+            continue
+
+        claim_quantities = generic_quantities
+'''
+count = text.count(old)
+if count != 1:
+    raise SystemExit(f"expected one quantity similarity block, found {count}")
+path.write_text(text.replace(old, new, 1), encoding="utf-8")
