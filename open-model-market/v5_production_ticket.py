@@ -31,7 +31,7 @@ def _write(path: Path, value: Any) -> None:
     )
 
 
-def _canonical_task(root: Path, fallback: str) -> tuple[str, str]:
+def _canonical_user_task(root: Path, fallback: str) -> tuple[str, str]:
     packet = _load(root / "ticket.json", {})
     task = packet.get("task") if isinstance(packet, Mapping) else None
     if (
@@ -139,14 +139,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "recovery reserve must leave an expert call after "
             "three governance calls"
         )
-    task, source = _canonical_task(root, args.task)
+    task, source = _canonical_user_task(root, args.task)
     if not task:
         raise ValueError("canonical user task is empty")
     constraints = compile_task_constraints(task)
     _write(
         root / "planning-task.json",
         {
-            "schema_version": "v5-gpt-planning-task-1",
+            "schema_version": "v5-gpt-planning-task-2",
             "source": source,
             "sha256": hashlib.sha256(
                 task.encode("utf-8")
@@ -154,11 +154,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "characters": len(task),
             "task_constraints": constraints.to_dict(),
             "selection_authority": "~openai/gpt-latest",
-            "red_team_authority": (
-                "~anthropic/claude-opus-latest"
-            ),
+            "red_team_model": "~anthropic/claude-opus-latest",
             "claude_red_team_calls": 1,
-            "gpt_synthesis_calls_max": 1,
+            "claude_is_advisory_only": True,
+            "claude_gatekeeping_allowed": False,
+            "gpt_synthesis_calls": 1,
             "local_scoring_used": False,
             "optimizer_used": False,
         },
@@ -170,8 +170,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "entrypoint": "v5_production_ticket.py",
             "pipeline": "v5_pipeline.py",
             "architecture": (
-                "gpt-latest -> claude-opus-latest-once -> "
-                "optional-gpt-synthesis-once -> "
+                "gpt-latest-proposal -> "
+                "claude-opus-latest-advice-once -> "
+                "gpt-latest-synthesis-once -> "
                 "deterministic-validator -> executor"
             ),
             "maximum_total_calls": args.maximum_total_calls,
@@ -183,6 +184,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.maximum_recovery_calls
             ),
             "cost_anomaly_usd": args.cost_anomaly_usd,
+            "claude_is_advisory_only": True,
+            "claude_gatekeeping_allowed": False,
+            "deterministic_validator_is_only_hard_gate": True,
             "local_planner_present": False,
             "optimizer_present": False,
             "cp_sat_present": False,
@@ -216,6 +220,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "approved_total_calls": args.maximum_total_calls,
             "selection_authority": "gpt-latest",
             "claude_red_team_calls": 1,
+            "claude_is_advisory_only": True,
+            "gpt_synthesis_calls": 1,
             "local_optimizer_used": False,
             "evidence_input_sha256": (
                 result["evidence_input_sha256"]
@@ -241,7 +247,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "fallback_used": False,
                 "local_planner_present": False,
                 "optimizer_present": False,
-                "claude_red_team_calls_max": 1,
+                "claude_red_team_calls": 1,
+                "claude_is_advisory_only": True,
+                "claude_gatekeeping_allowed": False,
+                "gpt_synthesis_calls": 1,
                 "model_loop_allowed": False,
                 "cross_task_history_used": False,
             },
