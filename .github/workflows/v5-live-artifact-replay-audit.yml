@@ -1,0 +1,123 @@
+name: V5 Live Artifact Replay Audit
+
+on:
+  pull_request:
+    branches:
+      - fix/v5-live-acceptance-contract-20260802
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  OPENROUTER_API_KEY: ""
+  OPENROUTER_MANAGEMENT_KEY: ""
+
+jobs:
+  replay-failed-production-artifact:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+      - name: Download immutable failed production artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          ARTIFACT_ID: "8828451845"
+        run: |
+          set -euo pipefail
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/$REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" \
+            > failed-production-artifact.zip
+          mkdir replay-artifact
+          unzip -q failed-production-artifact.zip -d replay-artifact
+          test -f replay-artifact/expert-team-result.json
+          test ! -f replay-artifact/v5-result.json
+      - name: Verify fact-label boundary against real report
+        run: |
+          set -euo pipefail
+          unset OPENROUTER_API_KEY OPENROUTER_MANAGEMENT_KEY || true
+          PYTHONPATH=open-model-market python - <<'PY'
+          import json
+          from pathlib import Path
+          from v5_independent_artifact_revalidation import _canonical_task
+          from v5_task_constraints import validate_answer_evidence
+
+          root = Path("replay-artifact")
+          ticket = json.loads((root / "ticket.json").read_text(encoding="utf-8"))
+          report = (root / "v5-final-report.md").read_text(encoding="utf-8")
+          task = _canonical_task(ticket)
+          violations = validate_answer_evidence(task, report)
+          assert not any(
+              item.startswith("unsupported-fact-label:")
+              for item in violations
+          ), violations
+          print(json.dumps({
+              "status": "PASS",
+              "fact_label_violations": [],
+              "other_evidence_violations": violations,
+              "model_calls": 0,
+              "model_cost_usd": 0,
+          }, ensure_ascii=False, sort_keys=True))
+          PY
+      - name: Recompute failed artifact without crashing
+        run: |
+          set -euo pipefail
+          unset OPENROUTER_API_KEY OPENROUTER_MANAGEMENT_KEY || true
+          set +e
+          PYTHONPATH=open-model-market python \
+            open-model-market/v5_independent_artifact_revalidation.py \
+            --artifact-dir replay-artifact \
+            --expected-sha 7633ebab0eda1027df83a24cdfd5edd26f35e221 \
+            --expected-run-id 30732177815 \
+            --maximum-calls 5 \
+            --maximum-cost-usd 0.35 \
+            --archive failed-production-artifact.zip \
+            --expected-artifact-digest sha256:c39cc969769134c3f8e85409bca9d1c004154f78f535cae39308118303ce7181 \
+            --output replay-verdict.json
+          code=$?
+          set -e
+          test "$code" -ne 0
+          test -f replay-verdict.json
+          jq -e '.status == "FAIL"' replay-verdict.json
+          jq -e '.recomputed_from_primitive_evidence == true' replay-verdict.json
+          jq -e '.paid_acceptance_verdict_used_as_source == false' replay-verdict.json
+          jq -e '.artifact_run_id == "30732177815"' replay-verdict.json
+          jq -e '.failures | length > 0' replay-verdict.json
+          jq -e '[.failures[] | select(test("execution status is not success|completion mode is not full|runtime evidence integrity is not PASS"))] | length > 0' replay-verdict.json
+      - name: Focused failure-path regressions
+        run: |
+          set -euo pipefail
+          unset OPENROUTER_API_KEY OPENROUTER_MANAGEMENT_KEY || true
+          python -m unittest -v \
+            tests.test_v5_task_constraints \
+            tests.test_v5_independent_artifact_revalidation \
+            tests.test_v5_failure_evidence_persistence
+      - name: Write zero-cost replay attestation
+        if: always()
+        run: |
+          mkdir -p replay-evidence
+          cp replay-verdict.json replay-evidence/ 2>/dev/null || true
+          sha256sum failed-production-artifact.zip \
+            > replay-evidence/downloaded-archive.sha256
+          printf '{"status":"PASS","source_run_id":"30732177815","source_artifact_id":"8828451845","model_calls":0,"model_cost_usd":0,"historical_failure_reclassified":false}\n' \
+            > replay-evidence/zero-cost-attestation.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: v5-live-artifact-replay-${{ github.run_id }}
+          path: replay-evidence/
+          if-no-files-found: error
+          retention-days: 30
