@@ -1,0 +1,203 @@
+name: PR227 Conservative Provider Route Envelope
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - tools/.pr227-catalog-route-envelope-rewrite.py
+      - .github/workflows/pr227-catalog-route-envelope.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr227-catalog-route-envelope
+  cancel-in-progress: false
+
+jobs:
+  validate-and-commit:
+    if: >-
+      github.event.pull_request.number == 227 &&
+      github.event.pull_request.head.ref == 'fix/v5-claude-unified-red-team-cleanup-20260803'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      ANTHROPIC_API_KEY: ""
+    steps:
+      - name: Checkout exact PR branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: fix/v5-claude-unified-red-team-cleanup-20260803
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply deterministic provider-route rewrite
+        run: |
+          set -euo pipefail
+          sha256sum tools/.pr227-catalog-route-envelope-rewrite.py
+          python -m py_compile tools/.pr227-catalog-route-envelope-rewrite.py
+          python tools/.pr227-catalog-route-envelope-rewrite.py
+          git diff --check
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-runtime.txt
+            requirements-dev.txt
+
+      - name: Install locked dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+
+      - name: Run static and focused route-envelope gates
+        run: |
+          set -euo pipefail
+          python -m ruff check .
+          python -m compileall -q open-model-market tests tools
+          python -m unittest \
+            tests.test_v5_catalog_endpoint_eligibility \
+            tests.test_v5_gpt_selector_contract \
+            tests.test_v5_full_load_stability \
+            -v
+
+      - name: Run complete regression suite
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p 'test*.py' -v
+
+      - name: Run three zero-chat live route-envelope validations
+        run: |
+          set -euo pipefail
+          test -n "${OPENROUTER_API_KEY:-}"
+          mkdir -p /tmp/pr227-live-route-envelope
+          python - <<'PY'
+          from __future__ import annotations
+
+          import argparse
+          import json
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, "open-model-market")
+          import model_market
+          from openrouter_api import request_json
+          from v5_catalog_view import (
+              catalog_index,
+              catalog_sha256,
+              compact_endpoint_catalog,
+              eligible_models,
+              endpoint_url,
+          )
+
+          args = argparse.Namespace(
+              task="PR227实时Provider路由保守包络验证",
+              output_dir="/tmp/pr227-live-route-envelope",
+              config="open-model-market/config.json",
+              catalog_file=None,
+              ranking_limit=12,
+              max_completion_tokens=512,
+              reasoning_effort="low",
+              maximum_total_calls=4,
+              maximum_recovery_calls=0,
+              require_live_catalog=True,
+              dry_run=False,
+          )
+          run = model_market.build_run_config(args)
+          results = []
+          for iteration in range(3):
+              models, source = model_market.fetch_catalog(run)
+              ranked = eligible_models(
+                  models,
+                  requested_context=16_384,
+                  maximum_models=12,
+              )
+              payloads = {}
+              raw_endpoint_rows = 0
+              for model in ranked:
+                  payload = request_json(
+                      endpoint_url(model.id),
+                      run.api_key,
+                      run.catalog_timeout_seconds,
+                      0,
+                  )
+                  payloads[model.id] = payload
+                  data = payload.get("data") if isinstance(payload, dict) else None
+                  if isinstance(data, dict) and isinstance(data.get("endpoints"), list):
+                      raw_endpoint_rows += len(data["endpoints"])
+              catalog = compact_endpoint_catalog(
+                  ranked,
+                  payloads,
+                  required_context_tokens=16_384,
+                  minimum_completion_tokens=512,
+              )
+              index = catalog_index(catalog)
+              assert len(catalog["endpoints"]) == len(index)
+              assert len(index) > 0
+              results.append(
+                  {
+                      "iteration": iteration,
+                      "catalog_source": source,
+                      "ranked_models": len(ranked),
+                      "raw_endpoint_rows": raw_endpoint_rows,
+                      "normalized_provider_routes": len(index),
+                      "catalog_sha256": catalog_sha256(catalog),
+                  }
+              )
+          result = {
+              "schema_version": "pr227-live-provider-route-envelope-1",
+              "status": "PASS",
+              "chat_model_calls": 0,
+              "iterations": results,
+          }
+          Path("/tmp/pr227-live-route-envelope/result.json").write_text(
+              json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(result, ensure_ascii=False))
+          PY
+
+      - name: Run eight-seed route-envelope order stress
+        run: |
+          set -euo pipefail
+          for seed in 0 1 7 42 31337 65535 99991 104729; do
+            PYTHONHASHSEED="$seed" python -m unittest \
+              tests.test_v5_catalog_endpoint_eligibility \
+              tests.test_v5_gpt_selector_contract \
+              -q
+          done
+
+      - name: Run medium-blocking granular audit
+        run: |
+          set -euo pipefail
+          python tools/repository_audit.py \
+            --root . \
+            --output-dir /tmp/pr227-route-envelope-audit \
+            --fail-on medium
+
+      - name: Upload zero-chat route-envelope evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr227-live-route-envelope-${{ github.run_id }}
+          path: |
+            /tmp/pr227-live-route-envelope/
+            /tmp/pr227-route-envelope-audit/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Commit validated fix and remove staging assets
+        run: |
+          set -euo pipefail
+          rm tools/.pr227-catalog-route-envelope-rewrite.py
+          rm .github/workflows/pr227-catalog-route-envelope.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: coalesce duplicate provider routes conservatively"
+          git push origin HEAD:fix/v5-claude-unified-red-team-cleanup-20260803
