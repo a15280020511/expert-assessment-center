@@ -10,12 +10,14 @@ import time
 import urllib.error
 import urllib.request
 from email.utils import parsedate_to_datetime
-from typing import Any, Dict, Optional
+from hashlib import sha256
+from typing import Any, Dict, Mapping, Optional
 
 CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODELS_URL = "https://openrouter.ai/api/v1/models"
 RETRYABLE_HTTP_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 MAX_RESPONSE_BYTES = 20 * 1024 * 1024
+MAX_DIAGNOSTIC_TOKEN_CHARS = 96
 
 
 class OpenRouterRequestError(RuntimeError):
@@ -31,6 +33,7 @@ class OpenRouterRequestError(RuntimeError):
         retry_after_seconds: float | None = None,
         request_sent: bool = False,
         response_received: bool = False,
+        response_diagnostics: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.category = category
@@ -39,6 +42,7 @@ class OpenRouterRequestError(RuntimeError):
         self.retry_after_seconds = retry_after_seconds
         self.request_sent = bool(request_sent)
         self.response_received = bool(response_received)
+        self.response_diagnostics = dict(response_diagnostics or {})
 
 
 def headers(api_key: Optional[str]) -> Dict[str, str]:
@@ -71,33 +75,278 @@ def _retry_delay(attempt: int, retry_after: str | None = None) -> float:
     return base + random.uniform(0.0, max(0.25, base * 0.35))
 
 
+def _header_value(response: Any, name: str) -> str:
+    response_headers = getattr(response, "headers", None)
+    if response_headers is None:
+        return ""
+    try:
+        value = response_headers.get(name)
+    except (AttributeError, KeyError, TypeError):
+        return ""
+    return str(value or "").strip()
+
+
+def _safe_leading_token(text: str) -> str:
+    stripped = str(text or "").lstrip("\ufeff \t\r\n")
+    token = stripped[:MAX_DIAGNOSTIC_TOKEN_CHARS]
+    return "".join(
+        character if 32 <= ord(character) < 127 else "?"
+        for character in token
+    )
+
+
+def _response_diagnostics(
+    response: Any,
+    raw: bytes,
+    text: str,
+    *,
+    parse_mode: str,
+    parse_error: BaseException | None = None,
+) -> dict[str, Any]:
+    content_type = _header_value(response, "Content-Type")
+    content_encoding = _header_value(response, "Content-Encoding")
+    status = getattr(response, "status", None)
+    diagnostics: dict[str, Any] = {
+        "schema_version": "openrouter-response-diagnostics-1",
+        "http_status": int(status) if isinstance(status, int) else None,
+        "content_type": content_type,
+        "content_encoding": content_encoding,
+        "content_length_header": _header_value(response, "Content-Length"),
+        "bytes_received": len(raw),
+        "body_sha256": sha256(raw).hexdigest(),
+        "line_count": text.count("\n") + (1 if text else 0),
+        "starts_with_sse_data": bool(
+            text.lstrip("\ufeff \t\r\n").startswith("data:")
+        ),
+        "starts_with_html": bool(
+            text.lstrip("\ufeff \t\r\n").casefold().startswith(
+                ("<!doctype html", "<html")
+            )
+        ),
+        "leading_token": _safe_leading_token(text),
+        "parse_mode": parse_mode,
+    }
+    if isinstance(parse_error, json.JSONDecodeError):
+        diagnostics["json_error"] = {
+            "message": parse_error.msg,
+            "line": parse_error.lineno,
+            "column": parse_error.colno,
+            "position": parse_error.pos,
+        }
+    elif parse_error is not None:
+        diagnostics["parse_error_type"] = type(parse_error).__name__
+        diagnostics["parse_error_message"] = str(parse_error)[:240]
+    return diagnostics
+
+
+def _sse_event_payloads(text: str) -> list[str]:
+    events: list[str] = []
+    data_lines: list[str] = []
+    saw_sse_field = False
+    for line in text.splitlines():
+        if not line:
+            if data_lines:
+                events.append("\n".join(data_lines))
+                data_lines = []
+            continue
+        if line.startswith(":"):
+            saw_sse_field = True
+            continue
+        if line.startswith("data:"):
+            saw_sse_field = True
+            value = line[5:]
+            if value.startswith(" "):
+                value = value[1:]
+            data_lines.append(value)
+            continue
+        if line.startswith(("event:", "id:", "retry:")):
+            saw_sse_field = True
+            continue
+        raise ValueError("non-SSE line encountered in event-stream response")
+    if data_lines:
+        events.append("\n".join(data_lines))
+    if not saw_sse_field or not events:
+        raise ValueError("event-stream response contains no data events")
+    return events
+
+
+def _merge_streaming_choices(payloads: list[Mapping[str, Any]]) -> dict[str, Any]:
+    base: dict[str, Any] = {}
+    choices_by_index: dict[int, dict[str, Any]] = {}
+    usage: Mapping[str, Any] | None = None
+    for payload in payloads:
+        for key, value in payload.items():
+            if key not in {"choices", "usage"} and key not in base:
+                base[key] = value
+        if isinstance(payload.get("usage"), Mapping):
+            usage = dict(payload["usage"])
+        choices = payload.get("choices")
+        if not isinstance(choices, list):
+            continue
+        for position, raw_choice in enumerate(choices):
+            if not isinstance(raw_choice, Mapping):
+                continue
+            raw_index = raw_choice.get("index", position)
+            try:
+                index = int(raw_index)
+            except (TypeError, ValueError):
+                index = position
+            choice = choices_by_index.setdefault(
+                index,
+                {
+                    "index": index,
+                    "message": {"role": "assistant", "content": ""},
+                    "finish_reason": None,
+                },
+            )
+            direct_message = raw_choice.get("message")
+            delta = raw_choice.get("delta")
+            source = direct_message if isinstance(direct_message, Mapping) else delta
+            if isinstance(source, Mapping):
+                message = choice["message"]
+                role = source.get("role")
+                if role:
+                    message["role"] = str(role)
+                for field in ("content", "reasoning", "reasoning_content"):
+                    value = source.get(field)
+                    if isinstance(value, str):
+                        message[field] = str(message.get(field) or "") + value
+                for field in ("tool_calls", "annotations"):
+                    value = source.get(field)
+                    if isinstance(value, list):
+                        message.setdefault(field, []).extend(value)
+            finish_reason = raw_choice.get("finish_reason")
+            if finish_reason is not None:
+                choice["finish_reason"] = finish_reason
+            if "logprobs" in raw_choice:
+                choice["logprobs"] = raw_choice.get("logprobs")
+    if not choices_by_index:
+        if len(payloads) == 1:
+            return dict(payloads[0])
+        raise ValueError("event-stream response contains no chat completion choices")
+    base["choices"] = [choices_by_index[index] for index in sorted(choices_by_index)]
+    if usage is not None:
+        base["usage"] = dict(usage)
+    return base
+
+
+def _decode_sse(text: str) -> dict[str, Any]:
+    decoded_payloads: list[Mapping[str, Any]] = []
+    for event in _sse_event_payloads(text):
+        if event.strip() == "[DONE]":
+            continue
+        payload = json.loads(event)
+        if not isinstance(payload, Mapping):
+            raise ValueError("SSE data payload is not a JSON object")
+        decoded_payloads.append(payload)
+    if not decoded_payloads:
+        raise ValueError("event-stream response ended without a JSON payload")
+    return _merge_streaming_choices(decoded_payloads)
+
+
 def _decode_response(response: Any, url: str) -> Dict[str, Any]:
     raw = response.read(MAX_RESPONSE_BYTES + 1)
     if len(raw) > MAX_RESPONSE_BYTES:
+        diagnostics = _response_diagnostics(
+            response,
+            raw[:MAX_RESPONSE_BYTES],
+            "",
+            parse_mode="size-limit",
+        )
         raise OpenRouterRequestError(
             f"Response from {url} exceeds the {MAX_RESPONSE_BYTES}-byte safety limit.",
             category="invalid_response",
             retryable=False,
             request_sent=True,
             response_received=True,
+            response_diagnostics=diagnostics,
         )
     try:
-        parsed = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        diagnostics = _response_diagnostics(
+            response,
+            raw,
+            raw.decode("utf-8", errors="replace"),
+            parse_mode="utf8",
+            parse_error=exc,
+        )
         raise OpenRouterRequestError(
-            f"Invalid JSON from {url}: {exc}",
+            f"Invalid UTF-8 response from {url}; response_sha256={diagnostics['body_sha256']}",
             category="invalid_response",
             retryable=False,
             request_sent=True,
             response_received=True,
+            response_diagnostics=diagnostics,
         ) from exc
+
+    try:
+        parsed = json.loads(text)
+        parse_mode = "json"
+    except json.JSONDecodeError as json_exc:
+        content_type = _header_value(response, "Content-Type").casefold()
+        looks_like_sse = text.lstrip("\ufeff \t\r\n").startswith("data:")
+        if "text/event-stream" not in content_type and not looks_like_sse:
+            diagnostics = _response_diagnostics(
+                response,
+                raw,
+                text,
+                parse_mode="json",
+                parse_error=json_exc,
+            )
+            raise OpenRouterRequestError(
+                f"Invalid JSON from {url}; response_sha256={diagnostics['body_sha256']}; "
+                f"content_type={diagnostics['content_type'] or 'unknown'}; "
+                f"bytes={diagnostics['bytes_received']}; "
+                f"json_error={json_exc.msg} at line {json_exc.lineno} column {json_exc.colno}",
+                category="invalid_response",
+                retryable=False,
+                request_sent=True,
+                response_received=True,
+                response_diagnostics=diagnostics,
+            ) from json_exc
+        try:
+            parsed = _decode_sse(text)
+            parse_mode = "sse"
+        except (ValueError, json.JSONDecodeError) as sse_exc:
+            diagnostics = _response_diagnostics(
+                response,
+                raw,
+                text,
+                parse_mode="sse",
+                parse_error=sse_exc,
+            )
+            diagnostics["initial_json_error"] = {
+                "message": json_exc.msg,
+                "line": json_exc.lineno,
+                "column": json_exc.colno,
+                "position": json_exc.pos,
+            }
+            raise OpenRouterRequestError(
+                f"Invalid event-stream response from {url}; "
+                f"response_sha256={diagnostics['body_sha256']}; "
+                f"content_type={diagnostics['content_type'] or 'unknown'}; "
+                f"bytes={diagnostics['bytes_received']}",
+                category="invalid_response",
+                retryable=False,
+                request_sent=True,
+                response_received=True,
+                response_diagnostics=diagnostics,
+            ) from sse_exc
     if not isinstance(parsed, dict):
+        diagnostics = _response_diagnostics(
+            response,
+            raw,
+            text,
+            parse_mode=parse_mode,
+        )
         raise OpenRouterRequestError(
-            f"Non-object JSON from {url}",
+            f"Non-object JSON from {url}; response_sha256={diagnostics['body_sha256']}",
             category="invalid_response",
             retryable=False,
             request_sent=True,
             response_received=True,
+            response_diagnostics=diagnostics,
         )
     return parsed
 
