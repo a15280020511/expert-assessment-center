@@ -255,16 +255,63 @@ _NEGATION_GENERIC_RE = re.compile(
 
 def _normalize_claim(value: str) -> str:
     value = re.sub(r"[（(][^）)]*[）)]", "", str(value or ""))
+    for pattern, replacement in (
+        (r"(?:无法|不能|不可|未能|未)确认", "未知"),
+        (r"(?:无法|不能|不可)核验", "未核验"),
+        (r"是否存在", ""),
+        (r"(?:题面|直接支持|题面事实)", ""),
+    ):
+        value = re.sub(pattern, replacement, value, flags=re.IGNORECASE)
     value = re.sub(r"[`*_~#>\[\]{}]", "", value)
     value = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "", value).casefold()
     for source, target in (
         ("存在", "有"),
         ("人员", "人"),
         ("人士", "人"),
+        ("以及", ""),
+        ("并且", ""),
+        ("而且", ""),
+        ("和", ""),
+        ("及", ""),
+        ("与", ""),
         ("被", ""),
     ):
         value = value.replace(source, target)
     return value
+
+
+def _quantity_skeleton(value: str) -> str:
+    """Remove only explicit quantities while preserving semantic anchors."""
+    without_quantities = _QUANTITY_RE.sub("", str(value or ""))
+    return _normalize_claim(without_quantities)
+
+
+def _semantic_core(value: str, polarity: str) -> str:
+    """Normalize the proposition core after its polarity is checked separately."""
+    rendered = str(value or "")
+    if polarity == "unknown":
+        rendered = _NEGATION_UNKNOWN_RE.sub("", rendered)
+    elif polarity == "absence":
+        rendered = _NEGATION_ABSENCE_RE.sub("", rendered)
+    elif polarity == "negative":
+        rendered = _NEGATION_GENERIC_RE.sub("", rendered)
+    return _normalize_claim(rendered)
+
+
+def _ngram_coverage(needle: str, haystack: str, size: int) -> float:
+    if size <= 0 or len(needle) < size:
+        return 0.0
+    needle_grams = {
+        needle[index : index + size]
+        for index in range(len(needle) - size + 1)
+    }
+    haystack_grams = {
+        haystack[index : index + size]
+        for index in range(max(0, len(haystack) - size + 1))
+    }
+    if not needle_grams:
+        return 0.0
+    return len(needle_grams & haystack_grams) / len(needle_grams)
 
 
 def _evidence_fragments(value: str, *, include_whole: bool) -> list[str]:
@@ -295,7 +342,13 @@ def _negation_polarity(value: str) -> str:
 def _claim_supported(claim: str, task: str) -> bool:
     source_fragments = _evidence_fragments(task, include_whole=True)
     source_rows = [
-        (_normalize_claim(fragment), _negation_polarity(fragment))
+        {
+            "raw": fragment,
+            "normalized": _normalize_claim(fragment),
+            "polarity": _negation_polarity(fragment),
+            "quantities": normalized_quantities(fragment),
+            "quantity_skeleton": _quantity_skeleton(fragment),
+        }
         for fragment in source_fragments
     ]
     for fragment in _evidence_fragments(claim, include_whole=False):
@@ -303,21 +356,68 @@ def _claim_supported(claim: str, task: str) -> bool:
         if not normalized:
             continue
         polarity = _negation_polarity(fragment)
+        compatible = [
+            row
+            for row in source_rows
+            if row["normalized"] and polarity == row["polarity"]
+        ]
+        if any(normalized in str(row["normalized"]) for row in compatible):
+            continue
         if any(
-            normalized in source and polarity == source_polarity
-            for source, source_polarity in source_rows
-            if source
+            SequenceMatcher(None, normalized, str(row["normalized"])).ratio() >= 0.72
+            for row in compatible
         ):
             continue
-        supported = any(
-            polarity == source_polarity
-            and SequenceMatcher(None, normalized, source).ratio() >= 0.72
-            for source, source_polarity in source_rows
-            if source
-        )
-        if not supported:
-            return False
+
+        claim_quantities = normalized_quantities(fragment)
+        if claim_quantities:
+            claim_skeleton = _quantity_skeleton(fragment)
+            quantity_supported = any(
+                claim_quantities.issubset(set(row["quantities"]))
+                and bool(claim_skeleton)
+                and (
+                    claim_skeleton in str(row["quantity_skeleton"])
+                    or SequenceMatcher(
+                        None,
+                        claim_skeleton,
+                        str(row["quantity_skeleton"]),
+                    ).ratio()
+                    >= 0.78
+                )
+                for row in compatible
+            )
+            if not quantity_supported:
+                task_skeleton = _quantity_skeleton(task)
+                quantity_supported = (
+                    claim_quantities.issubset(normalized_quantities(task))
+                    and len(claim_skeleton) >= 4
+                    and _ngram_coverage(claim_skeleton, task_skeleton, 2) >= 0.85
+                    and _ngram_coverage(claim_skeleton, task_skeleton, 3) >= 0.60
+                )
+            if quantity_supported:
+                continue
+
+        if polarity in {"unknown", "absence", "negative"}:
+            claim_core = _semantic_core(fragment, polarity)
+            polarity_supported = any(
+                bool(claim_core)
+                and bool(source_core := _semantic_core(str(row["raw"]), polarity))
+                and (
+                    claim_core in source_core
+                    or source_core in claim_core
+                    or SequenceMatcher(None, claim_core, source_core).ratio() >= 0.82
+                )
+                for row in compatible
+            )
+            if polarity_supported:
+                continue
+        return False
     return True
+
+
+def fact_claim_supported(task: str, claim: str) -> bool:
+    """Public deterministic fact-provenance predicate used by normalization."""
+    return _claim_supported(claim, task)
 
 
 def validate_answer_evidence(
