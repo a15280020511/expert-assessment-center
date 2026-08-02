@@ -160,8 +160,6 @@ class TestV5FullLoadStability(unittest.TestCase):
                         str(total),
                         "--maximum-recovery-calls",
                         str(recovery),
-                        "--quality-tier",
-                        "value",
                         "--output-dir",
                         str(output),
                     ],

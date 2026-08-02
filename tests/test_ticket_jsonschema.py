@@ -33,7 +33,6 @@ class TicketJsonSchemaTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(validated["calls"], 6)
         self.assertEqual(validated["max_cost_usd"], 0.0)
-        self.assertEqual(validated["quality_tier"], "value")
 
     def test_structured_cross_center_evidence_is_accepted(self):
         payload = self.valid_packet()

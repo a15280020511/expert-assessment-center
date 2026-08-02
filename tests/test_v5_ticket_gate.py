@@ -34,7 +34,6 @@ class V5TicketGateTests(unittest.TestCase):
                 "cost_policy": "unbounded_with_anomaly_guard",
                 "cost_anomaly_usd": 0.25,
             },
-            "quality_tier": "value",
             "private_output": False,
         }
         self.status = {
@@ -45,7 +44,6 @@ class V5TicketGateTests(unittest.TestCase):
             "maximum_recovery_calls": 1,
             "maximum_initial_calls": 1,
             "maximum_replacements": 1,
-            "quality_tier": "value",
             "max_cost_usd": 0.25,
             "cost_anomaly_usd": 0.25,
             "cost_policy": "unbounded_with_anomaly_guard",
@@ -90,7 +88,6 @@ class V5TicketGateTests(unittest.TestCase):
             self.root,
             expected_calls=5,
             expected_recovery_calls=1,
-            expected_quality_tier="value",
             expected_cost_anomaly_usd=0.25,
         )
 
@@ -118,8 +115,7 @@ class V5TicketGateTests(unittest.TestCase):
                 self.root,
                 expected_calls=6,
                 expected_recovery_calls=1,
-                expected_quality_tier="value",
-                expected_cost_anomaly_usd=0.25,
+                    expected_cost_anomaly_usd=0.25,
             )
         failure = json.loads(
             (self.root / "ticket-gate.json").read_text(encoding="utf-8")

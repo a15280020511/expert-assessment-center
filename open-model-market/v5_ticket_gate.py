@@ -70,7 +70,6 @@ def validate_gate(
     *,
     expected_calls: int,
     expected_recovery_calls: int,
-    expected_quality_tier: str,
     expected_cost_anomaly_usd: float | None,
 ) -> dict[str, Any]:
     ticket_path = root / "ticket.json"
@@ -200,21 +199,6 @@ def validate_gate(
         "status replacement limit differs from recovery pool",
     )
 
-    _require(
-        errors,
-        str(ticket.get("quality_tier") or "") == expected_quality_tier,
-        "ticket quality tier differs from workflow expectation",
-    )
-    _require(
-        errors,
-        str(status.get("quality_tier") or "") == expected_quality_tier,
-        "status quality tier differs from workflow expectation",
-    )
-    _require(
-        errors,
-        expected_quality_tier == "value",
-        "quality tier must remain value",
-    )
     _require(
         errors,
         str(budget.get("cost_policy") or "")
@@ -362,7 +346,6 @@ def validate_gate(
             "maximum_initial_calls": expected_initial,
             "maximum_recovery_calls": expected_recovery_calls,
             "cost_anomaly_usd": expected_cost_anomaly_usd,
-            "quality_tier": expected_quality_tier,
         },
         "immutable_admission_evidence": evidence,
         "model_calls_performed": 0,
@@ -385,7 +368,6 @@ def run_gate(
     *,
     expected_calls: int,
     expected_recovery_calls: int,
-    expected_quality_tier: str,
     expected_cost_anomaly_usd: float | None,
 ) -> dict[str, Any]:
     output = root / "ticket-gate.json"
@@ -394,7 +376,6 @@ def run_gate(
             root,
             expected_calls=expected_calls,
             expected_recovery_calls=expected_recovery_calls,
-            expected_quality_tier=expected_quality_tier,
             expected_cost_anomaly_usd=expected_cost_anomaly_usd,
         )
     except TicketGateError as exc:
@@ -437,7 +418,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default="ticket-artifacts")
     parser.add_argument("--expected-calls", required=True, type=int)
     parser.add_argument("--expected-recovery-calls", required=True, type=int)
-    parser.add_argument("--expected-quality-tier", required=True)
     parser.add_argument(
         "--expected-cost-anomaly-usd",
         default="",
@@ -453,7 +433,6 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.output_dir),
             expected_calls=args.expected_calls,
             expected_recovery_calls=args.expected_recovery_calls,
-            expected_quality_tier=args.expected_quality_tier,
             expected_cost_anomaly_usd=args.expected_cost_anomaly_usd,
         )
     except TicketGateError as exc:

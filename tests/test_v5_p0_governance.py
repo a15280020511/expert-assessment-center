@@ -84,7 +84,6 @@ class V5P0GovernanceTests(unittest.TestCase):
             "route": "expert-team",
             "task": {"question": "审计一个自包含的软件治理方案。"},
             "approved_budget": approved_budget,
-            "quality_tier": "value",
             "private_output": False,
         }
         with tempfile.TemporaryDirectory() as folder:

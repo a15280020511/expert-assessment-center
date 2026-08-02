@@ -28,7 +28,6 @@ class V5CommandTriggerTests(unittest.TestCase):
                 "cost_policy": "unbounded_with_anomaly_guard",
                 "cost_anomaly_usd": 0.20,
             },
-            "quality_tier": "value",
             "private_output": False,
         }
         with tempfile.TemporaryDirectory() as folder:

@@ -11,6 +11,8 @@ import re
 from hashlib import sha256
 from typing import Any, Mapping, Sequence
 
+from text_normalization import normalize_heading_key
+
 _IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _TOP_LEVEL_PATTERNS = (
     re.compile(
@@ -101,11 +103,7 @@ def _nonempty(value: Any) -> bool:
     return True
 
 
-def _normalized_heading(value: str) -> str:
-    value = re.sub(r"[`*_~]", "", str(value)).strip().casefold()
-    value = re.sub(r"^\d+(?:\.\d+)*[\s.)、:：-]+", "", value)
-    value = re.sub(r"[^0-9a-z_\u4e00-\u9fff]+", "_", value)
-    return value.strip("_")
+_normalized_heading = normalize_heading_key
 
 
 def explicit_contract_kind(contract: Mapping[str, Any]) -> str:

@@ -61,7 +61,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--catalog-file")
     parser.add_argument("--endpoint-file")
-    parser.add_argument("--quality-tier", default="value")
     parser.add_argument("--ranking-limit", type=int, default=150)
     parser.add_argument("--maximum-total-calls", type=int, default=8)
     parser.add_argument("--maximum-recovery-calls", type=int, default=1)

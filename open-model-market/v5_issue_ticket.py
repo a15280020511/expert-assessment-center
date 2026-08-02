@@ -304,8 +304,6 @@ def _format_schema_error(error: ValidationError) -> str:
                 "and no private delivery channel is implemented"
             )
         return "private_output must be boolean."
-    if path == "quality_tier":
-        return "quality_tier must be budget, value, or quality."
     return f"{path or 'ticket'}: {error.message}"
 
 
@@ -390,9 +388,6 @@ def _validate_ticket(packet: Mapping[str, Any]) -> tuple[dict[str, Any], list[st
     recovery = raw_recovery if isinstance(raw_recovery, int) and not isinstance(raw_recovery, bool) else -1
     raw_anomaly = budget.get("cost_anomaly_usd")
     anomaly = float(raw_anomaly) if isinstance(raw_anomaly, (int, float)) and not isinstance(raw_anomaly, bool) else None
-    quality_tier = packet.get("quality_tier", "value")
-    if not isinstance(quality_tier, str):
-        quality_tier = "value"
     return (
         {
             "task_id": _clean_string(packet.get("task_id")),
@@ -404,7 +399,6 @@ def _validate_ticket(packet: Mapping[str, Any]) -> tuple[dict[str, Any], list[st
             "cost_policy": _clean_string(budget.get("cost_policy")),
             "cost_anomaly_usd": anomaly,
             "max_cost_usd": anomaly or 0.0,
-            "quality_tier": quality_tier,
         },
         errors,
     )
@@ -472,7 +466,6 @@ def _rewrite_outputs(status: Mapping[str, Any]) -> None:
         "calls",
         "max_cost_usd",
         "cost_policy",
-        "quality_tier",
         "maximum_replacements",
         "maximum_recovery_calls",
         "maximum_initial_calls",
@@ -584,7 +577,6 @@ def prepare(args: argparse.Namespace) -> int:
                 "max_cost_usd": validated["cost_anomaly_usd"],
                 "cost_anomaly_usd": validated["cost_anomaly_usd"],
                 "cost_policy": validated["cost_policy"] or "invalid",
-                "quality_tier": validated["quality_tier"],
                 "private_output": bool(packet.get("private_output", False)),
                 "is_retry": is_retry,
                 "retry_id": retry_id,

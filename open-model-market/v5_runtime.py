@@ -27,6 +27,7 @@ import v5_quality_status_integrity as quality_integrity
 from execution_graph import ExecutionGraph, GraphLimits, SelectedNode
 from execution_graph_validator import validate_execution_graph
 from openrouter_api import CHAT_URL, request_json
+from text_normalization import normalize_heading_key
 from v5_execution_primitives import actual_cost as extract_actual_cost
 
 RUNTIME_VERSION = "v5-native-runtime-1"
@@ -667,12 +668,7 @@ class ExecutionEngine:
             ),
         )
 
-    @staticmethod
-    def _normalized_contract_field(value: str) -> str:
-        value = re.sub(r"[`*_~]", "", str(value)).strip().casefold()
-        value = re.sub(r"^\d+(?:\.\d+)*[\s.)、:：-]+", "", value)
-        value = re.sub(r"[^0-9a-z_\u4e00-\u9fff]+", "_", value)
-        return value.strip("_")
+    _normalized_contract_field = staticmethod(normalize_heading_key)
 
     @classmethod
     def _markdown_contract_fields(

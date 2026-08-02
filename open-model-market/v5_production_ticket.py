@@ -62,7 +62,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", required=True)
     parser.add_argument("--output-dir", default="ticket-artifacts")
-    parser.add_argument("--quality-tier", default="value")
     parser.add_argument(
         "--maximum-total-calls",
         type=int,
@@ -88,8 +87,6 @@ def _pipeline_args(
         task,
         "--output-dir",
         str(root),
-        "--quality-tier",
-        str(args.quality_tier),
         "--ranking-limit",
         "150",
         "--maximum-total-calls",
