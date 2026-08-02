@@ -1,0 +1,305 @@
+"""Deterministic catalog normalization for GPT-led expert selection.
+
+This module contains no scoring, optimization, Pareto pruning, or heuristic
+candidate selection. It only applies constitutional eligibility filters,
+preserves OpenRouter's official intelligence ordering, and exposes exact
+model/provider rows to GPT.
+"""
+from __future__ import annotations
+
+import json
+import math
+import urllib.parse
+from hashlib import sha256
+from typing import Any, Mapping, Sequence
+
+from v5_model_company import canonical_model_company
+
+ENDPOINTS_URL = "https://openrouter.ai/api/v1/models/{author}/{slug}/endpoints"
+MAX_VISIBLE_MODELS = 150
+FORBIDDEN_MODEL_TERMS = (
+    "openrouter/",
+    ":online",
+    ":batch",
+    ":free",
+    "preview",
+)
+GOVERNANCE_COMPANIES = frozenset({"openai", "anthropic"})
+
+
+class CatalogViewError(RuntimeError):
+    """Raised when no constitutionally usable catalog view can be built."""
+
+
+def stable_model_id(model_id: str) -> bool:
+    folded = str(model_id or "").strip().casefold()
+    return bool(
+        folded
+        and "/" in folded
+        and not any(term in folded for term in FORBIDDEN_MODEL_TERMS)
+    )
+
+
+def endpoint_url(model_id: str) -> str:
+    if not stable_model_id(model_id):
+        raise CatalogViewError(f"unstable or routed model id: {model_id!r}")
+    author, slug = model_id.split("/", 1)
+    return ENDPOINTS_URL.format(
+        author=urllib.parse.quote(author, safe=""),
+        slug=urllib.parse.quote(slug, safe=""),
+    )
+
+
+def eligible_models(
+    models: Mapping[str, Any],
+    *,
+    requested_context: int,
+    maximum_models: int = MAX_VISIBLE_MODELS,
+    exclude_governance_companies: bool = True,
+) -> list[Any]:
+    """Return official-rank-ordered eligible models without custom scoring."""
+    rows: list[Any] = []
+    context_floor = max(1, int(requested_context))
+    for model in models.values():
+        model_id = str(getattr(model, "id", "") or "")
+        if not stable_model_id(model_id):
+            continue
+        company = canonical_model_company(model_id)
+        if exclude_governance_companies and company in GOVERNANCE_COMPANIES:
+            continue
+        if int(getattr(model, "context_length", 0) or 0) < context_floor:
+            continue
+        if int(getattr(model, "max_completion_tokens", 0) or 0) <= 0:
+            continue
+        if (
+            getattr(model, "input_modalities", None)
+            and "text" not in model.input_modalities
+        ):
+            continue
+        if (
+            getattr(model, "output_modalities", None)
+            and "text" not in model.output_modalities
+        ):
+            continue
+        prompt = getattr(model, "prompt_price_per_million", None)
+        completion = getattr(model, "completion_price_per_million", None)
+        if prompt is None or completion is None:
+            continue
+        rank = int(
+            (getattr(model, "ranks", {}) or {}).get(
+                "intelligence-high-to-low",
+                MAX_VISIBLE_MODELS + 1,
+            )
+        )
+        if rank > maximum_models:
+            continue
+        rows.append(model)
+    rows.sort(
+        key=lambda model: (
+            int(
+                (getattr(model, "ranks", {}) or {}).get(
+                    "intelligence-high-to-low",
+                    MAX_VISIBLE_MODELS + 1,
+                )
+            ),
+            str(getattr(model, "id", "")),
+        )
+    )
+    if not rows:
+        raise CatalogViewError("no constitutionally eligible expert models")
+    return rows[: max(1, min(MAX_VISIBLE_MODELS, int(maximum_models)))]
+
+
+def _endpoint_rows(payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    data = payload.get("data") if isinstance(payload, Mapping) else None
+    if isinstance(data, Mapping) and isinstance(data.get("endpoints"), list):
+        return [row for row in data["endpoints"] if isinstance(row, Mapping)]
+    if isinstance(data, list):
+        return [row for row in data if isinstance(row, Mapping)]
+    if isinstance(payload.get("endpoints"), list):
+        return [row for row in payload["endpoints"] if isinstance(row, Mapping)]
+    return []
+
+
+def _provider_slug(endpoint: Mapping[str, Any]) -> str:
+    for key in ("tag", "provider_slug", "provider", "name", "provider_name"):
+        value = str(endpoint.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _finite(value: Any, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if math.isfinite(number) else default
+
+
+def _ppm(value: Any, fallback: float = 0.0) -> float:
+    number = _finite(value, fallback)
+    if number < 0:
+        return fallback
+    return number * 1_000_000 if number < 0.1 else number
+
+
+def compact_endpoint_catalog(
+    ranked: Sequence[Any],
+    endpoint_payloads: Mapping[str, Mapping[str, Any]],
+    *,
+    allow_synthetic_fixture: bool = False,
+) -> dict[str, Any]:
+    """Expose exact model/provider rows without inferred capability scores."""
+    rows: list[dict[str, Any]] = []
+    rejected: list[dict[str, str]] = []
+    for model in ranked:
+        model_id = str(getattr(model, "id", "") or "")
+        endpoints = _endpoint_rows(endpoint_payloads.get(model_id, {}))
+        if not endpoints and allow_synthetic_fixture:
+            endpoints = [
+                {
+                    "tag": f"fixture/{model_id.split('/', 1)[0]}",
+                    "context_length": getattr(model, "context_length", 0),
+                    "max_completion_tokens": getattr(
+                        model,
+                        "max_completion_tokens",
+                        0,
+                    ),
+                    "pricing": {
+                        "prompt": getattr(
+                            model,
+                            "prompt_price_per_million",
+                            0.0,
+                        ),
+                        "completion": getattr(
+                            model,
+                            "completion_price_per_million",
+                            0.0,
+                        ),
+                    },
+                    "supported_parameters": list(
+                        getattr(model, "supported_parameters", []) or []
+                    ),
+                    "synthetic_fixture_only": True,
+                }
+            ]
+        if not endpoints:
+            rejected.append({"model": model_id, "reason": "no-provider-endpoint"})
+            continue
+        for endpoint in endpoints:
+            provider = _provider_slug(endpoint)
+            if not provider:
+                rejected.append(
+                    {"model": model_id, "reason": "endpoint-missing-provider"}
+                )
+                continue
+            pricing = (
+                endpoint.get("pricing")
+                if isinstance(endpoint.get("pricing"), Mapping)
+                else {}
+            )
+            prompt = _ppm(
+                pricing.get("prompt"),
+                _finite(getattr(model, "prompt_price_per_million", 0.0)),
+            )
+            completion = _ppm(
+                pricing.get("completion"),
+                _finite(getattr(model, "completion_price_per_million", 0.0)),
+            )
+            if prompt < 0 or completion < 0:
+                rejected.append({"model": model_id, "reason": "invalid-pricing"})
+                continue
+            supported = sorted(
+                {
+                    str(value)
+                    for value in (
+                        endpoint.get("supported_parameters")
+                        or getattr(model, "supported_parameters", [])
+                        or []
+                    )
+                }
+            )
+            rows.append(
+                {
+                    "model": model_id,
+                    "company": canonical_model_company(model_id),
+                    "official_intelligence_rank": int(
+                        (getattr(model, "ranks", {}) or {}).get(
+                            "intelligence-high-to-low",
+                            MAX_VISIBLE_MODELS + 1,
+                        )
+                    ),
+                    "provider": provider,
+                    "provider_endpoint": f"{model_id}@{provider}",
+                    "context_length": int(
+                        endpoint.get("context_length")
+                        or getattr(model, "context_length", 0)
+                        or 0
+                    ),
+                    "max_completion_tokens": int(
+                        endpoint.get("max_completion_tokens")
+                        or getattr(model, "max_completion_tokens", 0)
+                        or 0
+                    ),
+                    "prompt_price_per_million": round(prompt, 8),
+                    "completion_price_per_million": round(completion, 8),
+                    "supported_parameters": supported,
+                    "input_modalities": list(
+                        getattr(model, "input_modalities", []) or ["text"]
+                    ),
+                    "output_modalities": list(
+                        getattr(model, "output_modalities", []) or ["text"]
+                    ),
+                    "synthetic_fixture_only": bool(
+                        endpoint.get("synthetic_fixture_only")
+                    ),
+                }
+            )
+    rows.sort(
+        key=lambda row: (
+            int(row["official_intelligence_rank"]),
+            str(row["model"]),
+            str(row["provider"]),
+        )
+    )
+    if not rows:
+        raise CatalogViewError("no exact model/provider endpoint rows")
+    return {
+        "schema_version": "v5-gpt-catalog-view-1",
+        "selection_authority": "gpt-direct-no-local-scoring",
+        "official_order_only": True,
+        "local_score_computed": False,
+        "optimizer_used": False,
+        "pareto_pruning_used": False,
+        "heuristic_ranking_used": False,
+        "governance_companies_excluded": sorted(GOVERNANCE_COMPANIES),
+        "endpoints": rows,
+        "rejected": rejected,
+    }
+
+
+def catalog_index(catalog: Mapping[str, Any]) -> dict[tuple[str, str], Mapping[str, Any]]:
+    result: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for row in catalog.get("endpoints", []):
+        if not isinstance(row, Mapping):
+            continue
+        key = (str(row.get("model") or ""), str(row.get("provider") or ""))
+        if not all(key):
+            continue
+        if key in result:
+            raise CatalogViewError(f"duplicate exact catalog endpoint: {key}")
+        result[key] = row
+    return result
+
+
+def catalog_sha256(catalog: Mapping[str, Any]) -> str:
+    rendered = json.dumps(
+        catalog,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+        default=str,
+    )
+    return sha256(rendered.encode("utf-8")).hexdigest()
