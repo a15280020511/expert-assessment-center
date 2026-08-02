@@ -29,7 +29,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Collect model and exact-endpoint evidence without chat calls
+      - name: Collect model and endpoint metadata without chat calls
         shell: bash
         run: |
           set -euo pipefail
@@ -117,6 +117,7 @@ jobs:
                           "company": company,
                           "context_length": int(model.context_length or 0),
                           "max_completion_tokens": int(model.max_completion_tokens or 0),
+                          "supported_parameters": sorted(model.supported_parameters or []),
                           "input_modalities": list(model.input_modalities or []),
                           "output_modalities": list(model.output_modalities or []),
                           "has_prompt_price": model.prompt_price_per_million is not None,
@@ -125,39 +126,89 @@ jobs:
                       }
                   )
 
-          endpoint_probes = []
-          for model_id in endpoint_probe_ids:
-              payload = request_json(
-                  endpoint_url(model_id),
-                  run.api_key,
-                  run.catalog_timeout_seconds,
-                  0,
-              )
+          def sanitized_endpoint_probe(model_id, url):
+              try:
+                  payload = request_json(
+                      url,
+                      run.api_key,
+                      run.catalog_timeout_seconds,
+                      0,
+                  )
+              except Exception as exc:
+                  return {
+                      "model": model_id,
+                      "url_kind": url.split("/models/", 1)[-1],
+                      "status": "ERROR",
+                      "error_type": type(exc).__name__,
+                      "error": str(exc)[:500],
+                      "endpoint_count": 0,
+                      "endpoints": [],
+                  }
               endpoint_rows = []
               for endpoint in _endpoint_rows(payload):
                   pricing = endpoint.get("pricing") if isinstance(endpoint.get("pricing"), dict) else {}
+                  supported = sorted(str(value) for value in (endpoint.get("supported_parameters") or []))
                   endpoint_rows.append(
                       {
                           "provider": _provider_slug(endpoint),
                           "context_length": int(endpoint.get("context_length") or 0),
                           "max_completion_tokens": int(endpoint.get("max_completion_tokens") or 0),
-                          "supported_parameters": sorted(str(value) for value in (endpoint.get("supported_parameters") or [])),
+                          "supported_parameters": supported,
+                          "supports_temperature": "temperature" in supported,
+                          "supports_max_tokens": "max_tokens" in supported or "max_completion_tokens" in supported,
+                          "supports_reasoning": "reasoning" in supported,
+                          "supports_structured_outputs": "structured_outputs" in supported or "response_format" in supported,
                           "has_prompt_price": pricing.get("prompt") not in (None, ""),
                           "has_completion_price": pricing.get("completion") not in (None, ""),
                       }
                   )
+              return {
+                  "model": model_id,
+                  "url_kind": url.split("/models/", 1)[-1],
+                  "status": "PASS",
+                  "endpoint_count": len(endpoint_rows),
+                  "endpoints": endpoint_rows,
+              }
+
+          endpoint_probes = []
+          for model_id in endpoint_probe_ids:
               endpoint_probes.append(
-                  {
-                      "model": model_id,
-                      "model_rank": int(models[model_id].ranks["intelligence-high-to-low"]),
-                      "model_level_max_completion_tokens": int(models[model_id].max_completion_tokens or 0),
-                      "endpoint_count": len(endpoint_rows),
-                      "endpoints": endpoint_rows,
-                  }
+                  sanitized_endpoint_probe(model_id, endpoint_url(model_id))
               )
 
+          governance_catalog_rows = []
+          for model in models.values():
+              company = canonical_model_company(model.id)
+              if company not in GOVERNANCE_COMPANIES:
+                  continue
+              rank = int((model.ranks or {}).get("intelligence-high-to-low", 999999))
+              if rank > 80:
+                  continue
+              governance_catalog_rows.append(
+                  {
+                      "rank": rank,
+                      "model": model.id,
+                      "company": company,
+                      "context_length": int(model.context_length or 0),
+                      "max_completion_tokens": int(model.max_completion_tokens or 0),
+                      "supported_parameters": sorted(model.supported_parameters or []),
+                  }
+              )
+          governance_catalog_rows.sort(key=lambda row: (row["rank"], row["model"]))
+
+          governance_urls = {
+              "~openai/gpt-latest": "https://openrouter.ai/api/v1/models/~openai/gpt-latest/endpoints",
+              "openai/gpt-latest": "https://openrouter.ai/api/v1/models/openai/gpt-latest/endpoints",
+              "~anthropic/claude-opus-latest": "https://openrouter.ai/api/v1/models/~anthropic/claude-opus-latest/endpoints",
+              "anthropic/claude-opus-latest": "https://openrouter.ai/api/v1/models/anthropic/claude-opus-latest/endpoints",
+          }
+          governance_alias_probes = [
+              sanitized_endpoint_probe(model_id, url)
+              for model_id, url in governance_urls.items()
+          ]
+
           report = {
-              "schema_version": "v5-live-catalog-diagnostic-2",
+              "schema_version": "v5-live-catalog-diagnostic-3",
               "status": "PASS",
               "chat_model_calls": 0,
               "catalog_source": source,
@@ -171,6 +222,14 @@ jobs:
               "eligible_models_by_official_rank_ceiling": eligible_by_limit,
               "top_40_filter_trace": sorted(rows, key=lambda row: (row["rank"], row["model"])),
               "exact_endpoint_probes_top_24": endpoint_probes,
+              "governance_catalog_rows_top_80": governance_catalog_rows,
+              "governance_alias_endpoint_probes": governance_alias_probes,
+              "current_governance_required_parameter_families": [
+                  "temperature",
+                  "max_tokens",
+                  "reasoning",
+                  "structured_outputs_or_response_format",
+              ],
           }
           Path("catalog-diagnostic/report.json").write_text(
               json.dumps(report, ensure_ascii=False, indent=2),
