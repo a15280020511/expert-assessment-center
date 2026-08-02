@@ -88,7 +88,9 @@ class TestV5FullLoadStability(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=64) as pool:
             results = list(
                 pool.map(
-                    lambda index: budget.reserve("initial", 0.001, f"node-{index}"),
+                    lambda index: budget.reserve(
+                        "initial", 0.001, f"node-{index}"
+                    ),
                     range(1000),
                 )
             )
@@ -101,8 +103,8 @@ class TestV5FullLoadStability(unittest.TestCase):
     def test_concurrent_reconciliation_has_no_lost_updates(self) -> None:
         budget = _budget(cost=None)
         reservations = [
-            budget.reserve("initial", 0.0001, f"node-{i}")
-            for i in range(14)
+            budget.reserve("initial", 0.0001, f"node-{index}")
+            for index in range(14)
         ]
         self.assertTrue(all(ok for ok, _ in reservations))
         with ThreadPoolExecutor(max_workers=14) as pool:
@@ -128,7 +130,7 @@ class TestV5FullLoadStability(unittest.TestCase):
         self.assertEqual(512, snapshot["failures"]["provider-a"])
         self.assertEqual(512, len(snapshot["reasons"]["provider-a"]))
 
-    def test_parallel_advisory_dry_runs_are_isolated(self) -> None:
+    def test_parallel_advisory_dry_runs_are_isolated_and_deterministic(self) -> None:
         scenarios = (
             ("public", PUBLIC_INVESTMENT_TASK, 16, 2),
             ("closed", CLOSED_WORLD_TASK, 8, 1),
@@ -173,26 +175,13 @@ class TestV5FullLoadStability(unittest.TestCase):
                 if completed.returncode:
                     return name, completed.returncode, completed.stdout + completed.stderr
                 dry = json.loads((output / "v5-dry-run.json").read_text())
-                runtime = json.loads(
-                    (output / "v5-runtime-config.json").read_text()
-                )
-                resources = json.loads(
-                    (output / "v5-task-resources.json").read_text()
-                )
-                signature = json.dumps(
-                    {
-                        "dry": dry,
-                        "runtime": runtime,
-                        "resources": resources,
-                    },
-                    sort_keys=True,
-                    ensure_ascii=False,
-                )
                 self.assertEqual("validated-not-executed", dry["status"])
                 self.assertEqual(0, dry["model_calls"])
                 self.assertTrue(dry["claude_is_advisory_only"])
                 self.assertFalse(dry["claude_gatekeeping_allowed"])
                 self.assertEqual(1, dry["gpt_synthesis_calls"])
+                self.assertFalse((output / "v5-execution-graph.json").exists())
+                signature = json.dumps(dry, sort_keys=True, ensure_ascii=False)
                 return name, 0, signature
 
             with ThreadPoolExecutor(max_workers=6) as pool:
