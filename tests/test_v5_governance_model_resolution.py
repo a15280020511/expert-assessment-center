@@ -65,6 +65,24 @@ class GovernanceModelResolutionTests(unittest.TestCase):
             }
         }
 
+    @staticmethod
+    def response_format() -> dict:
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "fixture_contract",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "value": {"type": "string", "minLength": 1}
+                    },
+                    "required": ["value"],
+                },
+            },
+        }
+
     def fixture(self) -> tuple[dict, dict]:
         models = {
             "openai/gpt-5.6-sol": self.model(
@@ -131,7 +149,7 @@ class GovernanceModelResolutionTests(unittest.TestCase):
             "temperature": 0,
             "max_tokens": 512,
             "reasoning": {"effort": "high", "exclude": True},
-            "response_format": {"type": "json_schema"},
+            "response_format": self.response_format(),
             "provider": {
                 "only": ["openai"],
                 "order": ["openai"],
@@ -157,7 +175,7 @@ class GovernanceModelResolutionTests(unittest.TestCase):
             "messages": [{"role": "user", "content": "fixture"}],
             "max_tokens": 512,
             "reasoning": {"effort": "high", "exclude": True},
-            "response_format": {"type": "json_schema"},
+            "response_format": self.response_format(),
             "provider": {},
         }
         payload = _api_payload(
@@ -166,6 +184,11 @@ class GovernanceModelResolutionTests(unittest.TestCase):
         self.assertNotIn("logical_model", payload)
         self.assertNotIn("governance_endpoint", payload)
         self.assertEqual("openai/gpt-5.6-sol", payload["model"])
+        self.assertNotIn(
+            "minLength",
+            payload["response_format"]["json_schema"]["schema"]
+            ["properties"]["value"],
+        )
 
     def test_missing_direct_structured_endpoint_fails_closed(self) -> None:
         models, endpoints = self.fixture()
@@ -201,7 +224,7 @@ class GovernanceModelResolutionTests(unittest.TestCase):
             "messages": [],
             "max_tokens": 512,
             "reasoning": {"effort": "high"},
-            "response_format": {"type": "json_schema"},
+            "response_format": self.response_format(),
         }
         with self.assertRaises(GovernanceRuntimeError):
             _bind_governance_request(request, endpoint)
