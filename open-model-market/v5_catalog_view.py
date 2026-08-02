@@ -292,6 +292,25 @@ def _catalog_endpoint_row(
     }, ""
 
 
+_ROUTE_IDENTITY_FIELDS = (
+    "model",
+    "company",
+    "official_intelligence_rank",
+    "provider",
+    "provider_endpoint",
+    "input_modalities",
+    "output_modalities",
+)
+_ROUTE_VARIABLE_FIELDS = (
+    "context_length",
+    "max_completion_tokens",
+    "prompt_price_per_million",
+    "completion_price_per_million",
+    "supported_parameters",
+    "synthetic_fixture_only",
+)
+
+
 def _canonical_endpoint_row(row: Mapping[str, Any]) -> str:
     return json.dumps(
         dict(row),
@@ -303,10 +322,71 @@ def _canonical_endpoint_row(row: Mapping[str, Any]) -> str:
     )
 
 
-def _deduplicate_exact_endpoint_rows(
+def _merge_provider_route_rows(
+    existing: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    key: tuple[str, str],
+) -> Mapping[str, Any]:
+    expected_fields = set(_ROUTE_IDENTITY_FIELDS) | set(_ROUTE_VARIABLE_FIELDS)
+    actual_fields = set(existing) | set(candidate)
+    if actual_fields != expected_fields:
+        raise CatalogViewError(
+            f"unhandled duplicate provider route fields: {key}"
+        )
+    for field in _ROUTE_IDENTITY_FIELDS:
+        if existing.get(field) != candidate.get(field):
+            raise CatalogViewError(
+                f"conflicting duplicate provider route identity: {key}/{field}"
+            )
+    supported = sorted(
+        {
+            str(value)
+            for value in existing.get("supported_parameters", [])
+        }
+        & {
+            str(value)
+            for value in candidate.get("supported_parameters", [])
+        }
+    )
+    if not OUTPUT_LIMIT_PARAMETERS.intersection(
+        {value.casefold() for value in supported}
+    ):
+        raise CatalogViewError(
+            f"conflicting duplicate provider route capabilities: {key}"
+        )
+    merged = dict(existing)
+    merged.update(
+        {
+            "context_length": min(
+                int(existing["context_length"]),
+                int(candidate["context_length"]),
+            ),
+            "max_completion_tokens": min(
+                int(existing["max_completion_tokens"]),
+                int(candidate["max_completion_tokens"]),
+            ),
+            "prompt_price_per_million": max(
+                float(existing["prompt_price_per_million"]),
+                float(candidate["prompt_price_per_million"]),
+            ),
+            "completion_price_per_million": max(
+                float(existing["completion_price_per_million"]),
+                float(candidate["completion_price_per_million"]),
+            ),
+            "supported_parameters": supported,
+            "synthetic_fixture_only": bool(
+                existing.get("synthetic_fixture_only")
+                or candidate.get("synthetic_fixture_only")
+            ),
+        }
+    )
+    return merged
+
+
+def _coalesce_provider_route_rows(
     rows: Sequence[Mapping[str, Any]],
 ) -> list[Mapping[str, Any]]:
-    unique: list[Mapping[str, Any]] = []
+    order: list[tuple[str, str]] = []
     observed: dict[tuple[str, str], Mapping[str, Any]] = {}
     for row in rows:
         key = (
@@ -318,14 +398,12 @@ def _deduplicate_exact_endpoint_rows(
         existing = observed.get(key)
         if existing is None:
             observed[key] = row
-            unique.append(row)
+            order.append(key)
             continue
         if _canonical_endpoint_row(existing) == _canonical_endpoint_row(row):
             continue
-        raise CatalogViewError(
-            f"conflicting duplicate exact catalog endpoint: {key}"
-        )
-    return unique
+        observed[key] = _merge_provider_route_rows(existing, row, key)
+    return [observed[key] for key in order]
 
 
 def compact_endpoint_catalog(
@@ -367,7 +445,7 @@ def compact_endpoint_catalog(
                 rejected.append({"model": model_id, "reason": reason})
             elif row is not None:
                 rows.append(row)
-    rows = list(_deduplicate_exact_endpoint_rows(rows))
+    rows = list(_coalesce_provider_route_rows(rows))
     rows.sort(
         key=lambda row: (
             int(row["official_intelligence_rank"]),
@@ -402,7 +480,7 @@ def catalog_index(
         for row in catalog.get("endpoints", [])
         if isinstance(row, Mapping)
     ]
-    for row in _deduplicate_exact_endpoint_rows(rows):
+    for row in _coalesce_provider_route_rows(rows):
         key = (
             str(row.get("model") or ""),
             str(row.get("provider") or ""),

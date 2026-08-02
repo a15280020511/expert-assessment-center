@@ -112,7 +112,7 @@ class CatalogEndpointEligibilityTests(unittest.TestCase):
         self.assertEqual(1, len(index))
         self.assertIn((model.id, "together"), index)
 
-    def test_conflicting_exact_endpoint_rows_fail_closed(self) -> None:
+    def test_conflicting_route_variants_use_conservative_envelope(self) -> None:
         model = self.model(model_maximum=262_144)
         first = {
             "tag": "together",
@@ -126,26 +126,64 @@ class CatalogEndpointEligibilityTests(unittest.TestCase):
         }
         second = {
             **first,
+            "context_length": 131_072,
+            "max_completion_tokens": 8_192,
+            "supported_parameters": ["max_tokens"],
             "pricing": {
-                "prompt": "0.000001",
+                "prompt": "0.000002",
                 "completion": "0.000004",
             },
         }
+        catalog = compact_endpoint_catalog(
+            [model],
+            {
+                model.id: {
+                    "data": {
+                        "endpoints": [first, second],
+                    }
+                }
+            },
+            required_context_tokens=16_384,
+        )
+        self.assertEqual(1, len(catalog["endpoints"]))
+        row = catalog["endpoints"][0]
+        self.assertEqual(131_072, row["context_length"])
+        self.assertEqual(8_192, row["max_completion_tokens"])
+        self.assertEqual(["max_tokens"], row["supported_parameters"])
+        self.assertEqual(2.0, row["prompt_price_per_million"])
+        self.assertEqual(4.0, row["completion_price_per_million"])
+
+    def test_duplicate_route_identity_conflict_fails_closed(self) -> None:
+        model = self.model(model_maximum=262_144)
+        catalog = compact_endpoint_catalog(
+            [model],
+            {
+                model.id: {
+                    "data": {
+                        "endpoints": [
+                            {
+                                "tag": "together",
+                                "context_length": 1_048_576,
+                                "max_completion_tokens": 262_144,
+                                "supported_parameters": ["max_tokens"],
+                                "pricing": {
+                                    "prompt": "0.000001",
+                                    "completion": "0.000003",
+                                },
+                            }
+                        ]
+                    }
+                }
+            },
+            required_context_tokens=16_384,
+        )
+        row = catalog["endpoints"][0]
+        conflicting = {**row, "company": "different-company"}
         with self.assertRaisesRegex(
             CatalogViewError,
-            "conflicting duplicate exact catalog endpoint",
+            "conflicting duplicate provider route identity",
         ):
-            compact_endpoint_catalog(
-                [model],
-                {
-                    model.id: {
-                        "data": {
-                            "endpoints": [first, second],
-                        }
-                    }
-                },
-                required_context_tokens=16_384,
-            )
+            catalog_index({"endpoints": [row, conflicting]})
 
     def test_zero_endpoint_completion_is_rejected(self) -> None:
         model = self.model(
