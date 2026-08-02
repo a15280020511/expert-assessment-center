@@ -1,0 +1,92 @@
+name: Apply V5 Response Protocol Patch
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-v5-response-protocol-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/v5-openrouter-response-protocol-20260802' &&
+      github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Apply exact response protocol patch
+        run: |
+          set -euo pipefail
+          python tools/v5_apply_response_protocol_patch.py
+          git diff --check
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+      - name: Run response, quantity and recovery regressions
+        run: |
+          set -euo pipefail
+          python -m ruff check \
+            open-model-market/openrouter_api.py \
+            open-model-market/v5_runtime.py \
+            open-model-market/v5_task_constraints.py \
+            tests/test_openrouter_response_protocol.py \
+            tests/test_v5_response_diagnostics_evidence.py \
+            tests/test_v5_quantity_binding_context.py
+          python -m compileall -q open-model-market tests
+          python -m unittest -v \
+            tests.test_openrouter_response_protocol \
+            tests.test_v5_response_diagnostics_evidence \
+            tests.test_openrouter_hard_deadline \
+            tests.test_v5_quantity_binding_context \
+            tests.test_v5_task_constraints \
+            tests.test_v5_cross_endpoint_recovery \
+            tests.test_v5_operational_resilience
+          PYTHONPATH=open-model-market python - <<'PY'
+          from v5_task_constraints import (
+              closed_world_numeric_prompt,
+              compile_task_constraints,
+              fact_claim_supported,
+              normalized_quantities,
+          )
+          task = (
+              '仅依据题面：纸质库存表显示6顶应急头盔已经领用，'
+              '但现场只能确认5顶。禁止编造题面外事实。'
+          )
+          quantities = normalized_quantities(task)
+          assert ('6', '', 'item') in quantities
+          assert ('5', '', 'item') in quantities
+          assert fact_claim_supported(task, '应急头盔已领用6顶，现场只能确认5顶')
+          assert not fact_claim_supported(task, '应急头盔已领用5顶，现场只能确认6顶')
+          prompt = closed_world_numeric_prompt(task, compile_task_constraints(task))
+          assert '5:item' in prompt and '6:item' in prompt
+          PY
+      - name: Remove one-time patch entry
+        run: |
+          rm -f tools/v5_apply_response_protocol_patch.py
+          rm -f .github/workflows/v5-apply-response-protocol-patch.yml
+      - name: Commit clean production patch
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix(runtime): harden OpenRouter response protocol evidence'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
