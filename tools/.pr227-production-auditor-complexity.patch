@@ -1,0 +1,192 @@
+--- a/open-model-market/v5_execution_auditor.py
++++ b/open-model-market/v5_execution_auditor.py
+@@ -458,61 +458,85 @@
+     )
+ 
+ 
+-def _audit_requests(
++def _request_audit_values(
+     evidence: AuditEvidence,
+-    budget: BudgetState,
+     calls: CallState,
+-    checks: dict[str, Any],
+-    failures: list[str],
+-) -> RequestState:
+-    audit = evidence.request_audit
+-    status = (
+-        str(audit.get("status") or "missing")
+-        if isinstance(audit, Mapping)
+-        else "missing"
+-    )
++) -> tuple[
++    str,
++    int,
++    int,
++    int,
++    int,
++    int,
++    list[Any],
++    Any,
++]:
++    audit = evidence.request_audit if isinstance(evidence.request_audit, Mapping) else {}
++    status = str(audit.get("status") or "missing")
+     expected = calls.total_calls
+-    captured = (
+-        int(
+-            audit.get("request_count")
+-            or audit.get("captured_request_count")
+-            or 0
+-        )
+-        if isinstance(audit, Mapping)
+-        else 0
++    captured = int(
++        audit.get("request_count")
++        or audit.get("captured_request_count")
++        or 0
++    )
++    ceiling = int(audit.get("approved_total_call_ceiling") or 0)
++    governance_count = int(audit.get("governance_request_count") or 0)
++    expert_count = int(audit.get("expert_request_count") or 0)
++    requests = audit.get("requests", [])
++    if not isinstance(requests, list):
++        requests = []
++    return (
++        status,
++        expected,
++        captured,
++        ceiling,
++        governance_count,
++        expert_count,
++        requests,
++        audit.get("external_tools_allowed"),
+     )
+-    ceiling = (
+-        int(audit.get("approved_total_call_ceiling") or 0)
+-        if isinstance(audit, Mapping)
+-        else 0
+-    )
+-    governance_count = (
+-        int(audit.get("governance_request_count") or 0)
+-        if isinstance(audit, Mapping)
+-        else 0
+-    )
+-    expert_count = (
+-        int(audit.get("expert_request_count") or 0)
+-        if isinstance(audit, Mapping)
+-        else 0
+-    )
+-    requests = (
+-        audit.get("requests", [])
+-        if isinstance(audit, Mapping)
+-        and isinstance(audit.get("requests"), list)
+-        else []
+-    )
+-    tools_allowed = audit.get("external_tools_allowed") if isinstance(audit, Mapping) else None
+-    checks.update({
+-        "request_audit_status": status,
+-        "expected_request_count": expected,
+-        "captured_request_count": captured,
+-        "governance_request_count": governance_count,
+-        "expert_request_count": expert_count,
+-        "request_row_count": len(requests),
+-        "request_approved_total_call_ceiling": ceiling,
+-        "external_tools_allowed": tools_allowed,
+-    })
++
++
++def _record_request_checks(
++    checks: dict[str, Any],
++    *,
++    status: str,
++    expected: int,
++    captured: int,
++    ceiling: int,
++    governance_count: int,
++    expert_count: int,
++    requests: list[Any],
++    tools_allowed: Any,
++) -> None:
++    checks.update(
++        {
++            "request_audit_status": status,
++            "expected_request_count": expected,
++            "captured_request_count": captured,
++            "governance_request_count": governance_count,
++            "expert_request_count": expert_count,
++            "request_row_count": len(requests),
++            "request_approved_total_call_ceiling": ceiling,
++            "external_tools_allowed": tools_allowed,
++        }
++    )
++
++
++def _append_request_failures(
++    failures: list[str],
++    *,
++    status: str,
++    expected: int,
++    captured: int,
++    ceiling: int,
++    governance_count: int,
++    expert_count: int,
++    requests: list[Any],
++    tools_allowed: Any,
++    budget: BudgetState,
++    calls: CallState,
++) -> None:
+     if status != "PASS":
+         failures.append(f"V5 request audit status is {status}")
+     if captured != expected:
+@@ -534,8 +558,52 @@
+         )
+     if tools_allowed is not False:
+         failures.append("external-tool prohibition evidence is missing")
++
++
++def _audit_requests(
++    evidence: AuditEvidence,
++    budget: BudgetState,
++    calls: CallState,
++    checks: dict[str, Any],
++    failures: list[str],
++) -> RequestState:
++    (
++        status,
++        expected,
++        captured,
++        ceiling,
++        governance_count,
++        expert_count,
++        requests,
++        tools_allowed,
++    ) = _request_audit_values(evidence, calls)
++    _record_request_checks(
++        checks,
++        status=status,
++        expected=expected,
++        captured=captured,
++        ceiling=ceiling,
++        governance_count=governance_count,
++        expert_count=expert_count,
++        requests=requests,
++        tools_allowed=tools_allowed,
++    )
++    _append_request_failures(
++        failures,
++        status=status,
++        expected=expected,
++        captured=captured,
++        ceiling=ceiling,
++        governance_count=governance_count,
++        expert_count=expert_count,
++        requests=requests,
++        tools_allowed=tools_allowed,
++        budget=budget,
++        calls=calls,
++    )
+     return RequestState(status, expected, captured, ceiling)
+ 
++
+ def _audit_ledger(
+     evidence: AuditEvidence,
+     budget: BudgetState,
