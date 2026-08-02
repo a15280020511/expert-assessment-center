@@ -1,198 +1,109 @@
-"""Deterministically materialize GPT-selected experts into an execution graph.
+"""Deterministically materialize a GPT-authored task and expert graph.
 
-GPT chooses the composition. This module performs no ranking, scoring, pruning,
-optimization, or repair; it only validates exact catalog/resource contracts.
+GPT owns task decomposition, roles, functions, expert composition, and recovery
+order. This module never classifies tasks, scores capabilities, ranks candidates,
+repairs proposals, or invents work. It validates exact contracts only.
 """
 from __future__ import annotations
 
 import json
-import math
 from collections import Counter
 from hashlib import sha256
 from typing import Any, Mapping, Sequence
+
+import networkx as nx
 
 from execution_graph import ExecutionGraph, GraphLimits, SelectedEdge, SelectedNode
 from execution_graph_validator import derive_execution_stages, validate_execution_graph
 from v5_catalog_view import GOVERNANCE_COMPANIES, catalog_index
 from v5_model_company import canonical_model_company
+from v5_task_envelope import work_output_contract
 
 COST_RISK_MULTIPLIER = 1.18
+MAX_WORK_ITEMS = 32
+MAX_EDGE_COUNT = 64
 
 
 class ProposalValidationError(RuntimeError):
     """Raised when a GPT proposal violates deterministic constraints."""
 
 
-def compact_resources_for_gpt(resources: Mapping[str, Any]) -> dict[str, Any]:
-    interpretations: list[dict[str, Any]] = []
-    for raw in resources.get("interpretations", []):
-        if not isinstance(raw, Mapping):
-            continue
-        works: list[dict[str, Any]] = []
-        for work in raw.get("atomic_work", []):
-            if not isinstance(work, Mapping):
-                continue
-            works.append({
-                "work_id": work.get("work_id"),
-                "objective": work.get("objective"),
-                "importance": work.get("importance"),
-                "error_cost": work.get("error_cost"),
-                "verifiability": work.get("verifiability"),
-                "domain_requirements": work.get("domain_requirements", {}),
-                "operation_requirements": work.get("operation_requirements", {}),
-                "reasoning_requirements": work.get("reasoning_requirements", {}),
-                "context_requirements": work.get("context_requirements", {}),
-                "output_contract": work.get("output_contract", {}),
-                "independence_requirements": work.get(
-                    "independence_requirements", {}
-                ),
-                "dependencies": list(work.get("dependencies", [])),
-            })
-        interpretations.append({
-            "interpretation_id": raw.get("interpretation_id"),
-            "strategy": raw.get("strategy"),
-            "atomic_work": works,
-        })
-    return {
-        "task_digest": resources.get("task_semantics", {}).get("task_digest"),
-        "interpretations": interpretations,
-        "selection_instruction": (
-            "GPT chooses directly; local scoring, solver, Pareto pruning and "
-            "heuristic ranking are forbidden."
-        ),
-    }
-
-
-def _interpretation(
-    resources: Mapping[str, Any], interpretation_id: str
-) -> Mapping[str, Any]:
-    rows = [
-        row
-        for row in resources.get("interpretations", [])
-        if isinstance(row, Mapping)
-        and str(row.get("interpretation_id") or "") == interpretation_id
-    ]
-    if len(rows) != 1:
-        raise ProposalValidationError("proposal interpretation_id is unknown")
-    return rows[0]
-
-
-def _work_map(interpretation: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+def _work_map(proposal: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    rows = proposal.get("work_items")
+    if not isinstance(rows, list) or not 1 <= len(rows) <= MAX_WORK_ITEMS:
+        raise ProposalValidationError("proposal work_items are missing or oversized")
     result: dict[str, Mapping[str, Any]] = {}
-    for work in interpretation.get("atomic_work", []):
-        if not isinstance(work, Mapping):
-            continue
-        work_id = str(work.get("work_id") or "")
+    for index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            raise ProposalValidationError(f"work_items[{index}] must be an object")
+        work_id = str(row.get("work_id") or "")
+        objective = str(row.get("objective") or "").strip()
+        dependencies = row.get("dependencies")
+        required_outputs = row.get("required_outputs")
         if not work_id or work_id in result:
-            raise ProposalValidationError("invalid or duplicate atomic work id")
-        result[work_id] = work
-    if not result:
-        raise ProposalValidationError("selected interpretation has no work")
+            raise ProposalValidationError("invalid or duplicate work id")
+        if not objective:
+            raise ProposalValidationError("every work item needs an objective")
+        if not isinstance(dependencies, list) or len(dependencies) > MAX_WORK_ITEMS:
+            raise ProposalValidationError("work dependencies must be bounded lists")
+        if len(dependencies) != len(set(dependencies)):
+            raise ProposalValidationError("work dependencies contain duplicates")
+        if not isinstance(required_outputs, list) or not required_outputs:
+            raise ProposalValidationError("every work item needs required outputs")
+        result[work_id] = row
+    known = set(result)
+    dag = nx.DiGraph()
+    dag.add_nodes_from(known)
+    for work_id, row in result.items():
+        for dependency in row.get("dependencies", []):
+            source = str(dependency)
+            if source not in known or source == work_id:
+                raise ProposalValidationError("work dependency references are invalid")
+            dag.add_edge(source, work_id)
+    if not nx.is_directed_acyclic_graph(dag):
+        raise ProposalValidationError("work dependency graph must be acyclic")
     return result
 
 
-def _matrix(
-    resources: Mapping[str, Any], interpretation_id: str
-) -> Mapping[str, Any]:
-    matrices = resources.get("resource_matrices", {}).get("matrices", [])
-    rows = [
-        row
-        for row in matrices
-        if isinstance(row, Mapping)
-        and str(row.get("interpretation_id") or "") == interpretation_id
-    ]
-    return rows[0] if len(rows) == 1 else {}
+def _functions(raw: Mapping[str, Any]) -> tuple[str, ...]:
+    values = tuple(
+        dict.fromkeys(
+            str(value).strip()
+            for value in raw.get("functions", [])
+            if str(value).strip()
+        )
+    )
+    if not values:
+        raise ProposalValidationError("every expert node needs functions")
+    return values
 
 
-def _capabilities(
-    matrix: Mapping[str, Any], work_ids: Sequence[str]
-) -> dict[str, float]:
-    labels = [str(value) for value in matrix.get("capability_labels", [])]
-    work_index = [
-        row for row in matrix.get("work_index", []) if isinstance(row, Mapping)
-    ]
-    rows = matrix.get("task_resource_matrix", [])
-    positions = {
-        str(row.get("work_id") or ""): index
-        for index, row in enumerate(work_index)
-    }
-    result: dict[str, float] = {}
+def _required_outputs(
+    work_map: Mapping[str, Mapping[str, Any]],
+    work_ids: Sequence[str],
+) -> list[str]:
+    values: list[str] = []
     for work_id in work_ids:
-        position = positions.get(work_id)
-        if position is None or position >= len(rows):
-            continue
-        values = rows[position] if isinstance(rows[position], list) else []
-        for index, label in enumerate(labels):
-            if index >= len(values):
-                continue
-            try:
-                value = float(values[index])
-            except (TypeError, ValueError):
-                continue
-            if math.isfinite(value) and value > 0:
-                result[label] = max(result.get(label, 0.0), value)
-    return result or {"general_analysis": 1.0}
-
-
-def _functions(
-    work_map: Mapping[str, Mapping[str, Any]], work_ids: Sequence[str]
-) -> tuple[str, ...]:
-    values = {
-        str(operation)
-        for work_id in work_ids
-        for operation, weight in dict(
-            work_map[work_id].get("operation_requirements", {})
-        ).items()
-        if float(weight or 0.0) > 0
-    }
-    return tuple(sorted(values or {"analysis"}))
-
-
-def _merge_contracts(
-    work_map: Mapping[str, Mapping[str, Any]], work_ids: Sequence[str]
-) -> dict[str, Any]:
-    contracts = [
-        dict(work_map[work_id].get("output_contract", {}))
-        for work_id in work_ids
-    ]
-    if len(contracts) == 1:
-        return contracts[0]
-    required: list[str] = []
-    for contract in contracts:
-        for value in contract.get("required_fields", []):
-            field = str(value)
-            if field and field not in required:
-                required.append(field)
-    return {
-        "required_fields": required,
-        "machine_readable_required": any(
-            bool(row.get("machine_readable_required")) for row in contracts
-        ),
-        "must_separate_fact_assumption_inference": any(
-            bool(row.get("must_separate_fact_assumption_inference"))
-            for row in contracts
-        ),
-        "combined_from_exact_work_contracts": True,
-    }
+        for raw in work_map[work_id].get("required_outputs", []):
+            value = str(raw).strip()
+            if value and value not in values:
+                values.append(value)
+    return values
 
 
 def _estimated_cost(
     endpoint: Mapping[str, Any],
+    task_envelope: Mapping[str, Any],
     work_map: Mapping[str, Mapping[str, Any]],
     work_ids: Sequence[str],
     max_output_tokens: int,
 ) -> float:
-    prompt_tokens = 0
-    for work_id in work_ids:
-        context = work_map[work_id].get("context_requirements", {})
-        prompt_tokens += sum(
-            max(0, int(context.get(key, 0) or 0))
-            for key in (
-                "system_prompt_tokens",
-                "original_task_tokens",
-                "visible_upstream_tokens",
-            )
-        )
+    task_characters = max(1, int(task_envelope.get("task_characters") or 1))
+    dependency_count = sum(
+        len(work_map[work_id].get("dependencies", []))
+        for work_id in work_ids
+    )
+    prompt_tokens = task_characters + 4_096 + 2_048 * dependency_count
     prompt = float(endpoint.get("prompt_price_per_million", 0.0) or 0.0)
     completion = float(
         endpoint.get("completion_price_per_million", 0.0) or 0.0
@@ -233,27 +144,38 @@ def _selected_node(
     raw: Mapping[str, Any],
     endpoint: Mapping[str, Any],
     work_map: Mapping[str, Mapping[str, Any]],
-    matrix: Mapping[str, Any],
+    task: str,
+    task_envelope: Mapping[str, Any],
+    *,
+    final_node: bool,
 ) -> SelectedNode:
     work_ids = tuple(str(value) for value in raw.get("work_ids", []))
     effort = str(raw.get("reasoning_effort") or "medium")
     max_output = int(raw.get("max_output_tokens") or 0)
-    if not 256 <= max_output <= int(endpoint.get("max_completion_tokens") or 0):
+    endpoint_maximum = int(endpoint.get("max_completion_tokens") or 0)
+    if not 256 <= max_output <= endpoint_maximum:
         raise ProposalValidationError("node output allowance exceeds endpoint")
-    functions = _functions(work_map, work_ids)
+    required_context = int(task_envelope.get("required_context_tokens") or 0)
+    if int(endpoint.get("context_length") or 0) < required_context:
+        raise ProposalValidationError("node endpoint lacks required context capacity")
+    functions = _functions(raw)
+    contract = work_output_contract(
+        task,
+        _required_outputs(work_map, work_ids),
+        final_node=final_node,
+    )
     return SelectedNode(
         node_id=str(raw.get("node_id") or ""),
         assigned_work=work_ids,
-        professional_capabilities=_capabilities(matrix, work_ids),
+        professional_capabilities={value: 1.0 for value in functions},
         functions=functions,
         prompt_profile={
             "modules": list(functions),
             "role": str(raw.get("role") or ""),
-            "source": "gpt-direct-proposal",
+            "source": "gpt-authored-task-and-expert-graph",
         },
         reasoning_profile={
-            "reasoning_enabled": "reasoning"
-            in {
+            "reasoning_enabled": "reasoning" in {
                 str(value).casefold()
                 for value in endpoint.get("supported_parameters", [])
             },
@@ -268,11 +190,15 @@ def _selected_node(
         },
         model=str(raw.get("model") or ""),
         provider_endpoint=str(endpoint.get("provider_endpoint") or ""),
-        output_contract=_merge_contracts(work_map, work_ids),
-        estimated_quality=0.5,
-        quality_uncertainty=0.5,
+        output_contract=contract,
+        estimated_quality=0.0,
+        quality_uncertainty=0.0,
         estimated_cost=_estimated_cost(
-            endpoint, work_map, work_ids, max_output
+            endpoint,
+            task_envelope,
+            work_map,
+            work_ids,
+            max_output,
         ),
         failure_probability=0.0,
         request_config=_request_config(endpoint, effort, max_output),
@@ -284,15 +210,20 @@ def _recovery_row(
     raw: Mapping[str, Any],
     endpoint: Mapping[str, Any],
     selected: SelectedNode,
+    task_envelope: Mapping[str, Any],
     work_map: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
-    max_output = int(
+    maximum = int(
         selected.parameter_profile.get(
             "recommended_output_allowance_tokens", 2048
         )
     )
-    if max_output > int(endpoint.get("max_completion_tokens") or 0):
+    if maximum > int(endpoint.get("max_completion_tokens") or 0):
         raise ProposalValidationError("recovery output allowance exceeds endpoint")
+    if int(endpoint.get("context_length") or 0) < int(
+        task_envelope.get("required_context_tokens") or 0
+    ):
+        raise ProposalValidationError("recovery endpoint lacks required context capacity")
     return {
         "candidate_id": (
             f"recovery:{selected.node_id}:"
@@ -313,22 +244,27 @@ def _recovery_row(
         "provider_endpoint": str(endpoint.get("provider_endpoint") or ""),
         "provider_slug": str(endpoint.get("provider") or ""),
         "output_contract": dict(selected.output_contract),
-        "estimated_quality": selected.estimated_quality,
-        "quality_uncertainty": selected.quality_uncertainty,
+        "estimated_quality": 0.0,
+        "quality_uncertainty": 0.0,
         "estimated_cost": _estimated_cost(
-            endpoint, work_map, selected.assigned_work, max_output
+            endpoint,
+            task_envelope,
+            work_map,
+            selected.assigned_work,
+            maximum,
         ),
         "failure_probability": 0.0,
         "request_config": _request_config(
             endpoint,
             str(selected.reasoning_profile.get("effort") or "medium"),
-            max_output,
+            maximum,
         ),
     }
 
 
 def _dependency_violations(
-    graph: ExecutionGraph, work_map: Mapping[str, Mapping[str, Any]]
+    graph: ExecutionGraph,
+    work_map: Mapping[str, Mapping[str, Any]],
 ) -> list[str]:
     node_for_work = {
         work_id: node.node_id
@@ -348,7 +284,8 @@ def _dependency_violations(
 
 def materialize_proposal(
     proposal: Mapping[str, Any],
-    resources: Mapping[str, Any],
+    task: str,
+    task_envelope: Mapping[str, Any],
     catalog: Mapping[str, Any],
     *,
     approved_total_calls: int,
@@ -356,10 +293,7 @@ def materialize_proposal(
     approved_recovery_calls: int,
     cost_anomaly_usd: float | None,
 ) -> tuple[ExecutionGraph, GraphLimits, dict[str, Any]]:
-    interpretation_id = str(proposal.get("interpretation_id") or "")
-    interpretation = _interpretation(resources, interpretation_id)
-    work_map = _work_map(interpretation)
-    matrix = _matrix(resources, interpretation_id)
+    work_map = _work_map(proposal)
     endpoints = catalog_index(catalog)
     raw_nodes = proposal.get("nodes")
     raw_edges = proposal.get("edges")
@@ -368,6 +302,8 @@ def materialize_proposal(
         raise ProposalValidationError("proposal nodes are missing")
     if not isinstance(raw_edges, list) or not isinstance(raw_final, list):
         raise ProposalValidationError("proposal edges/final_nodes are invalid")
+    if len(raw_edges) > MAX_EDGE_COUNT:
+        raise ProposalValidationError("proposal exceeds edge limit")
 
     maximum_initial = (
         int(approved_total_calls)
@@ -376,6 +312,15 @@ def materialize_proposal(
     )
     if maximum_initial < 1 or len(raw_nodes) > maximum_initial:
         raise ProposalValidationError("proposal exceeds expert initial-call capacity")
+
+    raw_node_ids = {
+        str(row.get("node_id") or "")
+        for row in raw_nodes
+        if isinstance(row, Mapping)
+    }
+    final_nodes = tuple(str(value) for value in raw_final)
+    if not final_nodes or not set(final_nodes).issubset(raw_node_ids):
+        raise ProposalValidationError("final_nodes reference unknown nodes")
 
     selected: list[SelectedNode] = []
     selected_companies: list[str] = []
@@ -396,7 +341,14 @@ def materialize_proposal(
         if company in GOVERNANCE_COMPANIES:
             raise ProposalValidationError("governance company cannot be an expert")
         selected_companies.append(company)
-        node = _selected_node(raw, endpoint, work_map, matrix)
+        node = _selected_node(
+            raw,
+            endpoint,
+            work_map,
+            task,
+            task_envelope,
+            final_node=str(raw.get("node_id") or "") in final_nodes,
+        )
         selected.append(node)
         covered.extend(work_ids)
 
@@ -421,7 +373,11 @@ def materialize_proposal(
             recovery_companies.append(recovery_company)
             recovery_rows.append(
                 _recovery_row(
-                    recovery, recovery_endpoint, node, work_map
+                    recovery,
+                    recovery_endpoint,
+                    node,
+                    task_envelope,
+                    work_map,
                 )
             )
         recovery_pool[node.node_id] = recovery_rows
@@ -449,27 +405,25 @@ def materialize_proposal(
         for row in raw_edges
         if isinstance(row, Mapping)
     )
-    node_ids = {node.node_id for node in selected}
-    final_nodes = tuple(str(value) for value in raw_final)
-    if not final_nodes or not set(final_nodes).issubset(node_ids):
-        raise ProposalValidationError("final_nodes reference unknown nodes")
-
     provisional = ExecutionGraph(
         nodes=tuple(selected),
         edges=edges,
-        execution_stages=(tuple(sorted(node_ids)),),
+        execution_stages=(tuple(sorted(raw_node_ids)),),
         entry_nodes=(),
         final_nodes=final_nodes,
         required_work=tuple(work_map),
-        estimated_quality=0.5,
+        estimated_quality=0.0,
         quality_floor=0.0,
         estimated_total_cost=round(
             sum(node.estimated_cost for node in selected), 8
         ),
         metadata={
-            "interpretation_id": interpretation_id,
+            "work_items": [dict(row) for row in proposal.get("work_items", [])],
             "recovery_pool": recovery_pool,
             "selection_authority": "gpt-direct",
+            "local_task_classification_used": False,
+            "local_atomic_work_generation_used": False,
+            "local_resource_matrix_used": False,
             "local_scoring_used": False,
             "optimizer_used": False,
             "cp_sat_used": False,
@@ -480,15 +434,20 @@ def materialize_proposal(
     stages = derive_execution_stages(provisional)
     incoming = {edge.target for edge in edges}
     graph = ExecutionGraph(
-        **{
-            **provisional.to_dict(),
-            "execution_stages": [list(stage) for stage in stages],
-            "entry_nodes": sorted(node_ids - incoming),
-        }
+        nodes=tuple(selected),
+        edges=edges,
+        execution_stages=stages,
+        entry_nodes=tuple(sorted(raw_node_ids - incoming)),
+        final_nodes=final_nodes,
+        required_work=tuple(work_map),
+        estimated_quality=0.0,
+        quality_floor=0.0,
+        estimated_total_cost=provisional.estimated_total_cost,
+        metadata=dict(provisional.metadata),
     )
     limits = GraphLimits(
         max_nodes=maximum_initial,
-        max_edges=64,
+        max_edges=MAX_EDGE_COUNT,
         max_stages=16,
         max_model_calls=maximum_initial,
         max_retries=0,
@@ -519,19 +478,19 @@ def materialize_proposal(
         raise ProposalValidationError("proposal exceeds risk-adjusted cost guard")
 
     audit = {
-        "schema_version": "v5-gpt-proposal-materialization-1",
+        "schema_version": "v5-gpt-proposal-materialization-2",
         "status": "PASS",
-        "interpretation_id": interpretation_id,
+        "work_item_count": len(work_map),
         "selected_node_count": len(selected),
         "selected_companies": selected_companies,
         "recovery_companies": recovery_companies,
         "maximum_expert_initial_calls": maximum_initial,
         "risk_adjusted_reserved_cost_usd": round(total_risk_cost, 8),
+        "local_task_classification_used": False,
+        "local_atomic_work_generation_used": False,
+        "local_resource_matrix_used": False,
         "local_scoring_used": False,
         "optimizer_used": False,
-        "cp_sat_used": False,
-        "pareto_pruning_used": False,
-        "heuristic_ranking_used": False,
         "proposal_repaired_by_validator": False,
     }
     return graph, limits, audit
@@ -539,12 +498,19 @@ def materialize_proposal(
 
 def deterministic_violations(
     proposal: Mapping[str, Any],
-    resources: Mapping[str, Any],
+    task: str,
+    task_envelope: Mapping[str, Any],
     catalog: Mapping[str, Any],
     **limits: Any,
 ) -> list[str]:
     try:
-        materialize_proposal(proposal, resources, catalog, **limits)
+        materialize_proposal(
+            proposal,
+            task,
+            task_envelope,
+            catalog,
+            **limits,
+        )
     except Exception as exc:  # noqa: BLE001
         return [str(exc)]
     return []
@@ -552,7 +518,7 @@ def deterministic_violations(
 
 def claude_internal_review_payload(
     proposal: Mapping[str, Any],
-    resources: Mapping[str, Any],
+    task_envelope: Mapping[str, Any],
     catalog: Mapping[str, Any],
     *,
     task_digest: str,
@@ -562,11 +528,18 @@ def claude_internal_review_payload(
     cost_anomaly_usd: float | None,
 ) -> dict[str, Any]:
     endpoints = catalog_index(catalog)
-    interpretation_id = str(proposal.get("interpretation_id") or "")
-    try:
-        work_map = _work_map(_interpretation(resources, interpretation_id))
-    except ProposalValidationError:
-        work_map = {}
+    work_map = _work_map(proposal)
+    work_items = [
+        {
+            "work_id": work_id,
+            "objective": str(row.get("objective") or ""),
+            "dependencies": [str(value) for value in row.get("dependencies", [])],
+            "required_outputs": [
+                str(value) for value in row.get("required_outputs", [])
+            ],
+        }
+        for work_id, row in work_map.items()
+    ]
     nodes: list[dict[str, Any]] = []
     for raw in proposal.get("nodes", []):
         if not isinstance(raw, Mapping):
@@ -577,7 +550,13 @@ def claude_internal_review_payload(
         work_ids = [str(value) for value in raw.get("work_ids", [])]
         maximum = int(raw.get("max_output_tokens") or 0)
         estimated = (
-            _estimated_cost(endpoint, work_map, work_ids, maximum)
+            _estimated_cost(
+                endpoint,
+                task_envelope,
+                work_map,
+                work_ids,
+                maximum,
+            )
             if endpoint and all(value in work_map for value in work_ids)
             else 0.0
         )
@@ -585,18 +564,19 @@ def claude_internal_review_payload(
             "node_id": str(raw.get("node_id") or "unknown"),
             "candidate_id": f"{model}@{provider}",
             "work_ids": work_ids,
+            "role": str(raw.get("role") or ""),
+            "functions": [str(value) for value in raw.get("functions", [])],
             "model": model,
             "company": canonical_model_company(model),
             "provider": provider,
             "estimated_cost_usd": estimated,
-            "contract_kind": "gpt-proposed-expert-node",
+            "contract_kind": "gpt-authored-expert-node",
             "recovery_candidate_ids": [
                 f"{row.get('model')}@{row.get('provider')}"
                 for row in raw.get("recovery", [])
                 if isinstance(row, Mapping)
             ],
         })
-    required_work = sorted(work_map) or ["unknown-work"]
     edges = [
         {
             "source": str(row.get("source") or "unknown"),
@@ -612,7 +592,7 @@ def claude_internal_review_payload(
         "governance_calls_reserved": int(governance_calls_reserved),
         "approved_recovery_calls": int(approved_recovery_calls),
         "cost_anomaly_usd": cost_anomaly_usd,
-        "required_work": required_work,
+        "work_items": work_items,
         "nodes": nodes,
         "edges": edges,
     }
