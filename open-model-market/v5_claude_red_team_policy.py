@@ -10,7 +10,7 @@ import json
 import math
 import re
 from enum import Enum
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 CLAUDE_RED_TEAM_MODEL = "anthropic/claude-opus-5"
 CLAUDE_RED_TEAM_PROVIDER = "anthropic"
@@ -23,6 +23,7 @@ CLAUDE_RED_TEAM_MAX_CODES = 8
 CLAUDE_RED_TEAM_MAX_TARGETS = 8
 CLAUDE_RED_TEAM_MAX_STRING_CHARS = 240
 CLAUDE_RED_TEAM_MAX_DEPTH = 5
+CLAUDE_RED_TEAM_GOVERNANCE_CALLS = 2
 
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9_.:@/+-]{1,96}$")
@@ -82,6 +83,7 @@ _INTERNAL_TOP_LEVEL_KEYS = frozenset(
         "task_digest",
         "proposal_digest",
         "approved_total_calls",
+        "governance_calls_reserved",
         "approved_recovery_calls",
         "cost_anomaly_usd",
         "required_work",
@@ -148,6 +150,14 @@ def _check_number(value: Any, field: str, *, minimum: float = 0.0) -> None:
         raise ValueError(f"{field} is outside the allowed range")
 
 
+def _check_integer(value: Any, field: str, *, minimum: int, maximum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{field} must be an integer")
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{field} is outside the allowed range")
+    return value
+
+
 def _check_string_list(value: Any, field: str, *, maximum: int = CLAUDE_RED_TEAM_MAX_ITEMS) -> None:
     if not isinstance(value, list) or len(value) > maximum:
         raise ValueError(f"{field} must be a bounded list")
@@ -188,15 +198,36 @@ def _validate_internal(payload: Mapping[str, Any]) -> None:
         raise ValueError("internal Claude review input has missing or extra fields")
     _check_digest(payload["task_digest"], "task_digest")
     _check_digest(payload["proposal_digest"], "proposal_digest")
-    _check_number(payload["approved_total_calls"], "approved_total_calls", minimum=1)
-    _check_number(payload["approved_recovery_calls"], "approved_recovery_calls")
+    total_calls = _check_integer(
+        payload["approved_total_calls"],
+        "approved_total_calls",
+        minimum=4,
+        maximum=16,
+    )
+    governance_calls = _check_integer(
+        payload["governance_calls_reserved"],
+        "governance_calls_reserved",
+        minimum=CLAUDE_RED_TEAM_GOVERNANCE_CALLS,
+        maximum=CLAUDE_RED_TEAM_GOVERNANCE_CALLS,
+    )
+    recovery_calls = _check_integer(
+        payload["approved_recovery_calls"],
+        "approved_recovery_calls",
+        minimum=0,
+        maximum=total_calls - governance_calls - 1,
+    )
     if payload["cost_anomaly_usd"] is not None:
         _check_number(payload["cost_anomaly_usd"], "cost_anomaly_usd", minimum=0.00000001)
     _check_string_list(payload["required_work"], "required_work")
 
     nodes = payload["nodes"]
-    if not isinstance(nodes, list) or not nodes or len(nodes) > CLAUDE_RED_TEAM_MAX_ITEMS:
-        raise ValueError("nodes must be a non-empty bounded list")
+    maximum_nodes = total_calls - governance_calls - recovery_calls
+    if (
+        not isinstance(nodes, list)
+        or not nodes
+        or len(nodes) > min(CLAUDE_RED_TEAM_MAX_ITEMS, maximum_nodes)
+    ):
+        raise ValueError("nodes exceed the expert-call capacity after governance and recovery reserve")
     for index, node in enumerate(nodes):
         if not isinstance(node, Mapping) or set(node) != _INTERNAL_NODE_KEYS:
             raise ValueError(f"nodes[{index}] has missing or extra fields")
