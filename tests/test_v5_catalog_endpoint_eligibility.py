@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "open-model-market"))
 import model_market  # noqa: E402
 from v5_catalog_view import (  # noqa: E402
     CatalogViewError,
+    catalog_index,
     compact_endpoint_catalog,
     eligible_models,
 )
@@ -81,6 +82,70 @@ class CatalogEndpointEligibilityTests(unittest.TestCase):
         self.assertEqual("moonshotai/kimi-k3", endpoint["model"])
         self.assertEqual("morph", endpoint["provider"])
         self.assertEqual(262_144, endpoint["max_completion_tokens"])
+
+    def test_identical_exact_endpoint_rows_are_deduplicated(self) -> None:
+        model = self.model(model_maximum=262_144)
+        endpoint = {
+            "tag": "together",
+            "context_length": 1_048_576,
+            "max_completion_tokens": 262_144,
+            "supported_parameters": ["max_tokens", "temperature"],
+            "pricing": {
+                "prompt": "0.000001",
+                "completion": "0.000003",
+            },
+        }
+        catalog = compact_endpoint_catalog(
+            [model],
+            {
+                model.id: {
+                    "data": {
+                        "endpoints": [endpoint, dict(endpoint)],
+                    }
+                }
+            },
+            required_context_tokens=16_384,
+        )
+        self.assertEqual(1, len(catalog["endpoints"]))
+        row = catalog["endpoints"][0]
+        index = catalog_index({"endpoints": [row, dict(row)]})
+        self.assertEqual(1, len(index))
+        self.assertIn((model.id, "together"), index)
+
+    def test_conflicting_exact_endpoint_rows_fail_closed(self) -> None:
+        model = self.model(model_maximum=262_144)
+        first = {
+            "tag": "together",
+            "context_length": 1_048_576,
+            "max_completion_tokens": 262_144,
+            "supported_parameters": ["max_tokens", "temperature"],
+            "pricing": {
+                "prompt": "0.000001",
+                "completion": "0.000003",
+            },
+        }
+        second = {
+            **first,
+            "pricing": {
+                "prompt": "0.000001",
+                "completion": "0.000004",
+            },
+        }
+        with self.assertRaisesRegex(
+            CatalogViewError,
+            "conflicting duplicate exact catalog endpoint",
+        ):
+            compact_endpoint_catalog(
+                [model],
+                {
+                    model.id: {
+                        "data": {
+                            "endpoints": [first, second],
+                        }
+                    }
+                },
+                required_context_tokens=16_384,
+            )
 
     def test_zero_endpoint_completion_is_rejected(self) -> None:
         model = self.model(
