@@ -1,42 +1,24 @@
-"""OpenRouter catalog collection and task profiling without model selection logic."""
+"""OpenRouter catalog collection without task profiling or model selection."""
 from __future__ import annotations
 
 import argparse
 import json
 import math
 import os
-import re
 import urllib.parse
 from dataclasses import dataclass, field
-from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from openrouter_api import MODELS_URL, request_json
 
 DEFAULT_CONFIG = Path(__file__).with_name("config.json")
-POLICY_FILE = Path(__file__).with_name("team_policy.json")
 MAX_TASK_CHARS = 50_000
 MAX_CATALOG_MODELS = 150
 
 
 class ExpertTeamError(RuntimeError):
     pass
-
-
-@dataclass(frozen=True)
-class TaskProfile:
-    domains: List[str]
-    primary_domain: str
-    secondary_domain: str
-    complexity: str
-    complexity_score: int
-    high_stakes: bool
-    chinese: bool
-    long_context: bool
-    requested_context: int
-    team_pattern: str = "gpt-direct-dynamic-graph"
-    expert_count: int = 0
 
 
 @dataclass
@@ -63,7 +45,6 @@ class RunConfig:
     task: str
     output_dir: Path
     api_key: Optional[str]
-    quality_tier: str
     ranking_limit: int
     minimum_context_length: int
     catalog_sorts: List[str]
@@ -156,9 +137,6 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
         task=task,
         output_dir=Path(getattr(args, "output_dir", "v5-artifacts")),
         api_key=os.getenv("OPENROUTER_API_KEY"),
-        quality_tier=str(
-            getattr(args, "quality_tier", None) or "value"
-        ),
         ranking_limit=ranking,
         minimum_context_length=int(
             catalog.get("minimum_context_length", 16_384)
@@ -201,87 +179,6 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
             getattr(args, "maximum_recovery_calls", 2)
         ),
     )
-
-
-def classify_task(task: str, run: RunConfig) -> TaskProfile:
-    policy = load_json(POLICY_FILE)
-    text = task.casefold()
-    keywords = policy.get("keywords", {})
-    scored = [
-        (
-            str(domain),
-            sum(
-                1
-                for term in terms
-                if str(term).casefold() in text
-            ),
-        )
-        for domain, terms in keywords.items()
-        if isinstance(terms, list)
-    ]
-    scored = [row for row in scored if row[1] > 0]
-    scored.sort(key=lambda row: (-row[1], row[0]))
-    domains = [domain for domain, _ in scored] or ["general"]
-    primary = domains[0]
-    secondary = domains[1] if len(domains) > 1 else primary
-    high_stakes = any(
-        str(term).casefold() in text
-        for term in policy.get("high_stakes", [])
-    )
-    chinese = len(re.findall(r"[\u4e00-\u9fff]", task)) >= max(
-        4,
-        len(task) // 20,
-    )
-    long_context = len(task) > 12_000 or any(
-        str(term).casefold() in text
-        for term in policy.get("long_context", [])
-    )
-    score = (
-        int(len(task) > 1_200)
-        + int(len(task) > 6_000)
-        + int(len(domains) >= 2)
-        + int(len(domains) >= 3)
-        + 2 * int(high_stakes)
-    )
-    complexity = (
-        "simple"
-        if score <= 1
-        else "medium"
-        if score <= 3
-        else "complex"
-    )
-    context = max(
-        run.minimum_context_length,
-        int(len(task) / 2.5) + 3 * run.max_completion_tokens,
-    )
-    if long_context:
-        context = max(context, 65_536)
-    return TaskProfile(
-        domains=domains,
-        primary_domain=primary,
-        secondary_domain=secondary,
-        complexity=complexity,
-        complexity_score=score,
-        high_stakes=high_stakes,
-        chinese=chinese,
-        long_context=long_context,
-        requested_context=context,
-    )
-
-
-def _expired(value: Any) -> bool:
-    if not value:
-        return False
-    try:
-        parsed = datetime.fromisoformat(
-            str(value).replace("Z", "+00:00")
-        ).date()
-    except ValueError:
-        try:
-            parsed = date.fromisoformat(str(value)[:10])
-        except ValueError:
-            return False
-    return parsed <= date.today()
 
 
 def fetch_catalog(run: RunConfig) -> Tuple[Dict[str, ModelInfo], str]:
@@ -328,8 +225,7 @@ def fetch_catalog(run: RunConfig) -> Tuple[Dict[str, ModelInfo], str]:
             continue
         for rank, row in enumerate(rows, 1):
             if not isinstance(row, Mapping) or not isinstance(
-                row.get("id"),
-                str,
+                row.get("id"), str
             ):
                 continue
             model_id = str(row["id"])
@@ -369,33 +265,26 @@ def fetch_catalog(run: RunConfig) -> Tuple[Dict[str, ModelInfo], str]:
                         or row.get("max_completion_tokens")
                         or 0
                     ),
-                    prompt_price_per_million=_ppm(
-                        pricing,
-                        "prompt",
-                    ),
+                    prompt_price_per_million=_ppm(pricing, "prompt"),
                     completion_price_per_million=_ppm(
-                        pricing,
-                        "completion",
+                        pricing, "completion"
                     ),
                     supported_parameters=[
                         str(value)
                         for value in row.get(
-                            "supported_parameters",
-                            [],
+                            "supported_parameters", []
                         )
                     ],
                     input_modalities=[
                         str(value)
                         for value in architecture.get(
-                            "input_modalities",
-                            [],
+                            "input_modalities", []
                         )
                     ],
                     output_modalities=[
                         str(value)
                         for value in architecture.get(
-                            "output_modalities",
-                            [],
+                            "output_modalities", []
                         )
                     ],
                     knowledge_cutoff=row.get("knowledge_cutoff"),
