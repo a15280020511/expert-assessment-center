@@ -325,12 +325,27 @@ def _resource_shape(
         )
         for row in interpretations
     ]
+    synthesis_counts = [
+        sum(
+            1
+            for item in row.get("atomic_work", [])
+            if isinstance(item, Mapping)
+            and isinstance(item.get("operation_requirements"), Mapping)
+            and float(
+                item.get("operation_requirements", {}).get("synthesis", 0.0)
+                or 0.0
+            )
+            > 0.0
+        )
+        for row in interpretations
+    ]
     signals = resources.get("task_signals", {})
     signals = signals if isinstance(signals, Mapping) else {}
     structural = signals.get("structural_signals", {})
     structural = structural if isinstance(structural, Mapping) else {}
     return {
         "maximum_atomic_work": max(work_counts or [1]),
+        "maximum_synthesis_work": max(synthesis_counts or [0]),
         "interpretation_count": max(1, len(interpretations)),
         "explicit_contract_items": int(
             structural.get("explicit_contract_items", 0) or 0
@@ -401,11 +416,18 @@ def _planning_limits(
         profile or fallback_profile,
         shape,
     )
+    max_nodes = max(
+        1,
+        min(planning_nodes, total_calls - recovery_calls),
+    )
+    synthesis_slots = min(
+        max(0, max_nodes - 1),
+        1 if int(shape.get("maximum_synthesis_work", 0) or 0) > 0 else 0,
+    )
+    maximum_content_nodes = max(1, max_nodes - synthesis_slots)
+    effective_min_nodes = min(int(min_nodes), maximum_content_nodes)
     return GraphLimits(
-        max_nodes=max(
-            1,
-            min(planning_nodes, total_calls - recovery_calls),
-        ),
+        max_nodes=max_nodes,
         max_edges=64,
         max_stages=8,
         max_model_calls=total_calls,
@@ -413,7 +435,7 @@ def _planning_limits(
         max_replacements=recovery_calls,
         max_budget_usd=anomaly_budget,
         min_required_work_coverage=coverage,
-        min_successful_content_nodes=min_nodes,
+        min_successful_content_nodes=effective_min_nodes,
         allow_degraded_success=allow,
         cost_risk_multiplier=runtime.config.cost_risk_multiplier,
     )

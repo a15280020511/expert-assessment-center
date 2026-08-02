@@ -750,6 +750,15 @@ _INLINE_MARKDOWN_CONTRACT_RE = re.compile(
     r"[^：:\n]{0,100}[：:]\s*(?P<headings>[^\n]+)",
     re.IGNORECASE,
 )
+_INLINE_INFERRED_MARKDOWN_CONTRACT_RE = re.compile(
+    r"(?:最终(?:输出|报告|交付)\s*)"
+    r"(?=[^。\n]{0,220}(?:必须|务必|应当))"
+    r"(?=[^。\n]{0,220}(?:且只能|只能|仅能))"
+    r"[^。\n]{0,220}?(?:Markdown\s*)?"
+    r"(?:二级标题|H2|level[- ]2\s+headings?)"
+    r"[^：:\n]{0,120}[：:]\s*(?P<headings>[^\n]+)",
+    re.IGNORECASE,
+)
 _FINAL_FORMAT_LINE_RE = re.compile(
     r"(?:"
     r"(?:严格|必须|务必|请)?\s*(?:依次|严格依次|按照顺序)?\s*"
@@ -863,8 +872,26 @@ def _inline_delimited_markdown_headings(task: str) -> list[str]:
     return []
 
 
+def _inline_inferred_markdown_headings(task: str) -> list[str]:
+    match = _INLINE_INFERRED_MARKDOWN_CONTRACT_RE.search(str(task or ""))
+    if not match:
+        return []
+    values = [
+        value.strip()
+        for value in re.split(r"[；;、，,]", match.group("headings"))
+        if value.strip()
+    ]
+    if not 2 <= len(values) <= 128:
+        return []
+    return _valid_heading_sequence(values, len(values))
+
+
 def extract_explicit_markdown_contract(task: str) -> dict[str, Any]:
     headings = _inline_delimited_markdown_headings(task)
+    policy = "explicit-format-text-only-inline-delimited"
+    if not headings:
+        headings = _inline_inferred_markdown_headings(task)
+        policy = "explicit-format-text-only-inline-inferred-count"
     if not headings:
         return _extract_explicit_markdown_contract_legacy(task)
     return {
@@ -875,9 +902,7 @@ def extract_explicit_markdown_contract(task: str) -> dict[str, Any]:
         "markdown_heading_order_required": True,
         "task_explicit_delivery_section_count": len(headings),
         "task_explicit_long_form_required": len(headings) >= 8,
-        "contract_extraction_policy": (
-            "explicit-format-text-only-inline-delimited"
-        ),
+        "contract_extraction_policy": policy,
     }
 
 
