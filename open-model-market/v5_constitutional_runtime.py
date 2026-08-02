@@ -433,7 +433,54 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
                 constraints.to_dict(),
             )
 
-        result = super().execute_graph(*args, **kwargs)
+        try:
+            result = super().execute_graph(*args, **kwargs)
+        except Exception:
+            if root is not None:
+                try:
+                    node_results = json.loads(
+                        (root / "v5-node-results.json").read_text(encoding="utf-8")
+                    )
+                except (FileNotFoundError, json.JSONDecodeError, OSError):
+                    node_results = []
+                if not isinstance(node_results, list):
+                    node_results = []
+                try:
+                    summary = json.loads(
+                        (root / "v5-execution-summary.json").read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                except (FileNotFoundError, json.JSONDecodeError, OSError):
+                    summary = {}
+                if not isinstance(summary, Mapping):
+                    summary = {}
+                company_audit = self._actual_company_audit(
+                    {"node_results": node_results}
+                )
+                evidence_violations = validate_answer_evidence(
+                    original_task,
+                    str(summary.get("final_answer") or ""),
+                    constraints,
+                )
+                evidence_audit = {
+                    "schema_version": "v5-evidence-integrity-1",
+                    "status": "FAIL" if evidence_violations else "PASS",
+                    "constraints": constraints.to_dict(),
+                    "violations": evidence_violations,
+                    "fact_truth_not_inferred_from_structure": True,
+                    "upstream_model_claims_are_not_promoted_to_user_facts": True,
+                    "written_after_execution_failure": True,
+                }
+                self._write_json(
+                    root / "actual-model-company-audit.json",
+                    company_audit,
+                )
+                self._write_json(
+                    root / "evidence-integrity.json",
+                    evidence_audit,
+                )
+            raise
         company_audit = self._actual_company_audit(result)
         evidence_violations = validate_answer_evidence(
             original_task,
