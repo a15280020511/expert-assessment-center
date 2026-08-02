@@ -1,4 +1,4 @@
-"""Fixed GPT-latest proposal and one-time synthesis protocol."""
+"""Fixed GPT-latest proposal and mandatory one-time synthesis protocol."""
 from __future__ import annotations
 
 import json
@@ -22,15 +22,16 @@ PROPOSAL_PROMPT = (
     "单锁且禁止fallback，专家禁止工具。只输出严格JSON，不解释，不写报告。"
 )
 SYNTHESIS_PROMPT = (
-    "你是专家团中心的一次性综合器。你只根据初始GPT提案和Claude一次红队返回的枚举codes、targets"
-    "修正专家组合。不得再次调用或请求Claude，不得循环，不得添加目录外模型，不得绕过硬约束。"
+    "你是专家团中心的一次性综合器。你必须根据初始GPT提案和Claude一次红队给出的结构化修改意见，"
+    "形成最终专家组合。Claude意见是咨询意见，不是批准、否决或门禁；你应逐条综合，可在硬约束下"
+    "采纳、调整或不采纳。不得再次调用或请求Claude，不得循环，不得添加目录外模型，不得绕过硬约束。"
     "只输出一份最终严格JSON提案，不解释，不写报告。"
 )
 PROPOSAL_PROMPT_SHA256 = (
     "53d3a37962466df8df8bc47d94da75450e1b81cb5c422ea83a4808bcdac939a5"
 )
 SYNTHESIS_PROMPT_SHA256 = (
-    "079b7773f4176bf9362fe863c1fd913d1d3dc4920a652407fd72082afce809fd"
+    "c5ac29fa09d2a11d6725f8156bcd51552106fd50d6ff84bee012a0586b084f05"
 )
 
 
@@ -78,7 +79,11 @@ def _schema(name: str) -> dict[str, Any]:
                 "uniqueItems": True,
                 "items": work_id,
             },
-            "role": {"type": "string", "minLength": 1, "maxLength": 160},
+            "role": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160,
+            },
             "model": identifier,
             "provider": identifier,
             "reasoning_effort": {
@@ -184,7 +189,12 @@ def _content(value: Mapping[str, Any]) -> str:
     return rendered
 
 
-def _request(prompt: str, prompt_hash: str, name: str, user: Mapping[str, Any]) -> dict[str, Any]:
+def _request(
+    prompt: str,
+    prompt_hash: str,
+    name: str,
+    user: Mapping[str, Any],
+) -> dict[str, Any]:
     return {
         "model": GPT_SELECTOR_MODEL,
         "messages": [
@@ -222,7 +232,10 @@ def _hard_limits(
         ),
         "cost_anomaly_usd": cost_anomaly_usd,
         "distinct_expert_companies": True,
-        "governance_companies_forbidden_for_experts": ["openai", "anthropic"],
+        "governance_companies_forbidden_for_experts": [
+            "openai",
+            "anthropic",
+        ],
         "tools_allowed": False,
         "provider_fallback_allowed": False,
     }
@@ -260,7 +273,7 @@ def build_synthesis_request(
     *,
     task: str,
     initial_proposal: Mapping[str, Any],
-    claude_verdict: Mapping[str, Any],
+    claude_advice: Mapping[str, Any],
     resources: Mapping[str, Any],
     catalog: Mapping[str, Any],
     approved_total_calls: int,
@@ -275,6 +288,7 @@ def build_synthesis_request(
         cost_anomaly_usd=cost_anomaly_usd,
     )
     hard["claude_second_review_allowed"] = False
+    hard["claude_is_advisory_only"] = True
     return _request(
         SYNTHESIS_PROMPT,
         SYNTHESIS_PROMPT_SHA256,
@@ -282,10 +296,10 @@ def build_synthesis_request(
         {
             "task": str(task),
             "initial_proposal": initial_proposal,
-            "claude_red_team_verdict": {
-                "decision": claude_verdict.get("decision"),
-                "codes": list(claude_verdict.get("codes") or []),
-                "targets": list(claude_verdict.get("targets") or []),
+            "claude_red_team_advice": {
+                "suggestions": list(
+                    claude_advice.get("suggestions") or []
+                ),
             },
             "resources": resources,
             "catalog": catalog,
@@ -310,11 +324,19 @@ def parse_proposal(text: str) -> dict[str, Any]:
         raise GPTSelectorError("GPT proposal has no nodes")
     if len(value["nodes"]) > GPT_MAX_NODES:
         raise GPTSelectorError("GPT proposal exceeds node limit")
-    if not isinstance(value["edges"], list) or len(value["edges"]) > GPT_MAX_EDGES:
+    if (
+        not isinstance(value["edges"], list)
+        or len(value["edges"]) > GPT_MAX_EDGES
+    ):
         raise GPTSelectorError("GPT proposal edges are invalid")
-    if not isinstance(value["final_nodes"], list) or not value["final_nodes"]:
+    if (
+        not isinstance(value["final_nodes"], list)
+        or not value["final_nodes"]
+    ):
         raise GPTSelectorError("GPT proposal final nodes are invalid")
-    return json.loads(json.dumps(value, ensure_ascii=False, allow_nan=False))
+    return json.loads(
+        json.dumps(value, ensure_ascii=False, allow_nan=False)
+    )
 
 
 def proposal_sha256(value: Mapping[str, Any]) -> str:
