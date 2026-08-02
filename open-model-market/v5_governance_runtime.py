@@ -26,6 +26,7 @@ from v5_proposal_materializer import (
     deterministic_violations,
     materialize_proposal,
 )
+from v5_structured_output_compat import normalize_strict_response_format
 
 
 class GovernanceRuntimeError(RuntimeError):
@@ -142,7 +143,7 @@ def _bind_governance_request(
 
 
 def _api_payload(request: Mapping[str, Any]) -> dict[str, Any]:
-    return {
+    payload = {
         str(key): value
         for key, value in request.items()
         if key
@@ -153,6 +154,11 @@ def _api_payload(request: Mapping[str, Any]) -> dict[str, Any]:
             "governance_endpoint",
         }
     }
+    response_format = payload.get("response_format")
+    if isinstance(response_format, Mapping):
+        normalized, _ = normalize_strict_response_format(response_format)
+        payload["response_format"] = normalized
+    return payload
 
 
 def _request_receipt(request: Mapping[str, Any]) -> dict[str, Any]:
@@ -175,8 +181,12 @@ def _request_receipt(request: Mapping[str, Any]) -> dict[str, Any]:
             )
     response_format = request.get("response_format")
     schema_name = ""
+    schema_compatibility: dict[str, Any] = {}
     if isinstance(response_format, Mapping):
-        schema = response_format.get("json_schema")
+        normalized, schema_compatibility = normalize_strict_response_format(
+            response_format
+        )
+        schema = normalized.get("json_schema")
         if isinstance(schema, Mapping):
             schema_name = str(schema.get("name") or "")
     provider = request.get("provider")
@@ -196,6 +206,7 @@ def _request_receipt(request: Mapping[str, Any]) -> dict[str, Any]:
         "provider": provider,
         "governance_endpoint": endpoint,
         "response_schema": schema_name,
+        "schema_compatibility": schema_compatibility,
         "messages": message_rows,
         "raw_message_content_persisted": False,
         "request_fields": sorted(str(key) for key in _api_payload(request)),
@@ -276,7 +287,7 @@ class GovernanceLedger:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": "v5-advisory-governance-call-ledger-3",
+            "schema_version": "v5-advisory-governance-call-ledger-4",
             "status": "PASS",
             "maximum_governance_calls": self.maximum_calls,
             "actual_governance_calls": len(self.calls),
@@ -496,7 +507,7 @@ def run_single_pass_governance(
         **limits,
     )
     governance = {
-        "schema_version": "v5-advisory-governance-result-3",
+        "schema_version": "v5-advisory-governance-result-4",
         "status": "PASS",
         "initial_proposal": initial,
         "claude_advice": dict(claude_advice),
