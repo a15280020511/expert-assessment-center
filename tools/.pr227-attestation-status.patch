@@ -1,0 +1,106 @@
+diff --git a/open-model-market/v5_evidence_bundle.py b/open-model-market/v5_evidence_bundle.py
+index 4143dd5..124d9ac 100644
+--- a/open-model-market/v5_evidence_bundle.py
++++ b/open-model-market/v5_evidence_bundle.py
+@@ -229,8 +229,27 @@ def build_final_attestation_record(
+     diagnosis = load_json_or_default(diagnosis_path, {})
+     evidence = load_json_or_default(bundle, {})
+     report_present = report.is_file()
++    diagnosis_status = (
++        str(diagnosis.get("status") or "FAIL").upper()
++        if isinstance(diagnosis, Mapping)
++        else "FAIL"
++    )
++    evidence_frozen = bool(
++        evidence.get("business_evidence_frozen")
++        if isinstance(evidence, Mapping)
++        else False
++    )
++    attestation_status = (
++        normalized_audit_status
++        if normalized_audit_status in {"PASS", "DEGRADED"}
++        and diagnosis_status == normalized_audit_status
++        and report_present
++        and evidence_frozen
++        else "FAIL"
++    )
+     return {
+         "version": 2,
++        "status": attestation_status,
+         "runtime": RUNTIME_VERSION,
+         "run_id": int(run_id),
+         "commit_sha": commit_sha,
+@@ -240,11 +259,9 @@ def build_final_attestation_record(
+             "artifact_url": primary_artifact_url,
+         },
+         "audit_status": normalized_audit_status,
+-        "diagnosis_status": diagnosis.get("status") if isinstance(diagnosis, Mapping) else None,
++        "diagnosis_status": diagnosis_status,
+         "evidence_input_sha256": evidence.get("input_sha256") if isinstance(evidence, Mapping) else None,
+-        "business_evidence_frozen_before_upload": bool(
+-            evidence.get("business_evidence_frozen") if isinstance(evidence, Mapping) else False
+-        ),
++        "business_evidence_frozen_before_upload": evidence_frozen,
+         "report_required": report_required,
+         "report_present": report_present,
+         "report_sha256": sha256_file(report) if report_present else None,
+diff --git a/tests/test_v5_evidence_bundle.py b/tests/test_v5_evidence_bundle.py
+index 0eeb1d3..9902036 100644
+--- a/tests/test_v5_evidence_bundle.py
++++ b/tests/test_v5_evidence_bundle.py
+@@ -191,9 +191,43 @@ class V5EvidenceBundleTests(unittest.TestCase):
+             )
+             bundle = json.loads((root / "evidence-bundle.json").read_text(encoding="utf-8"))
+             self.assertEqual(status["status"], "PASS")
++            self.assertEqual(attestation["status"], "PASS")
+             self.assertEqual(attestation["evidence_input_sha256"], bundle["input_sha256"])
+             self.assertEqual(attestation["primary_artifact"]["artifact_id"], 123)
+ 
++    def test_attestation_fails_closed_when_audit_and_diagnosis_disagree(self):
++        with tempfile.TemporaryDirectory() as temp:
++            root = Path(temp)
++            self.seed(root)
++            EvidenceBundleBuilder(
++                EvidenceInputs.from_directory(root),
++                ApprovedRun(total_calls=5, recovery_calls=1, cost_anomaly_usd=0.20),
++            ).write(root, require_report=True)
++            diagnosis = json.loads(
++                (root / "execution-diagnosis.json").read_text(encoding="utf-8")
++            )
++            diagnosis["status"] = "DEGRADED"
++            (root / "execution-diagnosis.json").write_text(
++                json.dumps(diagnosis),
++                encoding="utf-8",
++            )
++            status_md = root / "final-status.md"
++            status_md.write_text("## EXECUTION_COMPLETED\n", encoding="utf-8")
++            write_manifest(root)
++            attestation = build_final_attestation_record(
++                root=root,
++                primary_artifact_id="123",
++                primary_artifact_digest="sha256:test",
++                primary_artifact_url="https://example.invalid/artifact/123",
++                audit_status="PASS",
++                run_id="1",
++                commit_sha="a" * 40,
++                final_status_file=status_md,
++            )
++            self.assertEqual(attestation["status"], "FAIL")
++            self.assertEqual(attestation["audit_status"], "PASS")
++            self.assertEqual(attestation["diagnosis_status"], "DEGRADED")
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/tests/test_v5_failure_evidence_chain.py b/tests/test_v5_failure_evidence_chain.py
+index 1bc513b..47ca0fa 100644
+--- a/tests/test_v5_failure_evidence_chain.py
++++ b/tests/test_v5_failure_evidence_chain.py
+@@ -74,6 +74,7 @@ class TestV5FailureEvidenceChain(unittest.TestCase):
+                 commit_sha="c" * 40,
+                 final_status_file=final_status,
+             )
++            self.assertEqual(attestation["status"], "FAIL")
+             self.assertFalse(attestation["report_required"])
+             self.assertFalse(attestation["report_present"])
+             self.assertIsNone(attestation["report_sha256"])
