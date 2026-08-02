@@ -36,8 +36,8 @@ jobs:
         run: |
           set -euo pipefail
           echo "684d0ab5ba6b8788873145e6ec4ee98df668e9f3bdec616e9e4dbef0904f08aa  tools/.pr227-live-contract-fix.patch" | sha256sum --check
-          git apply --check tools/.pr227-live-contract-fix.patch
-          git apply tools/.pr227-live-contract-fix.patch
+          git apply -p0 --check tools/.pr227-live-contract-fix.patch
+          git apply -p0 tools/.pr227-live-contract-fix.patch
           git diff --check
 
       - name: Set up pinned Python
