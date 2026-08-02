@@ -96,7 +96,7 @@ jobs:
                   "仅依据题面，不得调用外部工具，不得编造。"
                   "比较方案A与方案B，只接受完整交付。"
               ),
-              "long": "完成长上下文合同审计。" + "甲" * 48000,
+              "long": "完成长上下文合同审计。" + "A" * 48000,
           }
           root = Path("production-validation-artifacts")
           for name, task in tasks.items():
