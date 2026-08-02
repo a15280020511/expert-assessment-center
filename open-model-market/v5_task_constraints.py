@@ -15,21 +15,21 @@ for _export_name in dir(_impl):
     if not _export_name.startswith("__"):
         globals()[_export_name] = getattr(_impl, _export_name)
 
-_QUANTITY_TOKEN = (
+_QUANTITY_LITERAL_PATTERN = (
     r"\d+(?:\.\d+)?\s*(?:SLA|秒|分钟|小时|天|周|月|年|米|公里|千米|"
     r"公斤|克|人|名|位|次|%|％|件|台|部|套|支|辆|本|份|箱|包|瓶|"
     r"枚|张|把|只|艘|架|顶|元|块|人民币|rmb|cny|yuan|美元|美金|usd)"
 )
 _CARDINALITY_PREFIX_RE = re.compile(
-    rf"(?:共有|共计|总计|合计|共)(?=\s*{_QUANTITY_TOKEN})",
+    rf"(?:共有|共计|总计|合计|共)(?=\s*{_QUANTITY_LITERAL_PATTERN})",
     re.IGNORECASE,
 )
 _QUANTITY_COUNT_LINK_RE = re.compile(
-    rf"数量\s*(?:为|是|有)?(?=\s*{_QUANTITY_TOKEN})",
+    rf"数量\s*(?:为|是|有)?(?=\s*{_QUANTITY_LITERAL_PATTERN})",
     re.IGNORECASE,
 )
 _REMAINING_QUANTITY_RE = re.compile(
-    rf"剩余\s*电量\s*(?:为|是|有)?(?=\s*{_QUANTITY_TOKEN})",
+    rf"剩余\s*电量\s*(?:为|是|有)?(?=\s*{_QUANTITY_LITERAL_PATTERN})",
     re.IGNORECASE,
 )
 
