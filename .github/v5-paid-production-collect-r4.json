@@ -1,0 +1,6 @@
+{
+  "schema_version": "pr227-production-paid-collect-r4-1",
+  "paid_head_sha": "b756c5510ff7da25b1efc0ef32e5db4389189806",
+  "target_sha": "add4a7bc94fccf57e2979103686887d6920eec66",
+  "collection_model_calls": 0
+}
