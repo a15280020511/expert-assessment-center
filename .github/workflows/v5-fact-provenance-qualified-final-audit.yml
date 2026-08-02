@@ -1,0 +1,289 @@
+name: V5 Fact Provenance Qualified Final Audit
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v5-fact-provenance-qualified-final-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  canonical:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+      - name: Canonical static and complete unit suite
+        run: |
+          set -euo pipefail
+          mkdir -p audit-logs
+          python -m ruff check . 2>&1 | tee audit-logs/ruff.log
+          python -m compileall -q open-model-market tests tools 2>&1 | tee audit-logs/compile.log
+          python -m unittest discover -s tests -p 'test*.py' -v \
+            2>&1 | tee audit-logs/full-unit.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: fact-provenance-qualified-final-canonical-${{ github.run_id }}
+          path: audit-logs/
+          if-no-files-found: error
+          retention-days: 30
+
+  semantic-seeds:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [0, 1, 7, 42, 99, 31337]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install pinned dependencies
+        run: python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+      - name: Closed-world semantics and failure-chain matrix
+        env:
+          PYTHONHASHSEED: ${{ matrix.seed }}
+        run: |
+          set -euo pipefail
+          mkdir -p audit-logs
+          python -m unittest -v \
+            tests.test_v5_fact_provenance_semantic_normalization \
+            tests.test_v5_inferential_anchor_threshold \
+            tests.test_v5_quantity_binding_context \
+            tests.test_v5_fact_label_purity_normalization \
+            tests.test_v5_task_constraints \
+            tests.test_v5_deterministic_answer_normalization \
+            tests.test_v5_independent_artifact_revalidation \
+            tests.test_v5_explicit_markdown_contract_revalidation \
+            tests.test_v5_stress_stability \
+            2>&1 | tee audit-logs/semantic-seed-${{ matrix.seed }}.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: fact-provenance-qualified-final-seed-${{ matrix.seed }}-${{ github.run_id }}
+          path: audit-logs/
+          if-no-files-found: error
+          retention-days: 30
+
+  parallel-runtime-load:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [0, 42, 31337]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install pinned dependencies
+        run: python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+      - name: Concurrent budgets, circuits, DAGs and recovery
+        env:
+          PYTHONHASHSEED: ${{ matrix.seed }}
+        run: |
+          set -euo pipefail
+          mkdir -p audit-logs
+          python -m unittest -v \
+            tests.test_v5_full_load_stability \
+            tests.test_v5_operational_resilience \
+            tests.test_v5_cross_endpoint_recovery \
+            tests.test_v5_critical_delivery_reliability \
+            tests.test_v5_recovery_company_diversity \
+            2>&1 | tee audit-logs/parallel-${{ matrix.seed }}.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: fact-provenance-qualified-final-parallel-${{ matrix.seed }}-${{ github.run_id }}
+          path: audit-logs/
+          if-no-files-found: error
+          retention-days: 30
+
+  adversarial-properties:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install pinned dependencies
+        run: python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+      - name: Exhaustive fact-label, quantity, space and source-suffix properties
+        run: |
+          set -euo pipefail
+          mkdir -p audit-logs
+          PYTHONPATH=open-model-market python - <<'PY' | tee audit-logs/adversarial-properties.log
+          import itertools
+          import json
+          import random
+          from v5_deterministic_answer_normalization import normalize_answer
+          from v5_task_constraints import (
+              compile_task_constraints,
+              fact_claim_supported,
+              normalized_quantities,
+              validate_answer_evidence,
+          )
+
+          task = (
+              "仅依据题面：某社区夜间临时物资登记点只有1名值守人员。"
+              "值守手机剩余46%电量，应急灯剩余63%电量。"
+              "东侧出口外地面干燥但有玻璃碎片；"
+              "西侧出口外有不明液体，无法确认来源及是否存在电气风险。"
+              "门外有2名无法核验身份、自称设备巡检人员的人要求进入。"
+              "纸质登记表显示4件反光背心已领用，但现场只能确认3件。"
+              "禁止联网、调用工具或编造题面外事实。"
+          )
+          constraints = compile_task_constraints(task)
+          direct = [
+              "值守人员1名",
+              "手机剩余电量46%",
+              "应急灯剩余63%",
+              "东侧出口外地面干燥但有玻璃碎片",
+              "西侧出口外有不明液体，来源和电气风险未知",
+              "门外有2名自称设备巡检人员，无法核验身份",
+              "反光背心已领用4件，现场只能确认3件",
+          ]
+          suffixes = ("", "（题面）", "（题面事实）", "（直接支持）")
+          separators = ("。 | ", "；", "。")
+          cases = 0
+
+          for claim, suffix in itertools.product(direct, suffixes):
+              assert fact_claim_supported(task, claim + suffix), (claim, suffix)
+              answer = f"- 事实：{claim}{suffix}。\n"
+              assert validate_answer_evidence(task, answer) == [], answer
+              cases += 1
+
+          supported_multi = (
+              "反光背心已领用4件，现场只能确认3件",
+              "现场只能确认3件，登记表显示已领用4件反光背心",
+          )
+          for claim in supported_multi:
+              assert fact_claim_supported(task, claim), claim
+              assert validate_answer_evidence(task, f"- 事实：{claim}。\n") == []
+              cases += 1
+
+          for seed in range(128):
+              rng = random.Random(seed)
+              selected = rng.sample(direct, rng.randint(1, len(direct)))
+              rendered = [item + rng.choice(suffixes) for item in selected]
+              answer = "- 事实：" + rng.choice(separators).join(rendered) + "。\n"
+              assert validate_answer_evidence(task, answer) == [], (seed, answer)
+              cases += 1
+
+          conflicts = [
+              "门内有2名设备巡检人员",
+              "东侧出口外有不明液体",
+              "西侧出口外地面干燥但有玻璃碎片",
+              "手机剩余电量64%",
+              "现场确认4件反光背心",
+              "登记表显示3件反光背心已领用",
+              "共有3名值守人员",
+              "风险已经解除",
+              "纽约港存在航运风险",
+          ]
+          for claim in conflicts:
+              assert not fact_claim_supported(task, claim), claim
+              assert validate_answer_evidence(task, f"- 事实：{claim}。\n"), claim
+              cases += 1
+
+          spatial_task = (
+              "仅依据题面：东门外有2名访客等待核验。"
+              "西门外有维修人员要求进入。禁止编造题面外事实。"
+          )
+          assert fact_claim_supported(spatial_task, "西门外有维修人员要求进入")
+          assert not fact_claim_supported(spatial_task, "东门外有维修人员要求进入")
+          assert validate_answer_evidence(
+              spatial_task,
+              "- 事实：东门外有维修人员要求进入。\n",
+          )
+          cases += 3
+
+          for classifier in ("件", "台", "部", "套", "支", "辆", "本", "份", "箱", "包", "瓶", "枚", "张", "把", "只", "艘", "架"):
+              assert normalized_quantities(f"4{classifier}") == {("4", "", "item")}
+              cases += 1
+
+          synthesis = (
+              "- 事实：当前存在双侧出口隐患、外部未核验人员试图进入、"
+              "资产记录缺口以及通信与照明资源受限。\n"
+          )
+          normalized, audit = normalize_answer(task, synthesis, {}, constraints)
+          assert "推断：当前存在双侧出口隐患" in normalized, normalized
+          assert audit["schema_version"] == "v5-deterministic-answer-normalization-3"
+          assert audit["substantive_text_invented"] is False
+          assert validate_answer_evidence(task, normalized) == []
+          cases += 1
+
+          unrelated = "- 事实：纽约港存在严重航运风险和资产记录缺口。\n"
+          normalized, audit = normalize_answer(task, unrelated, {}, constraints)
+          assert normalized == unrelated
+          assert audit["inferential_fact_labels_relabelled"] == []
+          assert validate_answer_evidence(task, normalized)
+          cases += 1
+
+          print(json.dumps({
+              "status": "PASS",
+              "property_cases": cases,
+              "history_used": False,
+              "model_calls": 0,
+          }))
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: fact-provenance-qualified-final-properties-${{ github.run_id }}
+          path: audit-logs/
+          if-no-files-found: error
+          retention-days: 30
+
+  granular-repository-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Inspect every repository file and source line
+        run: |
+          set -euo pipefail
+          python tools/repository_audit.py \
+            --root . \
+            --output-dir audit-artifacts \
+            --fail-on high
+          tar --exclude=.git --exclude=audit-artifacts \
+            -czf audit-artifacts/repository-source-${GITHUB_SHA}.tar.gz .
+          sha256sum audit-artifacts/repository-source-${GITHUB_SHA}.tar.gz \
+            > audit-artifacts/repository-source-${GITHUB_SHA}.sha256
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: fact-provenance-qualified-final-granular-${{ github.run_id }}
+          path: audit-artifacts/
+          if-no-files-found: error
+          retention-days: 30
