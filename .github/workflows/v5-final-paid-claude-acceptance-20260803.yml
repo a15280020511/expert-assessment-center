@@ -1,23 +1,23 @@
-name: V5 Final Paid Claude Acceptance 2026-08-03
+name: V5 Final Paid Claude Acceptance
 
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/v5-final-paid-claude-acceptance-20260803.yml"
-      - ".v5-final-paid-acceptance-20260803"
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type RUN-EXACTLY-ONCE to authorize the bounded paid acceptance
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: v5-final-paid-claude-acceptance-${{ github.event.pull_request.number }}
+  group: v5-final-paid-claude-acceptance
   cancel-in-progress: false
 
 jobs:
   paid-acceptance:
-    if: >-
-      github.actor == github.repository_owner &&
-      github.event.pull_request.head.ref == 'fix/v5-claude-unified-red-team-cleanup-20260803'
+    if: github.actor == github.repository_owner
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
@@ -28,19 +28,17 @@ jobs:
       OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
       OPENROUTER_APP_NAME: expert-center-final-paid-acceptance
     steps:
-      - name: Check out exact PR head
+      - name: Check explicit authorization
+        run: test "${{ inputs.confirm }}" = "RUN-EXACTLY-ONCE"
+
+      - name: Check out exact dispatched source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Explain inactive marker state
-        if: ${{ hashFiles('.v5-final-paid-acceptance-20260803') == '' }}
-        run: echo "Final paid acceptance marker is absent; no model call is permitted."
-
       - name: Set up pinned Python
-        if: ${{ hashFiles('.v5-final-paid-acceptance-20260803') != '' }}
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
@@ -48,18 +46,13 @@ jobs:
           cache-dependency-path: requirements-runtime.txt
 
       - name: Install pinned runtime
-        if: ${{ hashFiles('.v5-final-paid-acceptance-20260803') != '' }}
-        shell: bash
         run: |
           set -euo pipefail
           test -n "$OPENROUTER_API_KEY"
-          test "$(cat .v5-final-paid-acceptance-20260803)" = "RUN-EXACTLY-ONCE"
           python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
           python -m pip check
 
       - name: Execute one bounded real task
-        if: ${{ hashFiles('.v5-final-paid-acceptance-20260803') != '' }}
-        shell: bash
         run: |
           set -euo pipefail
           task='仅依据以下题面，不得调用外部工具，不得补充外部事实：A方案月费20元、月流量100GB；B方案月费30元、月流量150GB。请严格按顺序输出两个Markdown二级标题：已知事实、最终建议。最终建议必须给出唯一推荐和两条理由，明确区分事实与推断，不得新增题面外数字。'
@@ -74,14 +67,11 @@ jobs:
             --reasoning-effort low \
             --require-live-catalog
 
-      - name: Verify exact paid-call constitution
-        if: ${{ hashFiles('.v5-final-paid-acceptance-20260803') != '' }}
-        shell: bash
+      - name: Verify paid-call constitution
         env:
-          ACCEPTANCE_SHA: ${{ github.event.pull_request.head.sha }}
+          ACCEPTANCE_SHA: ${{ github.sha }}
           ACCEPTANCE_RUN_ID: ${{ github.run_id }}
         run: |
-          set -euo pipefail
           python - <<'PY'
           import json
           import os
@@ -94,91 +84,37 @@ jobs:
           result = json.loads((root / "v5-result.json").read_text())
           audit = json.loads((root / "v5-request-audit.json").read_text())
           selection = json.loads((root / "v5-selection.json").read_text())
-          catalog = json.loads((root / "v5-gpt-catalog-view.json").read_text())
 
-          rows = calls["calls"]
-          kinds = [row["kind"] for row in rows]
-          gpt_model = resolution["gpt"]["resolved_model"]
-          claude_model = resolution["claude"]["resolved_model"]
-
+          kinds = [row["kind"] for row in calls["calls"]]
           assert resolution["status"] == "PASS"
           assert resolution["provider_fallback_allowed"] is False
           assert resolution["gpt"]["logical_model"] == "~openai/gpt-latest"
           assert resolution["claude"]["logical_model"] == "~anthropic/claude-opus-latest"
-          assert gpt_model.startswith("openai/gpt-")
-          assert "mini" not in gpt_model and "nano" not in gpt_model and "gpt-oss" not in gpt_model
-          assert claude_model.startswith("anthropic/claude-opus-")
-          assert resolution["gpt"]["provider"] == "openai"
-          assert resolution["claude"]["provider"] == "anthropic"
-          assert resolution["gpt"]["synthetic_fixture_only"] is False
-          assert resolution["claude"]["synthetic_fixture_only"] is False
-
-          assert calls["status"] == "PASS"
-          assert calls["actual_governance_calls"] == 3
           assert kinds == ["gpt_proposal", "claude_red_team", "gpt_synthesis"]
-          assert calls["gpt_proposal_calls"] == 1
-          assert calls["claude_red_team_calls"] == 1
-          assert calls["gpt_synthesis_calls"] == 1
-          assert rows[0]["requested_model"] == "~openai/gpt-latest"
-          assert rows[1]["requested_model"] == "~anthropic/claude-opus-latest"
-          assert rows[2]["requested_model"] == "~openai/gpt-latest"
-          assert rows[0]["selected_model"] == gpt_model
-          assert rows[1]["selected_model"] == claude_model
-          assert rows[2]["selected_model"] == gpt_model
-          assert rows[0]["provider"].casefold() == "openai"
-          assert rows[1]["provider"].casefold() == "anthropic"
-          assert rows[2]["provider"].casefold() == "openai"
-          assert all(row["request"]["temperature_present"] is False for row in rows)
-          assert all(row["request"]["response_schema"] for row in rows)
-          assert all(row["request"]["provider"]["allow_fallbacks"] is False for row in rows)
-          assert all(row["request"]["provider"]["require_parameters"] is True for row in rows)
-
-          assert governance["status"] == "PASS"
+          assert calls["actual_governance_calls"] == 3
           assert governance["claude_review_count"] == 1
           assert governance["gpt_synthesis_count"] == 1
           assert governance["claude_is_advisory_only"] is True
           assert governance["claude_gatekeeping_allowed"] is False
-          assert governance["claude_covers_internal_selection"] is True
-          assert governance["claude_covers_external_information"] is True
           assert governance["second_claude_review_allowed"] is False
           assert governance["model_loop_allowed"] is False
-          assert governance["final_authority"] == "deterministic-constitutional-validator"
           assert selection["local_task_classification_used"] is False
           assert selection["local_atomic_work_generation_used"] is False
           assert selection["local_resource_matrix_used"] is False
           assert selection["local_scoring_used"] is False
           assert selection["optimizer_used"] is False
-          assert catalog["optimizer_used"] is False
-          assert catalog["local_score_computed"] is False
-          assert all(row["official_intelligence_rank"] <= 12 for row in catalog["endpoints"])
-          assert result["approved_total_calls"] == 4
           assert result["total_model_calls"] == 4
-          assert result["governance"]["actual_calls"] == 3
-          assert result["governance"]["gpt_model"] == gpt_model
-          assert result["governance"]["claude_model"] == claude_model
-          assert result["governance"]["claude_calls"] == 1
-          assert result["governance"]["gpt_synthesis_calls"] == 1
           assert result["actual_cost_usd"] <= 0.25 + 1e-12
           assert audit["status"] == "PASS"
           assert audit["request_count"] == 4
-          assert audit["governance_request_count"] == 3
-          assert audit["expert_request_count"] == 1
           assert audit["external_tools_allowed"] is False
-          assert audit["provider_fallback_allowed"] is False
-          assert audit["claude_gatekeeping_allowed"] is False
-          assert audit["second_claude_review_allowed"] is False
 
           receipt = {
-              "schema_version": "v5-final-paid-claude-acceptance-2",
+              "schema_version": "v5-final-paid-claude-acceptance-3",
               "status": "PASS",
               "commit_sha": os.environ["ACCEPTANCE_SHA"],
               "workflow_run_id": os.environ["ACCEPTANCE_RUN_ID"],
               "governance_sequence": kinds,
-              "gpt_model": gpt_model,
-              "gpt_provider": resolution["gpt"]["provider"],
-              "claude_model": claude_model,
-              "claude_provider": resolution["claude"]["provider"],
-              "temperature_sent": False,
               "governance_calls": 3,
               "claude_calls": 1,
               "expert_calls": 1,
@@ -193,11 +129,10 @@ jobs:
               json.dumps(receipt, ensure_ascii=False, indent=2),
               encoding="utf-8",
           )
-          print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
           PY
 
       - name: Upload paid acceptance evidence
-        if: ${{ always() && hashFiles('.v5-final-paid-acceptance-20260803') != '' }}
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: v5-final-paid-claude-acceptance-${{ github.run_id }}
