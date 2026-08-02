@@ -40,28 +40,25 @@ jobs:
 
           runtime = Path("open-model-market/v5_runtime.py")
           text = runtime.read_text(encoding="utf-8")
-          start = text.index("    def _preflight(")
-          before = text[:start]
-          after = text[start:]
-          old_limits = "        limits: GraphLimits,\n"
-          if old_limits not in after:
-              raise SystemExit("preflight limits target missing")
-          after = after.replace(
-              old_limits,
-              "        limits: GraphLimits | None = None,\n",
-              1,
+          old_signature = '''    def _preflight(
+              self,
+              graph: ExecutionGraph,
+              limits: GraphLimits,
+          ) -> dict[str, Any]:
+          '''
+          new_signature = '''    def _preflight(
+              self,
+              graph: ExecutionGraph,
+              limits: GraphLimits | None = None,
+          ) -> dict[str, Any]:
+              limits = limits or GraphLimits()
+          '''
+          if text.count(old_signature) != 1:
+              raise SystemExit("preflight signature target missing or ambiguous")
+          runtime.write_text(
+              text.replace(old_signature, new_signature),
+              encoding="utf-8",
           )
-          old_body = "    ) -> dict[str, Any]:\n        blockers: list[str] = []\n"
-          if old_body not in after:
-              raise SystemExit("preflight body target missing")
-          after = after.replace(
-              old_body,
-              "    ) -> dict[str, Any]:\n"
-              "        limits = limits or GraphLimits()\n"
-              "        blockers: list[str] = []\n",
-              1,
-          )
-          runtime.write_text(before + after, encoding="utf-8")
 
           test = Path("tests/test_v5_live_delivery_consistency.py")
           text = test.read_text(encoding="utf-8")
