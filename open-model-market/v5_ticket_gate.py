@@ -63,7 +63,7 @@ def _require(errors: list[str], condition: bool, message: str) -> None:
         errors.append(message)
 
 
-def validate_gate(
+def run_gate(
     root: Path,
     *,
     expected_calls: int,
@@ -261,7 +261,7 @@ def main() -> int:
         else float(args.expected_cost_anomaly_usd)
     )
     try:
-        result = validate_gate(
+        result = run_gate(
             Path(args.output_dir),
             expected_calls=args.expected_calls,
             expected_recovery_calls=args.expected_recovery_calls,
