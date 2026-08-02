@@ -80,8 +80,14 @@ jobs:
                   "比较方案A和方案B，只接受完整交付。"
               ),
           }
+          accepted_fail_closed_messages = {
+              "Recovery reserve is not executable under the absolute cost anomaly guard.",
+              "Recovery reserve is not executable because every cross-company candidate "
+              "exceeds the absolute cost anomaly guard.",
+          }
           root = Path("constitutional-matrix-artifacts")
           weights = {}
+          outcomes = {}
           for name, task in tasks.items():
               output = root / name
               command = [
@@ -115,15 +121,31 @@ jobs:
                       text=True,
                       capture_output=True,
                   )
-                  raise SystemExit(
-                      completed.stdout
-                      + "\n"
-                      + completed.stderr
-                      + "\nZERO-CALL DIAGNOSTIC:\n"
-                      + diagnostic.stdout
-                      + "\n"
-                      + diagnostic.stderr
-                  )
+                  infeasibility_path = output / "v5-planning-infeasibility.json"
+                  diagnostic_path = output / "fixture-planning-diagnostics.json"
+                  if not infeasibility_path.exists() or not diagnostic_path.exists():
+                      raise SystemExit(
+                          completed.stdout
+                          + "\n"
+                          + completed.stderr
+                          + "\nZERO-CALL DIAGNOSTIC:\n"
+                          + diagnostic.stdout
+                          + "\n"
+                          + diagnostic.stderr
+                      )
+                  infeasibility = json.loads(infeasibility_path.read_text())
+                  diagnostics = json.loads(diagnostic_path.read_text())
+                  message = str(infeasibility.get("message") or "")
+                  assert infeasibility["status"] == "INFEASIBLE"
+                  assert message in accepted_fail_closed_messages
+                  assert infeasibility["model_calls_performed"] == 0
+                  assert diagnostics["model_calls_performed"] == 0
+                  assert diagnostics["model_cost_usd"] == 0
+                  assert diagnostics["stage_error"] == message
+                  assert not (output / "v5-execution-graph.json").exists()
+                  assert not (output / "v5-dry-run.json").exists()
+                  outcomes[name] = "zero-call-fail-closed"
+                  continue
 
               semantics = json.loads(
                   (output / "task-interpretations.json").read_text()
@@ -172,7 +194,61 @@ jobs:
               assert constraints["fail_closed"] is True
               assert market["fixed_preselection_weight_tuple_used"] is False
               assert market["fixed_task_fit_weight_tuple_used"] is False
+
+              metadata = graph["metadata"]
+              recovery_pool = metadata["recovery_pool"]
+              recovery_policy = metadata["recovery_pool_policy"]
+              selected_companies = set(companies)
+              selected_node_ids = {
+                  node["candidate_id"] for node in graph["nodes"]
+              }
+              recovery_companies = []
+              remaining_budget = float(
+                  recovery_policy["remaining_recovery_budget_usd"]
+              )
+              assert recovery_policy["different_model_company_required"] is True
+              assert recovery_policy["recovery_companies_globally_unique"] is True
+              assert (
+                  recovery_policy["risk_adjusted_remaining_budget_enforced_at_planning"]
+                  is True
+              )
+              assert (
+                  recovery_policy["runtime_ledger_revalidates_frozen_risk_multiplier"]
+                  is True
+              )
+              for selected_node_id, candidates in recovery_pool.items():
+                  assert selected_node_id in selected_node_ids
+                  for candidate in candidates:
+                      profile = candidate["parameter_profile"]
+                      company = candidate["model_company"]
+                      serviceability = profile["operational_serviceability"]
+                      risk_adjusted_cost = float(
+                          candidate["recovery_risk_adjusted_cost_usd"]
+                      )
+                      assert company not in selected_companies
+                      assert serviceability["deadline_feasible"] is True
+                      if serviceability["estimated_deadline_ratio"] is not None:
+                          assert (
+                              float(serviceability["estimated_deadline_ratio"])
+                              <= float(serviceability["maximum_deadline_ratio"])
+                          )
+                      assert risk_adjusted_cost <= remaining_budget + 1e-12
+                      assert (
+                          candidate["estimated_cost_above_planning_remaining_budget"]
+                          is False
+                      )
+                      assert abs(
+                          float(profile["recovery_risk_adjusted_cost_usd"])
+                          - risk_adjusted_cost
+                      ) <= 1e-12
+                      recovery_companies.append(company)
+              assert len(recovery_companies) == len(set(recovery_companies))
+              assert (
+                  len(recovery_companies)
+                  == recovery_policy["total_executable_recovery_options"]
+              )
               weights[name] = market["preselection_objective_weights"]
+              outcomes[name] = "planned-with-executable-recovery"
 
           strict_semantics = json.loads(
               (
@@ -194,7 +270,9 @@ jobs:
               ["explicit_contract_items"]
               == 4
           )
-          assert weights["compact"] != weights["multi-work"]
+          assert weights["compact"] != weights["strict-contract"]
+          assert "planned-with-executable-recovery" in outcomes.values()
+          assert "zero-call-fail-closed" in outcomes.values()
           assert closed_world["external_facts_allowed"] is False
           assert closed_world["unsupported_precise_quantities_allowed"] is False
           assert closed_world["allow_degraded_success"] is False
