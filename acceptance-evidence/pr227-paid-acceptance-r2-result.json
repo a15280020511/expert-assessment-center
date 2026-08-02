@@ -1,0 +1,177 @@
+{
+  "schema_version": "pr227-paid-acceptance-diagnostic-r2-1",
+  "status": "FAIL",
+  "paid_run_id": "30770782954",
+  "paid_run_status": "completed",
+  "paid_run_conclusion": "failure",
+  "target_sha": "f7f0bec6cbecee2314a352a736f45f92d82034f4",
+  "verification_error": "paid workflow status=completed conclusion=failure",
+  "primitive_artifact_id": "",
+  "primitive_artifact_digest": "",
+  "attestation_artifact_id": "",
+  "attestation_artifact_digest": "",
+  "failed_jobs": [
+    {
+      "id": 91557446417,
+      "name": "paid-acceptance",
+      "status": "completed",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-08-02T22:45:11Z",
+          "completed_at": "2026-08-02T22:45:12Z"
+        },
+        {
+          "name": "Checkout immutable authorization request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-08-02T22:45:12Z",
+          "completed_at": "2026-08-02T22:45:13Z"
+        },
+        {
+          "name": "Validate exact authorization and target",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-08-02T22:45:13Z",
+          "completed_at": "2026-08-02T22:45:13Z"
+        },
+        {
+          "name": "Checkout exact PR source",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-08-02T22:45:13Z",
+          "completed_at": "2026-08-02T22:45:14Z"
+        },
+        {
+          "name": "Verify exact clean source",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-08-02T22:45:14Z",
+          "completed_at": "2026-08-02T22:45:14Z"
+        },
+        {
+          "name": "Set up pinned Python",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-08-02T22:45:14Z",
+          "completed_at": "2026-08-02T22:45:15Z"
+        },
+        {
+          "name": "Install and validate pinned source",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-08-02T22:45:15Z",
+          "completed_at": "2026-08-02T22:45:29Z"
+        },
+        {
+          "name": "Verify inference secret without disclosure",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-08-02T22:45:29Z",
+          "completed_at": "2026-08-02T22:45:29Z"
+        },
+        {
+          "name": "Materialize immutable ticket",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-08-02T22:45:29Z",
+          "completed_at": "2026-08-02T22:45:29Z"
+        },
+        {
+          "name": "Execute bounded real production acceptance",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 10,
+          "started_at": "2026-08-02T22:45:29Z",
+          "completed_at": "2026-08-02T22:45:45Z"
+        },
+        {
+          "name": "Verify paid governance and execution constitution",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 11,
+          "started_at": "2026-08-02T22:45:45Z",
+          "completed_at": "2026-08-02T22:45:45Z"
+        },
+        {
+          "name": "Freeze complete artifact manifest",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 12,
+          "started_at": "2026-08-02T22:45:45Z",
+          "completed_at": "2026-08-02T22:45:45Z"
+        },
+        {
+          "name": "Upload primitive paid evidence",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-08-02T22:45:45Z",
+          "completed_at": "2026-08-02T22:45:46Z"
+        },
+        {
+          "name": "Post Set up pinned Python",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 24,
+          "started_at": "2026-08-02T22:45:46Z",
+          "completed_at": "2026-08-02T22:45:46Z"
+        },
+        {
+          "name": "Post Checkout exact PR source",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 25,
+          "started_at": "2026-08-02T22:45:46Z",
+          "completed_at": "2026-08-02T22:45:46Z"
+        },
+        {
+          "name": "Post Checkout immutable authorization request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 26,
+          "started_at": "2026-08-02T22:45:46Z",
+          "completed_at": "2026-08-02T22:45:46Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 27,
+          "started_at": "2026-08-02T22:45:46Z",
+          "completed_at": "2026-08-02T22:45:46Z"
+        }
+      ]
+    },
+    {
+      "id": 91557527003,
+      "name": "independent-revalidation",
+      "status": "completed",
+      "conclusion": "skipped",
+      "steps": []
+    }
+  ],
+  "artifacts": [
+    {
+      "id": 8840452885,
+      "name": "v5-pr227-paid-acceptance-r2-30770782954",
+      "digest": "sha256:a1a8c8e42a9ff392e1ded7c1cf3a6897ffd2297019c130cfccd33133605b4fe1",
+      "expired": false
+    }
+  ],
+  "attestation": {},
+  "collection_model_calls": 0,
+  "production_ref_moved": false
+}
