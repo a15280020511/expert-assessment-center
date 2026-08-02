@@ -66,6 +66,10 @@ class V5FactProvenanceSemanticNormalizationTests(unittest.TestCase):
             {},
             compile_task_constraints(TASK),
         )
+        self.assertEqual(
+            "v5-deterministic-answer-normalization-3",
+            audit["schema_version"],
+        )
         self.assertIn("推断：当前存在双侧出口隐患", normalized)
         self.assertNotIn("事实：当前存在双侧出口隐患", normalized)
         self.assertEqual(1, len(audit["inferential_fact_labels_relabelled"]))
