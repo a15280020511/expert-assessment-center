@@ -1,0 +1,78 @@
+name: Apply V5 Final Delivery Consistency Fix
+
+on:
+  push:
+    branches:
+      - fix/v5-final-delivery-consistency-20260802
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-v5-final-delivery-consistency-fix
+  cancel-in-progress: false
+
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fix/v5-final-delivery-consistency-20260802
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+      - name: Apply exact production patch
+        run: |
+          python tools/apply_v5_final_delivery_consistency_patch.py
+          sed -i '/        by_id = {node.node_id: node for node in graph.nodes}/d' \
+            tests/test_v5_live_delivery_consistency.py
+      - name: Verify focused production regressions
+        run: |
+          set -euo pipefail
+          python -m ruff check \
+            open-model-market/v5_task_constraints.py \
+            open-model-market/v5_task_delivery_contract.py \
+            open-model-market/v5_pipeline.py \
+            open-model-market/v5_constitutional_pipeline.py \
+            open-model-market/v5_runtime.py \
+            tests/test_v5_live_delivery_consistency.py
+          python -m compileall -q open-model-market tests tools
+          python -m unittest -v \
+            tests.test_v5_live_delivery_consistency \
+            tests.test_v5_quantity_binding_context \
+            tests.test_v5_fact_provenance_semantic_normalization \
+            tests.test_v5_v4_contract_isolation \
+            tests.test_v5_explicit_markdown_contract_revalidation \
+            tests.test_v5_explicit_contract_pipeline_integrity \
+            tests.test_v5_critical_delivery_reliability \
+            tests.test_v5_cross_endpoint_recovery \
+            tests.test_v5_constitutional_runtime \
+            tests.test_v5_failure_evidence_persistence
+      - name: Commit verified patch and self-remove
+        env:
+          BRANCH: fix/v5-final-delivery-consistency-20260802
+        run: |
+          set -euo pipefail
+          git rm tools/apply_v5_final_delivery_consistency_patch.py
+          git rm .github/workflows/apply-v5-final-delivery-consistency-fix.yml
+          git add \
+            open-model-market/v5_task_constraints.py \
+            open-model-market/v5_task_delivery_contract.py \
+            open-model-market/v5_pipeline.py \
+            open-model-market/v5_constitutional_pipeline.py \
+            open-model-market/v5_runtime.py \
+            tests/test_v5_live_delivery_consistency.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "fix(runtime): align final delivery feasibility and strict success"
+          git push origin "HEAD:$BRANCH"
