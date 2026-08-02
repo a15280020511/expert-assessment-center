@@ -10,7 +10,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-import issue_ticket_hardened  # noqa: E402
+import v5_issue_ticket as issue_ticket  # noqa: E402
 
 
 class PrivateOutputMessageTests(unittest.TestCase):
@@ -34,12 +34,12 @@ class PrivateOutputMessageTests(unittest.TestCase):
                 issue_number=20,
                 actor="owner",
                 author_association="OWNER",
-                comment_body="",
+                comment_body="/run-expert-team private-message-0001",
                 output_dir=temp,
             )
             with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY_OWNER": "owner"}, clear=False), \
-                 mock.patch.object(issue_ticket_hardened.base, "duplicate_reason", return_value=""):
-                issue_ticket_hardened.prepare(args)
+                 mock.patch.object(issue_ticket, "duplicate_reason", return_value=""):
+                issue_ticket.prepare(args)
             status = json.loads((Path(temp) / "ticket-status.json").read_text(encoding="utf-8"))
         self.assertFalse(status["accepted"])
         self.assertNotIn("must be boolean", status["reason"])

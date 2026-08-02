@@ -6,10 +6,10 @@ import argparse
 import hashlib
 import json
 import math
-import re
-import unicodedata
 from pathlib import Path
 from typing import Any, Mapping
+
+from v5_ticket_identity import task_fingerprint
 
 
 class TicketGateError(RuntimeError):
@@ -27,36 +27,6 @@ def _load_object(path: Path) -> dict[str, Any]:
         raise TicketGateError(f"immutable admission JSON must be an object: {path.name}")
     return value
 
-
-def _normalize_semantic_text(value: Any) -> str:
-    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
-    text = re.sub(r"[\s\u3000]+", " ", text)
-    text = re.sub(r"[，。！？；：、,.!?;:]+", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _task_fingerprint(packet: Mapping[str, Any]) -> str:
-    task = packet.get("task") if isinstance(packet.get("task"), Mapping) else {}
-    requirements = task.get("requirements") if isinstance(task.get("requirements"), list) else []
-    canonical = {
-        "question": _normalize_semantic_text(task.get("question")),
-        "requirements": sorted(
-            {
-                normalized
-                for item in requirements
-                if isinstance(item, str)
-                for normalized in [_normalize_semantic_text(item)]
-                if normalized
-            }
-        ),
-    }
-    raw = json.dumps(
-        canonical,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _sha256(path: Path) -> str:
@@ -132,7 +102,7 @@ def validate_gate(
     _require(errors, question in task_text, "task.txt does not contain the admitted question")
     _require(errors, bool(task_text.strip()), "task.txt must not be empty")
 
-    fingerprint = _task_fingerprint(ticket)
+    fingerprint = task_fingerprint(ticket)
     _require(
         errors,
         str(status.get("task_fingerprint") or "") == fingerprint,
@@ -154,10 +124,15 @@ def validate_gate(
     _require(errors, _is_int(status_recovery), "status recovery calls must be an integer")
     _require(errors, ticket_recovery == expected_recovery_calls, "ticket recovery calls differ from workflow expectation")
     _require(errors, status_recovery == expected_recovery_calls, "status recovery calls differ from workflow expectation")
-    _require(errors, expected_recovery_calls < expected_calls, "recovery pool must leave at least one initial call")
+    governance_calls = 3
     _require(
         errors,
-        status_initial == expected_calls - expected_recovery_calls,
+        expected_recovery_calls < expected_calls - governance_calls,
+        "recovery pool must leave at least one expert initial call after governance",
+    )
+    _require(
+        errors,
+        status_initial == expected_calls - governance_calls - expected_recovery_calls,
         "status initial-call limit is inconsistent",
     )
     _require(

@@ -16,6 +16,7 @@ import networkx as nx
 from execution_graph import ExecutionGraph, GraphLimits, SelectedEdge, SelectedNode
 from execution_graph_validator import derive_execution_stages, validate_execution_graph
 from v5_catalog_view import GOVERNANCE_COMPANIES, catalog_index
+from v5_claude_red_team_policy import CLAUDE_RED_TEAM_MAX_TASK_CHARS
 from v5_model_company import canonical_model_company
 from v5_task_envelope import work_output_contract
 
@@ -516,8 +517,19 @@ def deterministic_violations(
     return []
 
 
-def claude_internal_review_payload(
+def _bounded_task_excerpt(task: str) -> tuple[str, bool]:
+    text = str(task or "")
+    maximum = CLAUDE_RED_TEAM_MAX_TASK_CHARS
+    if len(text) <= maximum:
+        return text, False
+    head = maximum // 2
+    tail = maximum - head
+    return text[:head] + "\n[...task excerpt truncated...]\n" + text[-tail:], True
+
+
+def claude_unified_review_payload(
     proposal: Mapping[str, Any],
+    task: str,
     task_envelope: Mapping[str, Any],
     catalog: Mapping[str, Any],
     *,
@@ -527,6 +539,7 @@ def claude_internal_review_payload(
     approved_recovery_calls: int,
     cost_anomaly_usd: float | None,
 ) -> dict[str, Any]:
+    """Build one bounded Claude input for selection and information review."""
     endpoints = catalog_index(catalog)
     work_map = _work_map(proposal)
     work_items = [
@@ -560,23 +573,25 @@ def claude_internal_review_payload(
             if endpoint and all(value in work_map for value in work_ids)
             else 0.0
         )
-        nodes.append({
-            "node_id": str(raw.get("node_id") or "unknown"),
-            "candidate_id": f"{model}@{provider}",
-            "work_ids": work_ids,
-            "role": str(raw.get("role") or ""),
-            "functions": [str(value) for value in raw.get("functions", [])],
-            "model": model,
-            "company": canonical_model_company(model),
-            "provider": provider,
-            "estimated_cost_usd": estimated,
-            "contract_kind": "gpt-authored-expert-node",
-            "recovery_candidate_ids": [
-                f"{row.get('model')}@{row.get('provider')}"
-                for row in raw.get("recovery", [])
-                if isinstance(row, Mapping)
-            ],
-        })
+        nodes.append(
+            {
+                "node_id": str(raw.get("node_id") or "unknown"),
+                "candidate_id": f"{model}@{provider}",
+                "work_ids": work_ids,
+                "role": str(raw.get("role") or ""),
+                "functions": [str(value) for value in raw.get("functions", [])],
+                "model": model,
+                "company": canonical_model_company(model),
+                "provider": provider,
+                "estimated_cost_usd": estimated,
+                "contract_kind": "gpt-authored-expert-node",
+                "recovery_candidate_ids": [
+                    f"{row.get('model')}@{row.get('provider')}"
+                    for row in raw.get("recovery", [])
+                    if isinstance(row, Mapping)
+                ],
+            }
+        )
     edges = [
         {
             "source": str(row.get("source") or "unknown"),
@@ -585,6 +600,7 @@ def claude_internal_review_payload(
         for row in proposal.get("edges", [])
         if isinstance(row, Mapping)
     ]
+    excerpt, truncated = _bounded_task_excerpt(task)
     return {
         "task_digest": task_digest,
         "proposal_digest": graph_sha256(proposal),
@@ -592,6 +608,13 @@ def claude_internal_review_payload(
         "governance_calls_reserved": int(governance_calls_reserved),
         "approved_recovery_calls": int(approved_recovery_calls),
         "cost_anomaly_usd": cost_anomaly_usd,
+        "task_excerpt": excerpt,
+        "task_characters": len(str(task or "")),
+        "task_truncated": truncated,
+        "task_constraints": dict(task_envelope.get("task_constraints") or {}),
+        "explicit_delivery_contract": dict(
+            task_envelope.get("explicit_delivery_contract") or {}
+        ),
         "work_items": work_items,
         "nodes": nodes,
         "edges": edges,

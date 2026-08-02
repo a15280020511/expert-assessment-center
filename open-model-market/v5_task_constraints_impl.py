@@ -679,35 +679,3 @@ def validate_answer_evidence(
                 + " | ".join(value[:120] for value in unsupported[:8])
             )
     return list(dict.fromkeys(violations))
-
-
-def dynamic_objective_weights(profile: Any, task: str) -> dict[str, float]:
-    """Derive task-specific preselection weights; no quality tier uses a fixed tuple."""
-    constraints = compile_task_constraints(task)
-    complexity = max(
-        0.0,
-        min(7.0, float(getattr(profile, "complexity_score", 0) or 0)),
-    )
-    requested_context = max(
-        1.0,
-        float(getattr(profile, "requested_context", 1) or 1),
-    )
-    high_stakes = 1.0 if bool(getattr(profile, "high_stakes", False)) else 0.0
-    closed_world = 0.0 if constraints.external_facts_allowed else 1.0
-    long_context = 1.0 if bool(getattr(profile, "long_context", False)) else 0.0
-    raw = {
-        "intelligence": 1.0 + complexity / 3.5 + 1.5 * high_stakes + closed_world,
-        "task_fit": 1.0 + complexity / 7.0 + high_stakes + 0.5 * closed_world,
-        "value": (
-            1.0
-            + max(0.0, 1.0 - complexity / 7.0)
-            + 0.5 * (1.0 - high_stakes)
-        ),
-        "context": (
-            0.5
-            + long_context
-            + min(2.0, requested_context / 65536.0)
-        ),
-    }
-    total = sum(raw.values())
-    return {key: value / total for key, value in raw.items()}

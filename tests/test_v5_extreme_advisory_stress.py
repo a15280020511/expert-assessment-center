@@ -246,8 +246,15 @@ class ExtremeAdvisoryStressTests(unittest.TestCase):
         self.assertEqual(3, ledger["actual_governance_calls"])
         self.assertEqual(1, ledger["claude_red_team_calls"])
         self.assertEqual(1, ledger["gpt_synthesis_calls"])
+        self.assertTrue(governance["claude_covers_internal_selection"])
+        self.assertTrue(governance["claude_covers_external_information"])
         self.assertFalse(governance["second_claude_review_allowed"])
         self.assertFalse(governance["model_loop_allowed"])
+        for row in ledger["calls"]:
+            receipt = row["request"]
+            self.assertFalse(receipt["raw_message_content_persisted"])
+            self.assertTrue(all("content" not in message for message in receipt["messages"]))
+            self.assertNotIn(self.task, json.dumps(receipt, ensure_ascii=False))
 
     def test_oversized_task_dry_run_is_zero_call_and_deterministic(self) -> None:
         headings = "；".join(f"第{index}节" for index in range(1, 17))

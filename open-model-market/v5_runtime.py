@@ -27,7 +27,7 @@ import v5_quality_status_integrity as quality_integrity
 from execution_graph import ExecutionGraph, GraphLimits, SelectedNode
 from execution_graph_validator import validate_execution_graph
 from openrouter_api import CHAT_URL, request_json
-from v5_planning_runtime import PlannerPolicy
+from v5_execution_primitives import actual_cost as extract_actual_cost
 
 RUNTIME_VERSION = "v5-native-runtime-1"
 MIN_DEGRADED_WORK_COVERAGE = 2.0 / 3.0
@@ -93,8 +93,6 @@ class RuntimeConfig:
     tools_allowed: bool = False
     live_catalog_required: bool = False
     provider_lock_required: bool = True
-    maximum_candidates_per_work: int = 12
-    solver_timeout_seconds: float = 20.0
     cost_risk_multiplier: float = 1.18
     max_provider_failures: int = 2
 
@@ -114,10 +112,6 @@ class RuntimeConfig:
             raise ValueError("V5 expert runtime forbids external tools")
         if not self.provider_lock_required:
             raise ValueError("V5 production runtime requires explicit provider lock")
-        if int(self.maximum_candidates_per_work) < 2:
-            raise ValueError("maximum_candidates_per_work must be at least 2")
-        if float(self.solver_timeout_seconds) < 1.0:
-            raise ValueError("solver_timeout_seconds must be at least 1")
 
     @property
     def initial_call_limit(self) -> int:
@@ -542,16 +536,6 @@ class ExecutionEngine:
             independence_group=selected.independence_group,
         )
 
-    @staticmethod
-    def _actual_cost(response: Mapping[str, Any]) -> float:
-        usage = response.get("usage") if isinstance(response.get("usage"), Mapping) else {}
-        for key in ("cost", "total_cost"):
-            try:
-                if usage.get(key) is not None:
-                    return max(0.0, float(usage[key]))
-            except (TypeError, ValueError):
-                continue
-        return 0.0
 
     @staticmethod
     def _reasoning_saturation_evidence(
@@ -839,7 +823,7 @@ class ExecutionEngine:
             response, latency = call_fn(run, payload)
             answer = cost_hardening.robust_extract_answer(response)
             usage = dict(response.get("usage") or {}) if isinstance(response.get("usage"), Mapping) else {}
-            actual_cost = self._actual_cost(response)
+            actual_cost = extract_actual_cost(response)
             budget_exceeded = budget.reconcile(actual_cost)
             if not answer:
                 saturation = self._reasoning_saturation_evidence(usage, payload)
@@ -982,7 +966,7 @@ class ExecutionEngine:
             attempts=attempts,
             actual_cost_usd=round(
                 sum(
-                    self._actual_cost({"usage": row.usage})
+                    extract_actual_cost({"usage": row.usage})
                     for row in attempts
                 ),
                 8,
@@ -1046,9 +1030,8 @@ class ExecutionEngine:
                 best = (retried, selected)
             category = self._category(retried)
 
-        # Recovery rows are already frozen and ranked by the run-local
-        # CrossEndpointPlannerPolicy. Re-sorting here would silently replace the
-        # audited effective-cost-per-quality policy with a different objective.
+        # Recovery rows are authored by GPT and frozen by the deterministic
+        # constitutional validator. Execution preserves that exact order.
         alternatives = [self._candidate(row, selected) for row in recovery_rows]
         last_attempted_node = selected
         source_attempt = attempts[-1] if attempts else initial
@@ -1101,7 +1084,7 @@ class ExecutionEngine:
             quality_score=0.0,
             attempts=attempts,
             actual_cost_usd=round(
-                sum(self._actual_cost({"usage": row.usage}) for row in attempts), 8
+                sum(extract_actual_cost({"usage": row.usage}) for row in attempts), 8
             ),
             contract=self._contract(selected, None),
         )
@@ -1568,11 +1551,7 @@ class ProductionRuntime:
     output_policy: OutputPolicy = field(default_factory=OutputPolicy)
     quality_policy: QualityGatePolicy = field(default_factory=QualityGatePolicy)
     audit_policy: AuditPolicy = field(default_factory=AuditPolicy)
-    planner_policy: Any | None = None
-
     def __post_init__(self) -> None:
-        if self.planner_policy is None:
-            self.planner_policy = PlannerPolicy(self.config)
         self.execution_engine = ExecutionEngine(
             self.config,
             prompt_policy=self.prompt_policy,
@@ -1632,10 +1611,6 @@ class ProductionRuntime:
                 "token": asdict(self.token_policy),
                 "output": asdict(self.output_policy),
                 "audit": asdict(self.audit_policy),
-                "planner": {
-                    "implementation": type(self.planner_policy).__name__,
-                    "composition": "explicit-direct-call",
-                },
             },
             "global_monkey_patching": False,
             "cross_task_history_used": False,

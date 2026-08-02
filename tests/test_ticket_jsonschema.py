@@ -7,7 +7,7 @@ from jsonschema import Draft202012Validator
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-import issue_ticket  # noqa: E402
+import v5_issue_ticket as issue_ticket  # noqa: E402
 
 
 class TicketJsonSchemaTests(unittest.TestCase):

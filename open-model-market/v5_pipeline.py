@@ -127,10 +127,17 @@ def _merge_request_audit(
         "code_interpreter",
         "models",
     }
+    def forbidden_fields(row: Mapping[str, Any]) -> set[str]:
+        direct = forbidden.intersection(row)
+        recorded = row.get("request_fields")
+        if isinstance(recorded, list):
+            direct.update(forbidden.intersection(str(value) for value in recorded))
+        return direct
+
     status = (
         "PASS"
         if len(requests) <= approved_total_calls
-        and all(not forbidden.intersection(row) for row in requests)
+        and all(not forbidden_fields(row) for row in requests)
         else "FAIL"
     )
     _write(
@@ -147,6 +154,8 @@ def _merge_request_audit(
             "provider_fallback_allowed": False,
             "claude_is_advisory_only": True,
             "claude_gatekeeping_allowed": False,
+            "claude_covers_internal_selection": True,
+            "claude_covers_external_information": True,
             "second_claude_review_allowed": False,
             "model_loop_allowed": False,
         },
@@ -377,6 +386,8 @@ def main(
         "gpt_synthesis_calls": 1,
         "claude_is_advisory_only": True,
         "claude_gatekeeping_allowed": False,
+        "claude_covers_internal_selection": True,
+        "claude_covers_external_information": True,
         "second_claude_review_allowed": False,
     }
     result["total_model_calls"] = governance_calls + expert_calls

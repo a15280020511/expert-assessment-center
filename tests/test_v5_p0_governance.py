@@ -103,7 +103,7 @@ class V5P0GovernanceTests(unittest.TestCase):
                 {"GITHUB_REPOSITORY_OWNER": "owner"},
                 clear=False,
             ), mock.patch.object(
-                ticket.hardened.base,
+                ticket,
                 "duplicate_reason",
                 return_value="",
             ):
@@ -124,7 +124,7 @@ class V5P0GovernanceTests(unittest.TestCase):
         self.assertEqual(status["execution_id"], "p0-budget-001")
         self.assertEqual(status["calls"], 8)
         self.assertEqual(status["maximum_recovery_calls"], 2)
-        self.assertEqual(status["maximum_initial_calls"], 6)
+        self.assertEqual(status["maximum_initial_calls"], 3)
         self.assertEqual(status["cost_anomaly_usd"], 1.5)
 
     def test_ticket_rejects_recovery_outside_total(self):
@@ -134,7 +134,7 @@ class V5P0GovernanceTests(unittest.TestCase):
             "cost_policy": "unbounded_with_anomaly_guard",
         })
         self.assertFalse(status["accepted"])
-        self.assertIn("leave at least one initial call", status["reason"])
+        self.assertIn("leave at least one initial expert call", status["reason"])
 
     def test_workflow_has_serialized_admission_and_execution(self):
         text = (

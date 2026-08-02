@@ -15,11 +15,7 @@ def build_production_runtime(config: RuntimeConfig) -> ProductionRuntime:
         retry_same_endpoint_categories=(),
         maximum_same_endpoint_retries_per_node=0,
     )
-    return build_runtime(
-        config,
-        planner_policy="gpt-direct-no-local-planner",
-        retry_policy=retry_policy,
-    )
+    return build_runtime(config, retry_policy=retry_policy)
 
 
 __all__ = ["build_production_runtime"]

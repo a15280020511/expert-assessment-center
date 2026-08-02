@@ -180,10 +180,9 @@ class EvidenceBundleBuilder:
             raise RuntimeError(
                 "approved total paid-call ceiling exceeded"
             )
-        if governance_calls not in {2, 3}:
+        if governance_calls != CLAUDE_RED_TEAM_GOVERNANCE_CALLS:
             raise RuntimeError(
-                "governance must use GPT proposal, Claude once, and "
-                "optional GPT synthesis"
+                "governance must use exactly GPT proposal, Claude once, and GPT synthesis"
             )
         if int(
             inputs.governance_ledger.get(
@@ -197,10 +196,14 @@ class EvidenceBundleBuilder:
             inputs.governance_ledger.get(
                 "gpt_synthesis_calls"
             ) or 0
-        ) > 1:
+        ) != 1:
             raise RuntimeError(
-                "GPT synthesis call count exceeds one"
+                "GPT synthesis call count must equal one"
             )
+        if inputs.governance_result.get("claude_covers_internal_selection") is not True:
+            raise RuntimeError("Claude evidence must cover internal expert selection")
+        if inputs.governance_result.get("claude_covers_external_information") is not True:
+            raise RuntimeError("Claude evidence must cover external information review")
 
         actual_cost = float(
             inputs.execution_summary.get("actual_cost_usd") or 0.0
@@ -450,8 +453,8 @@ class EvidenceBundleBuilder:
             "runtime_version": RUNTIME_VERSION,
             "entrypoint": "v5_production_ticket.py",
             "architecture": (
-                "gpt-latest -> claude-opus-latest-once -> "
-                "optional-gpt-synthesis-once -> "
+                "gpt-latest-once -> claude-opus-latest-once -> "
+                "gpt-synthesis-once -> "
                 "deterministic-validator"
             ),
             **approved.to_dict(),

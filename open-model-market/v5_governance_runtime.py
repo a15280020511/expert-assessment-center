@@ -1,6 +1,7 @@
 """One-pass GPT/Claude advisory governance with complete paid-call ledger."""
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from dataclasses import dataclass
@@ -10,18 +11,17 @@ from typing import Any, Callable, Mapping
 from openrouter_api import CHAT_URL, request_json
 from v5_claude_red_team_policy import (
     CLAUDE_RED_TEAM_GOVERNANCE_CALLS,
-    RedTeamScope,
     build_claude_red_team_request,
     parse_claude_red_team_advice,
 )
-from v5_execution_primitives import extract_answer
+from v5_execution_primitives import actual_cost, extract_answer
 from v5_gpt_expert_selector import (
     build_proposal_request,
     build_synthesis_request,
     parse_proposal,
 )
 from v5_proposal_materializer import (
-    claude_internal_review_payload,
+    claude_unified_review_payload,
     deterministic_violations,
     materialize_proposal,
 )
@@ -29,18 +29,6 @@ from v5_proposal_materializer import (
 
 class GovernanceRuntimeError(RuntimeError):
     """Fail-closed governance protocol failure."""
-
-
-def _actual_cost(response: Mapping[str, Any]) -> float:
-    usage = response.get("usage")
-    usage = usage if isinstance(usage, Mapping) else {}
-    for key in ("cost", "total_cost"):
-        try:
-            if usage.get(key) is not None:
-                return max(0.0, float(usage[key]))
-        except (TypeError, ValueError):
-            continue
-    return 0.0
 
 
 def _provider(
@@ -89,6 +77,47 @@ def _api_payload(request: Mapping[str, Any]) -> dict[str, Any]:
         str(key): value
         for key, value in request.items()
         if key not in {"governance_policy", "red_team_policy"}
+    }
+
+
+def _request_receipt(request: Mapping[str, Any]) -> dict[str, Any]:
+    """Persist request structure and hashes, never raw task/catalog/prompt text."""
+    messages = request.get("messages")
+    message_rows: list[dict[str, Any]] = []
+    if isinstance(messages, list):
+        for row in messages:
+            if not isinstance(row, Mapping):
+                continue
+            content = str(row.get("content") or "")
+            message_rows.append(
+                {
+                    "role": str(row.get("role") or ""),
+                    "characters": len(content),
+                    "sha256": hashlib.sha256(
+                        content.encode("utf-8")
+                    ).hexdigest(),
+                }
+            )
+    response_format = request.get("response_format")
+    schema_name = ""
+    if isinstance(response_format, Mapping):
+        schema = response_format.get("json_schema")
+        if isinstance(schema, Mapping):
+            schema_name = str(schema.get("name") or "")
+    provider = request.get("provider")
+    provider = dict(provider) if isinstance(provider, Mapping) else {}
+    return {
+        "model": str(request.get("model") or ""),
+        "temperature": request.get("temperature"),
+        "max_tokens": request.get("max_tokens"),
+        "reasoning": dict(request.get("reasoning") or {})
+        if isinstance(request.get("reasoning"), Mapping)
+        else {},
+        "provider": provider,
+        "response_schema": schema_name,
+        "messages": message_rows,
+        "raw_message_content_persisted": False,
+        "request_fields": sorted(str(key) for key in request),
     }
 
 
@@ -149,9 +178,9 @@ class GovernanceLedger:
                     or ""
                 ),
                 provider=_provider(request, response),
-                request=dict(request),
+                request=_request_receipt(request),
                 usage=usage,
-                actual_cost_usd=round(_actual_cost(response), 8),
+                actual_cost_usd=round(actual_cost(response), 8),
                 latency_seconds=round(max(0.0, latency_seconds), 6),
                 response_id=str(response.get("id") or "") or None,
             )
@@ -174,6 +203,8 @@ class GovernanceLedger:
             ),
             "claude_is_advisory_only": True,
             "claude_gatekeeping_allowed": False,
+            "claude_covers_internal_selection": True,
+            "claude_covers_external_information": True,
             "second_claude_review_allowed": False,
             "model_loop_allowed": False,
             "actual_cost_usd": round(
@@ -270,27 +301,22 @@ def run_single_pass_governance(
         parser=parse_proposal,
     )
 
-    claude_input = claude_internal_review_payload(
+    claude_input = claude_unified_review_payload(
         initial,
+        task,
         task_envelope,
         catalog,
         task_digest=task_digest,
         **limits,
     )
-    claude_request = build_claude_red_team_request(
-        RedTeamScope.INTERNAL_SELECTION,
-        claude_input,
-    )
+    claude_request = build_claude_red_team_request(claude_input)
     claude_advice = _call_and_parse(
         run=run,
         request=claude_request,
         kind="claude_red_team",
         ledger=ledger,
         call_fn=call,
-        parser=lambda text: parse_claude_red_team_advice(
-            RedTeamScope.INTERNAL_SELECTION,
-            text,
-        ),
+        parser=parse_claude_red_team_advice,
     )
 
     synthesis_request = build_synthesis_request(
@@ -358,6 +384,8 @@ def run_single_pass_governance(
         "gpt_synthesis_count": 1,
         "claude_is_advisory_only": True,
         "claude_gatekeeping_allowed": False,
+        "claude_covers_internal_selection": True,
+        "claude_covers_external_information": True,
         "second_claude_review_allowed": False,
         "model_loop_allowed": False,
         "final_authority": "deterministic-constitutional-validator",

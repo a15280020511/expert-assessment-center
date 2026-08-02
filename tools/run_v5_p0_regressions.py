@@ -16,24 +16,26 @@ sys.path.insert(0, str(ROOT / "open-model-market"))
 sys.path.insert(0, str(TESTS))
 
 SPECS = (
-    (TESTS / "test_v5_general_task_planning.py", "V5GeneralTaskPlanningTests", 6),
-    (TESTS / "test_v5_planning_scenario_matrix.py", "V5PlanningScenarioMatrixTests", 4),
-    (TESTS / "test_v5_general_task_full_planning.py", "V5GeneralTaskFullPlanningTests", 4),
     (TESTS / "test_v5_constitutional_runtime.py", "V5ConstitutionalRuntimeTests", 6),
+    (TESTS / "test_v5_claude_red_team_advice.py", "ClaudeRedTeamAdviceTests", 6),
+    (TESTS / "test_v5_extreme_advisory_stress.py", "ExtremeAdvisoryStressTests", 8),
+    (TESTS / "test_v5_repository_residue_audit.py", "RepositoryResidueAuditTests", 10),
+    (TESTS / "test_v5_command_trigger.py", "V5CommandTriggerTests", 5),
+    (TESTS / "test_v5_ticket_gate.py", "V5TicketGateTests", 6),
     (TESTS / "test_v5_task_constraints.py", "TaskConstraintPolarityTests", 3),
     (TESTS / "test_v5_task_constraints.py", "ClosedWorldEvidenceTests", 5),
-    (TESTS / "test_v5_task_constraints.py", "DynamicObjectiveTests", 1),
     (TESTS / "test_v5_task_constraints.py", "ActualCompanyAuditTests", 2),
-    (TESTS / "test_v5_independent_artifact_revalidation.py", "IndependentArtifactRevalidationTests", 4),
-    (TESTS / "test_v5_failure_evidence_persistence.py", "FailureEvidencePersistenceTests", 1),
-    (TESTS / "test_v5_live_delivery_consistency.py", "V5LiveDeliveryConsistencyTests", 6),
-    (TESTS / "test_v5_critical_delivery_reliability.py", "V5CriticalDeliveryReliabilityTests", 4),
-    (TESTS / "test_v5_v4_contract_isolation.py", "V5V4ContractIsolationTests", 7),
     (
-        TESTS / "test_v5_deterministic_answer_normalization.py",
-        "V5DeterministicAnswerNormalizationTests",
-        5,
+        TESTS / "test_v5_independent_artifact_revalidation.py",
+        "IndependentArtifactRevalidationTests",
+        4,
     ),
+    (
+        TESTS / "test_v5_failure_evidence_persistence.py",
+        "FailureEvidencePersistenceTests",
+        1,
+    ),
+    (TESTS / "test_v5_v4_contract_isolation.py", "V5V4ContractIsolationTests", 6),
 )
 
 

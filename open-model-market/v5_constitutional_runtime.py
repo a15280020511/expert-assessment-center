@@ -581,7 +581,6 @@ def harden_runtime(runtime: ProductionRuntime) -> ProductionRuntime:
 def build_runtime(
     config: RuntimeConfig,
     *,
-    planner_policy: Any,
     retry_policy: RetryPolicy,
 ) -> ProductionRuntime:
     runtime = ProductionRuntime(
@@ -599,6 +598,5 @@ def build_runtime(
                 FailureCategory.QUALITY_GATE_FAILED,
             )
         ),
-        planner_policy=planner_policy,
     )
     return harden_runtime(runtime)

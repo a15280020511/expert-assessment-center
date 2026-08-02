@@ -29,7 +29,7 @@ class V5TicketGateTests(unittest.TestCase):
                 "requirements": ["区分事实与假设", "不得调用外部工具"],
             },
             "approved_budget": {
-                "calls": 4,
+                "calls": 5,
                 "maximum_recovery_calls": 1,
                 "cost_policy": "unbounded_with_anomaly_guard",
                 "cost_anomaly_usd": 0.25,
@@ -40,10 +40,10 @@ class V5TicketGateTests(unittest.TestCase):
         self.status = {
             "accepted": True,
             "task_id": self.ticket["task_id"],
-            "task_fingerprint": gate._task_fingerprint(self.ticket),
-            "calls": 4,
+            "task_fingerprint": gate.task_fingerprint(self.ticket),
+            "calls": 5,
             "maximum_recovery_calls": 1,
-            "maximum_initial_calls": 3,
+            "maximum_initial_calls": 1,
             "maximum_replacements": 1,
             "quality_tier": "value",
             "max_cost_usd": 0.25,
@@ -86,7 +86,7 @@ class V5TicketGateTests(unittest.TestCase):
     def _run(self) -> dict:
         return gate.run_gate(
             self.root,
-            expected_calls=4,
+            expected_calls=5,
             expected_recovery_calls=1,
             expected_quality_tier="value",
             expected_cost_anomaly_usd=0.25,
@@ -111,7 +111,7 @@ class V5TicketGateTests(unittest.TestCase):
         with self.assertRaises(gate.TicketGateError):
             gate.run_gate(
                 self.root,
-                expected_calls=5,
+                expected_calls=6,
                 expected_recovery_calls=1,
                 expected_quality_tier="value",
                 expected_cost_anomaly_usd=0.25,

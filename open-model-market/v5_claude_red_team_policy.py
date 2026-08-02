@@ -1,17 +1,22 @@
-"""Fixed single-call Claude latest red-team advisory contract."""
+"""Fixed single-call Claude Opus latest red-team advisory contract.
+
+Claude performs one bounded review that covers both the GPT-authored expert
+composition and the task/evidence boundary. It only returns modification
+advice. It cannot approve, reject, block, select, execute, browse, or repeat.
+"""
 from __future__ import annotations
 
 import json
 import math
 import re
-from enum import Enum
 from hashlib import sha256
 from typing import Any, Mapping
 
 CLAUDE_RED_TEAM_MODEL = "~anthropic/claude-opus-latest"
 CLAUDE_RED_TEAM_PROVIDER = "anthropic"
 CLAUDE_RED_TEAM_REASONING_EFFORT = "low"
-CLAUDE_RED_TEAM_MAX_INPUT_CHARS = 24_000
+CLAUDE_RED_TEAM_MAX_INPUT_CHARS = 48_000
+CLAUDE_RED_TEAM_MAX_TASK_CHARS = 20_000
 CLAUDE_RED_TEAM_MAX_OUTPUT_CHARS = 4_000
 CLAUDE_RED_TEAM_MAX_OUTPUT_TOKENS = 512
 CLAUDE_RED_TEAM_MAX_ITEMS = 32
@@ -21,91 +26,62 @@ GPT_PROPOSAL_CALLS = 1
 CLAUDE_RED_TEAM_MAX_CALLS_PER_TASK = 1
 GPT_SYNTHESIS_CALLS = 1
 CLAUDE_RED_TEAM_GOVERNANCE_CALLS = 3
+RED_TEAM_SCOPE = "unified_selection_and_information"
 
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9_.~:@/+-]{1,160}$")
 
-
-class RedTeamScope(str, Enum):
-    INTERNAL_SELECTION = "internal_selection"
-    EXTERNAL_INFORMATION = "external_information"
-
-
-INTERNAL_CODES = frozenset({
-    "UNKNOWN_CANDIDATE",
-    "WORK_UNCOVERED",
-    "WORK_DUPLICATED",
-    "WORK_DEPENDENCY_INVALID",
-    "DUPLICATE_COMPANY",
-    "CALL_LIMIT_EXCEEDED",
-    "RECOVERY_LIMIT_EXCEEDED",
-    "COST_LIMIT_EXCEEDED",
-    "PROVIDER_UNLOCKED",
-    "TOOL_PERMISSION_PRESENT",
-    "GRAPH_INVALID",
-    "CONTRACT_MISMATCH",
-    "ROLE_MISMATCH",
-    "REVIEW_INPUT_INCOMPLETE",
-})
-EXTERNAL_CODES = frozenset({
-    "UNSUPPORTED_FACT",
-    "FACT_INFERENCE_MIXED",
-    "QUANTITY_CONFLICT",
-    "LOCATION_CONFLICT",
-    "SOURCE_MISSING",
-    "UNKNOWN_NOT_PRESERVED",
-    "CONTRACT_VIOLATION",
-    "INFORMATION_INCOMPLETE",
-    "REVIEW_INPUT_INCOMPLETE",
-})
-
-INTERNAL_SELECTION_PROMPT = (
-    "你是专家团中心的固定红队顾问。你只审查GPT已经提出的动态专家团组合，并给出具体、可执行、最小必要的修改意见。"
-    "你不是批准者、否决者或门禁，不得输出APPROVE、REJECT、通过或不通过。你不得直接选择或执行专家，不得修改执行图，"
-    "不得调用工具或浏览。你在每个任务中只执行一次。只返回严格JSON；没有修改意见时返回空suggestions。"
+RED_TEAM_CODES = frozenset(
+    {
+        "UNKNOWN_CANDIDATE",
+        "WORK_UNCOVERED",
+        "WORK_DUPLICATED",
+        "WORK_DEPENDENCY_INVALID",
+        "DUPLICATE_COMPANY",
+        "CALL_LIMIT_EXCEEDED",
+        "RECOVERY_LIMIT_EXCEEDED",
+        "COST_LIMIT_EXCEEDED",
+        "PROVIDER_UNLOCKED",
+        "TOOL_PERMISSION_PRESENT",
+        "GRAPH_INVALID",
+        "CONTRACT_MISMATCH",
+        "ROLE_MISMATCH",
+        "UNSUPPORTED_FACT",
+        "FACT_INFERENCE_MIXED",
+        "QUANTITY_CONFLICT",
+        "LOCATION_CONFLICT",
+        "SOURCE_MISSING",
+        "UNKNOWN_NOT_PRESERVED",
+        "CONTRACT_VIOLATION",
+        "INFORMATION_INCOMPLETE",
+        "REVIEW_INPUT_INCOMPLETE",
+    }
 )
-EXTERNAL_INFORMATION_PROMPT = (
-    "你是专家团中心的固定信息红队顾问。你只审查输入信息的事实来源、数量、位置、未知项和交付合同，并给出具体、可执行、"
-    "最小必要的修改意见。你不是批准者、否决者或门禁，不得输出APPROVE、REJECT、通过或不通过。你不得补充未经输入支持的事实，"
-    "不得执行任务、调用工具或浏览。你在每个任务中只执行一次。只返回严格JSON；没有修改意见时返回空suggestions。"
+
+UNIFIED_RED_TEAM_PROMPT = (
+    "你是专家团中心唯一且固定的Claude红队顾问。你每个任务只执行一次，同时审查两部分："
+    "第一，GPT已经提出的任务拆解、专家角色、模型、Provider、恢复顺序和执行图；第二，原始任务与"
+    "输入证据中的事实来源、数量、位置、未知项、推断边界和用户交付合同。你只给出具体、可执行、"
+    "最小必要的修改意见。你不是批准者、否决者或门禁，不得输出APPROVE、REJECT、通过、不通过或"
+    "任何执行许可；不得直接选择专家、修改执行图、执行任务、写最终报告、调用工具或浏览；不得要求"
+    "第二次复审。只返回严格JSON；没有修改意见时返回空suggestions。"
 )
-INTERNAL_SELECTION_PROMPT_SHA256 = (
-    "51cab7adb01591f7656970e5b5e04ac4a3c3aeef719f6a83de509e35976a134d"
-)
-EXTERNAL_INFORMATION_PROMPT_SHA256 = (
-    "1a26944dca51aa620082dad9f8ea14abb6859bcb17f0958e8d5ff79ade6b6223"
-)
-_PROMPTS = {
-    RedTeamScope.INTERNAL_SELECTION: (
-        INTERNAL_SELECTION_PROMPT,
-        INTERNAL_SELECTION_PROMPT_SHA256,
-    ),
-    RedTeamScope.EXTERNAL_INFORMATION: (
-        EXTERNAL_INFORMATION_PROMPT,
-        EXTERNAL_INFORMATION_PROMPT_SHA256,
-    ),
-}
+UNIFIED_RED_TEAM_PROMPT_SHA256 = sha256(
+    UNIFIED_RED_TEAM_PROMPT.encode("utf-8")
+).hexdigest()
 
 
-def _codes(scope: RedTeamScope) -> frozenset[str]:
-    return (
-        INTERNAL_CODES
-        if scope is RedTeamScope.INTERNAL_SELECTION
-        else EXTERNAL_CODES
-    )
-
-
-def fixed_prompt(scope: RedTeamScope | str) -> str:
-    prompt, expected = _PROMPTS[RedTeamScope(scope)]
-    if sha256(prompt.encode("utf-8")).hexdigest() != expected:
+def fixed_prompt() -> str:
+    if sha256(UNIFIED_RED_TEAM_PROMPT.encode("utf-8")).hexdigest() != (
+        UNIFIED_RED_TEAM_PROMPT_SHA256
+    ):
         raise RuntimeError("Claude fixed red-team prompt integrity check failed")
-    return prompt
+    return UNIFIED_RED_TEAM_PROMPT
 
 
-def fixed_prompt_sha256(scope: RedTeamScope | str) -> str:
-    scope = RedTeamScope(scope)
-    fixed_prompt(scope)
-    return _PROMPTS[scope][1]
+def fixed_prompt_sha256() -> str:
+    fixed_prompt()
+    return UNIFIED_RED_TEAM_PROMPT_SHA256
 
 
 def _identifier(value: Any, field: str) -> str:
@@ -114,14 +90,13 @@ def _identifier(value: Any, field: str) -> str:
     return value
 
 
-def _text(value: Any, field: str, maximum: int) -> str:
-    if (
-        not isinstance(value, str)
-        or not value.strip()
-        or len(value) > maximum
-        or any(ord(character) < 32 for character in value)
-    ):
+def _text(value: Any, field: str, maximum: int, *, allow_empty: bool = False) -> str:
+    if not isinstance(value, str) or len(value) > maximum:
         raise ValueError(f"{field} is invalid")
+    if not allow_empty and not value.strip():
+        raise ValueError(f"{field} is invalid")
+    if any(ord(character) < 32 and character not in "\n\t\r" for character in value):
+        raise ValueError(f"{field} contains control characters")
     return value
 
 
@@ -167,7 +142,13 @@ def _text_list(value: Any, field: str, maximum: int, item_maximum: int) -> None:
         _text(item, f"{field}[{index}]", item_maximum)
 
 
-def _validate_internal(payload: Mapping[str, Any]) -> None:
+def _mapping(value: Any, field: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field} must be an object")
+    return value
+
+
+def _validate_payload(payload: Mapping[str, Any]) -> None:
     expected = {
         "task_digest",
         "proposal_digest",
@@ -175,12 +156,17 @@ def _validate_internal(payload: Mapping[str, Any]) -> None:
         "governance_calls_reserved",
         "approved_recovery_calls",
         "cost_anomaly_usd",
+        "task_excerpt",
+        "task_characters",
+        "task_truncated",
+        "task_constraints",
+        "explicit_delivery_contract",
         "work_items",
         "nodes",
         "edges",
     }
     if set(payload) != expected:
-        raise ValueError("internal Claude review has missing or extra fields")
+        raise ValueError("Claude unified review has missing or extra fields")
     _digest(payload["task_digest"], "task_digest")
     _digest(payload["proposal_digest"], "proposal_digest")
     total = _integer(payload["approved_total_calls"], "approved_total_calls", 4, 16)
@@ -196,9 +182,35 @@ def _validate_internal(payload: Mapping[str, Any]) -> None:
         0,
         total - governance - 1,
     )
+    if recovery >= total - governance:
+        raise ValueError("approved recovery calls leave no initial expert call")
     if payload["cost_anomaly_usd"] is not None:
         if _number(payload["cost_anomaly_usd"], "cost_anomaly_usd") <= 0:
             raise ValueError("cost_anomaly_usd must be positive")
+    task_excerpt = _text(
+        payload["task_excerpt"],
+        "task_excerpt",
+        CLAUDE_RED_TEAM_MAX_TASK_CHARS,
+    )
+    task_characters = _integer(
+        payload["task_characters"],
+        "task_characters",
+        len(task_excerpt),
+        2_000_000,
+    )
+    if not isinstance(payload["task_truncated"], bool):
+        raise ValueError("task_truncated must be boolean")
+    if payload["task_truncated"] != (task_characters > len(task_excerpt)):
+        raise ValueError("task_truncated does not match task length")
+    constraints = _mapping(payload["task_constraints"], "task_constraints")
+    contract = _mapping(
+        payload["explicit_delivery_contract"],
+        "explicit_delivery_contract",
+    )
+    if len(json.dumps(constraints, ensure_ascii=False, default=str)) > 8_000:
+        raise ValueError("task_constraints are oversized")
+    if len(json.dumps(contract, ensure_ascii=False, default=str)) > 8_000:
+        raise ValueError("explicit_delivery_contract is oversized")
 
     work_items = payload["work_items"]
     if not isinstance(work_items, list) or not 1 <= len(work_items) <= CLAUDE_RED_TEAM_MAX_ITEMS:
@@ -270,6 +282,7 @@ def _validate_internal(payload: Mapping[str, Any]) -> None:
             4,
         )
         _number(node["estimated_cost_usd"], f"nodes[{index}].estimated_cost_usd")
+
     edges = payload["edges"]
     if not isinstance(edges, list) or len(edges) > CLAUDE_RED_TEAM_MAX_EDGES:
         raise ValueError("edges must be bounded")
@@ -280,62 +293,12 @@ def _validate_internal(payload: Mapping[str, Any]) -> None:
         _identifier(edge["target"], f"edges[{index}].target")
 
 
-def _validate_external(payload: Mapping[str, Any]) -> None:
-    expected = {
-        "task_digest",
-        "information_digest",
-        "contract_kind",
-        "claims",
-    }
-    if set(payload) != expected:
-        raise ValueError("external Claude review has missing or extra fields")
-    _digest(payload["task_digest"], "task_digest")
-    _digest(payload["information_digest"], "information_digest")
-    _identifier(payload["contract_kind"], "contract_kind")
-    claims = payload["claims"]
-    if not isinstance(claims, list) or not 1 <= len(claims) <= CLAUDE_RED_TEAM_MAX_ITEMS:
-        raise ValueError("claims must be a non-empty bounded list")
-    fields = {
-        "claim_id",
-        "label",
-        "source",
-        "text",
-        "quantity_tokens",
-        "location_tokens",
-    }
-    for index, claim in enumerate(claims):
-        if not isinstance(claim, Mapping) or set(claim) != fields:
-            raise ValueError(f"claims[{index}] has missing or extra fields")
-        for field in ("claim_id", "label", "source"):
-            _identifier(claim[field], f"claims[{index}].{field}")
-        _text(claim["text"], f"claims[{index}].text", 240)
-        _text_list(
-            claim["quantity_tokens"],
-            f"claims[{index}].quantity_tokens",
-            CLAUDE_RED_TEAM_MAX_ITEMS,
-            64,
-        )
-        _text_list(
-            claim["location_tokens"],
-            f"claims[{index}].location_tokens",
-            CLAUDE_RED_TEAM_MAX_ITEMS,
-            64,
-        )
-
-
-def canonical_review_input(
-    scope: RedTeamScope | str,
-    payload: Mapping[str, Any],
-) -> str:
-    scope = RedTeamScope(scope)
+def canonical_review_input(payload: Mapping[str, Any]) -> str:
     if not isinstance(payload, Mapping):
         raise ValueError("Claude red-team input must be an object")
-    if scope is RedTeamScope.INTERNAL_SELECTION:
-        _validate_internal(payload)
-    else:
-        _validate_external(payload)
+    _validate_payload(payload)
     rendered = json.dumps(
-        {"scope": scope.value, "payload": payload},
+        {"scope": RED_TEAM_SCOPE, "payload": payload},
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -346,12 +309,11 @@ def canonical_review_input(
     return rendered
 
 
-def advice_json_schema(scope: RedTeamScope | str) -> dict[str, Any]:
-    scope = RedTeamScope(scope)
+def advice_json_schema() -> dict[str, Any]:
     return {
         "type": "json_schema",
         "json_schema": {
-            "name": f"claude_{scope.value}_advice",
+            "name": "claude_unified_red_team_advice",
             "strict": True,
             "schema": {
                 "type": "object",
@@ -366,7 +328,7 @@ def advice_json_schema(scope: RedTeamScope | str) -> dict[str, Any]:
                             "properties": {
                                 "code": {
                                     "type": "string",
-                                    "enum": sorted(_codes(scope)),
+                                    "enum": sorted(RED_TEAM_CODES),
                                 },
                                 "target": {
                                     "type": "string",
@@ -389,18 +351,16 @@ def advice_json_schema(scope: RedTeamScope | str) -> dict[str, Any]:
 
 
 def build_claude_red_team_request(
-    scope: RedTeamScope | str,
     payload: Mapping[str, Any],
     *,
     provider_slug: str = CLAUDE_RED_TEAM_PROVIDER,
 ) -> dict[str, Any]:
-    scope = RedTeamScope(scope)
     _identifier(provider_slug, "provider_slug")
     return {
         "model": CLAUDE_RED_TEAM_MODEL,
         "messages": [
-            {"role": "system", "content": fixed_prompt(scope)},
-            {"role": "user", "content": canonical_review_input(scope, payload)},
+            {"role": "system", "content": fixed_prompt()},
+            {"role": "user", "content": canonical_review_input(payload)},
         ],
         "temperature": 0,
         "max_tokens": CLAUDE_RED_TEAM_MAX_OUTPUT_TOKENS,
@@ -408,7 +368,7 @@ def build_claude_red_team_request(
             "effort": CLAUDE_RED_TEAM_REASONING_EFFORT,
             "exclude": True,
         },
-        "response_format": advice_json_schema(scope),
+        "response_format": advice_json_schema(),
         "provider": {
             "only": [provider_slug],
             "order": [provider_slug],
@@ -418,11 +378,7 @@ def build_claude_red_team_request(
     }
 
 
-def parse_claude_red_team_advice(
-    scope: RedTeamScope | str,
-    text: str,
-) -> dict[str, Any]:
-    scope = RedTeamScope(scope)
+def parse_claude_red_team_advice(text: str) -> dict[str, Any]:
     if not isinstance(text, str) or not text.strip():
         raise ValueError("Claude red-team advice is empty")
     if len(text) > CLAUDE_RED_TEAM_MAX_OUTPUT_CHARS:
@@ -441,24 +397,24 @@ def parse_claude_red_team_advice(
         if not isinstance(suggestion, Mapping) or set(suggestion) != {"code", "target", "change"}:
             raise ValueError(f"suggestions[{index}] has missing or extra fields")
         code = str(suggestion["code"])
-        if code not in _codes(scope):
+        if code not in RED_TEAM_CODES:
             raise ValueError(f"suggestions[{index}].code is invalid")
         target = _identifier(suggestion["target"], f"suggestions[{index}].target")
         change = _text(suggestion["change"], f"suggestions[{index}].change", 240)
-        normalized.append({
-            "code": code,
-            "target": target,
-            "change": change.strip(),
-        })
+        normalized.append(
+            {"code": code, "target": target, "change": change.strip()}
+        )
     return {
         "suggestions": normalized,
-        "scope": scope.value,
+        "scope": RED_TEAM_SCOPE,
         "model": CLAUDE_RED_TEAM_MODEL,
         "reviewer_role": "advisory-red-team-only",
-        "prompt_sha256": fixed_prompt_sha256(scope),
+        "prompt_sha256": fixed_prompt_sha256(),
         "maximum_calls_per_task": 1,
         "hard_gate": False,
         "approval_authority": False,
+        "covers_internal_selection": True,
+        "covers_external_information": True,
     }
 
 
