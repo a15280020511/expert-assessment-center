@@ -191,8 +191,42 @@ class V5EvidenceBundleTests(unittest.TestCase):
             )
             bundle = json.loads((root / "evidence-bundle.json").read_text(encoding="utf-8"))
             self.assertEqual(status["status"], "PASS")
+            self.assertEqual(attestation["status"], "PASS")
             self.assertEqual(attestation["evidence_input_sha256"], bundle["input_sha256"])
             self.assertEqual(attestation["primary_artifact"]["artifact_id"], 123)
+
+    def test_attestation_fails_closed_when_audit_and_diagnosis_disagree(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.seed(root)
+            EvidenceBundleBuilder(
+                EvidenceInputs.from_directory(root),
+                ApprovedRun(total_calls=5, recovery_calls=1, cost_anomaly_usd=0.20),
+            ).write(root, require_report=True)
+            diagnosis = json.loads(
+                (root / "execution-diagnosis.json").read_text(encoding="utf-8")
+            )
+            diagnosis["status"] = "DEGRADED"
+            (root / "execution-diagnosis.json").write_text(
+                json.dumps(diagnosis),
+                encoding="utf-8",
+            )
+            status_md = root / "final-status.md"
+            status_md.write_text("## EXECUTION_COMPLETED\n", encoding="utf-8")
+            write_manifest(root)
+            attestation = build_final_attestation_record(
+                root=root,
+                primary_artifact_id="123",
+                primary_artifact_digest="sha256:test",
+                primary_artifact_url="https://example.invalid/artifact/123",
+                audit_status="PASS",
+                run_id="1",
+                commit_sha="a" * 40,
+                final_status_file=status_md,
+            )
+            self.assertEqual(attestation["status"], "FAIL")
+            self.assertEqual(attestation["audit_status"], "PASS")
+            self.assertEqual(attestation["diagnosis_status"], "DEGRADED")
 
 
 if __name__ == "__main__":

@@ -976,7 +976,11 @@ class ExecutionEngine:
         if node.output_contract.get("machine_readable_required"):
             return False
         text = str(attempt.answer).strip()
-        minimum = 260 if "synthesis" in node.functions else 120
+        minimum = (
+            260
+            if node.output_contract.get("final_delivery_node") is True
+            else 120
+        )
         return len(text) >= minimum and not any(
             value in text.casefold()
             for value in ("i cannot access", "无法访问互联网", "作为ai无法", "没有提供任何答案")
@@ -1214,13 +1218,14 @@ class ExecutionEngine:
 
     @staticmethod
     def _content_work_ids(graph: ExecutionGraph) -> set[str]:
-        synthesis = {
+        final_node_ids = set(graph.final_nodes)
+        final_work = {
             work_id
             for node in graph.nodes
-            if "synthesis" in node.functions
+            if node.node_id in final_node_ids
             for work_id in node.assigned_work
         }
-        return set(graph.required_work) - synthesis or set(graph.required_work)
+        return set(graph.required_work) - final_work or set(graph.required_work)
 
     @staticmethod
     def _best_outputs_by_work(

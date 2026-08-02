@@ -74,6 +74,7 @@ class TestV5FailureEvidenceChain(unittest.TestCase):
                 commit_sha="c" * 40,
                 final_status_file=final_status,
             )
+            self.assertEqual(attestation["status"], "FAIL")
             self.assertFalse(attestation["report_required"])
             self.assertFalse(attestation["report_present"])
             self.assertIsNone(attestation["report_sha256"])

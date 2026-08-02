@@ -49,6 +49,12 @@ class GPTSelectorContractTests(unittest.TestCase):
         self.assertEqual("方案比较专家", parsed["nodes"][0]["role"])
         self.assertEqual("work-1", parsed["work_items"][0]["work_id"])
 
+    def test_empty_descriptive_functions_are_valid(self) -> None:
+        proposal = valid_proposal()
+        proposal["nodes"][0]["functions"] = []
+        parsed = parse_proposal(json.dumps(proposal, ensure_ascii=False))
+        self.assertEqual([], parsed["nodes"][0]["functions"])
+
     def test_unicode_internal_id_is_rejected_before_claude_boundary(self) -> None:
         proposal = valid_proposal()
         proposal["work_items"][0]["work_id"] = "工作一"

@@ -140,7 +140,6 @@ def _schema(name: str) -> dict[str, Any]:
             "role": bounded_text,
             "functions": {
                 "type": "array",
-                "minItems": 1,
                 "maxItems": GPT_MAX_FUNCTIONS_PER_NODE,
                 "uniqueItems": True,
                 "items": {
@@ -466,7 +465,7 @@ def _validate_node(node: Any, index: int, known_work: set[str]) -> str:
     ):
         raise GPTSelectorError("node work_ids contain duplicates or unknown work")
     _bounded_text(node["role"], f"nodes[{index}].role", 320)
-    if not isinstance(functions, list) or not 1 <= len(functions) <= GPT_MAX_FUNCTIONS_PER_NODE:
+    if not isinstance(functions, list) or len(functions) > GPT_MAX_FUNCTIONS_PER_NODE:
         raise GPTSelectorError("node functions are invalid")
     normalized_functions = [
         _bounded_text(function, "node function", 96)

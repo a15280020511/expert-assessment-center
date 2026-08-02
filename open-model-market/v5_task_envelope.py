@@ -100,6 +100,7 @@ def work_output_contract(
         "required_fields": fields,
         "machine_readable_required": False,
         "must_separate_fact_assumption_inference": True,
+        "final_delivery_node": bool(final_node),
     }
     operations = ("synthesis",) if final_node else ()
     result = delivery_contract.apply_explicit_contract(task, operations, base)

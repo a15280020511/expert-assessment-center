@@ -74,8 +74,6 @@ def _functions(raw: Mapping[str, Any]) -> tuple[str, ...]:
             if str(value).strip()
         )
     )
-    if not values:
-        raise ProposalValidationError("every expert node needs functions")
     return values
 
 

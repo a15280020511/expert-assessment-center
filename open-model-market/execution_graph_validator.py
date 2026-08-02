@@ -158,8 +158,6 @@ def _node_endpoint_issues(node: Any, path: str) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     if not node.assigned_work:
         issues.append(ValidationIssue("unassigned_node", "Every node must own work.", path))
-    if not node.functions:
-        issues.append(ValidationIssue("missing_function", "Every node needs at least one function.", path))
     if not node.model or not node.provider_endpoint:
         issues.append(ValidationIssue("missing_endpoint", "Model and provider endpoint are required.", path))
     if any(term in node.model.casefold() for term in _FORBIDDEN_MODEL_TERMS):

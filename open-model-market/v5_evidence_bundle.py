@@ -229,8 +229,27 @@ def build_final_attestation_record(
     diagnosis = load_json_or_default(diagnosis_path, {})
     evidence = load_json_or_default(bundle, {})
     report_present = report.is_file()
+    diagnosis_status = (
+        str(diagnosis.get("status") or "FAIL").upper()
+        if isinstance(diagnosis, Mapping)
+        else "FAIL"
+    )
+    evidence_frozen = bool(
+        evidence.get("business_evidence_frozen")
+        if isinstance(evidence, Mapping)
+        else False
+    )
+    attestation_status = (
+        normalized_audit_status
+        if normalized_audit_status in {"PASS", "DEGRADED"}
+        and diagnosis_status == normalized_audit_status
+        and report_present
+        and evidence_frozen
+        else "FAIL"
+    )
     return {
         "version": 2,
+        "status": attestation_status,
         "runtime": RUNTIME_VERSION,
         "run_id": int(run_id),
         "commit_sha": commit_sha,
@@ -240,11 +259,9 @@ def build_final_attestation_record(
             "artifact_url": primary_artifact_url,
         },
         "audit_status": normalized_audit_status,
-        "diagnosis_status": diagnosis.get("status") if isinstance(diagnosis, Mapping) else None,
+        "diagnosis_status": diagnosis_status,
         "evidence_input_sha256": evidence.get("input_sha256") if isinstance(evidence, Mapping) else None,
-        "business_evidence_frozen_before_upload": bool(
-            evidence.get("business_evidence_frozen") if isinstance(evidence, Mapping) else False
-        ),
+        "business_evidence_frozen_before_upload": evidence_frozen,
         "report_required": report_required,
         "report_present": report_present,
         "report_sha256": sha256_file(report) if report_present else None,
