@@ -1,9 +1,9 @@
 name: V5 Recovery Guard Qualified Audit
 
 on:
-  push:
+  pull_request:
     branches:
-      - audit/v5-recovery-guard-qualified-20260802
+      - fix/v5-recovery-guard-contract-efficiency-20260802
 
 permissions:
   contents: read
