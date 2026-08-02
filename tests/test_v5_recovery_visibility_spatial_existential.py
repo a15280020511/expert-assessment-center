@@ -47,6 +47,58 @@ class V5RecoveryVisibilityAndSpatialExistentialTests(unittest.TestCase):
         self.assertFalse(fact_claim_supported(task, changed_location))
         self.assertFalse(fact_claim_supported(task, changed_object))
 
+    def test_unanchored_role_count_supports_generic_onsite_paraphrase(self) -> None:
+        task = (
+            "仅依据题面，不得编造。某夜间档案转运点只有3名值守人员。"
+        )
+        claim = "3名值守人员在现场。"
+        self.assertTrue(fact_claim_supported(task, claim))
+        self.assertEqual(
+            validate_answer_evidence(
+                task,
+                f"**事实｜来源：题面**：{claim}",
+            ),
+            [],
+        )
+
+    def test_generic_onsite_cannot_erase_explicit_location(self) -> None:
+        task = (
+            "仅依据题面，不得编造。南门外有2名设备维护人员等待核验。"
+        )
+        claim = "2名设备维护人员在现场。"
+        self.assertFalse(fact_claim_supported(task, claim))
+        self.assertTrue(
+            validate_answer_evidence(
+                task,
+                f"**事实｜来源：题面**：{claim}",
+            )
+        )
+
+    def test_sensory_existence_and_shared_location_compression_is_supported(self) -> None:
+        task = (
+            "仅依据题面，不得编造。南门外闻到来源不明的焦糊味，"
+            "无法确认来源，也无法确认是否存在电气风险。"
+            "南门外有2名身份无法核验、自称设备维护人员的人要求进入。"
+        )
+        claim = (
+            "南门外有焦糊味，且有2名身份无法核验的自称设备维护人员要求进入。"
+        )
+        self.assertTrue(fact_claim_supported(task, claim))
+        self.assertEqual(
+            validate_answer_evidence(
+                task,
+                f"**事实｜来源：题面**：{claim}",
+            ),
+            [],
+        )
+
+    def test_sensory_paraphrase_preserves_named_location_and_object(self) -> None:
+        task = (
+            "仅依据题面，不得编造。南门外闻到来源不明的焦糊味。"
+        )
+        self.assertFalse(fact_claim_supported(task, "北门外有焦糊味。"))
+        self.assertFalse(fact_claim_supported(task, "南门外有汽油味。"))
+
     def test_recovery_ranks_visible_delivery_control_before_cheaper_risk(self) -> None:
         policy = CrossEndpointPlannerPolicy(
             RuntimeConfig(
