@@ -1,4 +1,4 @@
-"""Fixed single-call Claude latest red-team contract."""
+"""Fixed single-call Claude latest red-team advisory contract."""
 from __future__ import annotations
 
 import json
@@ -11,15 +11,14 @@ from typing import Any, Mapping
 CLAUDE_RED_TEAM_MODEL = "~anthropic/claude-opus-latest"
 CLAUDE_RED_TEAM_PROVIDER = "anthropic"
 CLAUDE_RED_TEAM_REASONING_EFFORT = "low"
-CLAUDE_RED_TEAM_MAX_INPUT_CHARS = 6_000
-CLAUDE_RED_TEAM_MAX_OUTPUT_CHARS = 800
-CLAUDE_RED_TEAM_MAX_OUTPUT_TOKENS = 128
+CLAUDE_RED_TEAM_MAX_INPUT_CHARS = 12_000
+CLAUDE_RED_TEAM_MAX_OUTPUT_CHARS = 4_000
+CLAUDE_RED_TEAM_MAX_OUTPUT_TOKENS = 512
 CLAUDE_RED_TEAM_MAX_ITEMS = 16
-CLAUDE_RED_TEAM_MAX_CODES = 8
-CLAUDE_RED_TEAM_MAX_TARGETS = 8
+CLAUDE_RED_TEAM_MAX_SUGGESTIONS = 8
 GPT_PROPOSAL_CALLS = 1
 CLAUDE_RED_TEAM_MAX_CALLS_PER_TASK = 1
-GPT_SYNTHESIS_CALLS_MAX = 1
+GPT_SYNTHESIS_CALLS = 1
 CLAUDE_RED_TEAM_GOVERNANCE_CALLS = 3
 
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -44,7 +43,7 @@ INTERNAL_CODES = frozenset({
     "GRAPH_INVALID",
     "CONTRACT_MISMATCH",
     "ROLE_MISMATCH",
-    "INSUFFICIENT_REVIEW_INPUT",
+    "REVIEW_INPUT_INCOMPLETE",
 })
 EXTERNAL_CODES = frozenset({
     "UNSUPPORTED_FACT",
@@ -55,26 +54,24 @@ EXTERNAL_CODES = frozenset({
     "UNKNOWN_NOT_PRESERVED",
     "CONTRACT_VIOLATION",
     "INFORMATION_INCOMPLETE",
-    "INSUFFICIENT_REVIEW_INPUT",
+    "REVIEW_INPUT_INCOMPLETE",
 })
 
 INTERNAL_SELECTION_PROMPT = (
-    "你是专家团中心的固定红队判定器。你只审核GPT已经提出的动态专家团组合是否违反输入中的硬约束。"
-    "你不得选择、替换、排序、增加、删除专家，不得修改执行图，不得执行任务，不得调用工具，"
-    "不得浏览，不得输出解释、建议、报告或自然语言。你在每个任务中最多执行一次。"
-    "只返回JSON Schema允许的APPROVE或REJECT、枚举codes和targets；证据不足必须REJECT。"
+    "你是专家团中心的固定红队顾问。你只审查GPT已经提出的动态专家团组合，并给出具体、可执行、最小必要的修改意见。"
+    "你不是批准者、否决者或门禁，不得输出APPROVE、REJECT、通过或不通过。你不得直接选择或执行专家，不得修改执行图，"
+    "不得调用工具或浏览。你在每个任务中只执行一次。只返回严格JSON；没有修改意见时返回空suggestions。"
 )
 EXTERNAL_INFORMATION_PROMPT = (
-    "你是专家团中心的固定信息红队判定器。你只检查输入信息的事实来源、数量、位置、未知项和交付合同。"
-    "你不得补充事实、改写内容、给出建议、生成报告、参与专家选择或执行任务，不得调用工具或浏览。"
-    "你在每个任务中最多执行一次。只返回JSON Schema允许的APPROVE或REJECT、枚举codes和targets；"
-    "证据不足必须REJECT。"
+    "你是专家团中心的固定信息红队顾问。你只审查输入信息的事实来源、数量、位置、未知项和交付合同，并给出具体、可执行、"
+    "最小必要的修改意见。你不是批准者、否决者或门禁，不得输出APPROVE、REJECT、通过或不通过。你不得补充未经输入支持的事实，"
+    "不得执行任务、调用工具或浏览。你在每个任务中只执行一次。只返回严格JSON；没有修改意见时返回空suggestions。"
 )
 INTERNAL_SELECTION_PROMPT_SHA256 = (
-    "12561265f5454459ea83764359db893fb92b9ead331b6af1502c8ef89f620790"
+    "51cab7adb01591f7656970e5b5e04ac4a3c3aeef719f6a83de509e35976a134d"
 )
 EXTERNAL_INFORMATION_PROMPT_SHA256 = (
-    "a8bbc969a9bf47fc1d23d1ac393b1637dca9794f7794adf6b1e35257ccc99647"
+    "1a26944dca51aa620082dad9f8ea14abb6859bcb17f0958e8d5ff79ade6b6223"
 )
 _PROMPTS = {
     RedTeamScope.INTERNAL_SELECTION: (
@@ -89,11 +86,7 @@ _PROMPTS = {
 
 
 def _codes(scope: RedTeamScope) -> frozenset[str]:
-    return (
-        INTERNAL_CODES
-        if scope is RedTeamScope.INTERNAL_SELECTION
-        else EXTERNAL_CODES
-    )
+    return INTERNAL_CODES if scope is RedTeamScope.INTERNAL_SELECTION else EXTERNAL_CODES
 
 
 def fixed_prompt(scope: RedTeamScope | str) -> str:
@@ -121,12 +114,7 @@ def _digest(value: Any, field: str) -> str:
     return value
 
 
-def _integer(
-    value: Any,
-    field: str,
-    minimum: int,
-    maximum: int,
-) -> int:
+def _integer(value: Any, field: str, minimum: int, maximum: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"{field} must be an integer")
     if not minimum <= value <= maximum:
@@ -146,11 +134,7 @@ def _number(value: Any, field: str) -> float:
     return number
 
 
-def _id_list(
-    value: Any,
-    field: str,
-    maximum: int = CLAUDE_RED_TEAM_MAX_ITEMS,
-) -> None:
+def _id_list(value: Any, field: str, maximum: int = CLAUDE_RED_TEAM_MAX_ITEMS) -> None:
     if not isinstance(value, list) or len(value) > maximum:
         raise ValueError(f"{field} must be a bounded list")
     for index, item in enumerate(value):
@@ -186,12 +170,7 @@ def _validate_internal(payload: Mapping[str, Any]) -> None:
         raise ValueError("internal Claude review has missing or extra fields")
     _digest(payload["task_digest"], "task_digest")
     _digest(payload["proposal_digest"], "proposal_digest")
-    total = _integer(
-        payload["approved_total_calls"],
-        "approved_total_calls",
-        4,
-        16,
-    )
+    total = _integer(payload["approved_total_calls"], "approved_total_calls", 4, 16)
     governance = _integer(
         payload["governance_calls_reserved"],
         "governance_calls_reserved",
@@ -245,10 +224,7 @@ def _validate_internal(payload: Mapping[str, Any]) -> None:
             f"nodes[{index}].recovery_candidate_ids",
             maximum=4,
         )
-        _number(
-            node["estimated_cost_usd"],
-            f"nodes[{index}].estimated_cost_usd",
-        )
+        _number(node["estimated_cost_usd"], f"nodes[{index}].estimated_cost_usd")
     edges = payload["edges"]
     if not isinstance(edges, list) or len(edges) > CLAUDE_RED_TEAM_MAX_ITEMS:
         raise ValueError("edges must be bounded")
@@ -294,14 +270,8 @@ def _validate_external(payload: Mapping[str, Any]) -> None:
         text = claim["text"]
         if not isinstance(text, str) or not text.strip() or len(text) > 240:
             raise ValueError(f"claims[{index}].text is invalid")
-        _semantic_list(
-            claim["quantity_tokens"],
-            f"claims[{index}].quantity_tokens",
-        )
-        _semantic_list(
-            claim["location_tokens"],
-            f"claims[{index}].location_tokens",
-        )
+        _semantic_list(claim["quantity_tokens"], f"claims[{index}].quantity_tokens")
+        _semantic_list(claim["location_tokens"], f"claims[{index}].location_tokens")
 
 
 def canonical_review_input(
@@ -327,38 +297,43 @@ def canonical_review_input(
     return rendered
 
 
-def verdict_json_schema(scope: RedTeamScope | str) -> dict[str, Any]:
+def advice_json_schema(scope: RedTeamScope | str) -> dict[str, Any]:
     scope = RedTeamScope(scope)
     return {
         "type": "json_schema",
         "json_schema": {
-            "name": f"claude_{scope.value}_verdict",
+            "name": f"claude_{scope.value}_advice",
             "strict": True,
             "schema": {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "decision": {
-                        "type": "string",
-                        "enum": ["APPROVE", "REJECT"],
-                    },
-                    "codes": {
+                    "suggestions": {
                         "type": "array",
-                        "maxItems": CLAUDE_RED_TEAM_MAX_CODES,
-                        "uniqueItems": True,
+                        "maxItems": CLAUDE_RED_TEAM_MAX_SUGGESTIONS,
                         "items": {
-                            "type": "string",
-                            "enum": sorted(_codes(scope)),
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "code": {
+                                    "type": "string",
+                                    "enum": sorted(_codes(scope)),
+                                },
+                                "target": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9_.~:@/+-]{1,160}$",
+                                },
+                                "change": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 240,
+                                },
+                            },
+                            "required": ["code", "target", "change"],
                         },
                     },
-                    "targets": {
-                        "type": "array",
-                        "maxItems": CLAUDE_RED_TEAM_MAX_TARGETS,
-                        "uniqueItems": True,
-                        "items": {"type": "string", "maxLength": 160},
-                    },
                 },
-                "required": ["decision", "codes", "targets"],
+                "required": ["suggestions"],
             },
         },
     }
@@ -376,10 +351,7 @@ def build_claude_red_team_request(
         "model": CLAUDE_RED_TEAM_MODEL,
         "messages": [
             {"role": "system", "content": fixed_prompt(scope)},
-            {
-                "role": "user",
-                "content": canonical_review_input(scope, payload),
-            },
+            {"role": "user", "content": canonical_review_input(scope, payload)},
         ],
         "temperature": 0,
         "max_tokens": CLAUDE_RED_TEAM_MAX_OUTPUT_TOKENS,
@@ -387,7 +359,7 @@ def build_claude_red_team_request(
             "effort": CLAUDE_RED_TEAM_REASONING_EFFORT,
             "exclude": True,
         },
-        "response_format": verdict_json_schema(scope),
+        "response_format": advice_json_schema(scope),
         "provider": {
             "only": [provider_slug],
             "order": [provider_slug],
@@ -397,73 +369,62 @@ def build_claude_red_team_request(
     }
 
 
-def parse_claude_red_team_verdict(
+def parse_claude_red_team_advice(
     scope: RedTeamScope | str,
     text: str,
 ) -> dict[str, Any]:
     scope = RedTeamScope(scope)
     if not isinstance(text, str) or not text.strip():
-        raise ValueError("Claude red-team verdict is empty")
+        raise ValueError("Claude red-team advice is empty")
     if len(text) > CLAUDE_RED_TEAM_MAX_OUTPUT_CHARS:
-        raise ValueError("Claude red-team verdict exceeds hard limit")
+        raise ValueError("Claude red-team advice exceeds hard limit")
     try:
         value = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise ValueError("Claude red-team verdict is not JSON") from exc
-    if not isinstance(value, Mapping) or set(value) != {
-        "decision",
-        "codes",
-        "targets",
-    }:
-        raise ValueError("Claude verdict has missing or extra fields")
-    decision = value["decision"]
-    codes = value["codes"]
-    targets = value["targets"]
-    if decision not in {"APPROVE", "REJECT"}:
-        raise ValueError("Claude decision is invalid")
-    if (
-        not isinstance(codes, list)
-        or len(codes) > CLAUDE_RED_TEAM_MAX_CODES
-        or len(codes) != len(set(codes))
-        or any(code not in _codes(scope) for code in codes)
-    ):
-        raise ValueError("Claude codes are invalid")
-    if (
-        not isinstance(targets, list)
-        or len(targets) > CLAUDE_RED_TEAM_MAX_TARGETS
-        or len(targets) != len(set(targets))
-    ):
-        raise ValueError("Claude targets are invalid")
-    for index, target in enumerate(targets):
-        _identifier(target, f"targets[{index}]")
-    if decision == "APPROVE" and (codes or targets):
-        raise ValueError("APPROVE cannot carry objections")
-    if decision == "REJECT" and not codes:
-        raise ValueError("REJECT requires an enumerated code")
+        raise ValueError("Claude red-team advice is not JSON") from exc
+    if not isinstance(value, Mapping) or set(value) != {"suggestions"}:
+        raise ValueError("Claude advice has missing or extra fields")
+    suggestions = value["suggestions"]
+    if not isinstance(suggestions, list) or len(suggestions) > CLAUDE_RED_TEAM_MAX_SUGGESTIONS:
+        raise ValueError("Claude suggestions are invalid")
+    normalized: list[dict[str, str]] = []
+    for index, suggestion in enumerate(suggestions):
+        if not isinstance(suggestion, Mapping) or set(suggestion) != {"code", "target", "change"}:
+            raise ValueError(f"suggestions[{index}] has missing or extra fields")
+        code = str(suggestion["code"])
+        if code not in _codes(scope):
+            raise ValueError(f"suggestions[{index}].code is invalid")
+        target = _identifier(suggestion["target"], f"suggestions[{index}].target")
+        change = suggestion["change"]
+        if (
+            not isinstance(change, str)
+            or not change.strip()
+            or len(change) > 240
+            or any(ord(character) < 32 for character in change)
+        ):
+            raise ValueError(f"suggestions[{index}].change is invalid")
+        normalized.append({"code": code, "target": target, "change": change.strip()})
     return {
-        "decision": decision,
-        "codes": list(codes),
-        "targets": list(targets),
+        "suggestions": normalized,
         "scope": scope.value,
         "model": CLAUDE_RED_TEAM_MODEL,
-        "reviewer_role": "single-call-red-team-only",
+        "reviewer_role": "advisory-red-team-only",
         "prompt_sha256": fixed_prompt_sha256(scope),
         "maximum_calls_per_task": 1,
-        "second_review_allowed": False,
+        "hard_gate": False,
+        "approval_authority": False,
     }
 
 
 def forbidden_claude_capabilities() -> tuple[str, ...]:
     return (
+        "approve_proposal",
+        "reject_proposal",
+        "block_execution",
         "select_experts",
-        "replace_experts",
-        "reorder_experts",
-        "modify_execution_graph",
         "execute_task",
         "call_tools",
         "browse_network",
-        "write_report",
-        "rewrite_information",
-        "emit_free_text_reasoning",
+        "write_final_report",
         "repeat_red_team_review",
     )
