@@ -1,0 +1,85 @@
+{
+  "schema_version": "pr227-production-paid-r5-receipt-1",
+  "status": "FAIL",
+  "run_id": "30773107033",
+  "target_sha": "164dbc819a2c8b2600e968d0cfbf589542702320",
+  "step_outcomes": {
+    "execute": "failure",
+    "prepare_report": "skipped",
+    "audit": "skipped",
+    "manifest": "skipped",
+    "primary": "success",
+    "independent": "skipped",
+    "final": "failure",
+    "attestation": "skipped",
+    "proof": "success"
+  },
+  "expert_error": {
+    "version": 5,
+    "runtime_version": "v5-gpt-claude-runtime-1",
+    "error_code": "V5_PRODUCTION_EXECUTION_FAILED",
+    "stage": "v5-gpt-claude-production-runtime",
+    "message": "conflicting duplicate exact catalog endpoint: ('google/gemma-4-31b-it', 'together')",
+    "traceback": "Traceback (most recent call last):\n  File \"/home/runner/work/expert-assessment-center/expert-assessment-center/runtime-source/open-model-market/v5_production_ticket.py\", line 187, in main\n    v5_pipeline.main(\n  File \"/home/runner/work/expert-assessment-center/expert-assessment-center/runtime-source/open-model-market/v5_pipeline.py\", line 574, in main\n    catalog, governance_models, catalog_source, endpoint_source = _build_catalog_state(\n                                                                  ^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/expert-assessment-center/expert-assessment-center/runtime-source/open-model-market/v5_pipeline.py\", line 259, in _build_catalog_state\n    catalog = compact_endpoint_catalog(\n              ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/expert-assessment-center/expert-assessment-center/runtime-source/open-model-market/v5_catalog_view.py\", line 370, in compact_endpoint_catalog\n    rows = list(_deduplicate_exact_endpoint_rows(rows))\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/expert-assessment-center/expert-assessment-center/runtime-source/open-model-market/v5_catalog_view.py\", line 325, in _deduplicate_exact_endpoint_rows\n    raise CatalogViewError(\nv5_catalog_view.CatalogViewError: conflicting duplicate exact catalog endpoint: ('google/gemma-4-31b-it', 'together')\n",
+    "normalization_error": "governance must use exactly GPT proposal, Claude once, and GPT synthesis",
+    "fallback_used": false,
+    "local_planner_present": false,
+    "optimizer_present": false,
+    "claude_red_team_calls": 1,
+    "claude_is_advisory_only": true,
+    "claude_gatekeeping_allowed": false,
+    "gpt_synthesis_calls": 1,
+    "model_loop_allowed": false,
+    "cross_task_history_used": false
+  },
+  "total_model_calls": null,
+  "governance_model_calls": null,
+  "expert_model_calls": null,
+  "actual_cost_usd": null,
+  "primary_artifact": {
+    "id": "8841163464",
+    "digest": "571a49060dba043163b12d90d0e40e3c5f2cd8daa94e1e96cefd97b84ad123ef"
+  },
+  "proof_artifact": {
+    "id": "8841163585",
+    "digest": "c79a9aef8d779ab3ae123d90d1385ce05eab915f2f353f7a61fc498d6cb8ac63"
+  },
+  "independent_revalidation": {},
+  "final_status": {
+    "schema_version": "v5-final-status-1",
+    "status": "FAIL",
+    "runtime_version": "v5-native-runtime-1",
+    "run_url": "https://github.com/a15280020511/expert-assessment-center/actions/runs/30773107033",
+    "task_id": "pr227-production-paid-r5-20260803",
+    "task_fingerprint": "66edec4980c1025cc90d20566833ce51541f49a73cd897d1354f96e2b64c8521",
+    "node_count": 0,
+    "approved_initial_calls": 4,
+    "call_count": 0,
+    "approved_total_calls": 4,
+    "recovery_calls": 0,
+    "approved_recovery_calls": 0,
+    "completion_mode": null,
+    "quality_status": null,
+    "provider_actual_cost_usd": 0,
+    "cost_anomaly_usd": null,
+    "substantive_providers": [],
+    "substantive_provider_count": 0,
+    "legacy_runtime_present": null,
+    "primary_artifact": {
+      "artifact_id": "8841163464",
+      "artifact_url": "https://github.com/a15280020511/expert-assessment-center/actions/runs/30773107033/artifacts/8841163464",
+      "artifact_digest": "571a49060dba043163b12d90d0e40e3c5f2cd8daa94e1e96cefd97b84ad123ef"
+    },
+    "primary_failure": {},
+    "failures": [
+      "V5 audit is missing",
+      "V5 audit step outcome is independent-artifact-revalidation-failed",
+      "primary artifact manifest step outcome is skipped"
+    ],
+    "degradations": [],
+    "evidence_input_sha256": null,
+    "business_evidence_frozen": false
+  },
+  "final_attestation": {},
+  "production_ref_moved": false
+}
