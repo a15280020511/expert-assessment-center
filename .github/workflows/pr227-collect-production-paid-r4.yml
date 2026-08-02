@@ -1,0 +1,336 @@
+name: PR227 Collect Production Paid R4
+
+on:
+  push:
+    branches:
+      - acceptance/pr227-final-paid-20260803-r4
+    paths:
+      - .github/v5-paid-production-collect-r4.json
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: pr227-collect-production-paid-r4
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      PAID_HEAD_SHA: b756c5510ff7da25b1efc0ef32e5db4389189806
+      TARGET_SHA: add4a7bc94fccf57e2979103686887d6920eec66
+      ACCEPTANCE_BRANCH: acceptance/pr227-final-paid-20260803-r4
+    steps:
+      - name: Checkout collection branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: acceptance/pr227-final-paid-20260803-r4
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Wait for exact paid Run
+        id: paid
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id=""
+          run_status="not_found"
+          conclusion=""
+          for attempt in $(seq 1 90); do
+            gh api -H "Accept: application/vnd.github+json" \
+              "/repos/$REPOSITORY/actions/workflows/pr227-production-paid-acceptance-r4.yml/runs?branch=$ACCEPTANCE_BRANCH&event=push&per_page=20" \
+              > paid-runs.json
+            run_id=$(jq -r --arg sha "$PAID_HEAD_SHA" '
+              [.workflow_runs[] | select(.head_sha == $sha)]
+              | sort_by(.run_number)
+              | if length > 0 then .[-1].id else empty end
+            ' paid-runs.json)
+            if [[ -n "$run_id" ]]; then
+              run_status=$(jq -r --argjson id "$run_id" '.workflow_runs[] | select(.id == $id) | .status' paid-runs.json)
+              conclusion=$(jq -r --argjson id "$run_id" '.workflow_runs[] | select(.id == $id) | (.conclusion // "")' paid-runs.json)
+              echo "paid_run_id=$run_id status=$run_status conclusion=$conclusion"
+              [[ "$run_status" == "completed" ]] && break
+            fi
+            sleep 20
+          done
+          test -n "$run_id"
+          test "$run_status" = "completed"
+          {
+            echo "run_id=$run_id"
+            echo "run_status=$run_status"
+            echo "conclusion=$conclusion"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download and verify exact jobs and Artifacts
+        env:
+          PAID_RUN_ID: ${{ steps.paid.outputs.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api -H "Accept: application/vnd.github+json" \
+            "/repos/$REPOSITORY/actions/runs/$PAID_RUN_ID/jobs?per_page=100" \
+            > paid-jobs.json
+          gh api -H "Accept: application/vnd.github+json" \
+            "/repos/$REPOSITORY/actions/runs/$PAID_RUN_ID/artifacts?per_page=100" \
+            > paid-artifacts.json
+          rm -rf collected
+          mkdir -p collected
+          jq -c '.artifacts[] | select(.expired == false) | {id,name,digest}' paid-artifacts.json \
+            | while read -r row; do
+                id=$(jq -r '.id' <<<"$row")
+                name=$(jq -r '.name' <<<"$row")
+                digest=$(jq -r '.digest' <<<"$row")
+                gh api -H "Accept: application/vnd.github+json" \
+                  "/repos/$REPOSITORY/actions/artifacts/$id/zip" \
+                  > "collected/$name.zip"
+                actual="sha256:$(sha256sum "collected/$name.zip" | awk '{print $1}')"
+                test "$actual" = "$digest"
+                mkdir -p "collected/$name"
+                unzip -q "collected/$name.zip" -d "collected/$name"
+              done
+
+      - name: Independently recompute collection verdict
+        env:
+          PAID_RUN_ID: ${{ steps.paid.outputs.run_id }}
+          PAID_RUN_STATUS: ${{ steps.paid.outputs.run_status }}
+          PAID_RUN_CONCLUSION: ${{ steps.paid.outputs.conclusion }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+          from typing import Any
+
+          run_id = os.environ["PAID_RUN_ID"]
+          target_sha = os.environ["TARGET_SHA"]
+          jobs = json.loads(Path("paid-jobs.json").read_text(encoding="utf-8"))
+          artifacts = json.loads(Path("paid-artifacts.json").read_text(encoding="utf-8"))
+          collected = Path("collected")
+          primary_name = f"pr227-production-primary-r4-{run_id}"
+          proof_name = f"pr227-production-attestation-r4-{run_id}"
+          primary_dir = collected / primary_name
+          proof_dir = collected / proof_name
+
+          def load_unique(root: Path, name: str) -> dict[str, Any]:
+              matches = list(root.rglob(name)) if root.is_dir() else []
+              if len(matches) != 1:
+                  return {}
+              try:
+                  value = json.loads(matches[0].read_text(encoding="utf-8"))
+              except Exception:
+                  return {}
+              return value if isinstance(value, dict) else {}
+
+          def unique_file(root: Path, name: str) -> Path | None:
+              matches = list(root.rglob(name)) if root.is_dir() else []
+              return matches[0] if len(matches) == 1 else None
+
+          def artifact_row(name: str) -> dict[str, Any]:
+              rows = [
+                  row for row in artifacts.get("artifacts", [])
+                  if row.get("name") == name and not row.get("expired")
+              ]
+              return rows[0] if len(rows) == 1 else {}
+
+          primary = artifact_row(primary_name)
+          proof = artifact_row(proof_name)
+          expert_error = load_unique(primary_dir, "expert-team-error.json")
+          expert_result = load_unique(primary_dir, "expert-team-result.json")
+          v5_result = load_unique(primary_dir, "v5-result.json")
+          governance = load_unique(primary_dir, "v5-governance-calls.json")
+          requests = load_unique(primary_dir, "v5-request-audit.json")
+          ledger = load_unique(primary_dir, "call-ledger.json")
+          execution_audit = load_unique(primary_dir, "execution-audit.json")
+          final_status = load_unique(proof_dir, "final-status.json")
+          independent = load_unique(proof_dir, "independent-revalidation.json")
+          attestation = load_unique(proof_dir, "final-attestation.json")
+          report = unique_file(primary_dir, "v5-final-report.md")
+
+          failures: list[str] = []
+          if os.environ["PAID_RUN_CONCLUSION"] != "success":
+              failures.append(
+                  "paid workflow conclusion is " + os.environ["PAID_RUN_CONCLUSION"]
+              )
+          if not primary:
+              failures.append("primary Artifact is missing or ambiguous")
+          if not proof:
+              failures.append("proof Artifact is missing or ambiguous")
+          if expert_error:
+              failures.append(
+                  "structured production error: "
+                  + str(expert_error.get("message") or expert_error.get("error_code"))
+              )
+          if expert_result.get("status") != "success":
+              failures.append("expert-team-result status is not success")
+          if v5_result.get("status") != "success":
+              failures.append("v5-result status is not success")
+          kinds = [
+              str(row.get("kind") or "")
+              for row in governance.get("calls", [])
+              if isinstance(row, dict)
+          ]
+          if kinds != ["gpt_proposal", "claude_red_team", "gpt_synthesis"]:
+              failures.append("governance sequence is invalid")
+          if int(governance.get("actual_governance_calls") or 0) != 3:
+              failures.append("governance call count is not three")
+          if governance.get("claude_is_advisory_only") is not True:
+              failures.append("Claude advisory-only evidence is missing")
+          if governance.get("claude_gatekeeping_allowed") is not False:
+              failures.append("Claude gatekeeping is not prohibited")
+          if governance.get("second_claude_review_allowed") is not False:
+              failures.append("second Claude review is not prohibited")
+          if governance.get("model_loop_allowed") is not False:
+              failures.append("model loop is not prohibited")
+          if int(requests.get("request_count") or 0) != 4:
+              failures.append("request total is not four")
+          if int(requests.get("governance_request_count") or 0) != 3:
+              failures.append("governance request total is not three")
+          if int(requests.get("expert_request_count") or 0) != 1:
+              failures.append("expert request total is not one")
+          request_rows = requests.get("requests", [])
+          if not isinstance(request_rows, list) or len(request_rows) != 4:
+              failures.append("request detail rows do not contain four requests")
+          if requests.get("external_tools_allowed") is not False:
+              failures.append("external tools are not explicitly prohibited")
+          if requests.get("provider_fallback_allowed") is not False:
+              failures.append("provider fallback is not explicitly prohibited")
+          summary = ledger.get("summary", {}) if isinstance(ledger.get("summary"), dict) else {}
+          if int(summary.get("call_count") or 0) != 4:
+              failures.append("call ledger total is not four")
+          if int(summary.get("governance_calls") or 0) != 3:
+              failures.append("call ledger governance total is not three")
+          if int(summary.get("expert_calls") or 0) != 1:
+              failures.append("call ledger expert total is not one")
+          try:
+              ledger_cost = float(summary.get("provider_actual_cost_usd"))
+          except (TypeError, ValueError):
+              ledger_cost = -1.0
+          if not 0 <= ledger_cost <= 0.25:
+              failures.append("call ledger cost is outside the approved bound")
+          if execution_audit.get("status") != "PASS":
+              failures.append("native execution audit did not pass")
+          if report is None or not report.is_file() or report.stat().st_size == 0:
+              failures.append("final report is missing or empty")
+          if final_status.get("status") != "PASS":
+              failures.append("final status did not pass")
+          if independent.get("status") != "PASS":
+              failures.append("independent revalidation did not pass")
+          total_calls = independent.get("total_model_calls", independent.get("model_calls"))
+          if int(total_calls or 0) != 4:
+              failures.append("independent total model calls are not four")
+          if int(independent.get("governance_model_calls") or 0) != 3:
+              failures.append("independent governance model calls are not three")
+          if int(independent.get("expert_model_calls") or 0) != 1:
+              failures.append("independent expert model calls are not one")
+          try:
+              independent_cost = float(independent.get("actual_cost_usd"))
+          except (TypeError, ValueError):
+              independent_cost = -1.0
+          if not 0 <= independent_cost <= 0.25:
+              failures.append("independent total cost is outside the approved bound")
+          if independent.get("recomputed_from_primitive_evidence") is not True:
+              failures.append("independent evidence was not recomputed from primitives")
+          if independent.get("paid_acceptance_verdict_used_as_source") is not False:
+              failures.append("independent evidence reused a paid verdict")
+          if attestation.get("status") != "PASS":
+              failures.append("final Attestation status did not pass")
+          if attestation.get("audit_status") != "PASS":
+              failures.append("final Attestation audit status did not pass")
+          if attestation.get("diagnosis_status") != "PASS":
+              failures.append("final Attestation diagnosis status did not pass")
+          if attestation.get("business_evidence_frozen_before_upload") is not True:
+              failures.append("final Attestation does not prove frozen evidence")
+          if attestation.get("report_present") is not True:
+              failures.append("final Attestation does not prove report presence")
+          if attestation.get("event_context_commit_matched_checkout") is not True:
+              failures.append("Attestation checkout SHA binding failed")
+          if attestation.get("commit_sha") != target_sha:
+              failures.append("Attestation commit SHA differs from target")
+          if attestation.get("event_context_commit_sha") != target_sha:
+              failures.append("Attestation event-context SHA differs from target")
+          embedded = attestation.get("independent_artifact_revalidation")
+          if not isinstance(embedded, dict) or embedded.get("status") != "PASS":
+              failures.append("Attestation lacks passing independent evidence")
+          primary_identity = attestation.get("primary_artifact")
+          if not isinstance(primary_identity, dict):
+              failures.append("Attestation primary Artifact identity is missing")
+          elif primary:
+              if int(primary_identity.get("artifact_id") or 0) != int(primary.get("id") or 0):
+                  failures.append("Attestation primary Artifact ID mismatch")
+              if primary_identity.get("artifact_digest") != primary.get("digest"):
+                  failures.append("Attestation primary Artifact digest mismatch")
+
+          result = {
+              "schema_version": "pr227-production-paid-r4-collection-1",
+              "status": "PASS" if not failures else "FAIL",
+              "paid_run_id": run_id,
+              "paid_run_status": os.environ["PAID_RUN_STATUS"],
+              "paid_run_conclusion": os.environ["PAID_RUN_CONCLUSION"],
+              "target_sha": target_sha,
+              "total_model_calls": total_calls,
+              "governance_model_calls": independent.get("governance_model_calls"),
+              "expert_model_calls": independent.get("expert_model_calls"),
+              "actual_cost_usd": independent.get("actual_cost_usd"),
+              "primary_artifact": {
+                  "id": primary.get("id"),
+                  "name": primary.get("name"),
+                  "digest": primary.get("digest"),
+              },
+              "proof_artifact": {
+                  "id": proof.get("id"),
+                  "name": proof.get("name"),
+                  "digest": proof.get("digest"),
+              },
+              "failures": failures,
+              "failed_jobs": [
+                  {
+                      "id": job.get("id"),
+                      "name": job.get("name"),
+                      "status": job.get("status"),
+                      "conclusion": job.get("conclusion"),
+                      "steps": job.get("steps"),
+                  }
+                  for job in jobs.get("jobs", [])
+                  if job.get("conclusion") != "success"
+              ],
+              "final_status": final_status,
+              "independent_revalidation": independent,
+              "final_attestation": attestation,
+              "collection_model_calls": 0,
+              "production_ref_moved": False,
+          }
+          out = Path("acceptance-evidence/pr227-production-paid-r4-result.json")
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_text(
+              json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps({
+              "status": result["status"],
+              "paid_run_id": run_id,
+              "total_model_calls": total_calls,
+              "actual_cost_usd": result["actual_cost_usd"],
+              "failures": failures,
+          }, ensure_ascii=False))
+          PY
+
+      - name: Persist exact zero-call collection receipt
+        run: |
+          set -euo pipefail
+          git fetch origin "$ACCEPTANCE_BRANCH"
+          git rebase "origin/$ACCEPTANCE_BRANCH"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add acceptance-evidence/pr227-production-paid-r4-result.json
+          git diff --cached --check
+          git commit -m "test: persist PR227 production paid R4 result"
+          git push origin HEAD:"$ACCEPTANCE_BRANCH"
