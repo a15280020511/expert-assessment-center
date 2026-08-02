@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - tools/.pr227-production-auditor-r3.patch
+      - tools/.pr227-production-auditor-complexity.patch
       - .github/workflows/pr227-production-auditor-r3.yml
 
 permissions:
@@ -32,12 +33,15 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Verify and apply production-auditor patch
+      - name: Verify and apply production-auditor patches
         run: |
           set -euo pipefail
           echo "0536e3a78dd48486e8b687e549dcd03fdf81cdf5e7f4bbf8c350fb14ce576de5  tools/.pr227-production-auditor-r3.patch" | sha256sum --check
+          echo "0073ef524d5c860116b580a50359e72b5a00b53fbd0339b0d27728547c2fc3d4  tools/.pr227-production-auditor-complexity.patch" | sha256sum --check
           git apply --check tools/.pr227-production-auditor-r3.patch
           git apply tools/.pr227-production-auditor-r3.patch
+          git apply --check tools/.pr227-production-auditor-complexity.patch
+          git apply tools/.pr227-production-auditor-complexity.patch
           git diff --check
 
       - name: Set up pinned Python
@@ -120,6 +124,7 @@ jobs:
         run: |
           set -euo pipefail
           rm tools/.pr227-production-auditor-r3.patch
+          rm tools/.pr227-production-auditor-complexity.patch
           rm .github/workflows/pr227-production-auditor-r3.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
