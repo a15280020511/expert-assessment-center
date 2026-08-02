@@ -1,0 +1,313 @@
+{
+  "schema_version": "pr227-production-paid-r4-collection-1",
+  "status": "FAIL",
+  "paid_run_id": "30772800332",
+  "paid_run_status": "completed",
+  "paid_run_conclusion": "failure",
+  "target_sha": "add4a7bc94fccf57e2979103686887d6920eec66",
+  "total_model_calls": null,
+  "governance_model_calls": null,
+  "expert_model_calls": null,
+  "actual_cost_usd": null,
+  "primary_artifact": {
+    "id": 8841065617,
+    "name": "pr227-production-primary-r4-30772800332",
+    "digest": "sha256:35fc215f0923c2835e7bfe2e5eddc1c53d6174df2d90d2cf82a90c2095b858f3"
+  },
+  "proof_artifact": {
+    "id": 8841065748,
+    "name": "pr227-production-attestation-r4-30772800332",
+    "digest": "sha256:7f8ca2cdd74430cb54cc26bd22b0db68fe719fcc0b201d0ee271a3d4ec887103"
+  },
+  "failures": [
+    "paid workflow conclusion is failure",
+    "structured production error: duplicate exact catalog endpoint: ('google/gemma-4-31b-it', 'together')",
+    "expert-team-result status is not success",
+    "v5-result status is not success",
+    "governance sequence is invalid",
+    "governance call count is not three",
+    "Claude advisory-only evidence is missing",
+    "Claude gatekeeping is not prohibited",
+    "second Claude review is not prohibited",
+    "model loop is not prohibited",
+    "request total is not four",
+    "governance request total is not three",
+    "expert request total is not one",
+    "request detail rows do not contain four requests",
+    "external tools are not explicitly prohibited",
+    "provider fallback is not explicitly prohibited",
+    "call ledger total is not four",
+    "call ledger governance total is not three",
+    "call ledger expert total is not one",
+    "call ledger cost is outside the approved bound",
+    "native execution audit did not pass",
+    "final report is missing or empty",
+    "final status did not pass",
+    "independent revalidation did not pass",
+    "independent total model calls are not four",
+    "independent governance model calls are not three",
+    "independent expert model calls are not one",
+    "independent total cost is outside the approved bound",
+    "independent evidence was not recomputed from primitives",
+    "independent evidence reused a paid verdict",
+    "final Attestation status did not pass",
+    "final Attestation audit status did not pass",
+    "final Attestation diagnosis status did not pass",
+    "final Attestation does not prove frozen evidence",
+    "final Attestation does not prove report presence",
+    "Attestation checkout SHA binding failed",
+    "Attestation commit SHA differs from target",
+    "Attestation event-context SHA differs from target",
+    "Attestation lacks passing independent evidence",
+    "Attestation primary Artifact identity is missing"
+  ],
+  "failed_jobs": [
+    {
+      "id": 91562779658,
+      "name": "production-acceptance",
+      "status": "completed",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-08-02T23:42:07Z",
+          "completed_at": "2026-08-02T23:42:07Z"
+        },
+        {
+          "name": "Checkout immutable authorization request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-08-02T23:42:07Z",
+          "completed_at": "2026-08-02T23:42:08Z"
+        },
+        {
+          "name": "Validate exact one-time authorization",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-08-02T23:42:08Z",
+          "completed_at": "2026-08-02T23:42:08Z"
+        },
+        {
+          "name": "Checkout exact qualified source",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-08-02T23:42:08Z",
+          "completed_at": "2026-08-02T23:42:09Z"
+        },
+        {
+          "name": "Verify immutable clean source",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-08-02T23:42:09Z",
+          "completed_at": "2026-08-02T23:42:09Z"
+        },
+        {
+          "name": "Set up pinned Python",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-08-02T23:42:09Z",
+          "completed_at": "2026-08-02T23:42:11Z"
+        },
+        {
+          "name": "Install and validate exact source",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-08-02T23:42:11Z",
+          "completed_at": "2026-08-02T23:42:28Z"
+        },
+        {
+          "name": "Verify inference secret without disclosure",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-08-02T23:42:28Z",
+          "completed_at": "2026-08-02T23:42:28Z"
+        },
+        {
+          "name": "Materialize immutable admitted ticket",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-08-02T23:42:28Z",
+          "completed_at": "2026-08-02T23:42:28Z"
+        },
+        {
+          "name": "Execute exact V5 production ticket",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-08-02T23:42:28Z",
+          "completed_at": "2026-08-02T23:42:39Z"
+        },
+        {
+          "name": "Verify substantive execution result",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-08-02T23:42:39Z",
+          "completed_at": "2026-08-02T23:42:39Z"
+        },
+        {
+          "name": "Prepare strict report publication evidence",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 12,
+          "started_at": "2026-08-02T23:42:39Z",
+          "completed_at": "2026-08-02T23:42:39Z"
+        },
+        {
+          "name": "Audit complete native production evidence",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 13,
+          "started_at": "2026-08-02T23:42:39Z",
+          "completed_at": "2026-08-02T23:42:39Z"
+        },
+        {
+          "name": "Freeze primary Artifact manifest",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 14,
+          "started_at": "2026-08-02T23:42:39Z",
+          "completed_at": "2026-08-02T23:42:39Z"
+        },
+        {
+          "name": "Upload primary production Artifact",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-08-02T23:42:39Z",
+          "completed_at": "2026-08-02T23:42:40Z"
+        },
+        {
+          "name": "Independently revalidate uploaded primary Artifact",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 16,
+          "started_at": "2026-08-02T23:42:40Z",
+          "completed_at": "2026-08-02T23:42:40Z"
+        },
+        {
+          "name": "Render authoritative final status",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-08-02T23:42:40Z",
+          "completed_at": "2026-08-02T23:42:40Z"
+        },
+        {
+          "name": "Generate final bound Attestation",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 18,
+          "started_at": "2026-08-02T23:42:40Z",
+          "completed_at": "2026-08-02T23:42:40Z"
+        },
+        {
+          "name": "Write local final diagnostic",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 19,
+          "started_at": "2026-08-02T23:42:40Z",
+          "completed_at": "2026-08-02T23:42:40Z"
+        },
+        {
+          "name": "Upload final status and Attestation Artifact",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 20,
+          "started_at": "2026-08-02T23:42:40Z",
+          "completed_at": "2026-08-02T23:42:41Z"
+        },
+        {
+          "name": "Verify final production qualification",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 21,
+          "started_at": "2026-08-02T23:42:41Z",
+          "completed_at": "2026-08-02T23:42:41Z"
+        },
+        {
+          "name": "Post Set up pinned Python",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 40,
+          "started_at": "2026-08-02T23:42:41Z",
+          "completed_at": "2026-08-02T23:42:41Z"
+        },
+        {
+          "name": "Post Checkout exact qualified source",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 41,
+          "started_at": "2026-08-02T23:42:41Z",
+          "completed_at": "2026-08-02T23:42:41Z"
+        },
+        {
+          "name": "Post Checkout immutable authorization request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 42,
+          "started_at": "2026-08-02T23:42:41Z",
+          "completed_at": "2026-08-02T23:42:41Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 43,
+          "started_at": "2026-08-02T23:42:41Z",
+          "completed_at": "2026-08-02T23:42:41Z"
+        }
+      ]
+    }
+  ],
+  "final_status": {
+    "schema_version": "v5-final-status-1",
+    "status": "FAIL",
+    "runtime_version": "v5-native-runtime-1",
+    "run_url": "https://github.com/a15280020511/expert-assessment-center/actions/runs/30772800332",
+    "task_id": "pr227-production-paid-r4-20260803",
+    "task_fingerprint": "66edec4980c1025cc90d20566833ce51541f49a73cd897d1354f96e2b64c8521",
+    "node_count": 0,
+    "approved_initial_calls": 4,
+    "call_count": 0,
+    "approved_total_calls": 4,
+    "recovery_calls": 0,
+    "approved_recovery_calls": 0,
+    "completion_mode": null,
+    "quality_status": null,
+    "provider_actual_cost_usd": 0,
+    "cost_anomaly_usd": null,
+    "substantive_providers": [],
+    "substantive_provider_count": 0,
+    "legacy_runtime_present": null,
+    "primary_artifact": {
+      "artifact_id": "8841065617",
+      "artifact_url": "https://github.com/a15280020511/expert-assessment-center/actions/runs/30772800332/artifacts/8841065617",
+      "artifact_digest": "35fc215f0923c2835e7bfe2e5eddc1c53d6174df2d90d2cf82a90c2095b858f3"
+    },
+    "primary_failure": {},
+    "failures": [
+      "V5 audit is missing",
+      "V5 audit step outcome is independent-artifact-revalidation-failed",
+      "primary artifact manifest step outcome is skipped"
+    ],
+    "degradations": [],
+    "evidence_input_sha256": null,
+    "business_evidence_frozen": false
+  },
+  "independent_revalidation": {},
+  "final_attestation": {},
+  "collection_model_calls": 0,
+  "production_ref_moved": false
+}
