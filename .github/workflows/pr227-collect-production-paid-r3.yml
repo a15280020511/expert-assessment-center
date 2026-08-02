@@ -1,0 +1,268 @@
+name: PR227 Collect Production Paid R3
+
+on:
+  push:
+    branches:
+      - acceptance/pr227-final-paid-20260803-r3
+    paths:
+      - .github/v5-paid-production-collect-r3.json
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: pr227-collect-production-paid-r3
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      PAID_HEAD_SHA: b144a0eed0505b50618a7ebf1ec9940a9a619bbe
+      TARGET_SHA: 0a44879e847251a202c73099b12201ec4cabd616
+      ACCEPTANCE_BRANCH: acceptance/pr227-final-paid-20260803-r3
+    steps:
+      - name: Checkout collection branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: acceptance/pr227-final-paid-20260803-r3
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Wait for exact production paid Run
+        id: paid
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id=""
+          run_status="not_found"
+          conclusion=""
+          for attempt in $(seq 1 90); do
+            gh api -H "Accept: application/vnd.github+json" \
+              "/repos/$REPOSITORY/actions/workflows/pr227-production-paid-acceptance-r3.yml/runs?branch=$ACCEPTANCE_BRANCH&event=push&per_page=20" \
+              > paid-runs.json
+            run_id=$(jq -r --arg sha "$PAID_HEAD_SHA" '
+              [.workflow_runs[] | select(.head_sha == $sha)]
+              | sort_by(.run_number)
+              | if length > 0 then .[-1].id else empty end
+            ' paid-runs.json)
+            if [[ -n "$run_id" ]]; then
+              run_status=$(jq -r --argjson id "$run_id" '.workflow_runs[] | select(.id == $id) | .status' paid-runs.json)
+              conclusion=$(jq -r --argjson id "$run_id" '.workflow_runs[] | select(.id == $id) | (.conclusion // "")' paid-runs.json)
+              echo "paid_run_id=$run_id status=$run_status conclusion=$conclusion"
+              [[ "$run_status" == "completed" ]] && break
+            fi
+            sleep 20
+          done
+          test -n "$run_id"
+          test "$run_status" = "completed"
+          {
+            echo "run_id=$run_id"
+            echo "run_status=$run_status"
+            echo "conclusion=$conclusion"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download exact jobs and Artifacts
+        env:
+          PAID_RUN_ID: ${{ steps.paid.outputs.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api -H "Accept: application/vnd.github+json" \
+            "/repos/$REPOSITORY/actions/runs/$PAID_RUN_ID/jobs?per_page=100" \
+            > paid-jobs.json
+          gh api -H "Accept: application/vnd.github+json" \
+            "/repos/$REPOSITORY/actions/runs/$PAID_RUN_ID/artifacts?per_page=100" \
+            > paid-artifacts.json
+          rm -rf collected
+          mkdir -p collected
+          jq -c '.artifacts[] | select(.expired == false) | {id,name,digest}' paid-artifacts.json \
+            | while read -r row; do
+                id=$(jq -r '.id' <<<"$row")
+                name=$(jq -r '.name' <<<"$row")
+                digest=$(jq -r '.digest' <<<"$row")
+                gh api -H "Accept: application/vnd.github+json" \
+                  "/repos/$REPOSITORY/actions/artifacts/$id/zip" \
+                  > "collected/$name.zip"
+                actual="sha256:$(sha256sum "collected/$name.zip" | awk '{print $1}')"
+                test "$actual" = "$digest"
+                mkdir -p "collected/$name"
+                unzip -q "collected/$name.zip" -d "collected/$name"
+              done
+
+      - name: Recompute collection verdict
+        env:
+          PAID_RUN_ID: ${{ steps.paid.outputs.run_id }}
+          PAID_RUN_STATUS: ${{ steps.paid.outputs.run_status }}
+          PAID_RUN_CONCLUSION: ${{ steps.paid.outputs.conclusion }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          from typing import Any
+
+          run_id = os.environ["PAID_RUN_ID"]
+          target_sha = os.environ["TARGET_SHA"]
+          jobs = json.loads(Path("paid-jobs.json").read_text(encoding="utf-8"))
+          artifacts = json.loads(Path("paid-artifacts.json").read_text(encoding="utf-8"))
+          root = Path("collected")
+          primary_name = f"pr227-production-primary-r3-{run_id}"
+          proof_name = f"pr227-production-attestation-r3-{run_id}"
+          primary_dir = root / primary_name
+          proof_dir = root / proof_name
+
+          def load(path: Path) -> dict[str, Any]:
+              if not path.is_file():
+                  return {}
+              value = json.loads(path.read_text(encoding="utf-8"))
+              return value if isinstance(value, dict) else {}
+
+          def artifact_row(name: str) -> dict[str, Any]:
+              rows = [
+                  row for row in artifacts.get("artifacts", [])
+                  if row.get("name") == name and not row.get("expired")
+              ]
+              return rows[0] if len(rows) == 1 else {}
+
+          final_status = load(proof_dir / "final-status.json")
+          independent = load(proof_dir / "independent-revalidation.json")
+          attestation = load(proof_dir / "final-attestation.json")
+          if not final_status:
+              final_status = load(primary_dir / "final-status.json")
+          primary = artifact_row(primary_name)
+          proof = artifact_row(proof_name)
+
+          failures: list[str] = []
+          if not primary:
+              failures.append("primary production Artifact is missing")
+          if not proof:
+              failures.append("final proof Artifact is missing")
+          if final_status.get("status") != "PASS":
+              failures.append(
+                  f"final status is {final_status.get('status') or 'missing'}"
+              )
+          if independent.get("status") != "PASS":
+              failures.append(
+                  "independent Artifact revalidation did not pass"
+              )
+          if int(independent.get("total_model_calls") or independent.get("model_calls") or 0) != 4:
+              failures.append("independent total model call count is not four")
+          cost = independent.get("actual_cost_usd")
+          try:
+              numeric_cost = float(cost)
+          except (TypeError, ValueError):
+              numeric_cost = -1.0
+          if not 0 <= numeric_cost <= 0.25:
+              failures.append("independent total cost is outside the approved bound")
+          if attestation.get("audit_status") != "PASS":
+              failures.append(
+                  f"attestation audit status is {attestation.get('audit_status') or 'missing'}"
+              )
+          if attestation.get("diagnosis_status") != "PASS":
+              failures.append(
+                  f"attestation diagnosis status is {attestation.get('diagnosis_status') or 'missing'}"
+              )
+          if attestation.get("event_context_commit_matched_checkout") is not True:
+              failures.append("attestation checkout SHA binding failed")
+          if attestation.get("commit_sha") != target_sha:
+              failures.append("attestation commit SHA differs from qualified source")
+          if attestation.get("event_context_commit_sha") != target_sha:
+              failures.append("attestation event-context SHA differs from qualified source")
+          embedded = attestation.get("independent_artifact_revalidation")
+          if not isinstance(embedded, dict) or embedded.get("status") != "PASS":
+              failures.append("attestation does not embed passing independent revalidation")
+          primary_identity = attestation.get("primary_artifact")
+          if not isinstance(primary_identity, dict):
+              failures.append("attestation primary Artifact identity is missing")
+          elif primary:
+              if int(primary_identity.get("artifact_id") or 0) != int(primary.get("id") or 0):
+                  failures.append("attestation primary Artifact ID mismatch")
+              if primary_identity.get("artifact_digest") != primary.get("digest"):
+                  failures.append("attestation primary Artifact digest mismatch")
+
+          schema_defect = (
+              bool(attestation)
+              and "status" not in attestation
+              and attestation.get("audit_status") == "PASS"
+              and attestation.get("diagnosis_status") == "PASS"
+              and isinstance(embedded, dict)
+              and embedded.get("status") == "PASS"
+          )
+          business_chain_pass = not failures
+          authoritative_pass = business_chain_pass and attestation.get("status") == "PASS"
+          result = {
+              "schema_version": "pr227-production-paid-r3-collection-1",
+              "status": "PASS" if authoritative_pass else "FAIL",
+              "business_chain_status": "PASS" if business_chain_pass else "FAIL",
+              "attestation_schema_defect": schema_defect,
+              "paid_run_id": run_id,
+              "paid_run_status": os.environ["PAID_RUN_STATUS"],
+              "paid_run_conclusion": os.environ["PAID_RUN_CONCLUSION"],
+              "target_sha": target_sha,
+              "total_model_calls": independent.get("total_model_calls", independent.get("model_calls")),
+              "actual_cost_usd": independent.get("actual_cost_usd"),
+              "governance_model_calls": independent.get("governance_model_calls"),
+              "expert_model_calls": independent.get("expert_model_calls"),
+              "primary_artifact": {
+                  "id": primary.get("id"),
+                  "name": primary.get("name"),
+                  "digest": primary.get("digest"),
+              },
+              "proof_artifact": {
+                  "id": proof.get("id"),
+                  "name": proof.get("name"),
+                  "digest": proof.get("digest"),
+              },
+              "final_status": final_status,
+              "independent_revalidation": independent,
+              "final_attestation": attestation,
+              "failures": failures,
+              "failed_jobs": [
+                  {
+                      "id": job.get("id"),
+                      "name": job.get("name"),
+                      "status": job.get("status"),
+                      "conclusion": job.get("conclusion"),
+                      "steps": job.get("steps"),
+                  }
+                  for job in jobs.get("jobs", [])
+                  if job.get("conclusion") != "success"
+              ],
+              "collection_model_calls": 0,
+              "production_ref_moved": False,
+          }
+          out = Path("acceptance-evidence/pr227-production-paid-r3-result.json")
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_text(
+              json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps({
+              "status": result["status"],
+              "business_chain_status": result["business_chain_status"],
+              "attestation_schema_defect": schema_defect,
+              "failures": failures,
+          }, ensure_ascii=False))
+          PY
+
+      - name: Persist exact zero-call collection receipt
+        run: |
+          set -euo pipefail
+          git fetch origin "$ACCEPTANCE_BRANCH"
+          git rebase "origin/$ACCEPTANCE_BRANCH"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add acceptance-evidence/pr227-production-paid-r3-result.json
+          git diff --cached --check
+          git commit -m "test: persist PR227 production paid R3 result"
+          git push origin HEAD:"$ACCEPTANCE_BRANCH"
