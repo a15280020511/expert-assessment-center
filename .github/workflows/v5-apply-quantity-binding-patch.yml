@@ -32,11 +32,11 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-dev.txt
 
-      - name: Apply exact local quantity binding patch
+      - name: Apply exact local quantity binding replacements
         run: |
           set -euo pipefail
-          git apply --check tools/v5_quantity_binding_context.patch
-          git apply tools/v5_quantity_binding_context.patch
+          python tools/v5_quantity_binding_context.patch
+          git diff --check
 
       - name: Install pinned dependencies
         run: |
