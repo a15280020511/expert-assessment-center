@@ -24,7 +24,7 @@ jobs:
   validate-v5-advisory:
     name: Validate GPT Claude advisory runtime
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -46,9 +46,9 @@ jobs:
           set -euo pipefail
           required=(
             open-model-market/v5_pipeline.py
+            open-model-market/v5_task_envelope.py
             open-model-market/v5_gpt_expert_selector.py
             open-model-market/v5_claude_red_team_policy.py
-            open-model-market/v5_single_pass_advisory.py
             open-model-market/v5_governance_runtime.py
             open-model-market/v5_proposal_materializer.py
             open-model-market/execution_graph_validator.py
@@ -56,6 +56,7 @@ jobs:
           )
           for path in "${required[@]}"; do test -s "$path"; done
           removed=(
+            open-model-market/v5_single_pass_advisory.py
             open-model-market/v5_constitutional_pipeline.py
             open-model-market/v5_planner.py
             open-model-market/v5_value_optimizer.py
@@ -66,10 +67,15 @@ jobs:
             open-model-market/v5_dynamic_configuration.py
             open-model-market/v5_planning_diagnostics.py
             open-model-market/v5_single_pass_dialectic_gate.py
+            open-model-market/v5_general_task_planning.py
+            open-model-market/task_semantic_compiler.py
+            open-model-market/resource_matrix.py
+            open-model-market/atomic_work_graph.py
+            open-model-market/team_policy.json
           )
           for path in "${removed[@]}"; do test ! -e "$path"; done
           ! grep -R --line-number --exclude-dir=.git \
-            -E 'ortools|cp_model|google-or-tools-cp-sat|optimize_execution_graph|pareto_prune' \
+            -E 'ortools|cp_model|google-or-tools-cp-sat|optimize_execution_graph|pareto_prune|import numpy|from numpy|compile_v5_task_resources|compile_task_semantics' \
             open-model-market requirements-runtime.txt
           python - <<'PY'
           import sys
@@ -89,13 +95,11 @@ jobs:
           assert CLAUDE_RED_TEAM_MAX_CALLS_PER_TASK == 1
           assert GPT_SYNTHESIS_CALLS == 1
           assert CLAUDE_RED_TEAM_GOVERNANCE_CALLS == 3
-          source = Path(
-              "open-model-market/v5_governance_runtime.py"
-          ).read_text(encoding="utf-8")
+          source = Path("open-model-market/v5_governance_runtime.py").read_text()
           assert "claude_is_advisory_only" in source
           assert "claude_gatekeeping_allowed" in source
-          assert "final_authority" in source
           assert "deterministic-constitutional-validator" in source
+          assert "task_envelope" in source
           PY
       - name: Run static and constitutional tests
         shell: bash
@@ -107,9 +111,10 @@ jobs:
             2>&1 | tee v5-validation-logs/compileall.log
           python -m unittest \
             tests.test_v5_claude_red_team_advice \
-            tests.test_v5_single_pass_advisory \
             tests.test_v5_admission_task_isolation \
             tests.test_v5_full_load_stability \
+            tests.test_v5_extreme_advisory_stress \
+            tests.test_v5_repository_residue_audit \
             tests.test_execution_graph_validator \
             tests.test_v5_constitutional_runtime \
             tests.test_v5_task_constraints \
@@ -129,7 +134,6 @@ jobs:
             --dry-run \
             --maximum-total-calls 8 \
             --maximum-recovery-calls 1 \
-            --quality-tier value \
             --output-dir v5-validation-artifacts
           python - <<'PY'
           import json
@@ -138,6 +142,7 @@ jobs:
           root = Path("v5-validation-artifacts")
           dry = json.loads((root / "v5-dry-run.json").read_text())
           runtime = json.loads((root / "v5-runtime-config.json").read_text())
+          envelope = json.loads((root / "v5-task-envelope.json").read_text())
           assert dry["status"] == "validated-not-executed"
           assert dry["model_calls"] == 0
           assert dry["proposal_request"]["model"] == "~openai/gpt-latest"
@@ -146,10 +151,15 @@ jobs:
           assert dry["claude_is_advisory_only"] is True
           assert dry["claude_gatekeeping_allowed"] is False
           assert dry["gpt_synthesis_calls"] == 1
+          assert dry["local_task_classification_used"] is False
+          assert dry["local_atomic_work_generation_used"] is False
+          assert dry["local_resource_matrix_used"] is False
           assert dry["local_scoring_used"] is False
           assert dry["optimizer_used"] is False
           assert dry["cp_sat_used"] is False
           assert runtime["final_authority"] == "deterministic-constitutional-validator"
+          assert runtime["task_decomposition_authority"] == "gpt-latest"
+          assert envelope["local_task_classification_used"] is False
           assert not (root / "v5-execution-graph.json").exists()
           PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
