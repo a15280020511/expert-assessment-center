@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import json
-import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -11,7 +8,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
 from execution_graph import SelectedNode  # noqa: E402
-import task_semantic_compiler as compiler  # noqa: E402
 from v5_constitutional_runtime import (  # noqa: E402
     ConstitutionalExecutionEngine,
     ConstitutionalPromptPolicy,
@@ -19,6 +15,7 @@ from v5_constitutional_runtime import (  # noqa: E402
 )
 import v5_task_delivery_contract as contracts  # noqa: E402
 from v5_task_constraints import closed_world_numeric_prompt  # noqa: E402
+from v5_task_envelope import work_output_contract  # noqa: E402
 
 HEADINGS = [
     "题面事实",
@@ -26,6 +23,7 @@ HEADINGS = [
     "推断与未知",
     "结论与反转条件",
 ]
+INTERNAL_FIELDS = ["analysis", "calculations", "unknowns"]
 TASK = (
     "仅依据题面。方案A一次性投入1200元、每月300元；"
     "方案B一次性投入300元、每月450元；评估期24个月。\n"
@@ -43,7 +41,15 @@ PAID_TASK = (
 )
 
 
-def node(contract, functions=("analysis",)):
+def contract(*, final_node: bool) -> dict:
+    return work_output_contract(
+        TASK,
+        INTERNAL_FIELDS,
+        final_node=final_node,
+    )
+
+
+def node(contract_value, functions=("analysis",)):
     return SelectedNode(
         node_id="node-test",
         assigned_work=("work-test",),
@@ -54,7 +60,7 @@ def node(contract, functions=("analysis",)):
         parameter_profile={"supported_parameters": ["reasoning"]},
         model="openai/test-model",
         provider_endpoint="openai/test-model@provider-a",
-        output_contract=dict(contract),
+        output_contract=dict(contract_value),
         estimated_quality=0.8,
         quality_uncertainty=0.1,
         estimated_cost=0.001,
@@ -72,24 +78,20 @@ def node(contract, functions=("analysis",)):
 
 class V5V4ContractIsolationTests(unittest.TestCase):
     def test_inline_chinese_count_markdown_contract_is_extracted(self):
-        contract = contracts.extract_explicit_markdown_contract(TASK)
-        self.assertTrue(contract["explicit_markdown_contract"])
-        self.assertEqual(HEADINGS, contract["exact_markdown_headings"])
+        value = contracts.extract_explicit_markdown_contract(TASK)
+        self.assertTrue(value["explicit_markdown_contract"])
+        self.assertEqual(HEADINGS, value["exact_markdown_headings"])
 
-    def test_synthesis_owns_inline_final_contract_internal_node_does_not(self):
-        final = compiler._output_contract(TASK, {"synthesis": 1.0}, False)
-        internal = compiler._output_contract(
-            TASK,
-            {"analysis": 1.0, "decision_comparison": 1.0},
-            False,
-        )
+    def test_final_node_owns_inline_contract_internal_node_does_not(self):
+        final = contract(final_node=True)
+        internal = contract(final_node=False)
         self.assertEqual(HEADINGS, final["required_fields"])
         self.assertTrue(final["explicit_markdown_contract"])
         self.assertFalse(internal.get("explicit_markdown_contract", False))
-        self.assertNotEqual(HEADINGS, internal["required_fields"])
+        self.assertEqual(INTERNAL_FIELDS, internal["required_fields"])
 
     def test_internal_task_projection_removes_final_headings_but_keeps_facts(self):
-        internal = compiler._output_contract(TASK, {"analysis": 1.0}, False)
+        internal = contract(final_node=False)
         projected = contracts.project_task_for_node(TASK, internal)
         self.assertIn("1200元", projected)
         self.assertIn("不得调用外部工具", projected)
@@ -98,12 +100,8 @@ class V5V4ContractIsolationTests(unittest.TestCase):
         self.assertIn("最终报告格式仅由最终综合节点执行", projected)
 
     def test_prompt_policy_projects_internal_task_and_preserves_final_task(self):
-        internal_contract = compiler._output_contract(
-            TASK, {"analysis": 1.0}, False
-        )
-        final_contract = compiler._output_contract(
-            TASK, {"synthesis": 1.0}, False
-        )
+        internal_contract = contract(final_node=False)
+        final_contract = contract(final_node=True)
         policy = ConstitutionalPromptPolicy()
         internal_payload = policy.build_payload(
             node(internal_contract), TASK, []
@@ -191,51 +189,17 @@ class V5V4ContractIsolationTests(unittest.TestCase):
                 ]
             }
         )
-        self.assertEqual(["deepseek"], [
-            row["company"] for row in audit["successful_node_models"]
-        ])
-        self.assertEqual(["xiaomi"], [
-            row["company"] for row in audit["degraded_node_models"]
-        ])
-        self.assertTrue(audit["degraded_nodes_are_not_labeled_strict_success"])
-
-    def test_v4_dry_run_binds_exact_contract_only_to_final_nodes(self):
-        with tempfile.TemporaryDirectory(prefix="v5-v4-contract-") as directory:
-            completed = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "open-model-market/v5_constitutional_pipeline.py"),
-                    "--task", TASK,
-                    "--catalog-file", str(ROOT / "tests/fixtures/models.json"),
-                    "--endpoint-file", str(ROOT / "tests/fixtures/endpoints.json"),
-                    "--dry-run",
-                    "--maximum-total-calls", "4",
-                    "--maximum-recovery-calls", "1",
-                    "--cost-anomaly-usd", "0.25",
-                    "--quality-tier", "value",
-                    "--output-dir", directory,
-                ],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=180,
-            )
-            self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
-            graph = json.loads(
-                (Path(directory) / "v5-execution-graph.json").read_text()
-            )
-        finals = set(graph["final_nodes"])
-        self.assertTrue(finals)
-        for row in graph["nodes"]:
-            is_final = row["node_id"] in finals
-            profile = row["parameter_profile"]
-            if is_final:
-                self.assertEqual("exact-markdown", profile["output_contract_kind"])
-                self.assertEqual(HEADINGS, row["output_contract"]["required_fields"])
-            else:
-                self.assertEqual("generic", profile["output_contract_kind"])
-                self.assertNotEqual(HEADINGS, row["output_contract"]["required_fields"])
+        self.assertEqual(
+            ["deepseek"],
+            [row["company"] for row in audit["successful_node_models"]],
+        )
+        self.assertEqual(
+            ["xiaomi"],
+            [row["company"] for row in audit["degraded_node_models"]],
+        )
+        self.assertTrue(
+            audit["degraded_nodes_are_not_labeled_strict_success"]
+        )
 
 
 if __name__ == "__main__":

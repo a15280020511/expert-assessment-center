@@ -29,12 +29,11 @@ class TestV5ReleaseCommandContract(unittest.TestCase):
     def test_gate_uses_task_independent_changed_paths(self):
         self.assertIn('- "open-model-market/**"', self.text)
         self.assertIn('- "tests/**"', self.text)
+        self.assertIn('- "requirements*.txt"', self.text)
         self.assertIn(
             '- ".github/workflows/promote-v5-production.yml"',
             self.text,
         )
-        self.assertNotIn(".release-request.json", self.text)
-        self.assertNotIn("v5-production-release", self.text)
         self.assertNotIn("pull_request_target:", self.text)
         self.assertNotIn("issue_comment:", self.text)
 
@@ -45,8 +44,11 @@ class TestV5ReleaseCommandContract(unittest.TestCase):
         canonical = self.text.index(
             "name: Run canonical static and unit gates"
         )
+        architecture = self.text.index(
+            "name: Verify cleaned advisory architecture"
+        )
         matrix = self.text.index(
-            "name: Run task-independent constitutional matrix"
+            "name: Run task-independent advisory matrix"
         )
         closed = self.text.index(
             "name: Enforce fail-closed promotion state"
@@ -55,7 +57,8 @@ class TestV5ReleaseCommandContract(unittest.TestCase):
             "name: Upload qualification diagnostics"
         )
         self.assertLess(install, canonical)
-        self.assertLess(canonical, matrix)
+        self.assertLess(canonical, architecture)
+        self.assertLess(architecture, matrix)
         self.assertLess(matrix, closed)
         self.assertLess(closed, diagnostics)
 
@@ -69,7 +72,6 @@ class TestV5ReleaseCommandContract(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(self.text.count(command), 1)
                 self.assertEqual(self.validate_text.count(command), 1)
-        self.assertNotIn("--select E9,F63,F7,F82", self.validate_text)
         self.assertIn('python-version: "3.12"', self.text)
         self.assertIn('python-version: "3.12"', self.validate_text)
         self.assertIn(
@@ -78,67 +80,69 @@ class TestV5ReleaseCommandContract(unittest.TestCase):
         )
         self.assertIn('select = ["E4", "E7", "E9", "F"]', self.ruff_text)
 
-    def test_matrix_exercises_generic_shapes_not_named_cases(self):
-        self.assertIn('"simple":', self.text)
-        self.assertIn('"contract":', self.text)
-        self.assertIn('"complex":', self.text)
-        self.assertIn('"closed_world":', self.text)
-        self.assertIn(
-            'signals["task_specific_production_branching"] is False',
-            self.text,
-        )
-        self.assertIn(
-            'signals["case_derived_compaction_applied"] is False',
-            self.text,
-        )
-        self.assertIn(
-            'signals["architecture_selection_policy"]',
-            self.text,
-        )
-        self.assertIn('"generic-semantic-matrix-only"', self.text)
-        self.assertIn(
-            'search["policy"] == "task-shape-feasibility-marginal-value"',
-            self.text,
-        )
-        self.assertIn(
-            'complexity["complex"] >= complexity["simple"]',
-            self.text,
-        )
-        self.assertIn(
-            'weights["complex"] != weights["simple"]',
-            self.text,
-        )
-        self.assertIn(
-            'closed_world["external_facts_allowed"] is False',
-            self.text,
-        )
+    def test_matrix_exercises_generic_shapes(self):
+        for key in (
+            '"simple":',
+            '"contract":',
+            '"complex":',
+            '"closed_world":',
+            '"long":',
+        ):
+            self.assertIn(key, self.text)
+        self.assertIn("open-model-market/v5_pipeline.py", self.text)
+        self.assertIn('dry["status"] == "validated-not-executed"', self.text)
+        self.assertIn('dry["model_calls"] == 0', self.text)
+        self.assertIn('constraints["fail_closed"] is True', self.text)
         self.assertNotIn("tabletop", self.text.casefold())
+        self.assertNotIn("v5-adaptive-search.json", self.text)
+        self.assertNotIn("v5-optimization.json", self.text)
 
-    def test_matrix_enforces_company_uniqueness_and_no_monkey_patch(self):
+    def test_matrix_enforces_advisory_only_governance(self):
+        required = (
+            "~openai/gpt-latest",
+            "~anthropic/claude-opus-latest",
+            'dry["claude_calls_per_task"] == 1',
+            'dry["claude_is_advisory_only"] is True',
+            'dry["claude_gatekeeping_allowed"] is False',
+            'dry["gpt_synthesis_calls"] == 1',
+            'dry["second_claude_review_allowed"] is False',
+            'runtime["final_authority"] == "deterministic-constitutional-validator"',
+            'runtime["model_loop_allowed"] is False',
+            'runtime["task_decomposition_authority"] == "gpt-latest"',
+        )
+        for fragment in required:
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, self.text)
+
+    def test_gate_proves_local_selection_algorithms_are_absent(self):
+        self.assertIn("removed=(", self.text)
         self.assertIn(
-            "len(companies) == len(set(companies))",
+            'for path in "${removed[@]}"; do test ! -e "$path"; done',
             self.text,
         )
-        self.assertIn(
-            'dry["model_company_policy"] == "task-global-all-different"',
-            self.text,
-        )
-        self.assertIn(
-            'dry["global_monkey_patching"] is False',
-            self.text,
-        )
-        self.assertIn(
-            'market["fixed_preselection_weight_tuple_used"] is False',
-            self.text,
-        )
-        self.assertIn(
-            'constraints["fail_closed"] is True',
-            self.text,
-        )
+        for path in (
+            "open-model-market/v5_planner.py",
+            "open-model-market/v5_constitutional_pipeline.py",
+            "open-model-market/v5_value_optimizer.py",
+            "open-model-market/v5_cross_endpoint_planner.py",
+            "open-model-market/v5_operational_resilience.py",
+            "open-model-market/v5_general_task_planning.py",
+            "open-model-market/task_semantic_compiler.py",
+            "open-model-market/resource_matrix.py",
+            "open-model-market/atomic_work_graph.py",
+        ):
+            self.assertIn(path, self.text)
+        self.assertIn('dry["local_scoring_used"] is False', self.text)
+        self.assertIn('dry["optimizer_used"] is False', self.text)
+        self.assertIn('dry["cp_sat_used"] is False', self.text)
+        self.assertIn('dry["local_task_classification_used"] is False', self.text)
+        self.assertIn('dry["local_resource_matrix_used"] is False', self.text)
+        self.assertNotIn("solver_status", self.text)
+        self.assertNotIn("preselection_objective_weights", self.text)
 
     def test_gate_explicitly_records_production_is_not_moved(self):
         self.assertIn(
-            "Production ref movement remains disabled until paid request-driven acceptance is attached.",
+            "Production ref movement remains disabled until explicit acceptance.",
             self.text,
         )
         self.assertIn("test ! -e .release-authorized", self.text)

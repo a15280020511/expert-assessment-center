@@ -88,7 +88,9 @@ class TestV5FullLoadStability(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=64) as pool:
             results = list(
                 pool.map(
-                    lambda index: budget.reserve("initial", 0.001, f"node-{index}"),
+                    lambda index: budget.reserve(
+                        "initial", 0.001, f"node-{index}"
+                    ),
                     range(1000),
                 )
             )
@@ -100,7 +102,10 @@ class TestV5FullLoadStability(unittest.TestCase):
 
     def test_concurrent_reconciliation_has_no_lost_updates(self) -> None:
         budget = _budget(cost=None)
-        reservations = [budget.reserve("initial", 0.0001, f"node-{i}") for i in range(14)]
+        reservations = [
+            budget.reserve("initial", 0.0001, f"node-{index}")
+            for index in range(14)
+        ]
         self.assertTrue(all(ok for ok, _ in reservations))
         with ThreadPoolExecutor(max_workers=14) as pool:
             reconciliations = list(pool.map(budget.reconcile, [0.0001] * 14))
@@ -125,7 +130,7 @@ class TestV5FullLoadStability(unittest.TestCase):
         self.assertEqual(512, snapshot["failures"]["provider-a"])
         self.assertEqual(512, len(snapshot["reasons"]["provider-a"]))
 
-    def test_parallel_constitutional_dry_runs_are_isolated(self) -> None:
+    def test_parallel_advisory_dry_runs_are_isolated_and_deterministic(self) -> None:
         scenarios = (
             ("public", PUBLIC_INVESTMENT_TASK, 16, 2),
             ("closed", CLOSED_WORLD_TASK, 8, 1),
@@ -134,7 +139,7 @@ class TestV5FullLoadStability(unittest.TestCase):
         cases = [(*row, iteration) for row in scenarios for iteration in range(4)]
         env = os.environ.copy()
         env.pop("OPENROUTER_API_KEY", None)
-        with tempfile.TemporaryDirectory(prefix="v5-native-load-") as directory:
+        with tempfile.TemporaryDirectory(prefix="v5-advisory-load-") as directory:
             root = Path(directory)
 
             def run_case(case: tuple[str, str, int, int, int]):
@@ -143,15 +148,22 @@ class TestV5FullLoadStability(unittest.TestCase):
                 completed = subprocess.run(
                     [
                         sys.executable,
-                        str(ROOT / "open-model-market" / "v5_constitutional_pipeline.py"),
-                        "--task", task,
-                        "--catalog-file", str(ROOT / "tests/fixtures/models.json"),
-                        "--endpoint-file", str(ROOT / "tests/fixtures/endpoints.json"),
+                        str(ROOT / "open-model-market" / "v5_pipeline.py"),
+                        "--task",
+                        task,
+                        "--catalog-file",
+                        str(ROOT / "tests/fixtures/models.json"),
+                        "--endpoint-file",
+                        str(ROOT / "tests/fixtures/endpoints.json"),
                         "--dry-run",
-                        "--maximum-total-calls", str(total),
-                        "--maximum-recovery-calls", str(recovery),
-                        "--quality-tier", "value",
-                        "--output-dir", str(output),
+                        "--maximum-total-calls",
+                        str(total),
+                        "--maximum-recovery-calls",
+                        str(recovery),
+                        "--quality-tier",
+                        "value",
+                        "--output-dir",
+                        str(output),
                     ],
                     cwd=ROOT,
                     env=env,
@@ -163,11 +175,13 @@ class TestV5FullLoadStability(unittest.TestCase):
                 if completed.returncode:
                     return name, completed.returncode, completed.stdout + completed.stderr
                 dry = json.loads((output / "v5-dry-run.json").read_text())
-                graph = json.loads((output / "v5-execution-graph.json").read_text())
-                signature = json.dumps(graph, sort_keys=True, ensure_ascii=False)
-                self.assertEqual("planned-not-executed", dry["status"])
-                self.assertTrue(dry["production_entrypoint_changed"])
-                self.assertFalse(dry["global_monkey_patching"])
+                self.assertEqual("validated-not-executed", dry["status"])
+                self.assertEqual(0, dry["model_calls"])
+                self.assertTrue(dry["claude_is_advisory_only"])
+                self.assertFalse(dry["claude_gatekeeping_allowed"])
+                self.assertEqual(1, dry["gpt_synthesis_calls"])
+                self.assertFalse((output / "v5-execution-graph.json").exists())
+                signature = json.dumps(dry, sort_keys=True, ensure_ascii=False)
                 return name, 0, signature
 
             with ThreadPoolExecutor(max_workers=6) as pool:

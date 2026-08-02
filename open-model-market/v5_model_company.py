@@ -1,15 +1,14 @@
-"""Canonical model-company identity and platform diversity boundaries for V5."""
+"""Canonical model-company identity for governance and expert isolation."""
 from __future__ import annotations
 
 from typing import Any, Mapping
 
 REQUIRE_DISTINCT_MODEL_COMPANIES = True
-# Two is the mathematical lower bound needed to exercise company diversity.
-# It is not a normal production pool width; production breadth is task-adaptive.
 MINIMUM_CANDIDATES_PER_WORK = 2
 ABSOLUTE_INTELLIGENCE_RANKING_CEILING = 150
-# Compatibility alias for callers that treat this value as a catalog ceiling.
-DEFAULT_INTELLIGENCE_RANKING_LIMIT = ABSOLUTE_INTELLIGENCE_RANKING_CEILING
+DEFAULT_INTELLIGENCE_RANKING_LIMIT = (
+    ABSOLUTE_INTELLIGENCE_RANKING_CEILING
+)
 
 MODEL_COMPANY_ALIASES: Mapping[str, str] = {
     "01-ai": "01-ai",
@@ -52,8 +51,8 @@ MODEL_COMPANY_ALIASES: Mapping[str, str] = {
 
 
 def canonical_model_company(model_id: str) -> str:
-    """Return a stable company identity from one direct model ID."""
-    value = str(model_id or "").strip().casefold()
+    """Resolve direct and latest-alias model IDs to stable companies."""
+    value = str(model_id or "").strip().casefold().lstrip("~")
     author = value.split("/", 1)[0].strip() if "/" in value else value
     if not author:
         return "unknown"
@@ -61,7 +60,6 @@ def canonical_model_company(model_id: str) -> str:
 
 
 def candidate_company(candidate: Any) -> str:
-    """Return the canonical company for candidates, market rows, or models."""
     if isinstance(candidate, Mapping):
         model_id = (
             candidate.get("model")

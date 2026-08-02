@@ -7,33 +7,40 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "promote-v5-production.yml"
 
 
-class V5ReleaseConstitutionalRegressionTests(unittest.TestCase):
+class V5ReleaseAdvisoryRegressionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.text = WORKFLOW.read_text(encoding="utf-8")
 
-    def test_release_gate_does_not_import_a_named_task_fixture(self) -> None:
+    def test_release_gate_does_not_import_named_task_architecture(self) -> None:
         forbidden = (
             "FAILED_PRODUCTION_TASK",
-            "test_v5_tabletop_production_semantics",
             "closed_book_tabletop_compaction_applied",
             "第五类复合事件",
             "桌面推演",
+            "v5-adaptive-search.json",
+            "v5-optimization.json",
+            "solver_status",
+            "preselection_objective_weights",
         )
         for fragment in forbidden:
             with self.subTest(fragment=fragment):
                 self.assertNotIn(fragment, self.text)
 
-    def test_release_gate_checks_generic_properties(self) -> None:
+    def test_release_gate_checks_advisory_properties(self) -> None:
         required = (
-            "task_specific_production_branching",
-            "case_derived_compaction_applied",
-            "architecture_selection_policy",
-            "generic-semantic-matrix-only",
-            "v5-adaptive-search.json",
-            "explicit_output_contract",
-            "model_company_policy",
-            "global_monkey_patching",
+            "task-independent advisory matrix",
+            "~openai/gpt-latest",
+            "~anthropic/claude-opus-latest",
+            "claude_is_advisory_only",
+            "claude_gatekeeping_allowed",
+            "gpt_synthesis_calls",
+            "second_claude_review_allowed",
+            "deterministic-constitutional-validator",
+            "local_scoring_used",
+            "optimizer_used",
+            "cp_sat_used",
+            "model_loop_allowed",
         )
         for fragment in required:
             with self.subTest(fragment=fragment):
@@ -45,6 +52,7 @@ class V5ReleaseConstitutionalRegressionTests(unittest.TestCase):
         self.assertIn("test ! -e .release-authorized", self.text)
         self.assertNotIn("git push", self.text)
         self.assertNotIn("refs/heads/production", self.text)
+        self.assertNotIn("OPENROUTER_API_KEY", self.text)
 
 
 if __name__ == "__main__":

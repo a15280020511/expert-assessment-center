@@ -6,9 +6,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
 from execution_graph import SelectedNode  # noqa: E402
-import task_semantic_compiler as compiler  # noqa: E402
 import v5_output_contract_delivery as delivery  # noqa: E402
 import v5_task_delivery_contract as contract_policy  # noqa: E402
+from v5_task_envelope import work_output_contract  # noqa: E402
 
 
 EXPECTED_HEADINGS = [
@@ -17,6 +17,7 @@ EXPECTED_HEADINGS = [
     "实施风险、运营风险与反证",
     "综合结论、适用条件与下一步",
 ]
+INTERNAL_HEADINGS = ["risk_findings", "counterexamples", "unknowns"]
 PAID_ACCEPTANCE_TASK = """
 比较方案A“自建内部工单系统”和方案B“采用托管SaaS工单系统”。
 分别完成成本结构与选择阈值分析、实施与运营风险反证，并形成综合决策。
@@ -29,7 +30,15 @@ PAID_ACCEPTANCE_TASK = """
 FLATTENED_TASK = " ".join(PAID_ACCEPTANCE_TASK.split())
 
 
-def _node(contract: dict, functions=("adversarial_reasoning",)) -> SelectedNode:
+def contract(*, final_node: bool) -> dict:
+    return work_output_contract(
+        FLATTENED_TASK,
+        INTERNAL_HEADINGS,
+        final_node=final_node,
+    )
+
+
+def _node(contract_value: dict, functions=("adversarial_reasoning",)) -> SelectedNode:
     return SelectedNode(
         node_id="node-red-team",
         assigned_work=("work-red-team",),
@@ -40,7 +49,7 @@ def _node(contract: dict, functions=("adversarial_reasoning",)) -> SelectedNode:
         parameter_profile={"supported_parameters": ["reasoning", "max_tokens"]},
         model="company/red-team-model",
         provider_endpoint="company/red-team-model@provider-a",
-        output_contract=dict(contract),
+        output_contract=dict(contract_value),
         estimated_quality=0.82,
         quality_uncertainty=0.08,
         estimated_cost=0.01,
@@ -65,40 +74,25 @@ def _answer(headings: list[str]) -> str:
 
 
 class TestV5FinalContractRuntimeIsolation(unittest.TestCase):
-    def test_flattened_numbered_final_headings_survive_semantic_compilation(self):
-        contract = compiler._output_contract(
-            FLATTENED_TASK,
-            {"synthesis": 1.0},
-            False,
-        )
-
-        self.assertTrue(contract["explicit_markdown_contract"])
-        self.assertEqual(contract["exact_markdown_headings"], EXPECTED_HEADINGS)
-        self.assertEqual(contract["required_fields"], EXPECTED_HEADINGS)
-        self.assertEqual(contract["task_explicit_delivery_section_count"], 4)
+    def test_flattened_numbered_final_headings_survive_contract_extraction(self):
+        value = contract(final_node=True)
+        self.assertTrue(value["explicit_markdown_contract"])
+        self.assertEqual(value["exact_markdown_headings"], EXPECTED_HEADINGS)
+        self.assertEqual(value["required_fields"], EXPECTED_HEADINGS)
+        self.assertEqual(value["task_explicit_delivery_section_count"], 4)
 
     def test_intermediate_contract_does_not_inherit_final_heading_names(self):
-        contract = compiler._output_contract(
-            FLATTENED_TASK,
-            {"adversarial_reasoning": 1.0},
-            False,
-        )
-
-        self.assertFalse(contract.get("explicit_markdown_contract", False))
-        self.assertEqual(contract["task_explicit_delivery_section_count"], 4)
-        self.assertNotEqual(contract["required_fields"], EXPECTED_HEADINGS)
+        value = contract(final_node=False)
+        self.assertFalse(value.get("explicit_markdown_contract", False))
+        self.assertEqual(value["task_explicit_delivery_section_count"], 4)
+        self.assertEqual(value["required_fields"], INTERNAL_HEADINGS)
 
     def test_generic_node_contract_rejects_answer_using_only_final_headings(self):
-        contract = compiler._output_contract(
-            FLATTENED_TASK,
-            {"adversarial_reasoning": 1.0},
-            False,
-        )
+        value = contract(final_node=False)
         violations = contract_policy.validate_markdown_contract(
             _answer(EXPECTED_HEADINGS),
-            contract,
+            value,
         )
-
         self.assertTrue(violations)
         self.assertTrue(
             any(
@@ -108,33 +102,22 @@ class TestV5FinalContractRuntimeIsolation(unittest.TestCase):
         )
 
     def test_generic_node_contract_accepts_all_internal_headings_in_order(self):
-        contract = compiler._output_contract(
-            FLATTENED_TASK,
-            {"adversarial_reasoning": 1.0},
-            False,
-        )
-        headings = list(contract["required_fields"])
-
+        value = contract(final_node=False)
         self.assertEqual(
             contract_policy.validate_markdown_contract(
-                _answer(headings),
-                contract,
+                _answer(INTERNAL_HEADINGS),
+                value,
             ),
             [],
         )
 
-    def test_quality_gate_marks_four_final_headings_invalid_for_red_team_node(self):
-        contract = compiler._output_contract(
-            FLATTENED_TASK,
-            {"adversarial_reasoning": 1.0},
-            False,
-        )
+    def test_quality_gate_marks_final_headings_invalid_for_internal_node(self):
+        value = contract(final_node=False)
         passed, _, reasons = delivery.contract_aware_quality_gate(
-            _node(contract),
+            _node(value),
             {"choices": [{"finish_reason": "stop"}]},
             _answer(EXPECTED_HEADINGS),
         )
-
         self.assertFalse(passed)
         self.assertTrue(
             any(
@@ -144,27 +127,17 @@ class TestV5FinalContractRuntimeIsolation(unittest.TestCase):
         )
 
     def test_prompt_scopes_final_format_away_from_intermediate_node(self):
-        contract = compiler._output_contract(
-            FLATTENED_TASK,
-            {"adversarial_reasoning": 1.0},
-            False,
-        )
-        prompt = delivery.contract_aware_system_prompt(_node(contract))
-
+        value = contract(final_node=False)
+        prompt = delivery.contract_aware_system_prompt(_node(value))
         self.assertIn("本节点是内部工作节点", prompt)
         self.assertIn("不得复制或采用原始任务中的最终报告格式", prompt)
         self.assertIn("本节点输出格式只遵循", prompt)
 
     def test_explicit_synthesis_prompt_owns_final_contract(self):
-        contract = compiler._output_contract(
-            FLATTENED_TASK,
-            {"synthesis": 1.0},
-            False,
-        )
+        value = contract(final_node=True)
         prompt = delivery.contract_aware_system_prompt(
-            _node(contract, functions=("synthesis",))
+            _node(value, functions=("synthesis",))
         )
-
         self.assertIn("本节点承载用户明确指定的最终交付契约", prompt)
         for heading in EXPECTED_HEADINGS:
             self.assertIn(heading, prompt)

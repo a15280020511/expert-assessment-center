@@ -1,4 +1,4 @@
-name: Validate V5 Dynamic Graph
+name: Validate V5 Advisory Architecture
 
 on:
   pull_request:
@@ -21,10 +21,10 @@ permissions:
   contents: read
 
 jobs:
-  validate-v5:
-    name: Validate constitutional V5 optimizer and DAG
+  validate-v5-advisory:
+    name: Validate GPT Claude advisory runtime
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -40,125 +40,132 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
           python -m pip check
-      - name: Verify constitutional architecture
+      - name: Verify advisory-only architecture
         shell: bash
         run: |
           set -euo pipefail
-          test -s open-model-market/v5_constitutional_pipeline.py
-          test -s open-model-market/v5_constitutional_runtime.py
-          test -s open-model-market/v5_task_constraints.py
-          test -s open-model-market/v5_deterministic_answer_normalization.py
-          test -s open-model-market/v5_execution_primitives.py
-          test -s open-model-market/v5_independent_artifact_revalidation.py
-          test -s open-model-market/v5-deterministic-answer-normalization-fix-evidence.json
-          test -s tests/test_v5_deterministic_answer_normalization.py
-          test -s open-model-market/legacy-cleanup-report.json
-          test -s open-model-market/constitutional-qualification-report.json
-          test ! -e open-model-market/v5_executor.py
-          test ! -e open-model-market/v5_total_call_cap.py
-          test ! -e open-model-market/v5_production_hardening.py
-          test ! -e open-model-market/v5_r8_executor.py
-          test "$(jq -r '.status' open-model-market/legacy-cleanup-report.json)" = "PASS"
-          test "$(jq -r '.v5_executor_production_reachable' open-model-market/legacy-cleanup-report.json)" = "false"
-          test "$(jq -r '.status' open-model-market/v5-deterministic-answer-normalization-fix-evidence.json)" = "PASS"
-          test "$(jq -r '.normalization_is_model_free' open-model-market/v5-deterministic-answer-normalization-fix-evidence.json)" = "true"
-          test "$(jq -r '.text_invented' open-model-market/v5-deterministic-answer-normalization-fix-evidence.json)" = "false"
-          test "$(jq -r '.p0_regression_count' open-model-market/v5-deterministic-answer-normalization-fix-evidence.json)" = "50"
+          required=(
+            open-model-market/v5_pipeline.py
+            open-model-market/v5_task_envelope.py
+            open-model-market/v5_gpt_expert_selector.py
+            open-model-market/v5_claude_red_team_policy.py
+            open-model-market/v5_governance_runtime.py
+            open-model-market/v5_proposal_materializer.py
+            open-model-market/execution_graph_validator.py
+            open-model-market/v5_runtime.py
+          )
+          for path in "${required[@]}"; do test -s "$path"; done
+          removed=(
+            open-model-market/v5_single_pass_advisory.py
+            open-model-market/v5_constitutional_pipeline.py
+            open-model-market/v5_planner.py
+            open-model-market/v5_value_optimizer.py
+            open-model-market/v5_operational_resilience.py
+            open-model-market/v5_benchmark.py
+            open-model-market/v5_cross_endpoint_planner.py
+            open-model-market/v5_cross_endpoint_planner_impl.py
+            open-model-market/v5_dynamic_configuration.py
+            open-model-market/v5_planning_diagnostics.py
+            open-model-market/v5_single_pass_dialectic_gate.py
+            open-model-market/v5_general_task_planning.py
+            open-model-market/task_semantic_compiler.py
+            open-model-market/resource_matrix.py
+            open-model-market/atomic_work_graph.py
+            open-model-market/team_policy.json
+          )
+          for path in "${removed[@]}"; do test ! -e "$path"; done
+          ! grep -R --line-number --exclude-dir=.git \
+            -E 'ortools|cp_model|google-or-tools-cp-sat|optimize_execution_graph|pareto_prune|import numpy|from numpy|compile_v5_task_resources|compile_task_semantics' \
+            open-model-market requirements-runtime.txt
           python - <<'PY'
-          import ast
+          import sys
           from pathlib import Path
 
-          failures = []
-          for root in (Path("open-model-market"), Path("tests")):
-              for path in root.rglob("*.py"):
-                  tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-                  for node in ast.walk(tree):
-                      if (
-                          isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                          and node.name == "install"
-                          and node.col_offset == 0
-                      ):
-                          failures.append(f"{path}:{node.lineno}:top-level install definition")
-                      if (
-                          isinstance(node, ast.Call)
-                          and isinstance(node.func, ast.Attribute)
-                          and node.func.attr == "install"
-                      ):
-                          failures.append(f"{path}:{node.lineno}:install call")
-          if failures:
-              raise SystemExit("\n".join(failures))
+          sys.path.insert(0, "open-model-market")
+          from v5_claude_red_team_policy import (
+              CLAUDE_RED_TEAM_GOVERNANCE_CALLS,
+              CLAUDE_RED_TEAM_MAX_CALLS_PER_TASK,
+              CLAUDE_RED_TEAM_MODEL,
+              GPT_SYNTHESIS_CALLS,
+          )
+          from v5_gpt_expert_selector import GPT_SELECTOR_MODEL
+
+          assert GPT_SELECTOR_MODEL == "~openai/gpt-latest"
+          assert CLAUDE_RED_TEAM_MODEL == "~anthropic/claude-opus-latest"
+          assert CLAUDE_RED_TEAM_MAX_CALLS_PER_TASK == 1
+          assert GPT_SYNTHESIS_CALLS == 1
+          assert CLAUDE_RED_TEAM_GOVERNANCE_CALLS == 3
+          source = Path("open-model-market/v5_governance_runtime.py").read_text()
+          assert "claude_is_advisory_only" in source
+          assert "claude_gatekeeping_allowed" in source
+          assert "deterministic-constitutional-validator" in source
+          assert "task_envelope" in source
           PY
-      - name: Run canonical static gates
+      - name: Run static and constitutional tests
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p v5-validation-logs
           python -m ruff check . 2>&1 | tee v5-validation-logs/ruff.log
-          python -m compileall -q open-model-market tests tools 2>&1 | tee v5-validation-logs/compileall.log
-      - name: Run critical constitutional and recovery tests
-        shell: bash
-        run: |
-          set -euo pipefail
+          python -m compileall -q open-model-market tests tools \
+            2>&1 | tee v5-validation-logs/compileall.log
           python -m unittest \
-            tests.test_v5_task_resource_compiler \
+            tests.test_v5_claude_red_team_advice \
+            tests.test_v5_admission_task_isolation \
+            tests.test_v5_full_load_stability \
+            tests.test_v5_extreme_advisory_stress \
+            tests.test_v5_repository_residue_audit \
             tests.test_execution_graph_validator \
-            tests.test_execution_graph_properties \
             tests.test_v5_constitutional_runtime \
             tests.test_v5_task_constraints \
-            tests.test_v5_deterministic_answer_normalization \
-            tests.test_v5_dynamic_model_fit \
-            tests.test_v5_global_company_calibration \
-            tests.test_v5_cross_endpoint_recovery \
-            tests.test_v5_independent_artifact_revalidation \
-            tests.test_v5_full_load_stability \
+            tests.test_v5_evidence_bundle \
             tests.test_v5_production_cutover \
             tests.test_v5_p0_governance \
             tests.test_legacy_runtime_removed \
             -v 2>&1 | tee v5-validation-logs/critical-tests.log
-      - name: Run deterministic constitutional dry-run
+      - name: Run zero-call advisory dry-run
         shell: bash
         run: |
           set -euo pipefail
-          python open-model-market/v5_constitutional_pipeline.py \
-            --task "比较三个城市公共投资方案，完成财务建模、政策与法律合规、证据核验、预测推演、独立红队反证和最终决策。" \
+          python open-model-market/v5_pipeline.py \
+            --task "比较三个公共投资方案，给出风险、证据和最终决策。" \
             --catalog-file tests/fixtures/models.json \
             --endpoint-file tests/fixtures/endpoints.json \
             --dry-run \
-            --maximum-total-calls 16 \
-            --maximum-recovery-calls 2 \
-            --quality-tier value \
+            --maximum-total-calls 8 \
+            --maximum-recovery-calls 1 \
             --output-dir v5-validation-artifacts
           python - <<'PY'
           import json
           from pathlib import Path
 
           root = Path("v5-validation-artifacts")
-          market = json.loads((root / "v5-model-endpoint-market.json").read_text())
-          optimization = json.loads((root / "v5-optimization.json").read_text())
-          graph = json.loads((root / "v5-execution-graph.json").read_text())
           dry = json.loads((root / "v5-dry-run.json").read_text())
-          constraints = json.loads((root / "task-constraints.json").read_text())
-          companies = [
-              node["parameter_profile"]["model_company"]
-              for node in graph["nodes"]
-          ]
-          assert optimization["solver_status"] in {"OPTIMAL", "FEASIBLE"}
-          assert optimization["optimizer"] == "google-or-tools-cp-sat"
-          assert len(companies) == len(set(companies))
-          assert dry["global_monkey_patching"] is False
-          assert dry["model_company_policy"] == "task-global-all-different"
-          assert dry["task_constraints"] == constraints
-          assert constraints["external_tools_allowed"] is False
-          assert constraints["fail_closed"] is True
-          assert market["fixed_preselection_weight_tuple_used"] is False
-          assert market["fixed_task_fit_weight_tuple_used"] is False
-          assert abs(sum(market["preselection_objective_weights"].values()) - 1.0) < 1e-9
-          assert abs(sum(market["task_fit_feature_weights"].values()) - 1.0) < 1e-9
+          runtime = json.loads((root / "v5-runtime-config.json").read_text())
+          envelope = json.loads((root / "v5-task-envelope.json").read_text())
+          assert dry["status"] == "validated-not-executed"
+          assert dry["model_calls"] == 0
+          assert dry["proposal_request"]["model"] == "~openai/gpt-latest"
+          assert dry["claude_model"] == "~anthropic/claude-opus-latest"
+          assert dry["claude_calls_per_task"] == 1
+          assert dry["claude_is_advisory_only"] is True
+          assert dry["claude_gatekeeping_allowed"] is False
+          assert dry["gpt_synthesis_calls"] == 1
+          assert dry["local_task_classification_used"] is False
+          assert dry["local_atomic_work_generation_used"] is False
+          assert dry["local_resource_matrix_used"] is False
+          assert dry["local_scoring_used"] is False
+          assert dry["optimizer_used"] is False
+          assert dry["cp_sat_used"] is False
+          assert runtime["final_authority"] == "deterministic-constitutional-validator"
+          assert runtime["task_decomposition_authority"] == "gpt-latest"
+          assert envelope["local_task_classification_used"] is False
+          assert not (root / "v5-execution-graph.json").exists()
           PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: v5-dynamic-validation-${{ github.run_id }}
+          name: v5-advisory-validation-${{ github.run_id }}
           path: |
             v5-validation-artifacts/
             v5-validation-logs/

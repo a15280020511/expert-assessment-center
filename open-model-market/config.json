@@ -1,71 +1,33 @@
 {
-  "selection": {
-    "team_pattern": "resource-demand-first-dynamic-work-packages-plus-synthesis",
-    "quality_tier": "value",
-    "ranking_limit": 150,
-    "minimum_context_length": 16384,
-    "candidate_pool_per_seat": 24,
-    "candidate_pool_policy": "top-150-multi-channel-intelligence-fit-value-price-context-company-diversity",
-    "require_distinct_model_companies": true,
-    "model_company_identity": "canonicalized-direct-model-author-prefix",
-    "company_shortage_policy": "expand-pool-then-fail-closed",
-    "budget_safety_factor": 1.25,
-    "catalog_sorts": [
-      "intelligence-high-to-low",
-      "pricing-low-to-high"
+  "catalog": {
+    "sorts": [
+      "intelligence-high-to-low"
     ],
-    "value_policy": {
-      "primary_metric": "expected_quality_after_failure_cost_per_blended_usd",
-      "benchmark_endpoint": "https://openrouter.ai/api/v1/benchmarks",
-      "price_floor_per_million": 0.25,
-      "benchmark_fallback": "official_intelligence_rank",
-      "speed_used": false,
-      "popularity_used": false,
-      "failure_probability_costed": true,
-      "recovery_cost_included": true
-    },
-    "optimizer": {
-      "engine": "google-or-tools-cp-sat",
-      "requirement_compiler": "resource_matrix.py",
-      "joint_resource_optimizer": "v5_value_optimizer.py",
-      "company_identity_policy": "v5_model_company.py",
-      "runtime_prompt_binding": "v5_dynamic_prompt_delivery.py",
-      "fallback_to_legacy_greedy_selector": false
-    },
-    "soft_price_caps_per_million": {
-      "budget": 3.0,
-      "value": 15.0,
-      "quality": 80.0
-    },
-    "weights": {
-      "budget": {"quality": 0.15, "popularity": 0.0, "cost": 0.65, "speed": 0.0, "fit": 0.15, "context": 0.05},
-      "value": {"quality": 0.35, "popularity": 0.0, "cost": 0.45, "speed": 0.0, "fit": 0.15, "context": 0.05},
-      "quality": {"quality": 0.70, "popularity": 0.0, "cost": 0.10, "speed": 0.0, "fit": 0.15, "context": 0.05}
-    }
+    "maximum_models": 150,
+    "minimum_context_length": 16384,
+    "selection_authority": "gpt-direct",
+    "local_scoring_allowed": false,
+    "optimizer_allowed": false
   },
-  "routing": {
-    "enabled": false,
-    "confidence_threshold": 0.68,
-    "high_stakes_confidence_threshold": 0.82,
-    "minimum_semantic_confidence": 0.65,
-    "max_completion_tokens": 900,
-    "max_budget_share": 0.20,
-    "max_intelligence_rank": 150
+  "governance": {
+    "gpt_model": "~openai/gpt-latest",
+    "claude_model": "~anthropic/claude-opus-latest",
+    "claude_red_team_calls": 1,
+    "claude_advisory_only": true,
+    "claude_gatekeeping_allowed": false,
+    "gpt_synthesis_calls": 1,
+    "governance_calls": 3,
+    "model_loop_allowed": false
   },
   "execution": {
     "max_completion_tokens": 10000,
-    "judge_max_completion_tokens": 10000,
     "reasoning_effort": "low",
-    "temperature": 0.10,
+    "temperature": 0.0,
     "catalog_timeout_seconds": 30,
     "catalog_max_retries": 1,
     "model_timeout_seconds": 240,
-    "model_max_retries": 0,
     "maximum_replacements": 2,
-    "parallel_workers": 4,
-    "judge_context_budget_chars": 120000,
-    "minimum_required_work_coverage": 0.6666666667,
-    "allow_controlled_degradation": true
+    "parallel_workers": 4
   },
   "provider": {
     "allow_fallbacks": false,

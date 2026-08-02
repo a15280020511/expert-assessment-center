@@ -47,6 +47,22 @@ def _execution_source() -> dict[str, object]:
     }
 
 
+def _architecture_hashes(root: Path) -> dict[str, str]:
+    paths = {
+        "config": "config.json",
+        "task_envelope": "v5_task_envelope.py",
+        "gpt_selector": "v5_gpt_expert_selector.py",
+        "claude_advisory": "v5_claude_red_team_policy.py",
+        "governance_runtime": "v5_governance_runtime.py",
+        "proposal_validator": "v5_proposal_materializer.py",
+        "execution_graph_validator": "execution_graph_validator.py",
+    }
+    return {
+        name: sha256_file(root / filename)
+        for name, filename in paths.items()
+    }
+
+
 def write_manifest(output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     files = []
@@ -62,15 +78,15 @@ def write_manifest(output_dir: Path) -> None:
         )
     root = Path(__file__).resolve().parent
     provenance = {
-        "schema_version": "v5-artifact-manifest-2",
+        "schema_version": "v5-artifact-manifest-3",
         "created_at": datetime.now(timezone.utc).isoformat(),
         **_execution_source(),
         "github_run_id": os.getenv("GITHUB_RUN_ID"),
         "github_run_attempt": os.getenv("GITHUB_RUN_ATTEMPT"),
         "github_repository": os.getenv("GITHUB_REPOSITORY"),
         "issue_number": os.getenv("ISSUE_NUMBER"),
-        "config_sha256": sha256_file(root / "config.json"),
-        "policy_sha256": sha256_file(root / "team_policy.json"),
+        "architecture_sha256": _architecture_hashes(root),
+        "obsolete_team_policy_present": False,
         "files": files,
     }
     (output_dir / "artifact-manifest.json").write_text(
