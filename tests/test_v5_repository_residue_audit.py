@@ -17,6 +17,10 @@ class RepositoryResidueAuditTests(unittest.TestCase):
             MARKET / "task_resource_artifacts.py",
             MARKET / "v5_single_pass_advisory.py",
             MARKET / "team_policy.json",
+            MARKET / "VALUE_SELECTION.md",
+            MARKET / "legacy-cleanup-report.json",
+            MARKET / "constitutional-qualification-report.json",
+            ROOT / "MIGRATION_MANIFEST.json",
             ROOT / "tools" / "v5_fixture_planning_diagnostics.py",
             ROOT / "tests" / "test_v5_general_task_planning.py",
             ROOT / "tests" / "test_v5_task_resource_compiler.py",
@@ -101,6 +105,23 @@ class RepositoryResidueAuditTests(unittest.TestCase):
             with self.subTest(fragment=fragment):
                 self.assertNotIn(fragment, text)
         self.assertIn('"proposal_repaired_by_validator": false', text)
+
+    def test_repository_overview_does_not_describe_obsolete_production_chain(self) -> None:
+        text = (ROOT / "README.md").read_text(encoding="utf-8")
+        forbidden = (
+            "任务语义编译\n→ 原子工作图",
+            "任务资源矩阵\n→ OpenRouter",
+            "Google OR-Tools CP-SAT联合求解",
+            "模型总目标权重和任务适配特征权重",
+            "候选池范围和求解搜索规模",
+            "风险调整后的任务效用",
+        )
+        for fragment in forbidden:
+            with self.subTest(fragment=fragment):
+                self.assertNotIn(fragment, text)
+        self.assertIn("GPT latest", text)
+        self.assertIn("Claude Opus latest", text)
+        self.assertIn("确定性宪法校验器：唯一硬门", text)
 
 
 if __name__ == "__main__":
