@@ -40,19 +40,21 @@ jobs:
 
           runtime = Path("open-model-market/v5_runtime.py")
           text = runtime.read_text(encoding="utf-8")
-          old_signature = '''    def _preflight(
-              self,
-              graph: ExecutionGraph,
-              limits: GraphLimits,
-          ) -> dict[str, Any]:
-          '''
-          new_signature = '''    def _preflight(
-              self,
-              graph: ExecutionGraph,
-              limits: GraphLimits | None = None,
-          ) -> dict[str, Any]:
-              limits = limits or GraphLimits()
-          '''
+          old_signature = (
+              "    def _preflight(\n"
+              "        self,\n"
+              "        graph: ExecutionGraph,\n"
+              "        limits: GraphLimits,\n"
+              "    ) -> dict[str, Any]:\n"
+          )
+          new_signature = (
+              "    def _preflight(\n"
+              "        self,\n"
+              "        graph: ExecutionGraph,\n"
+              "        limits: GraphLimits | None = None,\n"
+              "    ) -> dict[str, Any]:\n"
+              "        limits = limits or GraphLimits()\n"
+          )
           if text.count(old_signature) != 1:
               raise SystemExit("preflight signature target missing or ambiguous")
           runtime.write_text(
