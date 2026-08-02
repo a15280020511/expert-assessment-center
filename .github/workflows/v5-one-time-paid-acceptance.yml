@@ -53,17 +53,15 @@ jobs:
               "maximum_recovery_calls",
               "maximum_total_calls",
               "purpose",
-              "quality_tier",
               "request_id",
               "schema_version",
               "target_sha",
               "task"
             ] and
-            .schema_version == "v5-paid-acceptance-2" and
+            .schema_version == "v5-paid-acceptance-3" and
             .purpose == "task-independent-low-cost-production-qualification" and
             (.request_id | test("^[a-z0-9][a-z0-9._-]{0,63}$")) and
             (.target_sha | test("^[0-9a-f]{40}$")) and
-            (.quality_tier == "budget" or .quality_tier == "value" or .quality_tier == "quality") and
             (.maximum_total_calls | type == "number" and . >= 4 and . <= 16) and
             (.maximum_recovery_calls | type == "number" and . >= 0) and
             (.maximum_recovery_calls < .maximum_total_calls) and
@@ -81,7 +79,6 @@ jobs:
           {
             echo "target_sha=$target"
             echo "request_id=$(jq -er '.request_id' "$request")"
-            echo "quality_tier=$(jq -er '.quality_tier' "$request")"
             echo "maximum_total_calls=$(jq -er '.maximum_total_calls' "$request")"
             echo "maximum_recovery_calls=$(jq -er '.maximum_recovery_calls' "$request")"
             echo "cost_cap_usd=$(jq -er '.cost_cap_usd' "$request")"
@@ -151,7 +148,6 @@ jobs:
       - name: Execute bounded live production acceptance
         working-directory: runtime-source
         env:
-          QUALITY_TIER: ${{ steps.request.outputs.quality_tier }}
           MAXIMUM_TOTAL_CALLS: ${{ steps.request.outputs.maximum_total_calls }}
           MAXIMUM_RECOVERY_CALLS: ${{ steps.request.outputs.maximum_recovery_calls }}
           COST_CAP_USD: ${{ steps.request.outputs.cost_cap_usd }}
@@ -161,7 +157,6 @@ jobs:
           python open-model-market/v5_production_ticket.py \
             --task "$(cat paid-task.txt)" \
             --output-dir paid-acceptance-artifacts \
-            --quality-tier "$QUALITY_TIER" \
             --maximum-total-calls "$MAXIMUM_TOTAL_CALLS" \
             --maximum-recovery-calls "$MAXIMUM_RECOVERY_CALLS" \
             --cost-anomaly-usd "$COST_CAP_USD" \
