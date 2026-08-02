@@ -40,24 +40,26 @@ jobs:
 
           runtime = Path("open-model-market/v5_runtime.py")
           text = runtime.read_text(encoding="utf-8")
-          old = '''    def _preflight(
-              self,
-              graph: ExecutionGraph,
-              limits: GraphLimits,
-          ) -> dict[str, Any]:
-              blockers: list[str] = []
-          '''
-          new = '''    def _preflight(
-              self,
-              graph: ExecutionGraph,
-              limits: GraphLimits | None = None,
-          ) -> dict[str, Any]:
-              limits = limits or GraphLimits()
-              blockers: list[str] = []
-          '''
-          if old not in text:
-              raise SystemExit("preflight compatibility target missing")
-          runtime.write_text(text.replace(old, new), encoding="utf-8")
+          start = text.index("    def _preflight(")
+          end = text.index("        contracts =", start)
+          block = text[start:end]
+          old_limits = "        limits: GraphLimits,\n"
+          if block.count(old_limits) != 1:
+              raise SystemExit("preflight limits target missing or ambiguous")
+          block = block.replace(
+              old_limits,
+              "        limits: GraphLimits | None = None,\n",
+          )
+          signature_end = "    ) -> dict[str, Any]:\n        blockers: list[str] = []\n"
+          if block.count(signature_end) != 1:
+              raise SystemExit("preflight body target missing or ambiguous")
+          block = block.replace(
+              signature_end,
+              "    ) -> dict[str, Any]:\n"
+              "        limits = limits or GraphLimits()\n"
+              "        blockers: list[str] = []\n",
+          )
+          runtime.write_text(text[:start] + block + text[end:], encoding="utf-8")
 
           test = Path("tests/test_v5_live_delivery_consistency.py")
           text = test.read_text(encoding="utf-8")
