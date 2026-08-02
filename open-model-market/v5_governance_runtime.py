@@ -1,4 +1,4 @@
-"""One-pass GPT/Claude governance execution with a complete paid-call ledger."""
+"""One-pass GPT/Claude advisory governance with complete paid-call ledger."""
 from __future__ import annotations
 
 import json
@@ -11,7 +11,7 @@ from openrouter_api import CHAT_URL, request_json
 from v5_claude_red_team_policy import (
     RedTeamScope,
     build_claude_red_team_request,
-    parse_claude_red_team_verdict,
+    parse_claude_red_team_advice,
 )
 from v5_execution_primitives import extract_answer
 from v5_gpt_expert_selector import (
@@ -43,7 +43,10 @@ def _actual_cost(response: Mapping[str, Any]) -> float:
     return 0.0
 
 
-def _provider(request: Mapping[str, Any], response: Mapping[str, Any]) -> str:
+def _provider(
+    request: Mapping[str, Any],
+    response: Mapping[str, Any],
+) -> str:
     value = str(response.get("provider") or "").strip()
     if value:
         return value
@@ -105,7 +108,9 @@ class GovernanceLedger:
         latency_seconds: float,
     ) -> None:
         if len(self.calls) >= self.maximum_calls:
-            raise GovernanceRuntimeError("governance call ceiling exceeded")
+            raise GovernanceRuntimeError(
+                "governance call ceiling exceeded"
+            )
         usage = response.get("usage")
         usage = dict(usage) if isinstance(usage, Mapping) else {}
         self.calls.append(
@@ -114,20 +119,25 @@ class GovernanceLedger:
                 kind=kind,
                 requested_model=str(request.get("model") or ""),
                 resolved_model=str(
-                    response.get("model") or request.get("model") or ""
+                    response.get("model")
+                    or request.get("model")
+                    or ""
                 ),
                 provider=_provider(request, response),
                 request=dict(request),
                 usage=usage,
                 actual_cost_usd=round(_actual_cost(response), 8),
-                latency_seconds=round(max(0.0, latency_seconds), 6),
+                latency_seconds=round(
+                    max(0.0, latency_seconds),
+                    6,
+                ),
                 response_id=str(response.get("id") or "") or None,
             )
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": "v5-governance-call-ledger-1",
+            "schema_version": "v5-advisory-governance-call-ledger-1",
             "status": "PASS",
             "maximum_governance_calls": self.maximum_calls,
             "actual_governance_calls": len(self.calls),
@@ -140,10 +150,13 @@ class GovernanceLedger:
             "gpt_synthesis_calls": sum(
                 row.kind == "gpt_synthesis" for row in self.calls
             ),
+            "claude_is_advisory_only": True,
+            "claude_gatekeeping_allowed": False,
             "second_claude_review_allowed": False,
             "model_loop_allowed": False,
             "actual_cost_usd": round(
-                sum(row.actual_cost_usd for row in self.calls), 8
+                sum(row.actual_cost_usd for row in self.calls),
+                8,
             ),
             "calls": [row.to_dict() for row in self.calls],
         }
@@ -155,7 +168,9 @@ def _default_call(
 ) -> tuple[Mapping[str, Any], float]:
     api_key = getattr(run, "api_key", None)
     if not api_key:
-        raise GovernanceRuntimeError("OPENROUTER_API_KEY is not set")
+        raise GovernanceRuntimeError(
+            "OPENROUTER_API_KEY is not set"
+        )
     started = time.monotonic()
     response = request_json(
         CHAT_URL,
@@ -189,7 +204,9 @@ def _call_and_parse(
     )
     text = extract_answer(response)
     if not text:
-        raise GovernanceRuntimeError(f"{kind} returned no visible output")
+        raise GovernanceRuntimeError(
+            f"{kind} returned no visible output"
+        )
     return parser(text)
 
 
@@ -209,7 +226,7 @@ def run_single_pass_governance(
         tuple[Mapping[str, Any], float],
     ] | None = None,
 ) -> tuple[Any, Any, dict[str, Any], dict[str, Any]]:
-    """Run GPT proposal, Claude once, optional GPT synthesis, final validator."""
+    """Run GPT proposal, Claude advice, GPT synthesis, final validator."""
     call = call_fn or _default_call
     compact_resources = compact_resources_for_gpt(resources)
     limits = {
@@ -218,7 +235,9 @@ def run_single_pass_governance(
         "approved_recovery_calls": approved_recovery_calls,
         "cost_anomaly_usd": cost_anomaly_usd,
     }
-    ledger = GovernanceLedger(maximum_calls=governance_calls_reserved)
+    ledger = GovernanceLedger(
+        maximum_calls=governance_calls_reserved
+    )
 
     proposal_request = build_proposal_request(
         task=task,
@@ -246,43 +265,53 @@ def run_single_pass_governance(
         RedTeamScope.INTERNAL_SELECTION,
         claude_input,
     )
-    claude = _call_and_parse(
+    claude_advice = _call_and_parse(
         run=run,
         request=claude_request,
         kind="claude_red_team",
         ledger=ledger,
         call_fn=call,
-        parser=lambda text: parse_claude_red_team_verdict(
+        parser=lambda text: parse_claude_red_team_advice(
             RedTeamScope.INTERNAL_SELECTION,
             text,
         ),
     )
 
-    final = dict(initial)
-    if claude.get("decision") == "REJECT":
-        synthesis_request = build_synthesis_request(
-            task=task,
-            initial_proposal=initial,
-            claude_verdict=claude,
-            resources=compact_resources,
-            catalog=catalog,
-            **limits,
+    synthesis_request = build_synthesis_request(
+        task=task,
+        initial_proposal=initial,
+        claude_advice=claude_advice,
+        resources=compact_resources,
+        catalog=catalog,
+        **limits,
+    )
+    final = dict(
+        _call_and_parse(
+            run=run,
+            request=synthesis_request,
+            kind="gpt_synthesis",
+            ledger=ledger,
+            call_fn=call,
+            parser=parse_proposal,
         )
-        final = dict(
-            _call_and_parse(
-                run=run,
-                request=synthesis_request,
-                kind="gpt_synthesis",
-                ledger=ledger,
-                call_fn=call,
-                parser=parse_proposal,
-            )
-        )
+    )
 
-    if sum(row.kind == "claude_red_team" for row in ledger.calls) != 1:
-        raise GovernanceRuntimeError("Claude must execute exactly once")
-    if sum(row.kind == "gpt_synthesis" for row in ledger.calls) > 1:
-        raise GovernanceRuntimeError("GPT synthesis exceeded one call")
+    counts = {
+        kind: sum(row.kind == kind for row in ledger.calls)
+        for kind in (
+            "gpt_proposal",
+            "claude_red_team",
+            "gpt_synthesis",
+        )
+    }
+    if counts != {
+        "gpt_proposal": 1,
+        "claude_red_team": 1,
+        "gpt_synthesis": 1,
+    }:
+        raise GovernanceRuntimeError(
+            "governance must execute exactly GPT-Claude-GPT once"
+        )
 
     violations = deterministic_violations(
         final,
@@ -302,18 +331,20 @@ def run_single_pass_governance(
         **limits,
     )
     governance = {
-        "schema_version": "v5-single-pass-governance-result-1",
+        "schema_version": "v5-advisory-governance-result-1",
         "status": "PASS",
         "initial_proposal": initial,
-        "claude_verdict": dict(claude),
+        "claude_advice": dict(claude_advice),
         "final_proposal": final,
         "claude_review_count": 1,
-        "gpt_synthesis_count": sum(
-            row.kind == "gpt_synthesis" for row in ledger.calls
-        ),
+        "gpt_synthesis_count": 1,
+        "claude_is_advisory_only": True,
+        "claude_gatekeeping_allowed": False,
         "second_claude_review_allowed": False,
         "model_loop_allowed": False,
-        "final_authority": "deterministic-constitutional-validator",
+        "final_authority": (
+            "deterministic-constitutional-validator"
+        ),
         "materialization": materialization,
     }
     return graph, graph_limits, governance, ledger.to_dict()
@@ -326,10 +357,20 @@ def write_governance_artifacts(
 ) -> None:
     root.mkdir(parents=True, exist_ok=True)
     (root / "v5-governance-result.json").write_text(
-        json.dumps(governance, ensure_ascii=False, indent=2, default=str),
+        json.dumps(
+            governance,
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        ),
         encoding="utf-8",
     )
     (root / "v5-governance-calls.json").write_text(
-        json.dumps(ledger, ensure_ascii=False, indent=2, default=str),
+        json.dumps(
+            ledger,
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        ),
         encoding="utf-8",
     )
