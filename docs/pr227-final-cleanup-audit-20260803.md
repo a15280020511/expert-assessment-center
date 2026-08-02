@@ -65,6 +65,34 @@
 - High：0。
 - Medium：0。
 
+## 独立复算总口径修复
+
+在设计完整生产证据链时发现，独立 Artifact 复算器仍沿用旧口径：只统计专家调用和专家费用；当前生产摘要与总账则统计三次治理调用加专家调用的总数和总费用。若不修复，即使真实业务链成功，独立 Attestation 也会因为请求数与费用口径不一致而错误失败。
+
+治理感知的独立复算修复提交：`bb8c7ab5f1f32ef971e46f870f22be5a2c1aa3a2`。
+
+修复内容：
+
+- 独立加载并校验 `v5-governance-calls.json`。
+- 强制治理序列为 `gpt_proposal → claude_red_team → gpt_synthesis`，且 Claude 与 GPT 综合各一次。
+- 总调用数按治理调用加专家原始尝试重算，并与批准总上限、完整请求审计分别对账。
+- `governance_request_count`、`expert_request_count`、`request_count` 和请求明细数量必须一致。
+- 每个治理与专家请求均重新检查禁止工具和单一 Provider 锁定。
+- 总费用按治理费用加专家节点费用重算，并同时与执行摘要和 `call-ledger.json` 对账。
+- 独立结果同时输出治理调用、专家调用、治理费用、专家费用和总费用，避免口径混淆。
+- 新增治理序列篡改和请求总数篡改 fail-closed 回归。
+
+该提交的专用修复门已通过：
+
+- Ruff：PASS。
+- Python 全量编译：PASS。
+- 独立复算、证据包和原生审计聚焦回归：PASS。
+- 完整单元回归：PASS。
+- 8 个随机种子的同进程复算顺序压力：PASS。
+- Critical：0。
+- High：0。
+- Medium：0。
+
 ## 边界
 
-`main` 与 `production` 尚未移动。加固后的真实受限付费端到端重验仍需同时获得完整调用账本、主 Artifact、独立复算和最终 Attestation PASS，才能解除生产阻断。
+`main` 与 `production` 尚未移动。下一次真实受限付费端到端验收必须使用正式 `v5_production_ticket.py` 入口，并依次完成报告发布准备、原生执行审计、主 Artifact 冻结、独立复算、最终状态和最终 Attestation；所有环节均明确 PASS 后才能解除生产阻断。
