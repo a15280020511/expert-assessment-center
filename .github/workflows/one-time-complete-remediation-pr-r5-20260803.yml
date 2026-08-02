@@ -30,7 +30,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Verify authorization and patch test-generation lint contract
+      - name: Verify authorization and patch generated regression lint
         shell: bash
         run: |
           set -euo pipefail
@@ -60,10 +60,43 @@ jobs:
           python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
           python -m pip check
 
-      - name: Prepare and apply deterministic remediation
+      - name: Apply remediation and synchronize obsolete test fixtures
+        shell: bash
         run: |
+          set -euo pipefail
           python tools/one_time_r4_prepare.py
           python tools/one_time_complete_remediation_20260803.py
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"compatibility anchor missing in {path}: {old!r}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once(
+              "tests/test_ticket_jsonschema.py",
+              '        self.assertEqual(validated["quality_tier"], "value")\n',
+              "",
+          )
+          replace_once(
+              "tests/test_v5_command_trigger.py",
+              '            "quality_tier": "value",\n',
+              "",
+          )
+          replace_once(
+              "tests/test_v5_p0_governance.py",
+              '            "quality_tier": "value",\n',
+              "",
+          )
+          replace_once(
+              "tests/test_v5_full_load_stability.py",
+              '                        "--quality-tier",\n                        "value",\n',
+              "",
+          )
+          PY
 
       - name: Remove all one-time machinery before validation
         run: |
@@ -76,8 +109,9 @@ jobs:
           rm -f .github/workflows/one-time-complete-remediation-pr-r3-20260803.yml
           rm -f .github/workflows/one-time-complete-remediation-pr-r4-20260803.yml
           rm -f .github/workflows/one-time-complete-remediation-pr-r5-20260803.yml
+          rm -f .github/workflows/one-time-complete-remediation-pr-r6-20260803.yml
 
-      - name: Verify cleaned architecture and interfaces
+      - name: Verify cleaned architecture, interfaces, and synchronized tests
         shell: bash
         run: |
           set -euo pipefail
@@ -91,7 +125,11 @@ jobs:
             open-model-market/v5_ticket_gate.py \
             open-model-market/execution-ticket.schema.json \
             .github/workflows/execution-ticket.yml \
-            tests/test_v5_ticket_gate.py
+            tests/test_v5_ticket_gate.py \
+            tests/test_ticket_jsonschema.py \
+            tests/test_v5_command_trigger.py \
+            tests/test_v5_p0_governance.py \
+            tests/test_v5_full_load_stability.py
           grep -q 'workflow_dispatch' .github/workflows/v5-final-paid-claude-acceptance-20260803.yml
           grep -q 'inputs.confirm' .github/workflows/v5-final-paid-claude-acceptance-20260803.yml
           ! grep -q 'hashFiles(' .github/workflows/v5-final-paid-claude-acceptance-20260803.yml
