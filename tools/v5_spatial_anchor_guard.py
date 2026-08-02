@@ -58,6 +58,21 @@ def _major_evidence_fragments(value: str) -> list[str]:
     ]
 
 
+def _reordered_semantic_match(claim: str, source: str) -> bool:
+    """Match safe word reordering after quantity, polarity and space are gated."""
+    if not claim or not source or not _spatially_compatible(claim, source):
+        return False
+    return bool(
+        claim in source
+        or source in claim
+        or SequenceMatcher(None, claim, source).ratio() >= 0.72
+        or (
+            _ngram_coverage(claim, source, 2) >= 0.72
+            and _ngram_coverage(claim, source, 3) >= 0.42
+        )
+    )
+
+
 _QUANTITY_MAJOR_FRAGMENT_RE = re.compile(
 ''',
 )
@@ -68,13 +83,20 @@ replace_once(
             if not source_context:
                 continue
             if claim_context in source_context:
+                return True
+            if SequenceMatcher(None, claim_context, source_context).ratio() >= 0.72:
+                return True
+            if (
+                _ngram_coverage(claim_context, source_context, 2) >= 0.85
+                and _ngram_coverage(claim_context, source_context, 3) >= 0.60
+            ):
+                return True
 ''',
     '''        for source_context in source_contexts:
             if not source_context:
                 continue
-            if not _spatially_compatible(claim_context, source_context):
-                continue
-            if claim_context in source_context:
+            if _reordered_semantic_match(claim_context, source_context):
+                return True
 ''',
 )
 
@@ -167,8 +189,6 @@ new_claim_supported = '''def _source_evidence_rows(task: str) -> list[dict[str, 
 
 
 def _semantic_reorder_supported(fragment: str, row: Mapping[str, Any]) -> bool:
-    if not _spatially_compatible(fragment, str(row.get("context_raw", ""))):
-        return False
     claim_skeleton = _quantity_skeleton(fragment)
     if not claim_skeleton:
         return False
@@ -183,13 +203,7 @@ def _semantic_reorder_supported(fragment: str, row: Mapping[str, Any]) -> bool:
         )
     )
     return any(
-        claim_skeleton in source_skeleton
-        or source_skeleton in claim_skeleton
-        or SequenceMatcher(None, claim_skeleton, source_skeleton).ratio() >= 0.72
-        or (
-            _ngram_coverage(claim_skeleton, source_skeleton, 2) >= 0.72
-            and _ngram_coverage(claim_skeleton, source_skeleton, 3) >= 0.42
-        )
+        _reordered_semantic_match(claim_skeleton, source_skeleton)
         for source_skeleton in source_skeletons
     )
 
