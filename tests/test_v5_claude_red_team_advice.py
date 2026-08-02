@@ -30,17 +30,32 @@ def internal_payload() -> dict[str, object]:
         "governance_calls_reserved": 3,
         "approved_recovery_calls": 1,
         "cost_anomaly_usd": 0.5,
-        "required_work": ["work-1", "work-2"],
+        "work_items": [
+            {
+                "work_id": "work-1",
+                "objective": "Analyze the bounded decision problem",
+                "dependencies": [],
+                "required_outputs": ["analysis"],
+            },
+            {
+                "work_id": "work-2",
+                "objective": "Synthesize the final decision",
+                "dependencies": ["work-1"],
+                "required_outputs": ["recommendation"],
+            },
+        ],
         "nodes": [
             {
                 "node_id": "node-1",
                 "candidate_id": "model-a@provider-a",
                 "work_ids": ["work-1", "work-2"],
+                "role": "Decision analyst and synthesizer",
+                "functions": ["analysis", "synthesis"],
                 "model": "company-a/model-a",
                 "company": "company-a",
                 "provider": "provider-a",
                 "estimated_cost_usd": 0.01,
-                "contract_kind": "analysis",
+                "contract_kind": "gpt-authored-expert-node",
                 "recovery_candidate_ids": [],
             }
         ],
