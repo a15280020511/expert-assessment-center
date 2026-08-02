@@ -90,7 +90,6 @@ class RuntimeConfig:
     total_call_limit: int
     recovery_call_limit: int
     cost_anomaly_usd: float | None
-    quality_tier: str
     tools_allowed: bool = False
     live_catalog_required: bool = False
     provider_lock_required: bool = True
@@ -107,8 +106,6 @@ class RuntimeConfig:
             or float(self.cost_anomaly_usd) <= 0
         ):
             raise ValueError("cost_anomaly_usd must be finite and positive")
-        if self.quality_tier not in {"budget", "value", "quality"}:
-            raise ValueError("quality_tier must be budget, value, or quality")
         if self.tools_allowed:
             raise ValueError("V5 expert runtime forbids external tools")
         if not self.provider_lock_required:

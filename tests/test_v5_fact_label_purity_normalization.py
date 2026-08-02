@@ -103,7 +103,7 @@ class V5FactLabelPurityNormalizationTests(unittest.TestCase):
 
     def test_engine_promotes_only_after_full_revalidation(self) -> None:
         engine = ConstitutionalExecutionEngine(
-            RuntimeConfig(5, 1, 0.35, "value"),
+            RuntimeConfig(5, 1, 0.35),
             prompt_policy=SimpleNamespace(),
             retry_policy=SimpleNamespace(),
             recovery_policy=SimpleNamespace(),

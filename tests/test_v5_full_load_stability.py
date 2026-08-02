@@ -53,7 +53,6 @@ def _budget(*, cost: float | None, failures: int = 3) -> BudgetController:
         total_call_limit=16,
         recovery_call_limit=2,
         cost_anomaly_usd=cost,
-        quality_tier="value",
         max_provider_failures=failures,
     )
     return BudgetController(config, _empty_graph())

@@ -59,8 +59,7 @@ class V5P0GovernanceTests(unittest.TestCase):
             total_call_limit=16,
             recovery_call_limit=2,
             cost_anomaly_usd=None,
-            quality_tier="value",
-        )
+            )
         budget = BudgetController(config, self._budget_graph())
         self.assertEqual(config.initial_call_limit, 14)
         for index in range(14):

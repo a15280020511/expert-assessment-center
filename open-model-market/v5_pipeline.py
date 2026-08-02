@@ -421,7 +421,6 @@ def main(
         total_call_limit=expert_total_calls,
         recovery_call_limit=recovery_calls,
         cost_anomaly_usd=remaining_cost,
-        quality_tier="value",
         tools_allowed=False,
         live_catalog_required=bool(args.require_live_catalog),
         provider_lock_required=True,

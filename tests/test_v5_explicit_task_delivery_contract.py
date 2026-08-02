@@ -158,8 +158,7 @@ class TestV5ExplicitTaskDeliveryContract(unittest.TestCase):
                 total_call_limit=4,
                 recovery_call_limit=1,
                 cost_anomaly_usd=None,
-                quality_tier="value",
-            )
+                    )
         )
         wrong = json.dumps({"assumptions": ["x"], "final_recommendation": ["x"]})
         evidence = runtime.execution_engine._contract(_node(contract), wrong)

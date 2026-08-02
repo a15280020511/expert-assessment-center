@@ -56,8 +56,7 @@ class TestV5OutputContractDelivery(unittest.TestCase):
             total_call_limit=4,
             recovery_call_limit=1,
             cost_anomaly_usd=None,
-            quality_tier="value",
-        ))
+            ))
 
     def test_machine_readable_prompt_demands_actual_json_fields(self):
         with patch.dict(os.environ, {delivery.COMPACT_MODE_ENV: ""}, clear=False):

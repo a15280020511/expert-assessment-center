@@ -89,7 +89,7 @@ def recovery_row() -> dict:
 class V5ReasoningSaturationRecoveryTests(unittest.TestCase):
     def test_replacement_for_reasoning_saturated_empty_output_is_visible_only(self) -> None:
         node = selected_node()
-        config = RuntimeConfig(2, 1, 0.35, "value")
+        config = RuntimeConfig(2, 1, 0.35)
         graph = SimpleNamespace(nodes=[node], final_nodes=[])
         budget = BudgetController(config, graph)
         requests: list[dict] = []

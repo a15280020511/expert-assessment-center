@@ -165,12 +165,12 @@ class WorkflowContractTests(unittest.TestCase):
     def test_paid_acceptance_is_request_driven_and_recomputed(self):
         paid = self.paid_acceptance
         self.assertIn('branches:\n      - "acceptance/**"', paid)
-        self.assertIn('schema_version == "v5-paid-acceptance-2"', paid)
+        self.assertIn('schema_version == "v5-paid-acceptance-3"', paid)
         self.assertIn("target_sha", paid)
         self.assertIn("maximum_total_calls", paid)
         self.assertIn("maximum_recovery_calls", paid)
         self.assertIn("cost_cap_usd", paid)
-        self.assertIn("quality_tier", paid)
+        self.assertNotIn("quality_tier", paid)
         self.assertIn(".task.question", paid)
         self.assertNotIn("PR_NUMBER", paid)
         self.assertNotIn("fix/v5-constitution-p0-publication-integrity", paid)

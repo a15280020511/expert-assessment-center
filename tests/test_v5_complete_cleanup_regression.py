@@ -14,14 +14,19 @@ from text_normalization import normalize_heading_key  # noqa: E402
 
 
 class CompleteCleanupRegressionTests(unittest.TestCase):
-    def test_quality_tier_is_not_an_external_contract(self) -> None:
+    def test_quality_tier_is_removed_from_runtime_and_workflows(self) -> None:
         schema = json.loads((MODULE / "execution-ticket.schema.json").read_text())
         self.assertNotIn("quality_tier", schema["properties"])
         paths = [
             MODULE / "v5_issue_ticket.py",
             MODULE / "v5_production_ticket.py",
             MODULE / "v5_ticket_gate.py",
+            MODULE / "v5_pipeline.py",
+            MODULE / "v5_runtime.py",
+            MODULE / "expert-team-capabilities.json",
             ROOT / ".github/workflows/execution-ticket.yml",
+            ROOT / ".github/workflows/v5-one-time-paid-acceptance.yml",
+            ROOT / ".github/workflows/v5-final-paid-claude-acceptance-20260803.yml",
         ]
         for path in paths:
             self.assertNotIn("quality_tier", path.read_text(), path)

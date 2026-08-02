@@ -152,7 +152,7 @@ class V5DeterministicAnswerNormalizationTests(unittest.TestCase):
 
     def test_engine_promotes_only_fully_revalidated_quality_failure(self):
         engine = ConstitutionalExecutionEngine(
-            RuntimeConfig(4, 1, 0.01, "value"),
+            RuntimeConfig(4, 1, 0.01),
             prompt_policy=SimpleNamespace(),
             retry_policy=SimpleNamespace(),
             recovery_policy=SimpleNamespace(),
@@ -174,7 +174,7 @@ class V5DeterministicAnswerNormalizationTests(unittest.TestCase):
 
     def test_engine_never_overrides_non_quality_failure(self):
         engine = ConstitutionalExecutionEngine(
-            RuntimeConfig(4, 1, 0.01, "value"),
+            RuntimeConfig(4, 1, 0.01),
             prompt_policy=SimpleNamespace(),
             retry_policy=SimpleNamespace(),
             recovery_policy=SimpleNamespace(),
