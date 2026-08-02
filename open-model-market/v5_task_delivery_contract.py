@@ -15,6 +15,11 @@ for _export_name in dir(_impl):
     if not _export_name.startswith("__"):
         globals()[_export_name] = getattr(_impl, _export_name)
 
+_FINAL_FORMAT_LEAD_TAIL_RE = re.compile(
+    r"(?:最终|最后)?\s*(?:输出|报告|答复|交付)\s*"
+    r"(?:必须且只能|必须只能|必须|只能|须|应当|应|需|需要)?\s*$"
+)
+
 
 def _heading_list_payload(value: str) -> str:
     """Return only the immediate heading list, before trailing requirements."""
@@ -150,6 +155,9 @@ def project_task_for_node(
         format_match = _impl._FINAL_FORMAT_LINE_RE.search(line)
         if format_match:
             prefix = line[: format_match.start()].rstrip(" ：:；;，,。")
+            prefix = _FINAL_FORMAT_LEAD_TAIL_RE.sub("", prefix).rstrip(
+                " ：:；;，,。"
+            )
             if prefix and not prefix.startswith("-"):
                 rendered.append(prefix)
             skip_numbered_headings = bool(explicit)

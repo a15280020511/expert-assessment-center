@@ -34,6 +34,11 @@ SPECS = (
         "V5DeterministicAnswerNormalizationTests",
         5,
     ),
+    (
+        TESTS / "test_v5_recovery_contract_composite_evidence.py",
+        "V5RecoveryContractCompositeEvidenceTests",
+        6,
+    ),
 )
 
 

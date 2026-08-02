@@ -1,9 +1,9 @@
 """Stable public facade for constitutional task constraints and evidence gates.
 
 The implementation module contains the general fail-closed validators. This
-facade adds quantity-local, spatial-local, sensory-local, and task-anchored
-deictic canonicalization without weakening polarity, object, unit, quantity,
-or explicit location binding.
+facade adds local Chinese surface canonicalization and conservative composite
+fact entailment without weakening polarity, object, unit, quantity, or explicit
+location binding.
 """
 from __future__ import annotations
 
@@ -47,6 +47,23 @@ _GENERIC_ONSITE_RE = re.compile(
     rf"(?P<subject>{_QUANTITY_LITERAL_PATTERN}"
     r"[^，。！？!?；;\n]{0,24}?)(?:在|位于)现场"
 )
+_UNKNOWN_SOURCE_SUMMARY_RE = re.compile(
+    r"^(?P<subject>.+?)(?:来源|出处)(?:不明|未知)$"
+)
+_UNVERIFIED_IDENTITY_SUMMARY_RE = re.compile(
+    r"^(?P<subject>.+?)(?:身份)?(?:无法核验|未核验|身份不明|身份未知)$"
+)
+_DOCUMENT_OBSERVED_DISCREPANCY_RE = re.compile(
+    r"(?:交接单|清单|账面|记录).*(?:现场|实物).*(?:差异|不一致|不符)$"
+)
+_UNKNOWN_SOURCE_MARKER_RE = re.compile(
+    r"(?:来源|出处)(?:不明|未知)|(?:无法|不能|未能)确认(?:其)?(?:来源|出处)"
+)
+_UNVERIFIED_IDENTITY_MARKER_RE = re.compile(
+    r"身份(?:无法核验|未核验|不明|未知)|(?:无法|不能|未能)核验(?:其)?身份"
+)
+_DOCUMENT_MARKERS = ("交接单", "清单", "账面", "记录")
+_OBSERVED_MARKERS = ("现场", "实物")
 
 
 def _canonicalize_quantity_local_language(value: str) -> str:
@@ -123,6 +140,108 @@ def _canonicalize_task_anchored_onsite(
     return _GENERIC_ONSITE_RE.sub(replace, claim), blocked
 
 
+def _normalized_without_existential(value: str) -> str:
+    return _impl._normalize_claim(value).replace("有", "")
+
+
+def _unknown_source_summary_supported(task: str, fragment: str) -> bool:
+    match = _UNKNOWN_SOURCE_SUMMARY_RE.fullmatch(fragment.strip(" 。"))
+    if not match:
+        return False
+    subject = match.group("subject").strip()
+    normalized_subject = _normalized_without_existential(subject)
+    if not normalized_subject:
+        return False
+    for row in _impl._source_evidence_rows(task):
+        context = str(row.get("context_raw") or "")
+        if not _UNKNOWN_SOURCE_MARKER_RE.search(context):
+            continue
+        if not _impl._spatially_compatible(fragment, context):
+            continue
+        normalized_context = _normalized_without_existential(context)
+        if (
+            normalized_subject in normalized_context
+            or _impl._reordered_semantic_match(
+                normalized_subject,
+                normalized_context,
+            )
+        ):
+            return True
+    return False
+
+
+def _unverified_identity_summary_supported(task: str, fragment: str) -> bool:
+    match = _UNVERIFIED_IDENTITY_SUMMARY_RE.fullmatch(fragment.strip(" 。"))
+    if not match:
+        return False
+    subject = match.group("subject").strip()
+    normalized_subject = _impl._normalize_claim(subject)
+    for row in _impl._source_evidence_rows(task):
+        context = str(row.get("context_raw") or "")
+        if not _UNVERIFIED_IDENTITY_MARKER_RE.search(context):
+            continue
+        if not _impl._spatially_compatible(fragment, context):
+            continue
+        normalized_context = _impl._normalize_claim(context)
+        if normalized_subject and (
+            normalized_subject in normalized_context
+            or _impl._reordered_semantic_match(
+                normalized_subject,
+                normalized_context,
+            )
+        ):
+            return True
+        if (
+            normalized_subject in {"来访者", "访客", "来人"}
+            and re.search(r"(?:人|人员).{0,24}(?:要求|申请|试图).{0,8}(?:进入|入内)", context)
+        ):
+            return True
+    return False
+
+
+def _different_same_unit(left: tuple[str, str, str], right: tuple[str, str, str]) -> bool:
+    return left[2] == right[2] and left[:2] != right[:2]
+
+
+def _document_observed_discrepancy_supported(task: str, fragment: str) -> bool:
+    normalized_fragment = re.sub(r"[，,。；;\s]", "", fragment)
+    if not _DOCUMENT_OBSERVED_DISCREPANCY_RE.search(normalized_fragment):
+        return False
+    mentions = _impl._quantity_mentions(task)
+    documented = [
+        row
+        for row in mentions
+        if any(marker in str(row.get("raw") or "") for marker in _DOCUMENT_MARKERS)
+    ]
+    observed = [
+        row
+        for row in mentions
+        if any(marker in str(row.get("raw") or "") for marker in _OBSERVED_MARKERS)
+    ]
+    return any(
+        _different_same_unit(left["quantity"], right["quantity"])
+        for left in documented
+        for right in observed
+    )
+
+
+def _summary_fragment_supported(task: str, fragment: str) -> bool:
+    if _impl.fact_claim_supported(task, fragment):
+        return True
+    return bool(
+        _unknown_source_summary_supported(task, fragment)
+        or _unverified_identity_summary_supported(task, fragment)
+        or _document_observed_discrepancy_supported(task, fragment)
+    )
+
+
+def _composite_summary_supported(task: str, claim: str) -> bool:
+    fragments = _impl._evidence_fragments(claim, include_whole=False)
+    if not fragments:
+        return False
+    return all(_summary_fragment_supported(task, fragment) for fragment in fragments)
+
+
 def fact_claim_supported(task: str, claim: str) -> bool:
     """Validate a fact after safe local and task-anchored canonicalization."""
     canonical_task = _canonicalize_quantity_local_language(task)
@@ -133,7 +252,10 @@ def fact_claim_supported(task: str, claim: str) -> bool:
     )
     if blocked:
         return False
-    return _impl.fact_claim_supported(canonical_task, canonical_claim)
+    return bool(
+        _impl.fact_claim_supported(canonical_task, canonical_claim)
+        or _composite_summary_supported(canonical_task, canonical_claim)
+    )
 
 
 def validate_answer_evidence(
