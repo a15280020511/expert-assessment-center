@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - tools/.pr227-catalog-exact-dedup.patch
+      - tools/.pr227-catalog-dedup-rewrite.py
       - .github/workflows/pr227-catalog-exact-dedup.yml
 
 permissions:
@@ -32,12 +33,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Apply exact catalog duplicate patch
+      - name: Apply deterministic catalog duplicate rewrite
         run: |
           set -euo pipefail
-          sha256sum tools/.pr227-catalog-exact-dedup.patch
-          git apply --check tools/.pr227-catalog-exact-dedup.patch
-          git apply tools/.pr227-catalog-exact-dedup.patch
+          sha256sum \
+            tools/.pr227-catalog-exact-dedup.patch \
+            tools/.pr227-catalog-dedup-rewrite.py
+          python -m py_compile tools/.pr227-catalog-dedup-rewrite.py
+          python tools/.pr227-catalog-dedup-rewrite.py
           git diff --check
 
       - name: Set up pinned Python
@@ -186,6 +189,7 @@ jobs:
         run: |
           set -euo pipefail
           rm tools/.pr227-catalog-exact-dedup.patch
+          rm tools/.pr227-catalog-dedup-rewrite.py
           rm .github/workflows/pr227-catalog-exact-dedup.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
