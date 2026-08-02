@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT / "open-model-market"))
 
 import model_market  # noqa: E402
 from resource_matrix import compile_v5_task_resources  # noqa: E402
-from v5_production_ticket import _canonical_task  # noqa: E402
+from v5_production_ticket import _canonical_user_task  # noqa: E402
 from v5_proposal_materializer import compact_resources_for_gpt  # noqa: E402
 
 
@@ -60,7 +60,7 @@ class V5AdmissionTaskIsolationTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            canonical, source = _canonical_task(
+            canonical, source = _canonical_user_task(
                 root,
                 DELEGATION_NOTICE + "\n\n" + QUESTION,
             )
