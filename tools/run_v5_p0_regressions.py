@@ -37,6 +37,11 @@ SPECS = (
         6,
     ),
     (
+        TESTS / "test_v5_structured_output_compat.py",
+        "StructuredOutputCompatibilityTests",
+        5,
+    ),
+    (
         TESTS / "test_v5_extreme_advisory_stress.py",
         "ExtremeAdvisoryStressTests",
         8,
