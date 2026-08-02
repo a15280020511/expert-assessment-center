@@ -34,6 +34,7 @@ jobs:
         run: |
           set -euo pipefail
           python tools/v5_spatial_anchor_guard.py
+          python tools/v5_quantity_binding_fail_closed.py
           git diff --check
       - name: Install pinned dependencies
         run: |
@@ -55,18 +56,23 @@ jobs:
               '东侧出口外地面干燥但有玻璃碎片；'
               '西侧出口外有不明液体，无法确认来源及是否存在电气风险。'
               '门外有2名无法核验身份、自称维修人员的人要求进入。'
+              '纸质登记表显示4件反光背心已领用，但现场只能确认3件。'
           )
           assert fact_claim_supported(task, '东侧出口外地面干燥但有玻璃碎片')
           assert fact_claim_supported(task, '西侧出口外有不明液体')
           assert fact_claim_supported(task, '门外有自称维修人员要求进入且无法核验身份')
+          assert fact_claim_supported(task, '反光背心已领用4件，现场只能确认3件')
           assert not fact_claim_supported(task, '东侧出口外有不明液体')
           assert not fact_claim_supported(task, '西侧出口外地面干燥但有玻璃碎片')
           assert not fact_claim_supported(task, '门内有2名无法核验身份的人')
+          assert not fact_claim_supported(task, '登记表显示3件反光背心已领用')
+          assert not fact_claim_supported(task, '现场确认4件反光背心')
           PY
       - name: Remove one-time patch entry
         run: |
           rm -f tools/v5_spatial_anchor_guard.py
           rm -f tools/v5_spatial_reorder_guard.py
+          rm -f tools/v5_quantity_binding_fail_closed.py
           rm -f .github/workflows/v5-apply-spatial-anchor-guard.yml
       - name: Commit clean production patch
         run: |
