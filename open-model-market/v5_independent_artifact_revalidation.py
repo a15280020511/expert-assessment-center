@@ -326,6 +326,7 @@ def _load_revalidation_inputs(root: Path) -> dict[str, Any]:
         "runtime_evidence": _load_optional(root / "evidence-integrity.json", {}),
         "ticket": ticket,
         "call_ledger": _load_optional(root / "call-ledger.json", {}),
+        "governance_ledger": _load_optional(root / "v5-governance-calls.json", {}),
         "report": (root / "v5-final-report.md").read_text(encoding="utf-8"),
         "task": _canonical_task(ticket if isinstance(ticket, Mapping) else {}),
     }
@@ -388,60 +389,143 @@ def _normalized_node_evidence(
     return nodes, failures
 
 
+def _governance_audit(
+    governance_ledger: Mapping[str, Any],
+) -> tuple[list[Mapping[str, Any]], int, float, list[str]]:
+    failures: list[str] = []
+    rows = [
+        row
+        for row in governance_ledger.get("calls", [])
+        if isinstance(row, Mapping)
+    ]
+    calls = int(governance_ledger.get("actual_governance_calls") or len(rows))
+    kinds = [str(row.get("kind") or "") for row in rows]
+    if calls != 3 or len(rows) != 3:
+        failures.append(
+            "governance call count differs from required sequence: "
+            f"{calls}/{len(rows)}"
+        )
+    if kinds != ["gpt_proposal", "claude_red_team", "gpt_synthesis"]:
+        failures.append(f"governance call sequence is invalid: {kinds}")
+    if int(governance_ledger.get("claude_red_team_calls") or 0) != 1:
+        failures.append("Claude red-team call count is not one")
+    if int(governance_ledger.get("gpt_synthesis_calls") or 0) != 1:
+        failures.append("GPT synthesis call count is not one")
+    for field, expected in (
+        ("claude_is_advisory_only", True),
+        ("claude_gatekeeping_allowed", False),
+        ("second_claude_review_allowed", False),
+        ("model_loop_allowed", False),
+    ):
+        if governance_ledger.get(field) is not expected:
+            failures.append(f"governance flag {field} is not {expected}")
+    try:
+        cost = float(governance_ledger.get("actual_cost_usd") or 0.0)
+    except (TypeError, ValueError):
+        cost = -1.0
+    if not math.isfinite(cost) or cost < 0:
+        failures.append("governance actual cost is invalid")
+    return rows, calls, cost, failures
+
+
 def _call_budget_audit(
     nodes: list[Any],
     summary: Mapping[str, Any],
+    governance_ledger: Mapping[str, Any],
     maximum_calls: int,
-) -> tuple[list[dict[str, Any]], int, list[str]]:
+) -> tuple[list[dict[str, Any]], int, int, int, float, list[str]]:
     failures: list[str] = []
     attempts = _attempts(nodes)
-    calls = len(attempts)
+    expert_calls = len(attempts)
     budget = summary.get("execution_budget", {})
     reserved = (
         int(budget.get("calls_reserved") or 0)
         if isinstance(budget, Mapping)
         else 0
     )
-    if calls != reserved:
+    if expert_calls != reserved:
         failures.append(
-            f"attempt count differs from reserved calls: {calls}/{reserved}"
+            "expert attempt count differs from reserved calls: "
+            f"{expert_calls}/{reserved}"
         )
-    if not 1 <= calls <= maximum_calls:
+    _, governance_calls, governance_cost, governance_failures = _governance_audit(
+        governance_ledger
+    )
+    failures.extend(governance_failures)
+    total_calls = governance_calls + expert_calls
+    if not 4 <= total_calls <= maximum_calls:
         failures.append(
-            f"model call count outside bound: {calls}/{maximum_calls}"
+            f"total model call count outside bound: {total_calls}/{maximum_calls}"
         )
-    return attempts, calls, failures
+    return (
+        attempts,
+        expert_calls,
+        governance_calls,
+        total_calls,
+        governance_cost,
+        failures,
+    )
+
+
+def _request_shape_failures(
+    request: Any,
+    index: int,
+) -> list[str]:
+    failures: list[str] = []
+    if not isinstance(request, Mapping):
+        return [f"request {index} is not an object"]
+    forbidden = sorted(FORBIDDEN_REQUEST_FIELDS.intersection(request))
+    if forbidden:
+        failures.append(
+            f"request {index} contains forbidden fields: {forbidden}"
+        )
+    provider = request.get("provider")
+    if not isinstance(provider, Mapping):
+        failures.append(f"request {index} has no provider lock")
+        return failures
+    only = provider.get("only")
+    if not isinstance(only, list) or len(only) != 1:
+        failures.append(f"request {index} provider.only is not singular")
+    if provider.get("allow_fallbacks") is not False:
+        failures.append(f"request {index} allows provider fallback")
+    return failures
 
 
 def _request_audit_failures(
     request_audit: Mapping[str, Any],
-    attempts: list[dict[str, Any]],
-    calls: int,
+    *,
+    expert_calls: int,
+    governance_calls: int,
+    total_calls: int,
 ) -> list[str]:
     failures: list[str] = []
-    if int(request_audit.get("request_count") or 0) != calls:
-        failures.append("request audit count differs from primitive attempts")
+    requests = request_audit.get("requests", [])
+    if not isinstance(requests, list):
+        requests = []
+        failures.append("request audit requests are not a list")
+    if int(request_audit.get("request_count") or 0) != total_calls:
+        failures.append(
+            "request audit total count differs from governance plus expert calls"
+        )
+    if (
+        int(request_audit.get("governance_request_count") or 0)
+        != governance_calls
+    ):
+        failures.append(
+            "request audit governance count differs from governance ledger"
+        )
+    if int(request_audit.get("expert_request_count") or 0) != expert_calls:
+        failures.append(
+            "request audit expert count differs from primitive attempts"
+        )
+    if len(requests) != total_calls:
+        failures.append("request audit row count differs from total model calls")
     if request_audit.get("external_tools_allowed") is not False:
         failures.append("external tools are not explicitly prohibited")
-    for index, row in enumerate(attempts, 1):
-        request = row.get("request", {})
-        if not isinstance(request, Mapping):
-            failures.append(f"request {index} is not an object")
-            continue
-        forbidden = sorted(FORBIDDEN_REQUEST_FIELDS.intersection(request))
-        if forbidden:
-            failures.append(
-                f"request {index} contains forbidden fields: {forbidden}"
-            )
-        provider = request.get("provider")
-        if not isinstance(provider, Mapping):
-            failures.append(f"request {index} has no provider lock")
-            continue
-        only = provider.get("only")
-        if not isinstance(only, list) or len(only) != 1:
-            failures.append(f"request {index} provider.only is not singular")
-        if provider.get("allow_fallbacks") is not False:
-            failures.append(f"request {index} allows provider fallback")
+    if request_audit.get("provider_fallback_allowed") is not False:
+        failures.append("provider fallback is not explicitly prohibited")
+    for index, request in enumerate(requests, 1):
+        failures.extend(_request_shape_failures(request, index))
     return failures
 
 
@@ -485,13 +569,23 @@ def _cost_audit(
     nodes: list[Any],
     summary: Mapping[str, Any],
     call_ledger: Any,
+    governance_cost: float,
     maximum_cost_usd: float,
-) -> tuple[float, float | None, list[str]]:
+) -> tuple[float, float, float | None, list[str]]:
     failures: list[str] = []
-    node_cost = _actual_cost_from_nodes(nodes)
+    expert_cost = _actual_cost_from_nodes(nodes)
+    total_cost = round(expert_cost + governance_cost, 8)
     summary_cost = float(summary.get("actual_cost_usd") or 0.0)
-    if abs(node_cost - summary_cost) > 1e-8:
-        failures.append(f"actual cost mismatch: {node_cost}/{summary_cost}")
+    if abs(total_cost - summary_cost) > 1e-8:
+        failures.append(f"total actual cost mismatch: {total_cost}/{summary_cost}")
+    expert_summary = summary.get("expert_actual_cost_usd")
+    if (
+        expert_summary is not None
+        and abs(expert_cost - float(expert_summary)) > 1e-8
+    ):
+        failures.append(
+            f"expert actual cost mismatch: {expert_cost}/{float(expert_summary)}"
+        )
     ledger_summary = (
         call_ledger.get("summary", {})
         if isinstance(call_ledger, Mapping)
@@ -507,15 +601,15 @@ def _cost_audit(
         failures.append("call ledger actual provider cost is missing")
     else:
         ledger_cost = float(ledger_cost_value)
-        if abs(node_cost - ledger_cost) > 1e-8:
+        if abs(total_cost - ledger_cost) > 1e-8:
             failures.append(
-                f"call ledger cost mismatch: {node_cost}/{ledger_cost}"
+                f"call ledger total cost mismatch: {total_cost}/{ledger_cost}"
             )
-    if not 0.0 <= node_cost <= maximum_cost_usd:
+    if not 0.0 <= total_cost <= maximum_cost_usd:
         failures.append(
-            f"actual cost outside bound: {node_cost}/{maximum_cost_usd}"
+            f"total actual cost outside bound: {total_cost}/{maximum_cost_usd}"
         )
-    return node_cost, ledger_cost, failures
+    return expert_cost, total_cost, ledger_cost, failures
 
 
 def _independent_evidence_audit(
@@ -599,21 +693,37 @@ def recompute(
     failures.extend(node_failures)
     report_contract_violations = _final_contract_violations(graph, report, task)
     failures.extend(report_contract_violations)
-    attempts, calls, call_failures = _call_budget_audit(
+    (
+        attempts,
+        expert_calls,
+        governance_calls,
+        total_calls,
+        governance_cost,
+        call_failures,
+    ) = _call_budget_audit(
         nodes,
         summary,
+        data["governance_ledger"],
         maximum_calls,
     )
     failures.extend(call_failures)
-    failures.extend(_request_audit_failures(data["request_audit"], attempts, calls))
+    failures.extend(
+        _request_audit_failures(
+            data["request_audit"],
+            expert_calls=expert_calls,
+            governance_calls=governance_calls,
+            total_calls=total_calls,
+        )
+    )
     called_models, duplicates, unresolved, company_failures = _called_model_audit(
         attempts
     )
     failures.extend(company_failures)
-    node_cost, ledger_cost, cost_failures = _cost_audit(
+    expert_cost, total_cost, ledger_cost, cost_failures = _cost_audit(
         nodes,
         summary,
         data["call_ledger"],
+        governance_cost,
         maximum_cost_usd,
     )
     failures.extend(cost_failures)
@@ -639,8 +749,13 @@ def recompute(
         "manifest_file_count": manifest["manifest_file_count"],
         "manifest_files_checked": manifest["manifest_files_checked"],
         "actual_artifact_file_count": manifest["actual_file_count"],
-        "model_calls": calls,
-        "actual_cost_usd": node_cost,
+        "model_calls": total_calls,
+        "total_model_calls": total_calls,
+        "governance_model_calls": governance_calls,
+        "expert_model_calls": expert_calls,
+        "actual_cost_usd": total_cost,
+        "governance_actual_cost_usd": governance_cost,
+        "expert_actual_cost_usd": expert_cost,
         "call_ledger_cost_usd": ledger_cost,
         "maximum_calls": maximum_calls,
         "maximum_cost_usd": maximum_cost_usd,
@@ -684,7 +799,11 @@ def main() -> int:
             expected_artifact_digest=args.expected_artifact_digest,
         )
     except Exception as exc:
-        archive_sha256 = sha256_file(archive) if archive is not None and archive.is_file() else None
+        archive_sha256 = (
+            sha256_file(archive)
+            if archive is not None and archive.is_file()
+            else None
+        )
         result = {
             "schema_version": "v5-independent-artifact-revalidation-3",
             "status": "FAIL",
@@ -698,7 +817,12 @@ def main() -> int:
                 1 for path in Path(args.artifact_dir).rglob("*") if path.is_file()
             ),
             "model_calls": None,
+            "total_model_calls": None,
+            "governance_model_calls": None,
+            "expert_model_calls": None,
             "actual_cost_usd": None,
+            "governance_actual_cost_usd": None,
+            "expert_actual_cost_usd": None,
             "call_ledger_cost_usd": None,
             "maximum_calls": args.maximum_calls,
             "maximum_cost_usd": args.maximum_cost_usd,

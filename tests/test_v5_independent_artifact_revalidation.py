@@ -88,15 +88,23 @@ class IndependentArtifactRevalidationTests(unittest.TestCase):
             ],
             "final_nodes": ["node-final"],
         }
-        request = {
-            "model": "openai/model-a",
-            "messages": [{"role": "user", "content": canonical}],
-            "provider": {
-                "only": ["provider/default"],
-                "order": ["provider/default"],
-                "allow_fallbacks": False,
-            },
-        }
+        def request(model: str) -> dict[str, object]:
+            return {
+                "model": model,
+                "messages": [{"role": "user", "content": canonical}],
+                "provider": {
+                    "only": ["provider/default"],
+                    "order": ["provider/default"],
+                    "allow_fallbacks": False,
+                },
+            }
+
+        expert_request = request("openai/model-a")
+        governance_requests = [
+            request("openai/gpt-latest"),
+            request("anthropic/claude-opus-latest"),
+            request("openai/gpt-latest"),
+        ]
         nodes = [
             {
                 "node_id": "node-final",
@@ -110,7 +118,7 @@ class IndependentArtifactRevalidationTests(unittest.TestCase):
                         "status": "passed",
                         "model": "openai/model-a",
                         "response_model": "openai/model-a",
-                        "request": request,
+                        "request": expert_request,
                     }
                 ],
             }
@@ -120,7 +128,8 @@ class IndependentArtifactRevalidationTests(unittest.TestCase):
             "completion_mode": "full",
             "quality_status": "full_success",
             "final_answer": report,
-            "actual_cost_usd": 0.01,
+            "actual_cost_usd": 0.016,
+            "expert_actual_cost_usd": 0.01,
             "execution_budget": {"calls_reserved": 1},
         }
         self._write(root, "ticket.json", {"task": task})
@@ -132,8 +141,12 @@ class IndependentArtifactRevalidationTests(unittest.TestCase):
             root,
             "v5-request-audit.json",
             {
-                "request_count": 1,
+                "request_count": 4,
+                "governance_request_count": 3,
+                "expert_request_count": 1,
+                "requests": [*governance_requests, expert_request],
                 "external_tools_allowed": False,
+                "provider_fallback_allowed": False,
             },
         )
         self._write(root, "task-constraints.json", constraints)
@@ -148,8 +161,39 @@ class IndependentArtifactRevalidationTests(unittest.TestCase):
         )
         self._write(
             root,
+            "v5-governance-calls.json",
+            {
+                "actual_governance_calls": 3,
+                "claude_red_team_calls": 1,
+                "gpt_synthesis_calls": 1,
+                "claude_is_advisory_only": True,
+                "claude_gatekeeping_allowed": False,
+                "second_claude_review_allowed": False,
+                "model_loop_allowed": False,
+                "actual_cost_usd": 0.006,
+                "calls": [
+                    {
+                        "kind": "gpt_proposal",
+                        "actual_cost_usd": 0.002,
+                        "request": governance_requests[0],
+                    },
+                    {
+                        "kind": "claude_red_team",
+                        "actual_cost_usd": 0.002,
+                        "request": governance_requests[1],
+                    },
+                    {
+                        "kind": "gpt_synthesis",
+                        "actual_cost_usd": 0.002,
+                        "request": governance_requests[2],
+                    },
+                ],
+            },
+        )
+        self._write(
+            root,
             "call-ledger.json",
-            {"summary": {"provider_actual_cost_usd": 0.01}},
+            {"summary": {"provider_actual_cost_usd": 0.016}},
         )
         self._write(root, "v5-final-report.md", report)
         self._manifest(root, sha=sha, run_id=run_id)
@@ -170,6 +214,62 @@ class IndependentArtifactRevalidationTests(unittest.TestCase):
             self.assertTrue(result["recomputed_from_primitive_evidence"])
             self.assertFalse(result["paid_acceptance_verdict_used_as_source"])
             self.assertEqual(result["artifact_run_id"], run_id)
+            self.assertEqual(result["model_calls"], 4)
+            self.assertEqual(result["governance_model_calls"], 3)
+            self.assertEqual(result["expert_model_calls"], 1)
+            self.assertAlmostEqual(result["actual_cost_usd"], 0.016)
+            self.assertAlmostEqual(result["governance_actual_cost_usd"], 0.006)
+            self.assertAlmostEqual(result["expert_actual_cost_usd"], 0.01)
+
+    def test_total_request_and_cost_accounting_include_governance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sha, run_id = self._fixture(root)
+            audit = json.loads(
+                (root / "v5-request-audit.json").read_text(encoding="utf-8")
+            )
+            audit["request_count"] = 1
+            self._write(root, "v5-request-audit.json", audit)
+            self._manifest(root, sha=sha, run_id=run_id)
+            result = recompute(
+                root,
+                expected_sha=sha,
+                expected_run_id=run_id,
+                maximum_calls=4,
+                maximum_cost_usd=0.03,
+            )
+            self.assertEqual(result["status"], "FAIL")
+            self.assertTrue(
+                any(
+                    "request audit total count" in value
+                    for value in result["failures"]
+                )
+            )
+
+    def test_invalid_governance_sequence_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sha, run_id = self._fixture(root)
+            ledger = json.loads(
+                (root / "v5-governance-calls.json").read_text(encoding="utf-8")
+            )
+            ledger["calls"][1]["kind"] = "gpt_proposal"
+            self._write(root, "v5-governance-calls.json", ledger)
+            self._manifest(root, sha=sha, run_id=run_id)
+            result = recompute(
+                root,
+                expected_sha=sha,
+                expected_run_id=run_id,
+                maximum_calls=4,
+                maximum_cost_usd=0.03,
+            )
+            self.assertEqual(result["status"], "FAIL")
+            self.assertTrue(
+                any(
+                    "governance call sequence" in value
+                    for value in result["failures"]
+                )
+            )
 
     def test_missing_runtime_evidence_returns_structured_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
