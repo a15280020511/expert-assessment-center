@@ -1,0 +1,383 @@
+diff --git a/open-model-market/v5_claude_red_team_policy.py b/open-model-market/v5_claude_red_team_policy.py
+index 67abce9..6eb9346 100644
+--- a/open-model-market/v5_claude_red_team_policy.py
++++ b/open-model-market/v5_claude_red_team_policy.py
+@@ -356,7 +356,8 @@ def advice_json_schema() -> dict[str, Any]:
+                                 },
+                                 "target": {
+                                     "type": "string",
+-                                    "pattern": "^[A-Za-z0-9_.~:@/+-]{1,160}$",
++                                    "minLength": 1,
++                                    "maxLength": 160,
+                                 },
+                                 "change": {
+                                     "type": "string",
+@@ -423,10 +424,10 @@ def parse_claude_red_team_advice(text: str) -> dict[str, Any]:
+         code = str(suggestion["code"])
+         if code not in RED_TEAM_CODES:
+             raise ValueError(f"suggestions[{index}].code is invalid")
+-        target = _identifier(suggestion["target"], f"suggestions[{index}].target")
++        target = _text(suggestion["target"], f"suggestions[{index}].target", 160)
+         change = _text(suggestion["change"], f"suggestions[{index}].change", 240)
+         normalized.append(
+-            {"code": code, "target": target, "change": change.strip()}
++            {"code": code, "target": target.strip(), "change": change.strip()}
+         )
+     return {
+         "suggestions": normalized,
+diff --git a/open-model-market/v5_gpt_expert_selector.py b/open-model-market/v5_gpt_expert_selector.py
+index 0b04385..79736d5 100644
+--- a/open-model-market/v5_gpt_expert_selector.py
++++ b/open-model-market/v5_gpt_expert_selector.py
+@@ -2,6 +2,7 @@
+ from __future__ import annotations
+ 
+ import json
++import re
+ from hashlib import sha256
+ from typing import Any, Mapping
+ 
+@@ -17,6 +18,21 @@ GPT_MAX_RECOVERY_PER_NODE = 2
+ GPT_MAX_FUNCTIONS_PER_NODE = 12
+ GPT_MAX_OUTPUT_FIELDS_PER_WORK = 16
+ 
++GPT_IDENTIFIER_PATTERN = r"^[A-Za-z0-9_.~:@/+-]{1,160}$"
++GPT_NODE_ID_PATTERN = r"^[A-Za-z0-9_.:-]{1,64}$"
++GPT_WORK_ID_PATTERN = r"^[A-Za-z0-9_.:-]{1,96}$"
++GPT_RELATION_TYPES = (
++    "dependency",
++    "review",
++    "adversarial",
++    "supplement",
++    "correction",
++    "comparison",
++    "synthesis",
++    "adjudication",
++    "formatting",
++)
++
+ PROPOSAL_PROMPT = (
+     "你是专家团中心唯一的动态任务拆解与专家编组器。你必须直接阅读原始任务和硬约束，"
+     "自行生成最小充分的work_items、依赖关系和专家执行图；不存在本地预先生成的原子工作、"
+@@ -54,15 +70,15 @@ def _fixed(prompt: str, expected: str) -> str:
+ def _schema(name: str) -> dict[str, Any]:
+     identifier = {
+         "type": "string",
+-        "pattern": "^[A-Za-z0-9_.~:@/+-]{1,160}$",
++        "pattern": GPT_IDENTIFIER_PATTERN,
+     }
+     node_id = {
+         "type": "string",
+-        "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
++        "pattern": GPT_NODE_ID_PATTERN,
+     }
+     work_id = {
+         "type": "string",
+-        "pattern": "^[A-Za-z0-9_.:-]{1,96}$",
++        "pattern": GPT_WORK_ID_PATTERN,
+     }
+     bounded_text = {
+         "type": "string",
+@@ -170,17 +186,7 @@ def _schema(name: str) -> dict[str, Any]:
+             "target": node_id,
+             "relation_type": {
+                 "type": "string",
+-                "enum": [
+-                    "dependency",
+-                    "review",
+-                    "adversarial",
+-                    "supplement",
+-                    "correction",
+-                    "comparison",
+-                    "synthesis",
+-                    "adjudication",
+-                    "formatting",
+-                ],
++                "enum": list(GPT_RELATION_TYPES),
+             },
+         },
+         "required": ["source", "target", "relation_type"],
+@@ -373,22 +379,40 @@ def _bounded_text(value: Any, field: str, maximum: int) -> str:
+     return value
+ 
+ 
++def _identifier(value: Any, field: str, pattern: str) -> str:
++    if not isinstance(value, str) or re.fullmatch(pattern, value) is None:
++        raise GPTSelectorError(f"{field} must be a bounded identifier")
++    return value
++
++
+ def _validate_work_item(work: Any, index: int) -> str:
+     expected = {"work_id", "objective", "dependencies", "required_outputs"}
+     if not isinstance(work, Mapping) or set(work) != expected:
+         raise GPTSelectorError(f"work_items[{index}] has invalid fields")
+-    work_id = _bounded_text(work["work_id"], f"work_items[{index}].work_id", 96)
++    work_id = _identifier(
++        work["work_id"],
++        f"work_items[{index}].work_id",
++        GPT_WORK_ID_PATTERN,
++    )
+     _bounded_text(work["objective"], f"work_items[{index}].objective", 320)
+     dependencies = work["dependencies"]
+     outputs = work["required_outputs"]
+     if not isinstance(dependencies, list) or len(dependencies) > GPT_MAX_WORK_ITEMS:
+         raise GPTSelectorError("work dependencies are invalid")
+-    if len(dependencies) != len(set(dependencies)):
++    normalized_dependencies = [
++        _identifier(value, "work dependency", GPT_WORK_ID_PATTERN)
++        for value in dependencies
++    ]
++    if len(normalized_dependencies) != len(set(normalized_dependencies)):
+         raise GPTSelectorError("work dependencies contain duplicates")
+     if not isinstance(outputs, list) or not 1 <= len(outputs) <= GPT_MAX_OUTPUT_FIELDS_PER_WORK:
+         raise GPTSelectorError("work required_outputs are invalid")
+-    for output in outputs:
++    normalized_outputs = [
+         _bounded_text(output, "required_output", 160)
++        for output in outputs
++    ]
++    if len(normalized_outputs) != len(set(normalized_outputs)):
++        raise GPTSelectorError("work required_outputs contain duplicates")
+     return work_id
+ 
+ 
+@@ -400,8 +424,8 @@ def _validate_work_items(work_items: Any) -> set[str]:
+         raise GPTSelectorError("GPT proposal has duplicate work ids")
+     known_work = set(work_ids)
+     for work in work_items:
+-        dependencies = {str(value) for value in work["dependencies"]}
+-        if str(work["work_id"]) in dependencies or not dependencies.issubset(known_work):
++        dependencies = set(work["dependencies"])
++        if work["work_id"] in dependencies or not dependencies.issubset(known_work):
+             raise GPTSelectorError("work dependency references are invalid")
+     return known_work
+ 
+@@ -412,8 +436,8 @@ def _validate_recovery_rows(recovery: Any) -> None:
+     for row in recovery:
+         if not isinstance(row, Mapping) or set(row) != {"model", "provider"}:
+             raise GPTSelectorError("recovery row has invalid fields")
+-        _bounded_text(row["model"], "recovery model", 160)
+-        _bounded_text(row["provider"], "recovery provider", 160)
++        _identifier(row["model"], "recovery model", GPT_IDENTIFIER_PATTERN)
++        _identifier(row["provider"], "recovery provider", GPT_IDENTIFIER_PATTERN)
+ 
+ 
+ def _validate_node(node: Any, index: int, known_work: set[str]) -> str:
+@@ -423,22 +447,35 @@ def _validate_node(node: Any, index: int, known_work: set[str]) -> str:
+     }
+     if not isinstance(node, Mapping) or set(node) != expected:
+         raise GPTSelectorError(f"nodes[{index}] has invalid fields")
+-    node_id = _bounded_text(node["node_id"], f"nodes[{index}].node_id", 64)
++    node_id = _identifier(
++        node["node_id"],
++        f"nodes[{index}].node_id",
++        GPT_NODE_ID_PATTERN,
++    )
+     assigned = node["work_ids"]
+     functions = node["functions"]
+     if not isinstance(assigned, list) or not assigned or len(assigned) > GPT_MAX_WORK_ITEMS:
+         raise GPTSelectorError("node work_ids are invalid")
+-    if len(assigned) != len(set(assigned)) or not set(assigned).issubset(known_work):
++    normalized_assigned = [
++        _identifier(value, "node work_id", GPT_WORK_ID_PATTERN)
++        for value in assigned
++    ]
++    if (
++        len(normalized_assigned) != len(set(normalized_assigned))
++        or not set(normalized_assigned).issubset(known_work)
++    ):
+         raise GPTSelectorError("node work_ids contain duplicates or unknown work")
+     _bounded_text(node["role"], f"nodes[{index}].role", 320)
+     if not isinstance(functions, list) or not 1 <= len(functions) <= GPT_MAX_FUNCTIONS_PER_NODE:
+         raise GPTSelectorError("node functions are invalid")
+-    if len(functions) != len(set(functions)):
+-        raise GPTSelectorError("node functions contain duplicates")
+-    for function in functions:
++    normalized_functions = [
+         _bounded_text(function, "node function", 96)
+-    _bounded_text(node["model"], f"nodes[{index}].model", 160)
+-    _bounded_text(node["provider"], f"nodes[{index}].provider", 160)
++        for function in functions
++    ]
++    if len(normalized_functions) != len(set(normalized_functions)):
++        raise GPTSelectorError("node functions contain duplicates")
++    _identifier(node["model"], f"nodes[{index}].model", GPT_IDENTIFIER_PATTERN)
++    _identifier(node["provider"], f"nodes[{index}].provider", GPT_IDENTIFIER_PATTERN)
+     if node["reasoning_effort"] not in {"low", "medium", "high"}:
+         raise GPTSelectorError("node reasoning_effort is invalid")
+     maximum = node["max_output_tokens"]
+@@ -462,17 +499,33 @@ def _validate_nodes(nodes: Any, known_work: set[str]) -> set[str]:
+ def _validate_edges(edges: Any, known_nodes: set[str]) -> None:
+     if not isinstance(edges, list) or len(edges) > GPT_MAX_EDGES:
+         raise GPTSelectorError("GPT proposal edges are invalid")
+-    for edge in edges:
++    for index, edge in enumerate(edges):
+         if not isinstance(edge, Mapping) or set(edge) != {"source", "target", "relation_type"}:
+             raise GPTSelectorError("edge has invalid fields")
+-        if edge["source"] not in known_nodes or edge["target"] not in known_nodes:
++        source = _identifier(
++            edge["source"],
++            f"edges[{index}].source",
++            GPT_NODE_ID_PATTERN,
++        )
++        target = _identifier(
++            edge["target"],
++            f"edges[{index}].target",
++            GPT_NODE_ID_PATTERN,
++        )
++        if source not in known_nodes or target not in known_nodes:
+             raise GPTSelectorError("edge references unknown node")
++        if edge["relation_type"] not in GPT_RELATION_TYPES:
++            raise GPTSelectorError("edge relation_type is invalid")
+ 
+ 
+ def _validate_final_nodes(final_nodes: Any, known_nodes: set[str]) -> None:
+     if not isinstance(final_nodes, list) or not final_nodes:
+         raise GPTSelectorError("GPT proposal final_nodes are invalid")
+-    if len(final_nodes) != len(set(final_nodes)) or not set(final_nodes).issubset(known_nodes):
++    normalized = [
++        _identifier(value, "final_node", GPT_NODE_ID_PATTERN)
++        for value in final_nodes
++    ]
++    if len(normalized) != len(set(normalized)) or not set(normalized).issubset(known_nodes):
+         raise GPTSelectorError("GPT proposal final_nodes contain duplicates or unknown nodes")
+ 
+ 
+diff --git a/tests/test_v5_claude_red_team_advice.py b/tests/test_v5_claude_red_team_advice.py
+index 20477c1..558b6db 100644
+--- a/tests/test_v5_claude_red_team_advice.py
++++ b/tests/test_v5_claude_red_team_advice.py
+@@ -108,6 +108,39 @@ class ClaudeRedTeamAdviceTests(unittest.TestCase):
+         with self.assertRaisesRegex(ValueError, "functions contains duplicates"):
+             build_claude_red_team_request(payload)
+ 
++    def test_unicode_advisory_target_is_valid_and_normalized(self) -> None:
++        result = parse_claude_red_team_advice(
++            json.dumps(
++                {
++                    "suggestions": [
++                        {
++                            "code": "CONTRACT_MISMATCH",
++                            "target": "  最终建议部分  ",
++                            "change": "给出唯一推荐并列出两条题面内理由。",
++                        }
++                    ]
++                },
++                ensure_ascii=False,
++            )
++        )
++        self.assertEqual("最终建议部分", result["suggestions"][0]["target"])
++
++    def test_advisory_target_control_character_is_rejected(self) -> None:
++        with self.assertRaisesRegex(ValueError, "target contains control characters"):
++            parse_claude_red_team_advice(
++                json.dumps(
++                    {
++                        "suggestions": [
++                            {
++                                "code": "CONTRACT_MISMATCH",
++                                "target": "final\u0001section",
++                                "change": "修复交付合同。",
++                            }
++                        ]
++                    }
++                )
++            )
++
+     def test_empty_advice_is_valid_and_not_approval(self) -> None:
+         result = parse_claude_red_team_advice('{"suggestions":[]}')
+         self.assertEqual([], result["suggestions"])
+diff --git a/tests/test_v5_gpt_selector_contract.py b/tests/test_v5_gpt_selector_contract.py
+new file mode 100644
+index 0000000..57598a4
+--- /dev/null
++++ b/tests/test_v5_gpt_selector_contract.py
+@@ -0,0 +1,88 @@
++from __future__ import annotations
++
++import copy
++import json
++import sys
++import unittest
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++MARKET = ROOT / "open-model-market"
++if str(MARKET) not in sys.path:
++    sys.path.insert(0, str(MARKET))
++
++from v5_gpt_expert_selector import GPTSelectorError, parse_proposal  # noqa: E402
++
++
++def valid_proposal() -> dict[str, object]:
++    return {
++        "work_items": [
++            {
++                "work_id": "work-1",
++                "objective": "比较两个给定方案",
++                "dependencies": [],
++                "required_outputs": ["唯一建议"],
++            }
++        ],
++        "nodes": [
++            {
++                "node_id": "node-1",
++                "work_ids": ["work-1"],
++                "role": "方案比较专家",
++                "functions": ["对比月费与流量", "形成唯一建议"],
++                "model": "company/model",
++                "provider": "provider-a",
++                "reasoning_effort": "low",
++                "max_output_tokens": 512,
++                "recovery": [],
++            }
++        ],
++        "edges": [],
++        "final_nodes": ["node-1"],
++    }
++
++
++class GPTSelectorContractTests(unittest.TestCase):
++    def test_unicode_descriptions_are_allowed_but_ids_stay_identifiers(self) -> None:
++        proposal = valid_proposal()
++        parsed = parse_proposal(json.dumps(proposal, ensure_ascii=False))
++        self.assertEqual("方案比较专家", parsed["nodes"][0]["role"])
++        self.assertEqual("work-1", parsed["work_items"][0]["work_id"])
++
++    def test_unicode_internal_id_is_rejected_before_claude_boundary(self) -> None:
++        proposal = valid_proposal()
++        proposal["work_items"][0]["work_id"] = "工作一"
++        proposal["nodes"][0]["work_ids"] = ["工作一"]
++        with self.assertRaisesRegex(GPTSelectorError, "bounded identifier"):
++            parse_proposal(json.dumps(proposal, ensure_ascii=False))
++
++    def test_unicode_model_identifier_is_rejected_before_materialization(self) -> None:
++        proposal = valid_proposal()
++        proposal["nodes"][0]["model"] = "公司/模型"
++        with self.assertRaisesRegex(GPTSelectorError, "bounded identifier"):
++            parse_proposal(json.dumps(proposal, ensure_ascii=False))
++
++    def test_unknown_relation_type_is_rejected_by_parser(self) -> None:
++        proposal = valid_proposal()
++        proposal["nodes"].append(copy.deepcopy(proposal["nodes"][0]))
++        proposal["nodes"][1]["node_id"] = "node-2"
++        proposal["edges"] = [
++            {
++                "source": "node-1",
++                "target": "node-2",
++                "relation_type": "invented",
++            }
++        ]
++        proposal["final_nodes"] = ["node-2"]
++        with self.assertRaisesRegex(GPTSelectorError, "relation_type"):
++            parse_proposal(json.dumps(proposal, ensure_ascii=False))
++
++    def test_duplicate_required_outputs_are_rejected_like_schema(self) -> None:
++        proposal = valid_proposal()
++        proposal["work_items"][0]["required_outputs"] = ["建议", "建议"]
++        with self.assertRaisesRegex(GPTSelectorError, "required_outputs contain duplicates"):
++            parse_proposal(json.dumps(proposal, ensure_ascii=False))
++
++
++if __name__ == "__main__":
++    unittest.main()
