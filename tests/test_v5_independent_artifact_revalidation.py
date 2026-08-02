@@ -124,7 +124,7 @@ class IndependentArtifactRevalidationTests(unittest.TestCase):
             "execution_budget": {"calls_reserved": 1},
         }
         self._write(root, "ticket.json", {"task": task})
-        self._write(root, "v5-result.json", summary)
+        self._write(root, "expert-team-result.json", summary)
         self._write(root, "v5-execution-summary.json", summary)
         self._write(root, "v5-execution-graph.json", graph)
         self._write(root, "v5-node-results.json", nodes)
@@ -170,6 +170,28 @@ class IndependentArtifactRevalidationTests(unittest.TestCase):
             self.assertTrue(result["recomputed_from_primitive_evidence"])
             self.assertFalse(result["paid_acceptance_verdict_used_as_source"])
             self.assertEqual(result["artifact_run_id"], run_id)
+
+    def test_missing_runtime_evidence_returns_structured_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sha, run_id = self._fixture(root)
+            (root / "evidence-integrity.json").unlink()
+            self._manifest(root, sha=sha, run_id=run_id)
+            result = recompute(
+                root,
+                expected_sha=sha,
+                expected_run_id=run_id,
+                maximum_calls=4,
+                maximum_cost_usd=0.03,
+            )
+            self.assertEqual(result["status"], "FAIL")
+            self.assertTrue(result["recomputed_from_primitive_evidence"])
+            self.assertTrue(
+                any(
+                    "runtime evidence integrity is not PASS" in value
+                    for value in result["failures"]
+                )
+            )
 
     def test_manifest_run_and_file_coverage_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

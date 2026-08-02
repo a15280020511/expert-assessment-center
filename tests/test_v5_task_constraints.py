@@ -132,6 +132,23 @@ class ClosedWorldEvidenceExtendedTests(unittest.TestCase):
             any(value.startswith("unsupported-fact-label:") for value in violations)
         )
 
+    def test_fact_taxonomy_sentence_is_not_a_fact_label(self) -> None:
+        answer = (
+            "- 事实、假设、推断、未知四类标签在正文中明确区分，"
+            "且事实仅来自题面原句。"
+        )
+        self.assertEqual(validate_answer_evidence(self.TASK, answer), [])
+
+    def test_bold_fact_source_label_is_validated(self) -> None:
+        task = self.TASK + "北门外地面干燥。"
+        supported = "- **事实｜来源：题面**：北门外地面干燥。"
+        unsupported = "- **事实｜来源：题面**：北门外发生坍塌。"
+        self.assertEqual(validate_answer_evidence(task, supported), [])
+        violations = validate_answer_evidence(task, unsupported)
+        self.assertTrue(
+            any(value.startswith("unsupported-fact-label:") for value in violations)
+        )
+
 
 class DynamicObjectiveTests(unittest.TestCase):
     def test_weights_are_normalized_and_task_dependent(self) -> None:
