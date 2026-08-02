@@ -119,7 +119,11 @@ jobs:
           assert compiled_final["exact_markdown_headings"] == expected_headings
           assert compiled_final["required_fields"] == expected_headings
 
-          profile = classify_task(task)
+          profile_run = SimpleNamespace(
+              minimum_context_length=16384,
+              max_completion_tokens=10000,
+          )
+          profile = classify_task(task, profile_run)
           resources = compile_task_semantics(profile, SimpleNamespace(task=task))
           shape = _resource_shape(resources)
           assert shape["explicit_output_contract"] is True, shape
