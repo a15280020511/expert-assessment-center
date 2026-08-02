@@ -90,6 +90,7 @@ jobs:
           root = Path("paid-acceptance-artifacts")
           calls = json.loads((root / "v5-governance-calls.json").read_text())
           governance = json.loads((root / "v5-governance-result.json").read_text())
+          resolution = json.loads((root / "v5-governance-models.json").read_text())
           result = json.loads((root / "v5-result.json").read_text())
           audit = json.loads((root / "v5-request-audit.json").read_text())
           selection = json.loads((root / "v5-selection.json").read_text())
@@ -97,6 +98,21 @@ jobs:
 
           rows = calls["calls"]
           kinds = [row["kind"] for row in rows]
+          gpt_model = resolution["gpt"]["resolved_model"]
+          claude_model = resolution["claude"]["resolved_model"]
+
+          assert resolution["status"] == "PASS"
+          assert resolution["provider_fallback_allowed"] is False
+          assert resolution["gpt"]["logical_model"] == "~openai/gpt-latest"
+          assert resolution["claude"]["logical_model"] == "~anthropic/claude-opus-latest"
+          assert gpt_model.startswith("openai/gpt-")
+          assert "mini" not in gpt_model and "nano" not in gpt_model and "gpt-oss" not in gpt_model
+          assert claude_model.startswith("anthropic/claude-opus-")
+          assert resolution["gpt"]["provider"] == "openai"
+          assert resolution["claude"]["provider"] == "anthropic"
+          assert resolution["gpt"]["synthetic_fixture_only"] is False
+          assert resolution["claude"]["synthetic_fixture_only"] is False
+
           assert calls["status"] == "PASS"
           assert calls["actual_governance_calls"] == 3
           assert kinds == ["gpt_proposal", "claude_red_team", "gpt_synthesis"]
@@ -106,9 +122,17 @@ jobs:
           assert rows[0]["requested_model"] == "~openai/gpt-latest"
           assert rows[1]["requested_model"] == "~anthropic/claude-opus-latest"
           assert rows[2]["requested_model"] == "~openai/gpt-latest"
+          assert rows[0]["selected_model"] == gpt_model
+          assert rows[1]["selected_model"] == claude_model
+          assert rows[2]["selected_model"] == gpt_model
           assert rows[0]["provider"].casefold() == "openai"
           assert rows[1]["provider"].casefold() == "anthropic"
           assert rows[2]["provider"].casefold() == "openai"
+          assert all(row["request"]["temperature_present"] is False for row in rows)
+          assert all(row["request"]["response_schema"] for row in rows)
+          assert all(row["request"]["provider"]["allow_fallbacks"] is False for row in rows)
+          assert all(row["request"]["provider"]["require_parameters"] is True for row in rows)
+
           assert governance["status"] == "PASS"
           assert governance["claude_review_count"] == 1
           assert governance["gpt_synthesis_count"] == 1
@@ -130,6 +154,8 @@ jobs:
           assert result["approved_total_calls"] == 4
           assert result["total_model_calls"] == 4
           assert result["governance"]["actual_calls"] == 3
+          assert result["governance"]["gpt_model"] == gpt_model
+          assert result["governance"]["claude_model"] == claude_model
           assert result["governance"]["claude_calls"] == 1
           assert result["governance"]["gpt_synthesis_calls"] == 1
           assert result["actual_cost_usd"] <= 0.25 + 1e-12
@@ -143,11 +169,16 @@ jobs:
           assert audit["second_claude_review_allowed"] is False
 
           receipt = {
-              "schema_version": "v5-final-paid-claude-acceptance-1",
+              "schema_version": "v5-final-paid-claude-acceptance-2",
               "status": "PASS",
               "commit_sha": os.environ["ACCEPTANCE_SHA"],
               "workflow_run_id": os.environ["ACCEPTANCE_RUN_ID"],
               "governance_sequence": kinds,
+              "gpt_model": gpt_model,
+              "gpt_provider": resolution["gpt"]["provider"],
+              "claude_model": claude_model,
+              "claude_provider": resolution["claude"]["provider"],
+              "temperature_sent": False,
               "governance_calls": 3,
               "claude_calls": 1,
               "expert_calls": 1,
