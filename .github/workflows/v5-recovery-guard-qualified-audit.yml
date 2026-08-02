@@ -1,0 +1,364 @@
+name: V5 Recovery Guard Qualified Audit
+
+on:
+  push:
+    branches:
+      - audit/v5-recovery-guard-qualified-20260802
+
+permissions:
+  contents: read
+
+env:
+  OPENROUTER_API_KEY: ""
+  OPENROUTER_MANAGEMENT_KEY: ""
+
+concurrency:
+  group: v5-recovery-guard-qualified-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  canonical:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+      - name: Canonical static and complete unit suite
+        run: |
+          set -euo pipefail
+          unset OPENROUTER_API_KEY OPENROUTER_MANAGEMENT_KEY || true
+          mkdir -p audit-logs
+          python -m ruff check . 2>&1 | tee audit-logs/ruff.log
+          python -m compileall -q open-model-market tests tools 2>&1 | tee audit-logs/compile.log
+          python -m unittest discover -s tests -p 'test*.py' -v \
+            2>&1 | tee audit-logs/full-unit.log
+          printf '{"status":"PASS","model_calls":0,"model_cost_usd":0}\n' \
+            > audit-logs/zero-cost-attestation.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: recovery-guard-qualified-canonical-${{ github.run_id }}
+          path: audit-logs/
+          if-no-files-found: warn
+          retention-days: 30
+
+  recovery-seeds:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [0, 1, 7, 42, 99, 31337]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install pinned dependencies
+        run: python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+      - name: Recovery, deadline, compaction and quantity matrix
+        env:
+          PYTHONHASHSEED: ${{ matrix.seed }}
+          HYPOTHESIS_SEED: ${{ matrix.seed }}
+        run: |
+          set -euo pipefail
+          unset OPENROUTER_API_KEY OPENROUTER_MANAGEMENT_KEY || true
+          mkdir -p audit-logs
+          python -m unittest -v \
+            tests.test_v5_recovery_absolute_budget_feasibility \
+            tests.test_v5_recovery_guard_production_regression \
+            tests.test_v5_critical_delivery_reliability \
+            tests.test_v5_operational_resilience \
+            tests.test_v5_cross_endpoint_recovery \
+            tests.test_v5_recovery_company_diversity \
+            tests.test_v5_closed_world_display_and_compaction \
+            tests.test_v5_v4_contract_isolation \
+            tests.test_v5_long_markdown_contract_integrity \
+            2>&1 | tee audit-logs/recovery-seed-${{ matrix.seed }}.log
+          printf '{"status":"PASS","seed":%s,"model_calls":0,"model_cost_usd":0}\n' \
+            '${{ matrix.seed }}' > audit-logs/zero-cost-${{ matrix.seed }}.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: recovery-guard-qualified-seed-${{ matrix.seed }}-${{ github.run_id }}
+          path: audit-logs/
+          if-no-files-found: warn
+          retention-days: 30
+
+  parallel-runtime-load:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [0, 42, 31337]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install pinned dependencies
+        run: python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+      - name: Concurrent budgets, circuits, DAGs and recovery
+        env:
+          PYTHONHASHSEED: ${{ matrix.seed }}
+          HYPOTHESIS_SEED: ${{ matrix.seed }}
+        run: |
+          set -euo pipefail
+          unset OPENROUTER_API_KEY OPENROUTER_MANAGEMENT_KEY || true
+          mkdir -p audit-logs
+          python -m unittest -v \
+            tests.test_v5_full_load_stability \
+            tests.test_v5_stress_stability \
+            tests.test_v5_operational_resilience \
+            tests.test_v5_cross_endpoint_recovery \
+            tests.test_v5_critical_delivery_reliability \
+            tests.test_v5_recovery_company_diversity \
+            tests.test_v5_recovery_absolute_budget_feasibility \
+            tests.test_v5_recovery_guard_production_regression \
+            2>&1 | tee audit-logs/parallel-${{ matrix.seed }}.log
+          printf '{"status":"PASS","seed":%s,"model_calls":0,"model_cost_usd":0}\n' \
+            '${{ matrix.seed }}' > audit-logs/zero-cost-${{ matrix.seed }}.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: recovery-guard-qualified-parallel-${{ matrix.seed }}-${{ github.run_id }}
+          path: audit-logs/
+          if-no-files-found: warn
+          retention-days: 30
+
+  adversarial-properties:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install pinned dependencies
+        run: python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+      - name: Fuzz recovery guard, contract token floor and display isolation
+        run: |
+          set -euo pipefail
+          unset OPENROUTER_API_KEY OPENROUTER_MANAGEMENT_KEY || true
+          mkdir -p audit-logs
+          PYTHONPATH=open-model-market python - <<'PY' | tee audit-logs/adversarial-properties.log
+          import json
+          import random
+          from types import SimpleNamespace
+
+          from v5_constitutional_runtime import ConstitutionalPromptPolicy
+          from v5_cross_endpoint_planner import CrossEndpointPlannerPolicy
+          from v5_operational_resilience import contract_visible_token_floor
+          from v5_planner import V5PlanningError
+          from v5_runtime import RuntimeConfig
+          from v5_task_constraints import (
+              closed_world_numeric_prompt,
+              compile_task_constraints,
+          )
+
+          def candidate(candidate_id, company, cost, p95, structured, uncertainty):
+              return {
+                  "candidate_id": candidate_id,
+                  "interpretation_id": "audit",
+                  "coverage_keys": ["final#0"],
+                  "assigned_work": ["final"],
+                  "copy_indices": [0],
+                  "professional_capabilities": {},
+                  "functions": ["synthesis"],
+                  "prompt_profile": {},
+                  "reasoning_profile": {},
+                  "parameter_profile": {
+                      "model_company": company,
+                      "p95_token_usage_multiplier": p95,
+                      "structured_p95_token_usage_multiplier": structured,
+                      "operational_serviceability": {
+                          "estimated_deadline_ratio": 0.50,
+                          "maximum_deadline_ratio": 1.0,
+                          "deadline_feasible": True,
+                      },
+                  },
+                  "model_company": company,
+                  "model": f"{company}/model",
+                  "provider_endpoint": f"{company}/model@provider-{company}",
+                  "provider_slug": f"provider-{company}",
+                  "output_contract": {},
+                  "estimated_quality": 0.80,
+                  "quality_uncertainty": uncertainty,
+                  "estimated_cost": cost,
+                  "failure_probability": 0.02,
+                  "request_config": {},
+                  "independence_groups": [],
+              }
+
+          recovery_cases = 0
+          fail_closed_cases = 0
+          planned_cases = 0
+          for seed in range(256):
+              rng = random.Random(seed)
+              guard = rng.uniform(0.12, 0.45)
+              initial_cost = rng.uniform(0.01, min(0.20, guard * 0.70))
+              recovery_cost = rng.uniform(0.001, 0.30)
+              selected = candidate("selected", "google", initial_cost, 1.0, 1.0, 0.05)
+              recovery = candidate(
+                  "recovery",
+                  "openai",
+                  recovery_cost,
+                  rng.uniform(1.0, 1.7),
+                  rng.uniform(1.0, 1.6),
+                  rng.uniform(0.0, 0.35),
+              )
+              policy = CrossEndpointPlannerPolicy(
+                  RuntimeConfig(2, 1, guard, "value")
+              )
+              adjusted = policy._risk_adjusted_recovery_cost(recovery)
+              remaining = guard - initial_cost
+              optimization = {
+                  "selected_initial_cost_usd": initial_cost,
+                  "execution_graph": {
+                      "nodes": [{**selected, "node_id": "selected"}],
+                      "final_nodes": [],
+                      "metadata": {"interpretation_id": "audit"},
+                  },
+              }
+              try:
+                  result = policy.rebalance_recovery_pool(
+                      optimization,
+                      {"candidates": [selected, recovery]},
+                  )
+              except V5PlanningError as exc:
+                  assert adjusted > remaining + 1e-12
+                  assert "Recovery reserve is not executable" in str(exc)
+                  fail_closed_cases += 1
+              else:
+                  assert adjusted <= remaining + 1e-12
+                  row = result["execution_graph"]["metadata"]["recovery_pool"][
+                      "selected"
+                  ][0]
+                  assert row["model_company"] == "openai"
+                  assert row["recovery_risk_adjusted_cost_usd"] <= remaining + 1e-8
+                  assert row["estimated_cost_above_planning_remaining_budget"] is False
+                  planned_cases += 1
+              recovery_cases += 1
+
+          token_cases = 0
+          for seed in range(128):
+              rng = random.Random(1000 + seed)
+              task_tokens = rng.randint(100, 6000)
+              completion_tokens = rng.randint(0, 12000)
+              explicit = rng.choice([True, False])
+              obj = SimpleNamespace(parameter_profile={
+                  "explicit_output_contract_expected": explicit,
+                  "estimated_completion_usage_tokens": completion_tokens,
+              })
+              tokens, applied, floor = contract_visible_token_floor(
+                  obj,
+                  task_tokens,
+              )
+              expected_applied = explicit and completion_tokens > task_tokens
+              assert applied is expected_applied
+              assert floor == completion_tokens
+              assert tokens == (
+                  completion_tokens if expected_applied else task_tokens
+              )
+              token_cases += 1
+
+          compaction_cases = 0
+          for seed in range(64):
+              contract = {
+                  "schema_version": "v5-node-result-1",
+                  "validated_claims": [f"fact-{seed}"],
+                  "conclusions": [f"conclusion-{seed}"],
+                  "raw_fields": {"duplicate": seed},
+                  f"extra_{seed}": {"value": seed},
+              }
+              compact = ConstitutionalPromptPolicy._compact_upstream_contract(
+                  contract
+              )
+              assert "raw_fields" not in compact
+              assert set(compact) == set(contract) - {"raw_fields"}
+              assert compact[f"extra_{seed}"] == {"value": seed}
+              compaction_cases += 1
+
+          task = "闭卷，不得编造。只有2名值守；库存表6顶，现场5顶。"
+          prompt = closed_world_numeric_prompt(
+              task,
+              compile_task_constraints(task),
+          )
+          assert "2名" in prompt and "6顶" in prompt and "5顶" in prompt
+          assert "2:people" not in prompt
+          assert "6:item" not in prompt
+          assert "5:item" not in prompt
+
+          assert planned_cases > 0
+          assert fail_closed_cases > 0
+          print(json.dumps({
+              "status": "PASS",
+              "recovery_cases": recovery_cases,
+              "planned_cases": planned_cases,
+              "zero_call_fail_closed_cases": fail_closed_cases,
+              "contract_token_cases": token_cases,
+              "compaction_cases": compaction_cases,
+              "model_calls": 0,
+              "model_cost_usd": 0,
+              "cross_task_history_used": False,
+          }, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: recovery-guard-qualified-properties-${{ github.run_id }}
+          path: audit-logs/
+          if-no-files-found: warn
+          retention-days: 30
+
+  granular-repository-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Inspect every repository file and source line
+        run: |
+          set -euo pipefail
+          unset OPENROUTER_API_KEY OPENROUTER_MANAGEMENT_KEY || true
+          python tools/repository_audit.py \
+            --root . \
+            --output-dir audit-artifacts \
+            --fail-on high
+          tar --exclude=.git --exclude=audit-artifacts \
+            -czf audit-artifacts/repository-source-${GITHUB_SHA}.tar.gz .
+          sha256sum audit-artifacts/repository-source-${GITHUB_SHA}.tar.gz \
+            > audit-artifacts/repository-source-${GITHUB_SHA}.sha256
+          printf '{"status":"PASS","model_calls":0,"model_cost_usd":0}\n' \
+            > audit-artifacts/zero-cost-attestation.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: recovery-guard-qualified-granular-${{ github.run_id }}
+          path: audit-artifacts/
+          if-no-files-found: warn
+          retention-days: 30
