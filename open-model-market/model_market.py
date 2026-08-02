@@ -132,6 +132,15 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
             "reasoning_effort must be low, medium or high"
         )
 
+    recovery_arg = getattr(args, "maximum_recovery_calls", None)
+    recovery_calls = int(
+        execution.get("maximum_replacements", 2)
+        if recovery_arg is None
+        else recovery_arg
+    )
+    if recovery_calls < 0:
+        raise ExpertTeamError("maximum_recovery_calls must be non-negative")
+
     catalog_arg = getattr(args, "catalog_file", None)
     return RunConfig(
         task=task,
@@ -162,10 +171,7 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
             execution.get("model_timeout_seconds", 240)
         ),
         model_max_retries=0,
-        maximum_replacements=int(
-            getattr(args, "maximum_recovery_calls", None)
-            or execution.get("maximum_replacements", 2)
-        ),
+        maximum_replacements=recovery_calls,
         parallel_workers=int(execution.get("parallel_workers", 4)),
         provider=dict(provider),
         dry_run=bool(getattr(args, "dry_run", False)),
@@ -175,9 +181,7 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
         maximum_total_calls=int(
             getattr(args, "maximum_total_calls", 16)
         ),
-        maximum_recovery_calls=int(
-            getattr(args, "maximum_recovery_calls", 2)
-        ),
+        maximum_recovery_calls=recovery_calls,
     )
 
 
@@ -197,10 +201,12 @@ def fetch_catalog(run: RunConfig) -> Tuple[Dict[str, ModelInfo], str]:
         payload: Dict[str, Any] = {}
         errors: Dict[str, str] = {}
         for sort_name in run.catalog_sorts:
-            query = urllib.parse.urlencode({
-                "sort": sort_name,
-                "output_modalities": "text",
-            })
+            query = urllib.parse.urlencode(
+                {
+                    "sort": sort_name,
+                    "output_modalities": "text",
+                }
+            )
             try:
                 payload[sort_name] = request_json(
                     f"{MODELS_URL}?{query}",
