@@ -83,11 +83,14 @@ def validate_answer_evidence(
             - _impl.normalized_quantities(task)
         )
         if introduced:
-            rendered = ",".join(
-                f"{lo}{('-' + hi) if hi else ''}:{unit}"
-                for lo, hi, unit in introduced[:16]
+            rendered_values: list[str] = []
+            for lo, hi, unit in introduced[:16]:
+                suffix = f"-{hi}" if hi else ""
+                rendered_values.append(f"{lo}{suffix}:{unit}")
+            violations.append(
+                "closed-world-unsupported-quantity:"
+                + ",".join(rendered_values)
             )
-            violations.append("closed-world-unsupported-quantity:" + rendered)
 
     if provenance_required or not external_facts_allowed:
         unsupported = [
