@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 from typing import Any, Mapping
 
+from v5_claude_red_team_policy import CLAUDE_RED_TEAM_GOVERNANCE_CALLS
 from v5_json_io import load_json_or_default
 
 RUNTIME_VERSION = "v5-r8"
@@ -54,12 +55,16 @@ class BudgetState:
     def __init__(
         self,
         total: int,
+        governance: int,
+        expert_total: int,
         recovery: int,
         initial: int,
         anomaly: float | None,
         valid: bool,
     ) -> None:
         self.total = total
+        self.governance = governance
+        self.expert_total = expert_total
         self.recovery = recovery
         self.initial = initial
         self.anomaly = anomaly
@@ -98,10 +103,18 @@ class CompanyState:
 
 
 class CallState:
-    def __init__(self, calls: int, ledger_total: int, ledger_initial: int, actual_cost: float) -> None:
-        self.calls = calls
-        self.ledger_total = ledger_total
-        self.ledger_initial = ledger_initial
+    def __init__(
+        self,
+        expert_calls: int,
+        total_calls: int,
+        runtime_expert_total: int,
+        runtime_expert_initial: int,
+        actual_cost: float,
+    ) -> None:
+        self.expert_calls = expert_calls
+        self.total_calls = total_calls
+        self.runtime_expert_total = runtime_expert_total
+        self.runtime_expert_initial = runtime_expert_initial
         self.actual_cost = actual_cost
 
 
@@ -172,6 +185,8 @@ def _audit_entry_contract(
 ) -> BudgetState:
     ticket = evidence.ticket
     total = int(ticket.get("calls") or 0) if isinstance(ticket, Mapping) else 0
+    governance = CLAUDE_RED_TEAM_GOVERNANCE_CALLS
+    expert_total = max(0, total - governance)
     recovery = (
         int(ticket.get("maximum_recovery_calls") or 0)
         if isinstance(ticket, Mapping)
@@ -189,8 +204,9 @@ def _audit_entry_contract(
     )
     valid = (
         4 <= total <= ABSOLUTE_MAX_MODEL_CALLS
-        and 0 <= recovery < total
-        and initial == total - recovery
+        and expert_total >= 1
+        and 0 <= recovery < expert_total
+        and initial == expert_total - recovery
         and ticket.get("cost_policy") == "unbounded_with_anomaly_guard"
     ) if isinstance(ticket, Mapping) else False
     checks.update({
@@ -202,8 +218,10 @@ def _audit_entry_contract(
         "execute_outcome": execute_outcome,
         "publish_outcome": publish_outcome,
         "approved_total_calls": total,
+        "approved_governance_calls": governance,
+        "approved_expert_calls": expert_total,
         "approved_recovery_calls": recovery,
-        "approved_initial_calls": initial,
+        "approved_expert_initial_calls": initial,
         "cost_anomaly_usd": anomaly,
         "budget_contract_valid": valid,
     })
@@ -215,7 +233,15 @@ def _audit_entry_contract(
         failures,
     )
     _runtime_envelope_failures(evidence, failures)
-    return BudgetState(total, recovery, initial, anomaly, valid)
+    return BudgetState(
+        total,
+        governance,
+        expert_total,
+        recovery,
+        initial,
+        anomaly,
+        valid,
+    )
 
 
 def _audit_delivery(
@@ -373,37 +399,45 @@ def _audit_calls(
         and isinstance(summary.get("execution_budget"), Mapping)
         else {}
     )
-    calls = int(budget.get("calls_reserved") or 0)
-    ledger_total = int(budget.get("maximum_total_calls") or 0)
-    ledger_initial = int(budget.get("maximum_initial_calls") or 0)
+    expert_calls = int(budget.get("calls_reserved") or 0)
+    runtime_expert_total = int(budget.get("maximum_total_calls") or 0)
+    runtime_expert_initial = int(budget.get("maximum_initial_calls") or 0)
+    total_calls = budget_state.governance + expert_calls
     actual_cost = (
         float(summary.get("actual_cost_usd") or budget.get("actual_cost_usd") or 0.0)
         if isinstance(summary, Mapping)
         else 0.0
     )
     checks.update({
-        "model_calls": calls,
-        "runtime_total_call_ceiling": ledger_total,
-        "runtime_initial_call_ceiling": ledger_initial,
+        "model_calls": total_calls,
+        "governance_model_calls": budget_state.governance,
+        "expert_model_calls": expert_calls,
+        "runtime_expert_call_ceiling": runtime_expert_total,
+        "runtime_expert_initial_call_ceiling": runtime_expert_initial,
         "absolute_maximum_model_calls": ABSOLUTE_MAX_MODEL_CALLS,
         "actual_cost_usd": actual_cost,
     })
-    if calls <= 0:
-        failures.append("V5 execution performed no model calls")
-    elif calls > budget_state.total:
+    if expert_calls <= 0:
+        failures.append("V5 execution performed no expert model calls")
+    elif expert_calls > budget_state.expert_total:
         failures.append(
-            "V5 model calls exceed the approved ticket bound: "
-            f"{calls}/{budget_state.total}"
+            "V5 expert calls exceed the approved expert bound: "
+            f"{expert_calls}/{budget_state.expert_total}"
         )
-    if ledger_total != budget_state.total:
+    if total_calls > budget_state.total:
         failures.append(
-            "runtime total-call ceiling differs from approved ticket: "
-            f"{ledger_total}/{budget_state.total}"
+            "V5 total calls exceed the approved ticket bound: "
+            f"{total_calls}/{budget_state.total}"
         )
-    if ledger_initial != budget_state.initial:
+    if runtime_expert_total != budget_state.expert_total:
         failures.append(
-            "runtime initial-call ceiling differs from approved ticket: "
-            f"{ledger_initial}/{budget_state.initial}"
+            "runtime expert-call ceiling differs from approved ticket: "
+            f"{runtime_expert_total}/{budget_state.expert_total}"
+        )
+    if runtime_expert_initial != budget_state.initial:
+        failures.append(
+            "runtime expert initial-call ceiling differs from approved ticket: "
+            f"{runtime_expert_initial}/{budget_state.initial}"
         )
     if not math.isfinite(actual_cost) or actual_cost < 0:
         failures.append("V5 actual cost is invalid")
@@ -415,7 +449,115 @@ def _audit_calls(
             "V5 actual cost exceeded the approved anomaly stop: "
             f"{actual_cost}/{budget_state.anomaly}"
         )
-    return CallState(calls, ledger_total, ledger_initial, actual_cost)
+    return CallState(
+        expert_calls,
+        total_calls,
+        runtime_expert_total,
+        runtime_expert_initial,
+        actual_cost,
+    )
+
+
+def _request_audit_values(
+    evidence: AuditEvidence,
+    calls: CallState,
+) -> tuple[
+    str,
+    int,
+    int,
+    int,
+    int,
+    int,
+    list[Any],
+    Any,
+]:
+    audit = evidence.request_audit if isinstance(evidence.request_audit, Mapping) else {}
+    status = str(audit.get("status") or "missing")
+    expected = calls.total_calls
+    captured = int(
+        audit.get("request_count")
+        or audit.get("captured_request_count")
+        or 0
+    )
+    ceiling = int(audit.get("approved_total_call_ceiling") or 0)
+    governance_count = int(audit.get("governance_request_count") or 0)
+    expert_count = int(audit.get("expert_request_count") or 0)
+    requests = audit.get("requests", [])
+    if not isinstance(requests, list):
+        requests = []
+    return (
+        status,
+        expected,
+        captured,
+        ceiling,
+        governance_count,
+        expert_count,
+        requests,
+        audit.get("external_tools_allowed"),
+    )
+
+
+def _record_request_checks(
+    checks: dict[str, Any],
+    *,
+    status: str,
+    expected: int,
+    captured: int,
+    ceiling: int,
+    governance_count: int,
+    expert_count: int,
+    requests: list[Any],
+    tools_allowed: Any,
+) -> None:
+    checks.update(
+        {
+            "request_audit_status": status,
+            "expected_request_count": expected,
+            "captured_request_count": captured,
+            "governance_request_count": governance_count,
+            "expert_request_count": expert_count,
+            "request_row_count": len(requests),
+            "request_approved_total_call_ceiling": ceiling,
+            "external_tools_allowed": tools_allowed,
+        }
+    )
+
+
+def _append_request_failures(
+    failures: list[str],
+    *,
+    status: str,
+    expected: int,
+    captured: int,
+    ceiling: int,
+    governance_count: int,
+    expert_count: int,
+    requests: list[Any],
+    tools_allowed: Any,
+    budget: BudgetState,
+    calls: CallState,
+) -> None:
+    if status != "PASS":
+        failures.append(f"V5 request audit status is {status}")
+    if captured != expected:
+        failures.append(
+            "V5 request evidence is incomplete: "
+            f"captured={captured}, expected={expected}"
+        )
+    if governance_count != budget.governance:
+        failures.append(
+            "governance request count differs from approved governance calls"
+        )
+    if expert_count != calls.expert_calls:
+        failures.append("expert request count differs from expert attempts")
+    if requests and len(requests) != captured:
+        failures.append("request detail rows differ from captured request count")
+    if captured > budget.total or ceiling != budget.total:
+        failures.append(
+            "request audit does not prove compliance with the approved total-call ceiling"
+        )
+    if tools_allowed is not False:
+        failures.append("external-tool prohibition evidence is missing")
 
 
 def _audit_requests(
@@ -425,32 +567,40 @@ def _audit_requests(
     checks: dict[str, Any],
     failures: list[str],
 ) -> RequestState:
-    audit = evidence.request_audit
-    status = str(audit.get("status") or "missing") if isinstance(audit, Mapping) else "missing"
-    expected = int(audit.get("expected_request_count") or 0) if isinstance(audit, Mapping) else 0
-    captured = int(audit.get("captured_request_count") or 0) if isinstance(audit, Mapping) else 0
-    ceiling = int(audit.get("approved_total_call_ceiling") or 0) if isinstance(audit, Mapping) else 0
-    tools_allowed = audit.get("external_tools_allowed") if isinstance(audit, Mapping) else None
-    checks.update({
-        "request_audit_status": status,
-        "expected_request_count": expected,
-        "captured_request_count": captured,
-        "request_approved_total_call_ceiling": ceiling,
-        "external_tools_allowed": tools_allowed,
-    })
-    if status != "PASS":
-        failures.append(f"V5 request audit status is {status}")
-    if expected != calls.calls or captured != expected:
-        failures.append(
-            "V5 request evidence is incomplete: "
-            f"captured={captured}, expected={expected}, calls={calls.calls}"
-        )
-    if captured > budget.total or ceiling != budget.total:
-        failures.append(
-            "request audit does not prove compliance with the approved total-call ceiling"
-        )
-    if tools_allowed is not False:
-        failures.append("external-tool prohibition evidence is missing")
+    (
+        status,
+        expected,
+        captured,
+        ceiling,
+        governance_count,
+        expert_count,
+        requests,
+        tools_allowed,
+    ) = _request_audit_values(evidence, calls)
+    _record_request_checks(
+        checks,
+        status=status,
+        expected=expected,
+        captured=captured,
+        ceiling=ceiling,
+        governance_count=governance_count,
+        expert_count=expert_count,
+        requests=requests,
+        tools_allowed=tools_allowed,
+    )
+    _append_request_failures(
+        failures,
+        status=status,
+        expected=expected,
+        captured=captured,
+        ceiling=ceiling,
+        governance_count=governance_count,
+        expert_count=expert_count,
+        requests=requests,
+        tools_allowed=tools_allowed,
+        budget=budget,
+        calls=calls,
+    )
     return RequestState(status, expected, captured, ceiling)
 
 
@@ -467,8 +617,12 @@ def _audit_ledger(
         and isinstance(evidence.ledger.get("summary"), Mapping)
         else {}
     )
-    if int(summary.get("call_count") or 0) != calls.calls:
-        failures.append("V5 call ledger does not match execution budget")
+    if int(summary.get("call_count") or 0) != calls.total_calls:
+        failures.append("V5 call ledger total does not match execution evidence")
+    if int(summary.get("governance_calls") or 0) != budget.governance:
+        failures.append("V5 call ledger governance count is inconsistent")
+    if int(summary.get("expert_calls") or 0) != calls.expert_calls:
+        failures.append("V5 call ledger expert count is inconsistent")
     if int(summary.get("approved_total_call_ceiling") or 0) != budget.total:
         failures.append(
             "V5 call ledger does not preserve the approved total-call ceiling"
@@ -579,7 +733,7 @@ def _stage_status(
         "requests": (
             "PASS"
             if requests.status == "PASS"
-            and requests.captured == requests.expected == calls.calls
+            and requests.captured == requests.expected == calls.total_calls
             and requests.captured <= budget.total
             else "FAIL"
         ),

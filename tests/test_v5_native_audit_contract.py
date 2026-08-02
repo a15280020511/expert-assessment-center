@@ -31,7 +31,7 @@ class V5NativeAuditContractTests(unittest.TestCase):
             "ticket-status.json",
             {
                 "accepted": True,
-                "calls": 4,
+                "calls": 7,
                 "maximum_recovery_calls": 1,
                 "maximum_initial_calls": 3,
                 "cost_policy": "unbounded_with_anomaly_guard",
@@ -211,10 +211,13 @@ class V5NativeAuditContractTests(unittest.TestCase):
             "request-audit.json",
             {
                 "status": "PASS",
-                "approved_total_call_ceiling": 4,
-                "expected_request_count": 4,
-                "captured_request_count": 4,
+                "approved_total_call_ceiling": 7,
+                "request_count": 7,
+                "governance_request_count": 3,
+                "expert_request_count": 4,
+                "requests": [{} for _ in range(7)],
                 "external_tools_allowed": False,
+                "provider_fallback_allowed": False,
             },
         )
         self._write(
@@ -222,8 +225,10 @@ class V5NativeAuditContractTests(unittest.TestCase):
             "call-ledger.json",
             {
                 "summary": {
-                    "call_count": 4,
-                    "approved_total_call_ceiling": 4,
+                    "call_count": 7,
+                    "governance_calls": 3,
+                    "expert_calls": 4,
+                    "approved_total_call_ceiling": 7,
                     "approved_recovery_call_ceiling": 1,
                     "provider_actual_cost_usd": 0.09615135,
                     "substantive_provider_count": 2,
@@ -283,7 +288,9 @@ class V5NativeAuditContractTests(unittest.TestCase):
                 result["checks"]["native_contract_status"],
             )
             self.assertEqual(3, result["checks"]["strict_node_count"])
-            self.assertEqual(4, result["checks"]["model_calls"])
+            self.assertEqual(7, result["checks"]["model_calls"])
+            self.assertEqual(3, result["checks"]["governance_model_calls"])
+            self.assertEqual(4, result["checks"]["expert_model_calls"])
             self.assertEqual(
                 "PASS",
                 result["checks"]["actual_model_company_audit_status"],
