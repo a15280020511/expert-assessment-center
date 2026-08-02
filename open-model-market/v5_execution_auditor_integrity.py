@@ -13,8 +13,9 @@ from v5_quality_status_integrity import (
     DEGRADED_SUCCESS_STATUSES,
     STRICT_SUCCESS_STATUSES,
 )
+from v5_run_evidence import RUNTIME_VERSION as GOVERNED_RUNTIME_VERSION
 
-NATIVE_RUNTIME_VERSION = "v5-native-runtime-1"
+NATIVE_RUNTIME_VERSION = GOVERNED_RUNTIME_VERSION
 NATIVE_EXECUTOR = "v5-native-execution-engine"
 LEGACY_RUNTIME_FAILURE = "V5 production result envelope is missing"
 LEGACY_EXECUTOR_FAILURE = "R8 fault-aware executor evidence is missing"

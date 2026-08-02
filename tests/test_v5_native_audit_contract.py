@@ -42,7 +42,7 @@ class V5NativeAuditContractTests(unittest.TestCase):
             root,
             "production-runtime.json",
             {
-                "runtime_version": "v5-native-runtime-1",
+                "runtime_version": "v5-gpt-claude-runtime-1",
                 "fallback_policy": "fail-closed-no-alternate-runtime",
                 "legacy_runtime_present": False,
                 "cross_task_history_used": False,
@@ -52,7 +52,7 @@ class V5NativeAuditContractTests(unittest.TestCase):
             root,
             "expert-team-result.json",
             {
-                "runtime_version": "v5-native-runtime-1",
+                "runtime_version": "v5-gpt-claude-runtime-1",
                 "status": "success",
                 "completion_mode": "full",
                 "quality_status": "full_success",
