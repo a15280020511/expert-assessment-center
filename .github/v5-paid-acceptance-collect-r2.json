@@ -1,0 +1,6 @@
+{
+  "schema_version": "pr227-paid-acceptance-collect-r2-1",
+  "paid_head_sha": "f9fb10b707eef19df2a21ac2c2188c938011cadc",
+  "target_sha": "f7f0bec6cbecee2314a352a736f45f92d82034f4",
+  "collection_model_calls": 0
+}
