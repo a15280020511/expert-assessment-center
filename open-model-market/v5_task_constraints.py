@@ -1,8 +1,9 @@
 """Stable public facade for constitutional task constraints and evidence gates.
 
 The implementation module contains the general fail-closed validators. This
-facade adds quantity-local and spatial-local Chinese surface canonicalization
-without weakening polarity, object, unit, quantity, or location binding.
+facade adds quantity-local, spatial-local, sensory-local, and task-anchored
+deictic canonicalization without weakening polarity, object, unit, quantity,
+or explicit location binding.
 """
 from __future__ import annotations
 
@@ -37,6 +38,15 @@ _SPATIAL_EXISTENTIAL_RE = re.compile(
     r"(?:放着|放有|摆着|摆放着|有)\s*"
     r"(?:一个|一台|一部|一件|一只|一把)?(?=\S)"
 )
+_SENSORY_EXISTENTIAL_RE = re.compile(
+    r"(?:闻到|嗅到)\s*"
+    r"(?:(?:来源|出处)(?:不明|未知)的?)?\s*"
+    r"(?P<odor>[\u4e00-\u9fff]{1,12}?味)"
+)
+_GENERIC_ONSITE_RE = re.compile(
+    rf"(?P<subject>{_QUANTITY_LITERAL_PATTERN}"
+    r"[^，。！？!?；;\n]{0,24}?)(?:在|位于)现场"
+)
 
 
 def _canonicalize_quantity_local_language(value: str) -> str:
@@ -46,6 +56,7 @@ def _canonicalize_quantity_local_language(value: str) -> str:
     rendered = _QUANTITY_COUNT_LINK_RE.sub("只有", rendered)
     rendered = _REMAINING_QUANTITY_RE.sub("剩余", rendered)
     rendered = _SPATIAL_EXISTENTIAL_RE.sub(r"\g<location>有", rendered)
+    rendered = _SENSORY_EXISTENTIAL_RE.sub(r"有\g<odor>", rendered)
     for pattern, replacement in (
         (r"(?:已经|已)(?=交接)", ""),
         (r"实际\s*可(?=确认)", ""),
@@ -57,12 +68,72 @@ def _canonicalize_quantity_local_language(value: str) -> str:
     return rendered
 
 
+def _onsite_source_matches(
+    task: str,
+    subject: str,
+) -> list[Mapping[str, Any]]:
+    quantities = _impl.normalized_quantities(subject)
+    skeleton = _impl._quantity_skeleton(subject)
+    if not quantities or not skeleton:
+        return []
+    matches: list[Mapping[str, Any]] = []
+    for row in _impl._source_evidence_rows(task):
+        row_quantities = set(row.get("quantities", set())) | set(
+            row.get("contextual_quantities", set())
+        )
+        if not quantities.issubset(row_quantities):
+            continue
+        source_skeletons = tuple(
+            dict.fromkeys(
+                value
+                for value in (
+                    str(row.get("quantity_skeleton", "")),
+                    str(row.get("contextual_quantity_skeleton", "")),
+                )
+                if value
+            )
+        )
+        if any(
+            skeleton in source_skeleton
+            or _impl._reordered_semantic_match(skeleton, source_skeleton)
+            for source_skeleton in source_skeletons
+        ):
+            matches.append(row)
+    return matches
+
+
+def _canonicalize_task_anchored_onsite(
+    task: str,
+    claim: str,
+) -> tuple[str, bool]:
+    """Resolve generic 'onsite' only when source has no explicit spatial anchor."""
+    blocked = False
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal blocked
+        subject = match.group("subject").strip()
+        source_rows = _onsite_source_matches(task, subject)
+        if not source_rows:
+            return match.group(0)
+        if any(not set(row.get("spatial_anchors", set())) for row in source_rows):
+            return subject
+        blocked = True
+        return match.group(0)
+
+    return _GENERIC_ONSITE_RE.sub(replace, claim), blocked
+
+
 def fact_claim_supported(task: str, claim: str) -> bool:
-    """Validate a fact after safe local surface canonicalization."""
-    return _impl.fact_claim_supported(
-        _canonicalize_quantity_local_language(task),
-        _canonicalize_quantity_local_language(claim),
+    """Validate a fact after safe local and task-anchored canonicalization."""
+    canonical_task = _canonicalize_quantity_local_language(task)
+    canonical_claim = _canonicalize_quantity_local_language(claim)
+    canonical_claim, blocked = _canonicalize_task_anchored_onsite(
+        canonical_task,
+        canonical_claim,
     )
+    if blocked:
+        return False
+    return _impl.fact_claim_supported(canonical_task, canonical_claim)
 
 
 def validate_answer_evidence(
