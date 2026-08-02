@@ -11,6 +11,7 @@ from typing import Any, Mapping, Sequence
 import model_market
 from artifact_manifest import write_manifest
 from v5_catalog_view import (
+    MINIMUM_EXPERT_COMPLETION_TOKENS,
     catalog_sha256,
     compact_endpoint_catalog,
     eligible_models,
@@ -127,11 +128,14 @@ def _merge_request_audit(
         "code_interpreter",
         "models",
     }
+
     def forbidden_fields(row: Mapping[str, Any]) -> set[str]:
         direct = forbidden.intersection(row)
         recorded = row.get("request_fields")
         if isinstance(recorded, list):
-            direct.update(forbidden.intersection(str(value) for value in recorded))
+            direct.update(
+                forbidden.intersection(str(value) for value in recorded)
+            )
         return direct
 
     status = (
@@ -190,10 +194,13 @@ def main(
         task_envelope["task_constraints"],
     )
 
+    required_context_tokens = int(
+        task_envelope["required_context_tokens"]
+    )
     models, catalog_source = model_market.fetch_catalog(run)
     ranked = eligible_models(
         models,
-        requested_context=int(task_envelope["required_context_tokens"]),
+        requested_context=required_context_tokens,
         maximum_models=int(args.ranking_limit),
     )
     if args.endpoint_file:
@@ -216,6 +223,8 @@ def main(
         ranked,
         endpoint_payloads,
         allow_synthetic_fixture=allow_synthetic,
+        required_context_tokens=required_context_tokens,
+        minimum_completion_tokens=MINIMUM_EXPERT_COMPLETION_TOKENS,
     )
     snapshot_digest = catalog_sha256(catalog)
     snapshot = {
