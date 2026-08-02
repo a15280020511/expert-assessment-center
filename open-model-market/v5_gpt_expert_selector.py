@@ -1,13 +1,9 @@
-"""Fixed GPT proposal/synthesis requests for the expert-team center.
-
-GPT chooses the dynamic expert composition directly from the current task
-resources and exact catalog rows. No local scoring or solver participates.
-"""
+"""Fixed GPT-latest proposal and one-time synthesis protocol."""
 from __future__ import annotations
 
 import json
 from hashlib import sha256
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 GPT_SELECTOR_MODEL = "~openai/gpt-latest"
 GPT_SELECTOR_PROVIDER = "openai"
@@ -30,46 +26,61 @@ SYNTHESIS_PROMPT = (
     "修正专家组合。不得再次调用或请求Claude，不得循环，不得添加目录外模型，不得绕过硬约束。"
     "只输出一份最终严格JSON提案，不解释，不写报告。"
 )
-PROPOSAL_PROMPT_SHA256 = "53d3a37962466df8df8bc47d94da75450e1b81cb5c422ea83a4808bcdac939a5"
-SYNTHESIS_PROMPT_SHA256 = "079b7773f4176bf9362fe863c1fd913d1d3dc4920a652407fd72082afce809fd"
+PROPOSAL_PROMPT_SHA256 = (
+    "53d3a37962466df8df8bc47d94da75450e1b81cb5c422ea83a4808bcdac939a5"
+)
+SYNTHESIS_PROMPT_SHA256 = (
+    "079b7773f4176bf9362fe863c1fd913d1d3dc4920a652407fd72082afce809fd"
+)
 
 
 class GPTSelectorError(RuntimeError):
-    """Fail-closed GPT selection/synthesis protocol error."""
+    pass
 
 
-def _proposal_schema(name: str) -> dict[str, Any]:
+def _fixed(prompt: str, expected: str) -> str:
+    if sha256(prompt.encode("utf-8")).hexdigest() != expected:
+        raise GPTSelectorError("fixed GPT selector prompt integrity failure")
+    return prompt
+
+
+def _schema(name: str) -> dict[str, Any]:
+    identifier = {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_.~:@/+-]{1,160}$",
+    }
+    node_id = {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+    }
+    work_id = {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_.:-]{1,96}$",
+    }
+    recovery = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "model": identifier,
+            "provider": identifier,
+        },
+        "required": ["model", "provider"],
+    }
     node = {
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "node_id": {
-                "type": "string",
-                "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
-            },
+            "node_id": node_id,
             "work_ids": {
                 "type": "array",
                 "minItems": 1,
                 "maxItems": 8,
                 "uniqueItems": True,
-                "items": {
-                    "type": "string",
-                    "pattern": "^[A-Za-z0-9_.:-]{1,96}$",
-                },
+                "items": work_id,
             },
-            "role": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 160,
-            },
-            "model": {
-                "type": "string",
-                "pattern": "^[A-Za-z0-9_.~:@/+-]{1,160}$",
-            },
-            "provider": {
-                "type": "string",
-                "pattern": "^[A-Za-z0-9_.:@/+-]{1,160}$",
-            },
+            "role": {"type": "string", "minLength": 1, "maxLength": 160},
+            "model": identifier,
+            "provider": identifier,
             "reasoning_effort": {
                 "type": "string",
                 "enum": ["low", "medium", "high"],
@@ -82,22 +93,7 @@ def _proposal_schema(name: str) -> dict[str, Any]:
             "recovery": {
                 "type": "array",
                 "maxItems": GPT_MAX_RECOVERY_PER_NODE,
-                "uniqueItems": True,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "model": {
-                            "type": "string",
-                            "pattern": "^[A-Za-z0-9_.~:@/+-]{1,160}$",
-                        },
-                        "provider": {
-                            "type": "string",
-                            "pattern": "^[A-Za-z0-9_.:@/+-]{1,160}$",
-                        },
-                    },
-                    "required": ["model", "provider"],
-                },
+                "items": recovery,
             },
         },
         "required": [
@@ -115,14 +111,8 @@ def _proposal_schema(name: str) -> dict[str, Any]:
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "source": {
-                "type": "string",
-                "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
-            },
-            "target": {
-                "type": "string",
-                "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
-            },
+            "source": node_id,
+            "target": node_id,
             "relation_type": {
                 "type": "string",
                 "enum": [
@@ -149,10 +139,7 @@ def _proposal_schema(name: str) -> dict[str, Any]:
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "interpretation_id": {
-                        "type": "string",
-                        "pattern": "^[A-Za-z0-9_.:-]{1,96}$",
-                    },
+                    "interpretation_id": work_id,
                     "nodes": {
                         "type": "array",
                         "minItems": 1,
@@ -169,10 +156,7 @@ def _proposal_schema(name: str) -> dict[str, Any]:
                         "minItems": 1,
                         "maxItems": GPT_MAX_NODES,
                         "uniqueItems": True,
-                        "items": {
-                            "type": "string",
-                            "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
-                        },
+                        "items": node_id,
                     },
                 },
                 "required": [
@@ -186,14 +170,7 @@ def _proposal_schema(name: str) -> dict[str, Any]:
     }
 
 
-def _fixed_prompt(prompt: str, expected_sha256: str) -> str:
-    actual = sha256(prompt.encode("utf-8")).hexdigest()
-    if actual != expected_sha256:
-        raise GPTSelectorError("fixed GPT selector prompt integrity failure")
-    return prompt
-
-
-def _canonical_user_content(value: Mapping[str, Any]) -> str:
+def _content(value: Mapping[str, Any]) -> str:
     rendered = json.dumps(
         value,
         ensure_ascii=False,
@@ -203,8 +180,52 @@ def _canonical_user_content(value: Mapping[str, Any]) -> str:
         default=str,
     )
     if len(rendered) > GPT_MAX_INPUT_CHARS:
-        raise GPTSelectorError("GPT selector input exceeds hard character limit")
+        raise GPTSelectorError("GPT selector input exceeds hard limit")
     return rendered
+
+
+def _request(prompt: str, prompt_hash: str, name: str, user: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "model": GPT_SELECTOR_MODEL,
+        "messages": [
+            {"role": "system", "content": _fixed(prompt, prompt_hash)},
+            {"role": "user", "content": _content(user)},
+        ],
+        "temperature": 0,
+        "max_tokens": GPT_MAX_OUTPUT_TOKENS,
+        "reasoning": {"effort": "high", "exclude": True},
+        "response_format": _schema(name),
+        "provider": {
+            "only": [GPT_SELECTOR_PROVIDER],
+            "order": [GPT_SELECTOR_PROVIDER],
+            "allow_fallbacks": False,
+            "require_parameters": True,
+        },
+    }
+
+
+def _hard_limits(
+    *,
+    approved_total_calls: int,
+    governance_calls_reserved: int,
+    approved_recovery_calls: int,
+    cost_anomaly_usd: float | None,
+) -> dict[str, Any]:
+    return {
+        "approved_total_calls": int(approved_total_calls),
+        "governance_calls_reserved": int(governance_calls_reserved),
+        "approved_recovery_calls": int(approved_recovery_calls),
+        "maximum_expert_initial_calls": (
+            int(approved_total_calls)
+            - int(governance_calls_reserved)
+            - int(approved_recovery_calls)
+        ),
+        "cost_anomaly_usd": cost_anomaly_usd,
+        "distinct_expert_companies": True,
+        "governance_companies_forbidden_for_experts": ["openai", "anthropic"],
+        "tools_allowed": False,
+        "provider_fallback_allowed": False,
+    }
 
 
 def build_proposal_request(
@@ -217,57 +238,22 @@ def build_proposal_request(
     approved_recovery_calls: int,
     cost_anomaly_usd: float | None,
 ) -> dict[str, Any]:
-    prompt = _fixed_prompt(PROPOSAL_PROMPT, PROPOSAL_PROMPT_SHA256)
-    user = _canonical_user_content(
+    return _request(
+        PROPOSAL_PROMPT,
+        PROPOSAL_PROMPT_SHA256,
+        "gpt_expert_team_proposal",
         {
             "task": str(task),
             "resources": resources,
             "catalog": catalog,
-            "hard_limits": {
-                "approved_total_calls": int(approved_total_calls),
-                "governance_calls_reserved": int(governance_calls_reserved),
-                "approved_recovery_calls": int(approved_recovery_calls),
-                "maximum_expert_initial_calls": (
-                    int(approved_total_calls)
-                    - int(governance_calls_reserved)
-                    - int(approved_recovery_calls)
-                ),
-                "cost_anomaly_usd": cost_anomaly_usd,
-                "distinct_expert_companies": True,
-                "governance_companies_forbidden_for_experts": [
-                    "openai",
-                    "anthropic",
-                ],
-                "tools_allowed": False,
-                "provider_fallback_allowed": False,
-            },
-        }
+            "hard_limits": _hard_limits(
+                approved_total_calls=approved_total_calls,
+                governance_calls_reserved=governance_calls_reserved,
+                approved_recovery_calls=approved_recovery_calls,
+                cost_anomaly_usd=cost_anomaly_usd,
+            ),
+        },
     )
-    return {
-        "model": GPT_SELECTOR_MODEL,
-        "messages": [
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": user},
-        ],
-        "temperature": 0,
-        "max_tokens": GPT_MAX_OUTPUT_TOKENS,
-        "reasoning": {"effort": "high", "exclude": True},
-        "verbosity": "low",
-        "response_format": _proposal_schema("gpt_expert_team_proposal"),
-        "provider": {
-            "only": [GPT_SELECTOR_PROVIDER],
-            "order": [GPT_SELECTOR_PROVIDER],
-            "allow_fallbacks": False,
-            "require_parameters": True,
-        },
-        "governance_policy": {
-            "role": "dynamic-expert-team-proposer",
-            "local_scoring_used": False,
-            "optimizer_used": False,
-            "tools_allowed": False,
-            "prompt_sha256": PROPOSAL_PROMPT_SHA256,
-        },
-    }
 
 
 def build_synthesis_request(
@@ -282,8 +268,17 @@ def build_synthesis_request(
     approved_recovery_calls: int,
     cost_anomaly_usd: float | None,
 ) -> dict[str, Any]:
-    prompt = _fixed_prompt(SYNTHESIS_PROMPT, SYNTHESIS_PROMPT_SHA256)
-    user = _canonical_user_content(
+    hard = _hard_limits(
+        approved_total_calls=approved_total_calls,
+        governance_calls_reserved=governance_calls_reserved,
+        approved_recovery_calls=approved_recovery_calls,
+        cost_anomaly_usd=cost_anomaly_usd,
+    )
+    hard["claude_second_review_allowed"] = False
+    return _request(
+        SYNTHESIS_PROMPT,
+        SYNTHESIS_PROMPT_SHA256,
+        "gpt_expert_team_synthesis",
         {
             "task": str(task),
             "initial_proposal": initial_proposal,
@@ -294,90 +289,42 @@ def build_synthesis_request(
             },
             "resources": resources,
             "catalog": catalog,
-            "hard_limits": {
-                "approved_total_calls": int(approved_total_calls),
-                "governance_calls_reserved": int(governance_calls_reserved),
-                "approved_recovery_calls": int(approved_recovery_calls),
-                "maximum_expert_initial_calls": (
-                    int(approved_total_calls)
-                    - int(governance_calls_reserved)
-                    - int(approved_recovery_calls)
-                ),
-                "cost_anomaly_usd": cost_anomaly_usd,
-                "distinct_expert_companies": True,
-                "governance_companies_forbidden_for_experts": [
-                    "openai",
-                    "anthropic",
-                ],
-                "tools_allowed": False,
-                "provider_fallback_allowed": False,
-                "claude_second_review_allowed": False,
-            },
-        }
+            "hard_limits": hard,
+        },
     )
-    return {
-        "model": GPT_SELECTOR_MODEL,
-        "messages": [
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": user},
-        ],
-        "temperature": 0,
-        "max_tokens": GPT_MAX_OUTPUT_TOKENS,
-        "reasoning": {"effort": "high", "exclude": True},
-        "verbosity": "low",
-        "response_format": _proposal_schema("gpt_expert_team_synthesis"),
-        "provider": {
-            "only": [GPT_SELECTOR_PROVIDER],
-            "order": [GPT_SELECTOR_PROVIDER],
-            "allow_fallbacks": False,
-            "require_parameters": True,
-        },
-        "governance_policy": {
-            "role": "single-pass-post-red-team-synthesis",
-            "maximum_calls": 1,
-            "claude_second_review_allowed": False,
-            "model_loop_allowed": False,
-            "tools_allowed": False,
-            "prompt_sha256": SYNTHESIS_PROMPT_SHA256,
-        },
-    }
 
 
 def parse_proposal(text: str) -> dict[str, Any]:
     if not isinstance(text, str) or not text.strip():
         raise GPTSelectorError("GPT proposal is empty")
     if len(text) > GPT_MAX_OUTPUT_CHARS:
-        raise GPTSelectorError("GPT proposal exceeds output character limit")
+        raise GPTSelectorError("GPT proposal exceeds hard limit")
     try:
         value = json.loads(text)
     except json.JSONDecodeError as exc:
         raise GPTSelectorError("GPT proposal is not valid JSON") from exc
-    if not isinstance(value, Mapping):
-        raise GPTSelectorError("GPT proposal must be an object")
     required = {"interpretation_id", "nodes", "edges", "final_nodes"}
-    if set(value) != required:
-        raise GPTSelectorError("GPT proposal has missing or extra top-level fields")
-    nodes = value.get("nodes")
-    edges = value.get("edges")
-    final_nodes = value.get("final_nodes")
-    if not isinstance(nodes, list) or not nodes or len(nodes) > GPT_MAX_NODES:
-        raise GPTSelectorError("GPT proposal nodes are invalid")
-    if not isinstance(edges, list) or len(edges) > GPT_MAX_EDGES:
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise GPTSelectorError("GPT proposal has missing or extra fields")
+    if not isinstance(value["nodes"], list) or not value["nodes"]:
+        raise GPTSelectorError("GPT proposal has no nodes")
+    if len(value["nodes"]) > GPT_MAX_NODES:
+        raise GPTSelectorError("GPT proposal exceeds node limit")
+    if not isinstance(value["edges"], list) or len(value["edges"]) > GPT_MAX_EDGES:
         raise GPTSelectorError("GPT proposal edges are invalid")
-    if not isinstance(final_nodes, list) or not final_nodes:
-        raise GPTSelectorError("GPT proposal final_nodes are invalid")
-    return json.loads(
-        json.dumps(value, ensure_ascii=False, allow_nan=False, default=str)
-    )
+    if not isinstance(value["final_nodes"], list) or not value["final_nodes"]:
+        raise GPTSelectorError("GPT proposal final nodes are invalid")
+    return json.loads(json.dumps(value, ensure_ascii=False, allow_nan=False))
 
 
 def proposal_sha256(value: Mapping[str, Any]) -> str:
-    rendered = json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-        default=str,
-    )
-    return sha256(rendered.encode("utf-8")).hexdigest()
+    return sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
