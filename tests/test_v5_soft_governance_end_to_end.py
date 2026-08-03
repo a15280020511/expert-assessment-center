@@ -5,7 +5,6 @@ import json
 import sys
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 MARKET = ROOT / "open-model-market"
