@@ -1,0 +1,392 @@
+name: PR232 Free Shadow Topology Remediation
+
+on:
+  push:
+    branches:
+      - "remediation/pr232-shadow-topology-*"
+    paths:
+      - ".github/pr232-shadow-topology-request.json"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr232-free-shadow-topology-remediation
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out immutable remediation request
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          path: request-source
+
+      - name: Validate exact remediation authorization
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=request-source/.github/pr232-shadow-topology-request.json
+          jq -e '
+            type == "object" and
+            (keys | sort) == [
+              "authorization",
+              "patch_id",
+              "request_id",
+              "schema_version",
+              "target_branch",
+              "target_sha"
+            ] and
+            .schema_version == "pr232-shadow-topology-request-1" and
+            .authorization == "EXACT-ZERO-CALL-SOURCE-PATCH" and
+            .patch_id == "free-shadow-topology-and-failure-evidence" and
+            .target_branch == "fix/v5-free-shadow-production-qualification-20260803" and
+            (.request_id | test("^[a-z0-9][a-z0-9._-]{0,63}$")) and
+            (.target_sha | test("^[0-9a-f]{40}$"))
+          ' "$request" >/dev/null
+          test "$(git -C request-source diff --name-only HEAD^ HEAD)" = ".github/pr232-shadow-topology-request.json"
+          target="$(jq -er '.target_sha' "$request")"
+          git -C request-source merge-base --is-ancestor "$target" HEAD^
+          {
+            echo "target_branch=$(jq -er '.target_branch' "$request")"
+            echo "target_sha=$target"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact PR branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ steps.request.outputs.target_branch }}
+          fetch-depth: 0
+          persist-credentials: true
+          path: target-source
+
+      - name: Apply exact topology and evidence patch
+        working-directory: target-source
+        env:
+          TARGET_SHA: ${{ steps.request.outputs.target_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str, label: str) -> None:
+              text = path.read_text(encoding="utf-8")
+              if text.count(old) != 1:
+                  raise SystemExit(f"{label}: expected exactly one match")
+              path.write_text(text.replace(old, new), encoding="utf-8")
+
+          compat = Path("open-model-market/v5_free_shadow_compat.py")
+          old_schema = '''def _schema_instruction(response_format: Mapping[str, Any]) -> str:
+              json_schema = response_format.get("json_schema")
+              json_schema = json_schema if isinstance(json_schema, Mapping) else {}
+              schema = json_schema.get("schema")
+              schema = schema if isinstance(schema, Mapping) else {}
+              compact = json.dumps(
+                  schema,
+                  ensure_ascii=False,
+                  sort_keys=True,
+                  separators=(",", ":"),
+              )
+              return (
+                  "\\n\\nFREE_SHADOW_JSON_COMPATIBILITY:\\n"
+                  "只输出一个有效JSON对象；不要Markdown代码块、解释或额外文字。"
+                  "对象必须严格满足以下JSON Schema，禁止额外字段：\\n"
+                  + compact
+              )
+          '''
+          new_schema = '''def _topology_instruction(schema: Mapping[str, Any]) -> str:
+              properties = schema.get("properties")
+              if not isinstance(properties, Mapping):
+                  return ""
+              if not {"selected_nodes", "edges"}.issubset(properties):
+                  return ""
+              return (
+                  "引用完整性硬约束："
+                  "selected_nodes中的node_id必须唯一；"
+                  "edges中的from_node_id和to_node_id只能引用selected_nodes中已定义的node_id；"
+                  "禁止创建source、sink、start、end、final等虚拟节点；"
+                  "若selected_nodes只有一个元素，edges必须为[]；"
+                  "若硬上限maximum_recovery_nodes为0，recovery_selection必须为[]；"
+                  "每个work_item只能分配给已定义节点，且不得遗漏或重复。\\n"
+              )
+
+
+          def _schema_instruction(response_format: Mapping[str, Any]) -> str:
+              json_schema = response_format.get("json_schema")
+              json_schema = json_schema if isinstance(json_schema, Mapping) else {}
+              schema = json_schema.get("schema")
+              schema = schema if isinstance(schema, Mapping) else {}
+              compact = json.dumps(
+                  schema,
+                  ensure_ascii=False,
+                  sort_keys=True,
+                  separators=(",", ":"),
+              )
+              return (
+                  "\\n\\nFREE_SHADOW_JSON_COMPATIBILITY:\\n"
+                  "只输出一个有效JSON对象；不要Markdown代码块、解释或额外文字。"
+                  "对象必须严格满足以下JSON Schema，禁止额外字段。\\n"
+                  + _topology_instruction(schema)
+                  + "JSON Schema：\\n"
+                  + compact
+              )
+          '''
+          replace_once(compat, old_schema, new_schema, "schema instruction")
+
+          old_fence = '''def _strip_json_fence(text: str) -> tuple[str, bool]:
+              stripped = text.strip()
+              if not stripped.startswith("```") or not stripped.endswith("```"):
+                  return stripped, False
+              lines = stripped.splitlines()
+              if len(lines) < 3:
+                  return stripped, False
+              if lines[0].strip().casefold() not in {"```", "```json"}:
+                  return stripped, False
+              if lines[-1].strip() != "```":
+                  return stripped, False
+              return "\\n".join(lines[1:-1]).strip(), True
+          '''
+          new_fence = old_fence + '''
+
+          def _safe_output_summary(text: str) -> dict[str, Any]:
+              summary: dict[str, Any] = {
+                  "output_characters": len(text),
+                  "output_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                  "parsed_json_object": False,
+              }
+              try:
+                  value = json.loads(text)
+              except json.JSONDecodeError:
+                  return summary
+              if not isinstance(value, Mapping):
+                  return summary
+              summary["parsed_json_object"] = True
+              summary["top_level_keys"] = sorted(str(key) for key in value)
+              work_items = value.get("work_items")
+              selected_nodes = value.get("selected_nodes")
+              edges = value.get("edges")
+              recovery = value.get("recovery_selection")
+              if isinstance(work_items, list):
+                  summary["work_item_ids"] = [
+                      str(row.get("id") or "")
+                      for row in work_items
+                      if isinstance(row, Mapping)
+                  ]
+              if isinstance(selected_nodes, list):
+                  summary["selected_node_ids"] = [
+                      str(row.get("node_id") or "")
+                      for row in selected_nodes
+                      if isinstance(row, Mapping)
+                  ]
+              if isinstance(edges, list):
+                  summary["edge_pairs"] = [
+                      {
+                          "from_node_id": str(row.get("from_node_id") or ""),
+                          "to_node_id": str(row.get("to_node_id") or ""),
+                      }
+                      for row in edges
+                      if isinstance(row, Mapping)
+                  ]
+              if isinstance(recovery, list):
+                  summary["recovery_node_ids"] = [
+                      str(row.get("node_id") or "")
+                      for row in recovery
+                      if isinstance(row, Mapping)
+                  ]
+              return summary
+          '''
+          replace_once(compat, old_fence, new_fence, "safe output summary")
+
+          old_record = '''    def _record(
+                  self,
+                  response: Mapping[str, Any],
+                  adaptation: Mapping[str, Any],
+              ) -> None:
+                  usage = response.get("usage")
+                  usage = dict(usage) if isinstance(usage, Mapping) else {}
+                  self.calls.append(
+                      {
+                          "sequence": len(self.calls) + 1,
+                          "model": str(response.get("model") or ""),
+                          "company": self.endpoint.company,
+                          "provider": str(response.get("provider") or ""),
+                          "actual_cost_usd": float(actual_cost(response)),
+                          "response_id": str(response.get("id") or "") or None,
+                          "usage": usage,
+                          "wire_adaptation": dict(adaptation),
+                      }
+                  )
+          '''
+          new_record = '''    def _record(
+                  self,
+                  response: Mapping[str, Any],
+                  adaptation: Mapping[str, Any],
+              ) -> None:
+                  usage = response.get("usage")
+                  usage = dict(usage) if isinstance(usage, Mapping) else {}
+                  text = _content_text(response)
+                  self.calls.append(
+                      {
+                          "sequence": len(self.calls) + 1,
+                          "model": str(response.get("model") or ""),
+                          "company": self.endpoint.company,
+                          "provider": str(response.get("provider") or ""),
+                          "actual_cost_usd": float(actual_cost(response)),
+                          "response_id": str(response.get("id") or "") or None,
+                          "usage": usage,
+                          "output_summary": _safe_output_summary(text),
+                          "wire_adaptation": dict(adaptation),
+                      }
+                  )
+          '''
+          replace_once(compat, old_record, new_record, "boundary record")
+
+          acceptance = Path("open-model-market/v5_free_shadow_acceptance.py")
+          old_execute = '''    graph, limits, _, ledger = _run_governance_stage(
+                  output_dir,
+                  run,
+                  task,
+                  task_digest,
+                  envelope,
+                  catalog,
+                  resolution,
+                  boundary,
+                  maximum_completion_tokens,
+              )
+              result = _run_expert_stage(
+                  output_dir,
+                  run,
+                  task,
+                  graph,
+                  limits,
+                  resolution,
+                  ledger,
+                  boundary,
+              )
+              return _normalize_and_receipt(
+                  output_dir,
+                  result,
+                  ledger,
+                  boundary,
+                  selected_mode,
+              )
+          '''
+          new_execute = '''    try:
+                  graph, limits, _, ledger = _run_governance_stage(
+                      output_dir,
+                      run,
+                      task,
+                      task_digest,
+                      envelope,
+                      catalog,
+                      resolution,
+                      boundary,
+                      maximum_completion_tokens,
+                  )
+                  result = _run_expert_stage(
+                      output_dir,
+                      run,
+                      task,
+                      graph,
+                      limits,
+                      resolution,
+                      ledger,
+                      boundary,
+                  )
+                  return _normalize_and_receipt(
+                      output_dir,
+                      result,
+                      ledger,
+                      boundary,
+                      selected_mode,
+                  )
+              except Exception:
+                  write_json(
+                      output_dir / "free-shadow-call-boundary.json",
+                      boundary.receipt(),
+                  )
+                  raise
+          '''
+          replace_once(acceptance, old_execute, new_execute, "partial boundary persistence")
+
+          old_failure = '''        write_json(root / "free-shadow-acceptance-receipt.json", failure)
+                  print(json.dumps(failure, ensure_ascii=False))
+                  return 1
+          '''
+          new_failure = '''        write_json(root / "free-shadow-acceptance-receipt.json", failure)
+                  write_manifest(root)
+                  print(json.dumps(failure, ensure_ascii=False))
+                  return 1
+          '''
+          replace_once(acceptance, old_failure, new_failure, "failure manifest")
+
+          tests = Path("tests/test_v5_free_shadow_acceptance.py")
+          marker = '''    def test_shadow_identity_can_never_authorize_production(self) -> None:
+          '''
+          additions = '''    def test_topology_instruction_forbids_virtual_single_node_edges(self) -> None:
+                  schema = {
+                      "type": "object",
+                      "properties": {
+                          "selected_nodes": {"type": "array"},
+                          "edges": {"type": "array"},
+                      },
+                  }
+                  text = shadow_compat._topology_instruction(schema)
+                  self.assertIn("edges必须为[]", text)
+                  self.assertIn("禁止创建source", text)
+                  self.assertIn("只能引用selected_nodes", text)
+
+              def test_safe_output_summary_records_topology_without_raw_text(self) -> None:
+                  value = {
+                      "work_items": [{"id": "work_1"}],
+                      "selected_nodes": [{"node_id": "node_1"}],
+                      "edges": [
+                          {
+                              "from_node_id": "node_1",
+                              "to_node_id": "ghost_node",
+                          }
+                      ],
+                      "recovery_selection": [],
+                  }
+                  text = json.dumps(value, ensure_ascii=False)
+                  summary = shadow_compat._safe_output_summary(text)
+                  self.assertTrue(summary["parsed_json_object"])
+                  self.assertEqual(summary["selected_node_ids"], ["node_1"])
+                  self.assertEqual(
+                      summary["edge_pairs"][0]["to_node_id"],
+                      "ghost_node",
+                  )
+                  self.assertNotIn("raw_output", summary)
+                  self.assertEqual(summary["output_characters"], len(text))
+
+          ''' + marker
+          replace_once(tests, marker, additions, "topology diagnostics tests")
+          PY
+          python -m compileall -q open-model-market tests
+          test "$(git diff --name-only | sort)" = "$(printf '%s\n' \
+            open-model-market/v5_free_shadow_acceptance.py \
+            open-model-market/v5_free_shadow_compat.py \
+            tests/test_v5_free_shadow_acceptance.py | sort)"
+
+      - name: Commit exact remediation to PR branch
+        working-directory: target-source
+        env:
+          TARGET_BRANCH: ${{ steps.request.outputs.target_branch }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            open-model-market/v5_free_shadow_acceptance.py \
+            open-model-market/v5_free_shadow_compat.py \
+            tests/test_v5_free_shadow_acceptance.py
+          git commit -m "fix: harden free shadow topology references and failure evidence"
+          git push origin "HEAD:$TARGET_BRANCH"
