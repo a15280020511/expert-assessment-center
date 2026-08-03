@@ -7,6 +7,7 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
+import model_market  # noqa: E402
 import v5_pipeline  # noqa: E402
 from execution_graph import ExecutionGraph, SelectedNode  # noqa: E402
 from v5_runtime import RetryPolicy, RuntimeConfig  # noqa: E402
@@ -16,6 +17,7 @@ from v5_soft_resource_governance import (  # noqa: E402
     _without_local_token_caps,
     build_runtime,
 )
+from v5_task_envelope import build_task_envelope  # noqa: E402
 
 
 def node() -> SelectedNode:
@@ -162,6 +164,43 @@ class SoftResourceGovernanceTests(unittest.TestCase):
                 "cost_threshold_can_invalidate_result"
             ]
         )
+
+    def test_large_completion_advisory_is_not_rejected_by_config(self):
+        run = model_market.build_run_config(
+            SimpleNamespace(
+                task="closed-world task",
+                max_completion_tokens=1_000_000,
+                maximum_recovery_calls=0,
+                catalog_file=None,
+                output_dir="v5-artifacts",
+                dry_run=True,
+                require_live_catalog=False,
+                maximum_total_calls=4,
+            )
+        )
+        self.assertEqual(run.max_completion_tokens, 1_000_000)
+
+    def test_completion_advisory_does_not_change_required_context(self):
+        low = build_task_envelope(
+            "closed-world task",
+            minimum_context_length=16_384,
+            maximum_completion_tokens=1_000,
+        )
+        high = build_task_envelope(
+            "closed-world task",
+            minimum_context_length=16_384,
+            maximum_completion_tokens=1_000_000,
+        )
+        self.assertEqual(
+            low["required_context_tokens"],
+            high["required_context_tokens"],
+        )
+        self.assertNotEqual(
+            low["completion_capacity_advisory_tokens"],
+            high["completion_capacity_advisory_tokens"],
+        )
+        self.assertFalse(high["completion_advisory_affects_eligibility"])
+        self.assertFalse(high["local_token_ceiling_enforced"])
 
 
 if __name__ == "__main__":
