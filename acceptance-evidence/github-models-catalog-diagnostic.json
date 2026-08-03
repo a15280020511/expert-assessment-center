@@ -1,0 +1,17 @@
+{
+  "schema_version": "github-models-catalog-diagnostic-1",
+  "status": "FAIL",
+  "request_id": "pr232-github-models-catalog-r2",
+  "target_sha": "5e1f95240a709fa11a70058e8c2a9cd3ae71b1d0",
+  "http_status": 410,
+  "error": {},
+  "catalog_model_count": 0,
+  "publisher_counts": {},
+  "eligible_model_count": 0,
+  "eligible_publishers": [],
+  "eligible_publisher_count": 0,
+  "eligible_models": [],
+  "inference_calls": 0,
+  "paid_inference_calls": 0,
+  "production_ref_moved": false
+}
