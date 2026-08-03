@@ -95,24 +95,19 @@ jobs:
               raise SystemExit("production receipt transform anchor mismatch")
           replacement = '''replace_exact_count(
               "open-model-market/v5_production_ticket.py",
-              \'\'\'            "max_completion_tokens": args.max_completion_tokens,
-              "governance_max_completion_tokens": (
-                  args.governance_max_completion_tokens
-              ),
-          \'\'\',
-              \'\'\'            "completion_token_guidance": args.max_completion_tokens,
-              "governance_completion_token_guidance": (
-                  args.governance_max_completion_tokens
-              ),
-              "resource_governance_mode": "advisory-only",
-              "token_limit_enforced": False,
-              "cost_limit_enforced": False,
-          \'\'\',
+              '"max_completion_tokens": args.max_completion_tokens',
+              '"completion_token_guidance": args.max_completion_tokens',
+              expected_count=2,
+          )
+          replace_exact_count(
+              "open-model-market/v5_production_ticket.py",
+              '"governance_max_completion_tokens": (',
+              '"governance_completion_token_guidance": (',
               expected_count=2,
           )'''
           path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
           PY
-          test "$(sha256sum tools/apply_soft_resource_governance.py | awk '{print $1}')" = "19cb8ce342967a863c6adda3351341b5d43a5c00be9c93fde9a057ec4c0dc0d9"
+          test "$(sha256sum tools/apply_soft_resource_governance.py | awk '{print $1}')" = "3f857ba60c02a4ca79d98dee7016bcf60d5b2f580a01dcd8225a10c9601a5e3c"
           python -m py_compile tools/apply_soft_resource_governance.py
           python tools/apply_soft_resource_governance.py
           rm tools/apply_soft_resource_governance.py
