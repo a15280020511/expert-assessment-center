@@ -1,5 +1,5 @@
 {
-  "schema_version": "v5-constitutional-policy-3",
+  "schema_version": "v5-constitutional-policy-4",
   "authority": "CONSTITUTION.md",
   "fail_closed": true,
   "free_first_testing": {
@@ -84,7 +84,18 @@
       "legal_prior_outputs_within_same_task"
     ],
     "external_fact_collection_allowed": false,
-    "violation_action": "fail_closed"
+    "violation_action": "fail_closed",
+    "request_and_response_boundary_required": true,
+    "response_tool_calls_allowed": false,
+    "online_or_router_models_allowed": false,
+    "arbitrary_network_egress_allowed": false,
+    "model_plane_network_allowlist": [
+      "openrouter.ai"
+    ],
+    "control_plane_network_allowlist": [
+      "api.github.com"
+    ],
+    "network_violation_action": "fail_closed_without_recovery"
   },
   "resource_governance": {
     "mode": "prompt_led_soft_governance",
@@ -128,5 +139,17 @@
     "requires_run_sha_artifact_digest_binding": true,
     "automatic_merge_allowed": false,
     "automatic_production_ref_move_allowed": false
+  },
+  "network_isolation": {
+    "arbitrary_egress_allowed": false,
+    "model_plane_hosts": [
+      "openrouter.ai"
+    ],
+    "control_plane_hosts": [
+      "api.github.com"
+    ],
+    "model_access_to_network_allowed": false,
+    "data_collection_or_web_search_allowed": false,
+    "url_allowlist_enforced_before_request": true
   }
 }

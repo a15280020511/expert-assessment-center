@@ -13,7 +13,6 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 from openrouter_api import MODELS_URL, request_json
 
 DEFAULT_CONFIG = Path(__file__).with_name("config.json")
-MAX_TASK_CHARS = 50_000
 MAX_CATALOG_MODELS = 150
 
 
@@ -106,9 +105,6 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
     ).strip()
     if not task:
         raise ExpertTeamError("Task is required")
-    if len(task) > MAX_TASK_CHARS:
-        raise ExpertTeamError(f"Task exceeds {MAX_TASK_CHARS} characters")
-
     ranking = int(
         getattr(args, "ranking_limit", None)
         or catalog.get("maximum_models", MAX_CATALOG_MODELS)

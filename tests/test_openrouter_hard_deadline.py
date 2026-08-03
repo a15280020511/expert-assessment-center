@@ -10,7 +10,12 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-from openrouter_api import OpenRouterRequestError, request_json  # noqa: E402
+from openrouter_api import (  # noqa: E402
+    CHAT_URL,
+    MODELS_URL,
+    OpenRouterRequestError,
+    request_json,
+)
 
 
 class _Response:
@@ -37,11 +42,11 @@ class OpenRouterHardDeadlineTests(unittest.TestCase):
         with patch("openrouter_api.urllib.request.urlopen", slow_urlopen):
             with self.assertRaises(OpenRouterRequestError) as raised:
                 request_json(
-                    "https://example.invalid/chat",
+                    CHAT_URL,
                     "key",
                     0.05,
                     0,
-                    {"model": "test"},
+                    {"model": "vendor/exact-model"},
                 )
         elapsed = time.monotonic() - started
         self.assertEqual("timeout", raised.exception.category)
@@ -55,7 +60,7 @@ class OpenRouterHardDeadlineTests(unittest.TestCase):
             return_value=_Response({"ok": True}),
         ):
             value = request_json(
-                "https://example.invalid/models",
+                MODELS_URL,
                 "key",
                 1.0,
                 0,

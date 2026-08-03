@@ -31,6 +31,9 @@ from v5_governance_runtime import (
 from v5_gpt_expert_selector import build_proposal_request
 from v5_json_io import write_json
 from v5_provider_lock import canonical_provider_lock
+from v5_no_tools_policy import (
+    forbidden_request_fields as policy_forbidden_request_fields,
+)
 from v5_recovery_runtime import build_production_runtime
 from v5_runtime import RuntimeConfig
 from v5_soft_proposal_materializer import materialize_proposal
@@ -107,29 +110,8 @@ def _validate_budget(args: argparse.Namespace) -> tuple[int, int, int]:
     return total, recovery, expert_total
 
 
-_FORBIDDEN_REQUEST_FIELDS = frozenset(
-    {
-        "tools",
-        "tool_choice",
-        "plugins",
-        "web_search",
-        "web_search_options",
-        "file_search",
-        "browser",
-        "code_interpreter",
-        "models",
-    }
-)
-
-
 def _forbidden_request_fields(row: Mapping[str, Any]) -> set[str]:
-    direct = set(_FORBIDDEN_REQUEST_FIELDS.intersection(row))
-    recorded = row.get("request_fields")
-    if isinstance(recorded, list):
-        direct.update(
-            _FORBIDDEN_REQUEST_FIELDS.intersection(str(value) for value in recorded)
-        )
-    return direct
+    return set(policy_forbidden_request_fields(row))
 
 
 def _merge_request_audit(

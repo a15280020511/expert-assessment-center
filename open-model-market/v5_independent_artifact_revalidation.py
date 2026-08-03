@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 from artifact_manifest import sha256_file
 from v5_model_company import canonical_model_company
+from v5_no_tools_policy import forbidden_request_fields
 from v5_task_constraints import (
     compile_task_constraints,
     validate_answer_evidence,
@@ -19,19 +20,6 @@ from v5_task_delivery_contract import (
     explicit_contract_kind,
     validate_answer_contract,
 )
-
-FORBIDDEN_REQUEST_FIELDS = {
-    "tools",
-    "tool_choice",
-    "plugins",
-    "web_search",
-    "web_search_options",
-    "file_search",
-    "browser",
-    "code_interpreter",
-    "models",
-}
-
 
 def _load(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -502,7 +490,7 @@ def _request_shape_failures(
     failures: list[str] = []
     if not isinstance(request, Mapping):
         return [f"request {index} is not an object"]
-    forbidden = sorted(FORBIDDEN_REQUEST_FIELDS.intersection(request))
+    forbidden = sorted(forbidden_request_fields(request))
     if forbidden:
         failures.append(
             f"request {index} contains forbidden fields: {forbidden}"

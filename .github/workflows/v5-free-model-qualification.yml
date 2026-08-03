@@ -94,7 +94,7 @@ jobs:
           assert dry["claude_gatekeeping_allowed"] is False
           PY
 
-      - name: Run one real zero-cost free-model Canary
+      - name: Run one real zero-cost exact-model Canary
         shell: bash
         run: |
           set -euo pipefail
@@ -102,14 +102,90 @@ jobs:
           import hashlib
           import json
           import os
+          from decimal import Decimal, InvalidOperation
           from pathlib import Path
+          from typing import Any, Mapping
 
-          from openrouter_api import CHAT_URL, request_json
+          from openrouter_api import CHAT_URL, MODELS_URL, request_json
           from v5_execution_primitives import actual_cost, extract_answer
           from v5_free_first_preflight import evaluate_free_first_preflight
 
+
+          def zero_price(value: Any) -> bool:
+              try:
+                  return Decimal(str(value)) == Decimal("0")
+              except (InvalidOperation, TypeError, ValueError):
+                  return False
+
+
+          key = os.environ["OPENROUTER_API_KEY"]
+          catalog_response = request_json(MODELS_URL, key, 120, 0)
+          rows = catalog_response.get("data")
+          if not isinstance(rows, list):
+              raise RuntimeError("OpenRouter model catalog is unavailable")
+
+          candidates: list[dict[str, Any]] = []
+          for row in rows:
+              if not isinstance(row, Mapping):
+                  continue
+              model_id = str(row.get("id") or "").strip()
+              if not model_id.endswith(":free"):
+                  continue
+              pricing = row.get("pricing")
+              if not isinstance(pricing, Mapping):
+                  continue
+              if not zero_price(pricing.get("prompt")):
+                  continue
+              if not zero_price(pricing.get("completion")):
+                  continue
+              architecture = row.get("architecture")
+              architecture = (
+                  architecture if isinstance(architecture, Mapping) else {}
+              )
+              input_modalities = {
+                  str(value).casefold()
+                  for value in architecture.get("input_modalities", [])
+              }
+              output_modalities = {
+                  str(value).casefold()
+                  for value in architecture.get("output_modalities", [])
+              }
+              if input_modalities and "text" not in input_modalities:
+                  continue
+              if output_modalities and "text" not in output_modalities:
+                  continue
+              try:
+                  created = int(row.get("created") or 0)
+              except (TypeError, ValueError):
+                  created = 0
+              try:
+                  context_length = int(row.get("context_length") or 0)
+              except (TypeError, ValueError):
+                  context_length = 0
+              candidates.append(
+                  {
+                      "id": model_id,
+                      "created": created,
+                      "context_length": context_length,
+                  }
+              )
+
+          if not candidates:
+              raise RuntimeError(
+                  "no exact text-capable zero-price :free model is available"
+              )
+          selected = sorted(
+              candidates,
+              key=lambda row: (
+                  -int(row["created"]),
+                  -int(row["context_length"]),
+                  str(row["id"]),
+              ),
+          )[0]
+          selected_model = str(selected["id"])
+
           payload = {
-              "model": "openrouter/free",
+              "model": selected_model,
               "messages": [
                   {
                       "role": "system",
@@ -127,13 +203,7 @@ jobs:
                   "require_parameters": True,
               },
           }
-          response = request_json(
-              CHAT_URL,
-              os.environ["OPENROUTER_API_KEY"],
-              120,
-              0,
-              payload,
-          )
+          response = request_json(CHAT_URL, key, 120, 0, payload)
           answer = extract_answer(response).strip()
           cost = float(actual_cost(response))
           if answer.upper() != "PASS":
@@ -154,13 +224,23 @@ jobs:
               },
               "free_canary": {
                   "status": "PASS",
-                  "requested_model": "openrouter/free",
+                  "requested_model": selected_model,
                   "response_model": str(response.get("model") or ""),
                   "provider": str(response.get("provider") or ""),
                   "model_requests": 1,
                   "successful_model_calls": 1,
                   "paid_model_calls": 0,
                   "actual_cost_usd": cost,
+                  "selection": {
+                      "source": "live-openrouter-model-catalog",
+                      "exact_model_required": True,
+                      "free_suffix_required": True,
+                      "zero_prompt_price_required": True,
+                      "zero_completion_price_required": True,
+                      "candidate_count": len(candidates),
+                      "selected_created": selected["created"],
+                      "selected_context_length": selected["context_length"],
+                  },
               },
               "shadow_governance": None,
               "paid_acceptance_triggered": False,
