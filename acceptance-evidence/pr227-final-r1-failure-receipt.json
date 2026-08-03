@@ -23,6 +23,8 @@
   },
   "preflight": {
     "zero_call_release_gates": "PASS",
+    "official_zero_cost_ci_passed": 8,
+    "official_zero_cost_ci_total": 8,
     "full_unit_tests_passed": 332,
     "focused_tests_passed": 29,
     "free_canary_status": "PASS",
@@ -54,6 +56,16 @@
     "name": "v5-final-paid-claude-acceptance-30790692577",
     "digest": "sha256:85462a1504ebc269c84ed8f715ba069e9a59e9c252e6465cda880671577dd406",
     "size_in_bytes": 35684
+  },
+  "repository_state": {
+    "pr_number": 227,
+    "pr_head_sha": "a18685657313305315f533f9e045798d64b0219c",
+    "pr_state": "open",
+    "pr_draft": true,
+    "pr_merged": false,
+    "main_sha": "95cdda0e0d00109c81f2a286e7ac706319cc2c5f",
+    "production_sha": "95cdda0e0d00109c81f2a286e7ac706319cc2c5f",
+    "main_production_identical": true
   },
   "retry_performed": false,
   "additional_paid_test_authorized": false,
