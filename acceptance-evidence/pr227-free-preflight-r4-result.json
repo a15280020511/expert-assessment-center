@@ -1,0 +1,31 @@
+{
+  "schema_version": "pr227-free-preflight-r4-result-1",
+  "status": "PASS",
+  "run_id": "30787863808",
+  "target_sha": "0383d2ef80f1890306bc0bc5f7b37836cb2579ca",
+  "prior_zero_call_simulation": "PASS",
+  "free_canary": {
+    "schema_version": "pr227-request-level-free-canary-4",
+    "status": "PASS",
+    "requested_model": "openrouter/free",
+    "model_requests": 1,
+    "successful_model_calls": 1,
+    "paid_model_calls": 0,
+    "actual_cost_usd": 0.0,
+    "max_completion_tokens": 256,
+    "provider_data_collection": "allow",
+    "provider_zdr": false,
+    "raw_prompt_persisted": false,
+    "raw_answer_persisted": false,
+    "prompt_sha256": "8782cc015d1904e632be19b10dba9a93c09d5c6434114ffd0c49843a4eab1445",
+    "selected_response_model": "google/gemma-4-26b-a4b-it:free",
+    "provider": "Darkbloom",
+    "finish_reason": "stop",
+    "answer_characters": 4,
+    "answer_sha256": "2f9acb02faa121bb2a3621951f57b4c690655337edee2e5ac350be2b3be88ea8"
+  },
+  "maximum_model_requests": 1,
+  "maximum_paid_model_calls": 0,
+  "paid_acceptance_triggered": false,
+  "production_ref_moved": false
+}
