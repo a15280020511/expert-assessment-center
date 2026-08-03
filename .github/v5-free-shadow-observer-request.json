@@ -1,5 +1,5 @@
 {
   "schema_version": "v5-free-shadow-observer-request-1",
-  "request_id": "pr232-free-shadow-r3-observer-dedicated",
-  "target_run_head_sha": "4b5161e6b989336303d79ceb11b941f50c850cdf"
+  "request_id": "pr232-free-shadow-r4-observer",
+  "target_run_head_sha": "9c87c5338624b0cc1f729843fdc6758a1dfe9a60"
 }
