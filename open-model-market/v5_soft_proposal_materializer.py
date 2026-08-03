@@ -160,6 +160,7 @@ def deterministic_violations(
     catalog: Mapping[str, Any],
     **limits: Any,
 ) -> list[str]:
+    violation: str | None = None
     try:
         materialize_proposal(
             proposal,
@@ -168,9 +169,11 @@ def deterministic_violations(
             catalog,
             **limits,
         )
-    except Exception as exc:  # noqa: BLE001
-        return [str(exc)]
-    return []
+    except structural.MaterializationError as exc:
+        violation = str(exc)
+    except (TypeError, ValueError) as exc:
+        violation = f"invalid soft materialization input: {exc}"
+    return [] if violation is None else [violation]
 
 
 def claude_unified_review_payload(
