@@ -1,0 +1,38 @@
+name: Apply No-Tools Audit Patch
+
+on:
+  push:
+    branches:
+      - codex/no-tools-network-granular-audit-20260804
+    paths:
+      - .github/audit_no_tools_patch.py
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: codex/no-tools-network-granular-audit-20260804
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Apply audited patch
+        run: python .github/audit_no_tools_patch.py
+      - name: Validate patch locally
+        run: |
+          python -m compileall -q open-model-market tests tools
+          python -m unittest tests.test_v5_no_tools_network_policy -v
+      - name: Commit audited patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "audit: enforce no-tools and network isolation end to end"
+          git push origin HEAD:codex/no-tools-network-granular-audit-20260804
