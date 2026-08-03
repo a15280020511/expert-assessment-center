@@ -34,14 +34,17 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-          from textwrap import dedent
 
           source = Path('.github/workflows/pr227-r6-evidence-contract-remediation.yml')
           text = source.read_text(encoding='utf-8')
           marker = "          python - <<'PY'\n"
           start = text.index(marker) + len(marker)
           end = text.index("\n          PY\n", start)
-          script = dedent(text[start:end])
+          raw_lines = text[start:end].splitlines()
+          script = '\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in raw_lines
+          )
           exec(compile(script, str(source) + ':embedded-python', 'exec'))
           PY
           git diff --check
