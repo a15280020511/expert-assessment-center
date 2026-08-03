@@ -1,0 +1,933 @@
+{
+  "schema_version": "openrouter-free-policy-diagnostic-1",
+  "status": "PASS",
+  "request_id": "pr232-openrouter-policy-r1",
+  "target_sha": "5e1f95240a709fa11a70058e8c2a9cd3ae71b1d0",
+  "api_key": {
+    "status": 200,
+    "is_free_tier": false,
+    "is_management_key": false,
+    "limit": null,
+    "limit_remaining": null,
+    "limit_reset": null,
+    "usage": 9.837767231,
+    "usage_daily": 1.032075,
+    "rate_limit": {
+      "requests": -1,
+      "interval": "10s",
+      "note": "This field is deprecated and safe to ignore."
+    },
+    "expires_at": null
+  },
+  "models_user_http_status": 200,
+  "zdr_endpoints_http_status": 200,
+  "providers_http_status": 200,
+  "account_filtered_free_models": [
+    {
+      "id": "inclusionai/ling-3.0-flash:free",
+      "context_length": 262144,
+      "max_completion_tokens": 32768,
+      "supported_parameters": [
+        "frequency_penalty",
+        "include_reasoning",
+        "logprobs",
+        "max_tokens",
+        "presence_penalty",
+        "reasoning",
+        "repetition_penalty",
+        "seed",
+        "stop",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_logprobs",
+        "top_p"
+      ],
+      "prompt_price": "0",
+      "completion_price": "0",
+      "zdr": null
+    },
+    {
+      "id": "cohere/north-mini-code:free",
+      "context_length": 256000,
+      "max_completion_tokens": 64000,
+      "supported_parameters": [
+        "frequency_penalty",
+        "include_reasoning",
+        "max_tokens",
+        "presence_penalty",
+        "reasoning",
+        "seed",
+        "stop",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_p"
+      ],
+      "prompt_price": "0",
+      "completion_price": "0",
+      "zdr": null
+    },
+    {
+      "id": "google/gemma-4-26b-a4b-it:free",
+      "context_length": 262144,
+      "max_completion_tokens": 32768,
+      "supported_parameters": [
+        "frequency_penalty",
+        "include_reasoning",
+        "logprobs",
+        "max_tokens",
+        "presence_penalty",
+        "reasoning",
+        "repetition_penalty",
+        "response_format",
+        "seed",
+        "stop",
+        "structured_outputs",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_logprobs",
+        "top_p"
+      ],
+      "prompt_price": "0",
+      "completion_price": "0",
+      "zdr": null
+    },
+    {
+      "id": "google/gemma-4-31b-it:free",
+      "context_length": 262144,
+      "max_completion_tokens": 32768,
+      "supported_parameters": [
+        "include_reasoning",
+        "max_tokens",
+        "reasoning",
+        "response_format",
+        "seed",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_p"
+      ],
+      "prompt_price": "0",
+      "completion_price": "0",
+      "zdr": null
+    },
+    {
+      "id": "openai/gpt-oss-20b:free",
+      "context_length": 131072,
+      "max_completion_tokens": 32768,
+      "supported_parameters": [
+        "frequency_penalty",
+        "include_reasoning",
+        "logprobs",
+        "max_tokens",
+        "presence_penalty",
+        "reasoning",
+        "reasoning_effort",
+        "repetition_penalty",
+        "response_format",
+        "seed",
+        "stop",
+        "structured_outputs",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_logprobs",
+        "top_p"
+      ],
+      "prompt_price": "0",
+      "completion_price": "0",
+      "zdr": null
+    }
+  ],
+  "account_filtered_free_model_count": 5,
+  "zero_price_free_zdr_endpoints": [
+    {
+      "model_id": "fish-audio/s2.1-pro-free:free",
+      "provider": "fish-audio",
+      "provider_name": "Fish Audio",
+      "context_length": 0,
+      "max_completion_tokens": null,
+      "supported_parameters": [],
+      "status": 0,
+      "uptime_last_5m": null,
+      "uptime_last_30m": 100
+    },
+    {
+      "model_id": "inclusionai/ling-3.0-flash:free",
+      "provider": "novita",
+      "provider_name": "Novita",
+      "context_length": 262144,
+      "max_completion_tokens": 32768,
+      "supported_parameters": [
+        "reasoning",
+        "include_reasoning",
+        "max_tokens",
+        "temperature",
+        "top_p",
+        "stop",
+        "frequency_penalty",
+        "presence_penalty",
+        "seed",
+        "top_k",
+        "repetition_penalty",
+        "tools",
+        "tool_choice",
+        "logprobs",
+        "top_logprobs"
+      ],
+      "status": 0,
+      "uptime_last_5m": 99.83031674208145,
+      "uptime_last_30m": 99.82526036206053
+    }
+  ],
+  "zero_price_free_zdr_endpoint_count": 2,
+  "account_filtered_zdr_compatible_free_endpoints": [
+    {
+      "model_id": "inclusionai/ling-3.0-flash:free",
+      "provider": "novita",
+      "provider_name": "Novita",
+      "context_length": 262144,
+      "max_completion_tokens": 32768,
+      "supported_parameters": [
+        "reasoning",
+        "include_reasoning",
+        "max_tokens",
+        "temperature",
+        "top_p",
+        "stop",
+        "frequency_penalty",
+        "presence_penalty",
+        "seed",
+        "top_k",
+        "repetition_penalty",
+        "tools",
+        "tool_choice",
+        "logprobs",
+        "top_logprobs"
+      ],
+      "status": 0,
+      "uptime_last_5m": 99.83031674208145,
+      "uptime_last_30m": 99.82526036206053
+    }
+  ],
+  "account_filtered_zdr_compatible_free_endpoint_count": 1,
+  "providers": [
+    {
+      "slug": "cerebras",
+      "name": "Cerebras",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "deepgram",
+      "name": "Deepgram",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "voyageai",
+      "name": "VoyageAI by MongoDB",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "stepfun",
+      "name": "StepFun",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "black-forest-labs",
+      "name": "Black Forest Labs",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "moonshotai",
+      "name": "Moonshot AI",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "stealth",
+      "name": "Stealth",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "morph",
+      "name": "Morph",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "reka",
+      "name": "Reka",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "z-ai",
+      "name": "Z.AI",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "arcee-ai",
+      "name": "Arcee AI",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "sambanova",
+      "name": "SambaNova",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "ai21",
+      "name": "AI21",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "minimax",
+      "name": "Minimax",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "io-net",
+      "name": "Io Net",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "ionstream",
+      "name": "Ionstream",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "cohere",
+      "name": "Cohere",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "ncompass",
+      "name": "NCompass",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "claude-on-aws",
+      "name": "Claude Platform on AWS",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "baseten",
+      "name": "BaseTen",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "groq",
+      "name": "Groq",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "crusoe",
+      "name": "Crusoe",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "modal",
+      "name": "Modal",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "deepseek",
+      "name": "DeepSeek",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "darkbloom",
+      "name": "Darkbloom",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "mancer",
+      "name": "Mancer 2",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "nextbit",
+      "name": "NextBit",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "infermatic",
+      "name": "Infermatic",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "avian",
+      "name": "Avian",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "switchpoint",
+      "name": "Switchpoint",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "deepinfra",
+      "name": "DeepInfra",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "inflection",
+      "name": "Inflection",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "tencent",
+      "name": "Tencent",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "sail-research",
+      "name": "Sail Research",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "xai",
+      "name": "xAI",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "krea",
+      "name": "Krea",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "amazon-nova",
+      "name": "Amazon Nova",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "mara",
+      "name": "Mara",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "xiaomi",
+      "name": "Xiaomi",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "azure",
+      "name": "Azure",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "nvidia",
+      "name": "Nvidia",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "inference-net",
+      "name": "InferenceNet",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "perceptron",
+      "name": "Perceptron",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "sourceful",
+      "name": "Sourceful",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "fish-audio",
+      "name": "Fish Audio",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "cloudflare",
+      "name": "Cloudflare",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "nebius",
+      "name": "Nebius",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "aion-labs",
+      "name": "AionLabs",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "liquid",
+      "name": "Liquid",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "crucible",
+      "name": "Crucible",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "decart",
+      "name": "Decart",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "recraft",
+      "name": "Recraft",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "meta",
+      "name": "Meta",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "modelrun",
+      "name": "ModelRun",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "seed",
+      "name": "Seed",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "coreweave",
+      "name": "CoreWeave",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "dekallm",
+      "name": "DekaLLM",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "phala",
+      "name": "Phala",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "siliconflow",
+      "name": "SiliconFlow",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "relace",
+      "name": "Relace",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "openai",
+      "name": "OpenAI",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "poolside",
+      "name": "Poolside",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "fake-provider",
+      "name": "FakeProvider",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "modular",
+      "name": "Modular",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "cirrascale",
+      "name": "Cirrascale",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "ambient",
+      "name": "Ambient",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "anthropic",
+      "name": "Anthropic",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "baidu",
+      "name": "Baidu",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "atlas-cloud",
+      "name": "AtlasCloud",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "together",
+      "name": "Together",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "runway",
+      "name": "Runway",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "amazon-bedrock",
+      "name": "Amazon Bedrock",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "digitalocean",
+      "name": "DigitalOcean",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "thinkingmachines",
+      "name": "Thinking Machines",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "google-vertex",
+      "name": "Google",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "nex-agi",
+      "name": "Nex AGI",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "chutes",
+      "name": "Chutes",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "inceptron",
+      "name": "Inceptron",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "upstage",
+      "name": "Upstage",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "google-ai-studio",
+      "name": "Google AI Studio",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "parasail",
+      "name": "Parasail",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "open-inference",
+      "name": "OpenInference",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "featherless",
+      "name": "Featherless",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "streamlake",
+      "name": "StreamLake",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "alibaba",
+      "name": "Alibaba",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "clarifai",
+      "name": "Clarifai",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "quiver",
+      "name": "Quiver",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "venice",
+      "name": "Venice",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "sakana",
+      "name": "Sakana AI",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "wafer",
+      "name": "Wafer",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "inferact-vllm",
+      "name": "Inferact vLLM",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "friendli",
+      "name": "Friendli",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "akashml",
+      "name": "AkashML",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "heygen",
+      "name": "HeyGen",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "inception",
+      "name": "Inception",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "perplexity",
+      "name": "Perplexity",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "tenstorrent",
+      "name": "Tenstorrent",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "gmicloud",
+      "name": "GMICloud",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "fireworks",
+      "name": "Fireworks",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "mistral",
+      "name": "Mistral",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    },
+    {
+      "slug": "novita",
+      "name": "Novita",
+      "may_train_on_inputs": null,
+      "retains_prompts": null,
+      "supports_zdr": null
+    }
+  ],
+  "model_calls": 0,
+  "paid_model_calls": 0,
+  "actual_cost_usd": 0.0,
+  "production_ref_moved": false
+}
