@@ -27,7 +27,7 @@ jobs:
         run: |
           set -euo pipefail
           patch=.github/paid-fix/fix.patch
-          test "$(sha256sum "$patch" | awk '{print $1}')" = "6312fc0ed45dbd92347fee8793dd33ad28129b1bc8fab41600d60b0d730dc47e"
+          test "$(git hash-object "$patch")" = "0f6d2c340dba281d7cafb1cb67d3b177dbfd08c9"
           git apply --check "$patch"
           git apply "$patch"
           git show 9467cdc0c6ce2d67bbf8e39642f4afbdfd7dcb95:.github/workflows/repository-line-audit.yml > .github/workflows/repository-line-audit.yml
