@@ -86,12 +86,16 @@ jobs:
               encoding='utf-8',
           )
           PY
-          payload="tools/.pr227-r6-complexity-refactor.py.gz.b64"
-          test -s "$payload"
-          base64 --decode "$payload" | gzip --decompress > /tmp/pr227-r6-complexity-refactor.py
-          python -m py_compile /tmp/pr227-r6-complexity-refactor.py
-          python /tmp/pr227-r6-complexity-refactor.py
-          rm -f /tmp/pr227-r6-complexity-refactor.py
+          scripts=(
+            tools/pr227_r6_refactor_pipeline.py
+            tools/pr227_r6_refactor_auditors.py
+            tools/pr227_r6_refactor_evidence_bundle.py
+          )
+          for script in "${scripts[@]}"; do
+            test -s "$script"
+            python -m py_compile "$script"
+            python "$script"
+          done
           git diff --check
 
       - name: Set up pinned Python
@@ -191,6 +195,9 @@ jobs:
           rm .github/workflows/pr227-r6-evidence-contract-remediation.yml
           rm .github/workflows/pr227-r6-evidence-contract-bootstrap.yml
           rm tools/.pr227-r6-complexity-refactor.py.gz.b64
+          rm tools/pr227_r6_refactor_pipeline.py
+          rm tools/pr227_r6_refactor_auditors.py
+          rm tools/pr227_r6_refactor_evidence_bundle.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
