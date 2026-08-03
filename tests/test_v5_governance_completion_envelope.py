@@ -15,39 +15,44 @@ from v5_gpt_expert_selector import GPTSelectorError  # noqa: E402
 
 
 class GovernanceCompletionEnvelopeTests(unittest.TestCase):
-    def test_gpt_protocol_limit_is_reduced(self):
+    def test_gpt_protocol_limit_is_removed(self):
         request = governance.bounded_governance_request(
-            {"max_tokens": 10_000},
+            {
+                "max_tokens": 10_000,
+                "messages": [{"role": "system", "content": "base"}],
+            },
             8_000,
         )
-        self.assertEqual(request["max_tokens"], 8_000)
+        self.assertNotIn("max_tokens", request)
+        self.assertNotIn("max_completion_tokens", request)
+        self.assertIn(
+            "资源使用宪法",
+            request["messages"][0]["content"],
+        )
 
-    def test_claude_native_limit_is_not_increased(self):
+    def test_protocol_native_limit_is_also_removed(self):
         request = governance.bounded_governance_request(
             {"max_tokens": 512},
             8_000,
         )
-        self.assertEqual(request["max_tokens"], 512)
+        self.assertNotIn("max_tokens", request)
 
-    def test_omitted_task_limit_preserves_protocol_default(self):
+    def test_omitted_advisory_still_removes_protocol_limit(self):
         request = governance.bounded_governance_request(
             {"max_tokens": 10_000},
             None,
         )
-        self.assertEqual(request["max_tokens"], 10_000)
+        self.assertNotIn("max_tokens", request)
 
-    def test_nonpositive_task_limit_is_rejected(self):
-        with self.assertRaisesRegex(
-            governance.GovernanceRuntimeError,
-            "must be positive",
-        ):
-            governance.bounded_governance_request(
-                {"max_tokens": 10_000},
-                0,
-            )
+    def test_nonpositive_advisory_does_not_create_a_hard_gate(self):
+        request = governance.bounded_governance_request(
+            {"max_tokens": 10_000},
+            0,
+        )
+        self.assertNotIn("max_tokens", request)
 
-    def test_cap_survives_endpoint_parameter_conversion(self):
-        bounded = governance.bounded_governance_request(
+    def test_endpoint_binding_does_not_restore_token_cap(self):
+        softened = governance.bounded_governance_request(
             {"max_tokens": 10_000},
             8_000,
         )
@@ -60,11 +65,11 @@ class GovernanceCompletionEnvelopeTests(unittest.TestCase):
             "official_intelligence_rank": 1,
             "supported_parameters": ["max_completion_tokens"],
         }
-        request = governance._bind_governance_request(bounded, endpoint)
+        request = governance._bind_governance_request(softened, endpoint)
         self.assertNotIn("max_tokens", request)
-        self.assertEqual(request["max_completion_tokens"], 8_000)
+        self.assertNotIn("max_completion_tokens", request)
 
-    def test_single_pass_caps_both_gpt_calls_and_preserves_claude(self):
+    def test_single_pass_removes_all_governance_token_caps(self):
         captured = []
 
         def fake_call(_run, request):
@@ -143,26 +148,42 @@ class GovernanceCompletionEnvelopeTests(unittest.TestCase):
                 return_value=("graph", "limits", {"status": "PASS"}),
             ),
         ):
-            governance.run_single_pass_governance(
-                run=SimpleNamespace(api_key="unused"),
-                task="closed-world task",
-                task_digest="a" * 64,
-                task_envelope={},
-                catalog={},
-                approved_total_calls=4,
-                governance_calls_reserved=3,
-                approved_recovery_calls=0,
-                cost_anomaly_usd=0.25,
-                max_completion_tokens=8_000,
-                governance_models=governance_models,
-                call_fn=fake_call,
+            _, _, governance_result, ledger = (
+                governance.run_single_pass_governance(
+                    run=SimpleNamespace(api_key="unused"),
+                    task="closed-world task",
+                    task_digest="a" * 64,
+                    task_envelope={},
+                    catalog={},
+                    approved_total_calls=4,
+                    governance_calls_reserved=3,
+                    approved_recovery_calls=0,
+                    cost_anomaly_usd=0.25,
+                    max_completion_tokens=8_000,
+                    governance_models=governance_models,
+                    call_fn=fake_call,
+                )
             )
-        self.assertEqual(
-            [row["max_tokens"] for row in captured],
-            [8_000, 512, 8_000],
+        self.assertEqual(len(captured), 3)
+        self.assertTrue(
+            all(
+                "max_tokens" not in row
+                and "max_completion_tokens" not in row
+                for row in captured
+            )
+        )
+        self.assertFalse(
+            governance_result["resource_governance"][
+                "local_token_ceiling_enforced"
+            ]
+        )
+        self.assertFalse(
+            ledger["resource_governance"][
+                "cost_threshold_can_stop_execution"
+            ]
         )
 
-    def test_pipeline_rejects_nonpositive_direct_limit(self):
+    def test_pipeline_rejects_nonpositive_direct_advisory(self):
         args = SimpleNamespace(
             maximum_total_calls=4,
             maximum_recovery_calls=0,
@@ -176,7 +197,7 @@ class GovernanceCompletionEnvelopeTests(unittest.TestCase):
         ):
             v5_pipeline._validate_budget(args)
 
-    def test_separate_governance_limit_is_validated(self):
+    def test_separate_governance_advisory_is_validated(self):
         args = SimpleNamespace(
             maximum_total_calls=4,
             maximum_recovery_calls=0,
