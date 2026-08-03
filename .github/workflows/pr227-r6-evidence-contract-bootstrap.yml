@@ -61,6 +61,28 @@ jobs:
               1,
           )
           exec(compile(script, str(source) + ':embedded-python', 'exec'))
+
+          fixture = Path('tests/test_v5_independent_artifact_revalidation.py')
+          fixture_text = fixture.read_text(encoding='utf-8')
+          old = '''                    "output_contract": {
+                        "required_fields": ["facts", "conclusion"],
+                        "machine_readable_required": False,
+                    },
+                    "parameter_profile": {},
+'''
+          new = '''                    "output_contract": {
+                        "required_fields": ["facts", "conclusion"],
+                        "machine_readable_required": False,
+                        "final_delivery_node": True,
+                    },
+                    "parameter_profile": {},
+'''
+          if fixture_text.count(old) != 1:
+              raise SystemExit('direct final-contract fixture source not found exactly once')
+          fixture.write_text(
+              fixture_text.replace(old, new, 1),
+              encoding='utf-8',
+          )
           PY
           git diff --check
 
