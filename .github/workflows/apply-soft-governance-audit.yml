@@ -36,6 +36,14 @@ jobs:
         run: |
           set -euo pipefail
           test "$(find .audit-payload -maxdepth 1 -name 'part-*.b64' | wc -l)" -eq 8
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.audit-payload/part-006a.b64')
+          content = path.read_text(encoding='utf-8')
+          assert content.count('F2Six5conroww') == 1
+          content = content.replace('F2Six5conroww', 'F2Six5conCroww')
+          path.write_text(content, encoding='utf-8')
+          PY
           cat > /tmp/expected.sha256 <<'EOF'
           2f5f808774541382a35850894ffca1149706339f79fe8c2f823db3054e36ff0a  .audit-payload/part-001.b64
           d0726187100b300866a2c781600cc99a2d312ceab516110a1736ce2445fba816  .audit-payload/part-002.b64
