@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministically audit a V5 R8 production ticket execution."""
+"""Deterministically audit one native V5 production ticket execution."""
 from __future__ import annotations
 
 import argparse
@@ -12,8 +12,8 @@ from typing import Any, Mapping
 
 from v5_claude_red_team_policy import CLAUDE_RED_TEAM_GOVERNANCE_CALLS
 from v5_json_io import load_json_or_default
-
-RUNTIME_VERSION = "v5-r8"
+RUNTIME_VERSION = "v5-gpt-claude-runtime-1"
+EXECUTOR_ID = "v5-native-execution-engine"
 ABSOLUTE_MAX_MODEL_CALLS = 16
 ABSOLUTE_MAX_NODES = 16
 
@@ -154,12 +154,35 @@ def _entry_outcome_failures(
 
 def _runtime_envelope_failures(
     evidence: AuditEvidence,
+    checks: dict[str, Any],
     failures: list[str],
 ) -> None:
     result = evidence.result
     runtime = evidence.runtime
-    if not isinstance(result, Mapping) or result.get("runtime_version") != RUNTIME_VERSION:
-        failures.append("V5 production result envelope is missing")
+    result_version = (
+        str(result.get("runtime_version") or "")
+        if isinstance(result, Mapping)
+        else ""
+    )
+    runtime_version = (
+        str(runtime.get("runtime_version") or "")
+        if isinstance(runtime, Mapping)
+        else ""
+    )
+    checks.update(
+        {
+            "native_runtime_version": RUNTIME_VERSION,
+            "observed_result_runtime_version": result_version,
+            "observed_runtime_envelope_version": runtime_version,
+            "native_runtime_versions_consistent": (
+                result_version == runtime_version == RUNTIME_VERSION
+            ),
+        }
+    )
+    if result_version != RUNTIME_VERSION or runtime_version != RUNTIME_VERSION:
+        failures.append(
+            "native runtime version evidence is missing or inconsistent"
+        )
     if (
         not isinstance(runtime, Mapping)
         or runtime.get("fallback_policy") != "fail-closed-no-alternate-runtime"
@@ -232,7 +255,7 @@ def _audit_entry_contract(
         publish_outcome,
         failures,
     )
-    _runtime_envelope_failures(evidence, failures)
+    _runtime_envelope_failures(evidence, checks, failures)
     return BudgetState(
         total,
         governance,
@@ -242,6 +265,26 @@ def _audit_entry_contract(
         anomaly,
         valid,
     )
+
+
+def _record_native_executor_contract(
+    checks: dict[str, Any],
+    executor: str,
+) -> bool:
+    executor_valid = executor == EXECUTOR_ID
+    checks.update(
+        {
+            "expected_executor": EXECUTOR_ID,
+            "native_executor_valid": executor_valid,
+            "native_contract_status": (
+                "PASS"
+                if executor_valid
+                and checks.get("native_runtime_versions_consistent") is True
+                else "FAIL"
+            ),
+        }
+    )
+    return executor_valid
 
 
 def _audit_delivery(
@@ -271,6 +314,7 @@ def _audit_delivery(
         if isinstance(summary, Mapping)
         else ""
     )
+    executor_valid = _record_native_executor_contract(checks, executor)
     checks.update({
         "v5_status": status,
         "completion_mode": completion_mode,
@@ -283,8 +327,8 @@ def _audit_delivery(
         failures.append(
             f"V5 completion mode is {completion_mode or 'missing'}, not full"
         )
-    if executor != "v5-r8-fault-aware":
-        failures.append("R8 fault-aware executor evidence is missing")
+    if not executor_valid:
+        failures.append("native executor evidence is missing or inconsistent")
     if len(answer.strip()) < 160:
         failures.append("V5 final answer is missing or too short")
     return DeliveryState(status, completion_mode, executor, answer)

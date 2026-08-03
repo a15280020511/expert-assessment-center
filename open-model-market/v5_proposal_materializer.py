@@ -650,9 +650,16 @@ def _bounded_task_excerpt(task: str) -> tuple[str, bool]:
     maximum = CLAUDE_RED_TEAM_MAX_TASK_CHARS
     if len(text) <= maximum:
         return text, False
-    head = maximum // 2
-    tail = maximum - head
-    return text[:head] + "\n[...task excerpt truncated...]\n" + text[-tail:], True
+    marker = "\n[...task excerpt truncated...]\n"
+    retained = maximum - len(marker)
+    if retained <= 1:
+        raise ProposalValidationError("Claude task excerpt limit is invalid")
+    head = retained // 2
+    tail = retained - head
+    excerpt = text[:head] + marker + text[-tail:]
+    if len(excerpt) != maximum:
+        raise ProposalValidationError("Claude task excerpt bound is inconsistent")
+    return excerpt, True
 
 
 def _claude_work_items(
@@ -667,6 +674,44 @@ def _claude_work_items(
         }
         for work_id, row in work_map.items()
     ]
+
+
+def _claude_recovery_rows(
+    raw: Mapping[str, Any],
+    endpoints: Mapping[tuple[str, str], Mapping[str, Any]],
+    task_envelope: Mapping[str, Any],
+    work_map: Mapping[str, Mapping[str, Any]],
+    work_ids: list[str],
+    maximum: int,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for recovery in raw.get("recovery", []):
+        if not isinstance(recovery, Mapping):
+            continue
+        model = str(recovery.get("model") or "unknown")
+        provider = str(recovery.get("provider") or "unknown")
+        endpoint = endpoints.get((model, provider), {})
+        estimated = (
+            _estimated_cost(
+                endpoint,
+                task_envelope,
+                work_map,
+                work_ids,
+                maximum,
+            )
+            if endpoint and all(value in work_map for value in work_ids)
+            else 0.0
+        )
+        rows.append(
+            {
+                "candidate_id": f"{model}@{provider}",
+                "model": model,
+                "company": canonical_model_company(model),
+                "provider": provider,
+                "estimated_cost_usd": estimated,
+            }
+        )
+    return rows
 
 
 def _claude_node_row(
@@ -696,11 +741,14 @@ def _claude_node_row(
         "provider": provider,
         "estimated_cost_usd": estimated,
         "contract_kind": "gpt-authored-expert-node",
-        "recovery_candidate_ids": [
-            f"{row.get('model')}@{row.get('provider')}"
-            for row in raw.get("recovery", [])
-            if isinstance(row, Mapping)
-        ],
+        "recovery_candidates": _claude_recovery_rows(
+            raw,
+            endpoints,
+            task_envelope,
+            work_map,
+            work_ids,
+            maximum,
+        ),
     }
 
 
@@ -722,6 +770,7 @@ def _claude_edges(proposal: Mapping[str, Any]) -> list[dict[str, str]]:
         {
             "source": str(row.get("source") or "unknown"),
             "target": str(row.get("target") or "unknown"),
+            "relation_type": str(row.get("relation_type") or "unknown"),
         }
         for row in proposal.get("edges", [])
         if isinstance(row, Mapping)
@@ -761,6 +810,9 @@ def claude_unified_review_payload(
         "work_items": _claude_work_items(work_map),
         "nodes": _claude_nodes(proposal, endpoints, task_envelope, work_map),
         "edges": _claude_edges(proposal),
+        "final_nodes": [
+            str(value) for value in proposal.get("final_nodes", [])
+        ],
     }
 
 

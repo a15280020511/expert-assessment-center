@@ -36,6 +36,10 @@ REQ = re.compile(r"^\s*([A-Za-z0-9_.-]+)\s*(?:==|~=|>=|<=|>|<|!=).*$")
 PYTHON_WORKFLOW_ENTRYPOINT = re.compile(
     r"(?:python(?:3)?\s+)(?:\./)?open-model-market/([A-Za-z0-9_]+)\.py\b"
 )
+PYTHON_WORKFLOW_IMPORT = re.compile(
+    r"^\s*(?:from|import)\s+([A-Za-z0-9_]+)\b",
+    re.MULTILINE,
+)
 LEGACY_REPOSITORY = "a15280020511/" + "test"
 HISTORICAL = {
     "MIGRATION.md",
@@ -274,6 +278,7 @@ class AuditState:
     files: list[dict[str, Any]]
     hashes: dict[str, list[str]]
     imports_by_file: dict[str, set[str]]
+    function_hashes: dict[str, list[tuple[str, str, int]]]
     metrics: dict[str, dict[str, int]]
     requirements: dict[str, str]
     workflow_entrypoints: set[str]
@@ -285,6 +290,7 @@ class AuditState:
             files=[],
             hashes=defaultdict(list),
             imports_by_file={},
+            function_hashes=defaultdict(list),
             metrics={},
             requirements={},
             workflow_entrypoints=set(),
@@ -393,6 +399,62 @@ def _yaml_line_findings(rel: str, kind: str, index: int, line: str) -> list[Find
     ]
 
 
+
+
+def _record_function_hashes(
+    state: AuditState,
+    rel: str,
+    text: str,
+) -> None:
+    if "tests" in Path(rel).parts:
+        return
+    try:
+        tree = ast.parse(text, filename=rel)
+    except SyntaxError:
+        return
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        body = list(node.body)
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(getattr(body[0], "value", None), ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            body = body[1:]
+        rendered = ast.dump(
+            ast.Module(body=body, type_ignores=[]),
+            include_attributes=False,
+        )
+        if len(rendered) < 300:
+            continue
+        digest = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+        state.function_hashes[digest].append((rel, node.name, node.lineno))
+
+
+def _duplicate_function_findings(
+    function_hashes: dict[str, list[tuple[str, str, int]]],
+) -> list[Finding]:
+    findings: list[Finding] = []
+    for digest, rows in function_hashes.items():
+        paths = {path for path, _, _ in rows}
+        if len(paths) <= 1:
+            continue
+        locations = [f"{path}:{line}:{name}" for path, name, line in rows]
+        first_path, _, first_line = rows[0]
+        findings.append(
+            Finding(
+                "medium",
+                "PY-DUPLICATE-FUNCTION-BODY",
+                first_path,
+                first_line,
+                f"identical function bodies found at {locations}; sha256={digest}",
+            )
+        )
+    return findings
+
+
 def _inspect_structured_file(
     state: AuditState,
     rel: str,
@@ -404,6 +466,7 @@ def _inspect_structured_file(
         state.findings.extend(py_findings)
         state.imports_by_file[rel] = imports
         state.metrics[rel] = py_metrics
+        _record_function_hashes(state, rel, text)
     elif kind == "json":
         try:
             json.loads(text)
@@ -443,6 +506,7 @@ def _inspect_file(root: Path, path: Path, state: AuditState) -> None:
         return
     if kind == "yaml":
         state.workflow_entrypoints.update(PYTHON_WORKFLOW_ENTRYPOINT.findall(text))
+        state.workflow_entrypoints.update(PYTHON_WORKFLOW_IMPORT.findall(text))
     state.findings.extend(_line_findings(rel, kind, text))
     _inspect_structured_file(state, rel, kind, text)
 
@@ -507,7 +571,12 @@ def _orphan_findings(
     imports_by_file: dict[str, set[str]],
     workflow_entrypoints: set[str],
 ) -> tuple[list[str], list[Finding]]:
-    imported = set().union(*imports_by_file.values()) if imports_by_file else set()
+    production_imports = [
+        imports
+        for rel, imports in imports_by_file.items()
+        if "tests" not in Path(rel).parts
+    ]
+    imported = set().union(*production_imports) if production_imports else set()
     reachable_modules = imported | workflow_entrypoints
     candidates: list[str] = []
     findings: list[Finding] = []
@@ -539,6 +608,7 @@ def audit(root: Path) -> dict[str, Any]:
     for path in _repository_files(root):
         _inspect_file(root, path, state)
     state.findings.extend(_duplicate_findings(state.hashes))
+    state.findings.extend(_duplicate_function_findings(state.function_hashes))
     state.findings.extend(_requirement_findings(state.requirements))
     orphan_candidates, orphan_findings = _orphan_findings(
         state.metrics,
