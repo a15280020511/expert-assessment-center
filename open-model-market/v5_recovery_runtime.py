@@ -2,10 +2,12 @@
 
 Expert composition and recovery order are supplied by GPT and validated before
 execution. This module contains no scoring, ranking, optimization or reordering.
+Token and cost resources are governed through prompts and audit telemetry rather
+than local rejection or truncation gates.
 """
 from __future__ import annotations
 
-from v5_constitutional_runtime import build_runtime
+from v5_soft_resource_governance import build_runtime
 from v5_runtime import ProductionRuntime, RetryPolicy, RuntimeConfig
 
 
