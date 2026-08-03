@@ -13,7 +13,6 @@ from v5_governance_catalog import (  # noqa: E402
     resolve_live_governance_models,
 )
 from v5_governance_runtime import (  # noqa: E402
-    GovernanceRuntimeError,
     _api_payload,
     _bind_governance_request,
 )
@@ -207,7 +206,7 @@ class GovernanceModelResolutionTests(unittest.TestCase):
                 required_context_tokens=16_384,
             )
 
-    def test_binding_rejects_missing_output_limit(self) -> None:
+    def test_binding_accepts_endpoint_without_output_limit_parameter(self) -> None:
         endpoint = {
             "logical_model": "~openai/gpt-latest",
             "resolved_model": "openai/gpt-5.6-sol",
@@ -222,12 +221,13 @@ class GovernanceModelResolutionTests(unittest.TestCase):
         request = {
             "model": "~openai/gpt-latest",
             "messages": [],
-            "max_tokens": 512,
             "reasoning": {"effort": "high"},
             "response_format": self.response_format(),
         }
-        with self.assertRaises(GovernanceRuntimeError):
-            _bind_governance_request(request, endpoint)
+        bound = _bind_governance_request(request, endpoint)
+        self.assertEqual("openai/gpt-5.6-sol", bound["model"])
+        self.assertNotIn("max_tokens", bound)
+        self.assertNotIn("max_completion_tokens", bound)
 
 
 if __name__ == "__main__":
