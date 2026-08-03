@@ -1,0 +1,1829 @@
+{
+  "schema_version": "repository-audit-v4",
+  "file_count": 158,
+  "total_lines": 34377,
+  "finding_counts": {
+    "critical": 0,
+    "high": 0,
+    "medium": 1,
+    "low": 1,
+    "info": 0
+  },
+  "findings": [
+    {
+      "severity": "medium",
+      "rule": "PY-COMPLEXITY",
+      "path": "open-model-market/v5_free_shadow_compat.py",
+      "line": 84,
+      "message": "function '_zdr_candidates' complexity=22"
+    },
+    {
+      "severity": "low",
+      "rule": "FILE-DUPLICATE",
+      "path": "zero-cost-evidence/compile.log",
+      "line": 1,
+      "message": "identical content shared by ['zero-cost-evidence/compile.log', 'zero-cost-evidence/repository-audit.log']; sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "files": [
+    {
+      "path": ".github/dependabot.yml",
+      "size_bytes": 379,
+      "sha256": "c81ee1e21096a2d64110e7eb048ebeb09a227cfc836287fb8d51d6d87fbbf5c2",
+      "line_count": 21,
+      "kind": "yaml"
+    },
+    {
+      "path": ".github/workflows/execution-ticket.yml",
+      "size_bytes": 19809,
+      "sha256": "37fdc93373bfd73189dd8e8da9b356cae681e1403790757dee120670dd78a95e",
+      "line_count": 459,
+      "kind": "yaml"
+    },
+    {
+      "path": ".github/workflows/expert-integrity-validate.yml",
+      "size_bytes": 1157,
+      "sha256": "590aba48f22df4a80e189f14d5f636999489e61e8070f090e2202a01ff4a6337",
+      "line_count": 43,
+      "kind": "yaml"
+    },
+    {
+      "path": ".github/workflows/promote-v5-production.yml",
+      "size_bytes": 7727,
+      "sha256": "33de1650e64269fe31700ce23bfb2dc96adb64da7815c11d4dfb5110ab7e01d5",
+      "line_count": 171,
+      "kind": "yaml"
+    },
+    {
+      "path": ".github/workflows/repository-line-audit.yml",
+      "size_bytes": 1630,
+      "sha256": "c3d636b102774ae370dabe18746a9dd9e3e90e1393ed38e176baaa241845c29f",
+      "line_count": 54,
+      "kind": "yaml"
+    },
+    {
+      "path": ".github/workflows/v5-final-paid-claude-acceptance-20260803.yml",
+      "size_bytes": 22017,
+      "sha256": "af478b6b43335a6a02212a9216d1e4619e403bbfc76a49ffaf337f6948cc2336",
+      "line_count": 503,
+      "kind": "yaml"
+    },
+    {
+      "path": ".github/workflows/v5-free-shadow-production-qualification.yml",
+      "size_bytes": 16365,
+      "sha256": "6981eeb334ed85c990a06f49e1331d2b450470fe7af7748eeb00dcf5a6f627ee",
+      "line_count": 374,
+      "kind": "yaml"
+    },
+    {
+      "path": ".github/workflows/v5-governance-endpoint-diagnostic-20260803.yml",
+      "size_bytes": 4324,
+      "sha256": "bb481bc0010d00a9296c357a797a5ac8696f9d975c04fd51767035737dea620b",
+      "line_count": 118,
+      "kind": "yaml"
+    },
+    {
+      "path": ".github/workflows/v5-live-catalog-diagnostic-20260803.yml",
+      "size_bytes": 11091,
+      "sha256": "403d0f5b5c6cfa76aaf236b23bfab9047a3d9246727211fa2bdd172ac7a4f6ac",
+      "line_count": 248,
+      "kind": "yaml"
+    },
+    {
+      "path": ".github/workflows/v5-ticket-gate-validate.yml",
+      "size_bytes": 986,
+      "sha256": "ec6a3ac0e5693ec6d9557170aea5767a5ee04be6d1d3bfa67252b740374c3308",
+      "line_count": 33,
+      "kind": "yaml"
+    },
+    {
+      "path": ".github/workflows/v5-validate.yml",
+      "size_bytes": 7406,
+      "sha256": "46d90cb1fb11480a2b15105c1dc941b82cdc7afcd38b410d1e3a2055d6c9039c",
+      "line_count": 173,
+      "kind": "yaml"
+    },
+    {
+      "path": ".github/workflows/validate.yml",
+      "size_bytes": 7016,
+      "sha256": "f22cf392545bbeb5e18483b7ac56d300c93b20e0ae279c7af5256d20fc7605c0",
+      "line_count": 156,
+      "kind": "yaml"
+    },
+    {
+      "path": ".gitignore",
+      "size_bytes": 145,
+      "sha256": "8b1cb1f09d6acb0670f2b040945fd608075bd90d204d29b4e67e8ce2160ad2a5",
+      "line_count": 9,
+      "kind": "text"
+    },
+    {
+      "path": "CONSTITUTION.md",
+      "size_bytes": 4772,
+      "sha256": "16aad14329450aa2a1bd134717b9d39f90535e6d8f935e979c7c6f29d036b671",
+      "line_count": 81,
+      "kind": "text"
+    },
+    {
+      "path": "MIGRATION.md",
+      "size_bytes": 495,
+      "sha256": "3fdfe9d94480669a0daafd3e5ec26add806c6d801114ddb23f649ad7a48dd9e1",
+      "line_count": 7,
+      "kind": "text"
+    },
+    {
+      "path": "OBSERVABILITY.md",
+      "size_bytes": 4223,
+      "sha256": "ec9ba790d17e34c892d3f714556186c561adeb5cc1b8ee770df8be61f153cc87",
+      "line_count": 133,
+      "kind": "text"
+    },
+    {
+      "path": "OPERATIONS_RUNBOOK.md",
+      "size_bytes": 780,
+      "sha256": "b6385bcaccf955643720c1b16894476ade3a2f4d5dd4e2bc9714abb88da734d3",
+      "line_count": 20,
+      "kind": "text"
+    },
+    {
+      "path": "README.md",
+      "size_bytes": 6696,
+      "sha256": "11beed797c5c538add1a23fdf9e6308275af46671e5eae6d8186fe36123d648e",
+      "line_count": 146,
+      "kind": "text"
+    },
+    {
+      "path": "RECOVERY.md",
+      "size_bytes": 383,
+      "sha256": "3efe619d0e38d5043abe6ad11bb2a7542ea0ffdcd376048ce83842a09811a409",
+      "line_count": 6,
+      "kind": "text"
+    },
+    {
+      "path": "SECURITY.md",
+      "size_bytes": 381,
+      "sha256": "c236fb6f5cbf149788781778979409f8047215b7fb1617db6434f88809d545e1",
+      "line_count": 6,
+      "kind": "text"
+    },
+    {
+      "path": "docs/pr227-fifth-acceptance-provider-route-envelope-20260803.md",
+      "size_bytes": 2955,
+      "sha256": "cb3aface95de1385b28fe1837500c69c910736f4412058dbfeb9499fcf7deadc",
+      "line_count": 70,
+      "kind": "text"
+    },
+    {
+      "path": "docs/pr227-final-cleanup-audit-20260803.md",
+      "size_bytes": 7254,
+      "sha256": "e270f180180b8769127af5c04ed3c076804583d249c4fe7c1ba9103da0c6f820",
+      "line_count": 127,
+      "kind": "text"
+    },
+    {
+      "path": "docs/pr227-fourth-acceptance-catalog-dedup-20260803.md",
+      "size_bytes": 2599,
+      "sha256": "9901a484e7df39f1844b485d6854f1ee5097840d068714c8548b9d0796c0980c",
+      "line_count": 59,
+      "kind": "text"
+    },
+    {
+      "path": "docs/pr227-governed-runtime-version-audit-20260803.md",
+      "size_bytes": 1295,
+      "sha256": "66023a20d6a115b65672f8c4caa1530888bafd9bffe4e560d9a3a68c3a885e23",
+      "line_count": 31,
+      "kind": "text"
+    },
+    {
+      "path": "docs/pr227-third-paid-failure-semantic-fix-20260803.md",
+      "size_bytes": 3338,
+      "sha256": "d3985c432f016c5f4a9f9dc0b463e8e06a09b55052769e43915602dc2ee3c018",
+      "line_count": 70,
+      "kind": "text"
+    },
+    {
+      "path": "governance-compatibility.json",
+      "size_bytes": 724,
+      "sha256": "5e3c95dad8859922776e20dfb945727f9a8a40aaedb4dede0aef0c46a8957848",
+      "line_count": 16,
+      "kind": "json"
+    },
+    {
+      "path": "open-model-market/DELEGATION_CONTRACT.md",
+      "size_bytes": 2261,
+      "sha256": "f734e0c624b37494fd8af4728d044a41f85e50b81cc2131c850b8541f266aec2",
+      "line_count": 59,
+      "kind": "text"
+    },
+    {
+      "path": "open-model-market/V5_EXECUTION_GRAPH_FOUNDATION.md",
+      "size_bytes": 3183,
+      "sha256": "f7db1606e891c4c6744ef324017284c70603e71caa5a01e43b4876c45f445067",
+      "line_count": 87,
+      "kind": "text"
+    },
+    {
+      "path": "open-model-market/artifact_manifest.py",
+      "size_bytes": 3281,
+      "sha256": "68e6f95cabdcaf2a225672def49fbe8b88d004c9e8bc9cf54b1eff5d20b88eb4",
+      "line_count": 95,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/config.json",
+      "size_bytes": 957,
+      "sha256": "0ef4683d2506505d3cd3478cf0677eeabf19f64f9534ffc21d21b1bb21be6a8b",
+      "line_count": 37,
+      "kind": "json"
+    },
+    {
+      "path": "open-model-market/execution-ticket.schema.json",
+      "size_bytes": 7586,
+      "sha256": "a85ec80fbbbc045f895e5cae9f76d4e8849cff3198e72a980ede0b69ef8587fb",
+      "line_count": 253,
+      "kind": "json"
+    },
+    {
+      "path": "open-model-market/execution_graph.py",
+      "size_bytes": 6399,
+      "sha256": "d32f06fb2da4abf5341b98023f0d500d1512fd195d9e845f592d55881cbcd4d1",
+      "line_count": 169,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/execution_graph_validator.py",
+      "size_bytes": 14498,
+      "sha256": "911f0fe6ac461d50d849d6ac796a4abe309a15490d4ca59958d7a086e5910d26",
+      "line_count": 358,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/expert-team-capabilities.json",
+      "size_bytes": 4603,
+      "sha256": "9d7052162ddbaf284f0c80eeee4428f304b81e97e98a3bc17813452a3e83aec5",
+      "line_count": 88,
+      "kind": "json"
+    },
+    {
+      "path": "open-model-market/live-recovery-budget-fix-evidence.json",
+      "size_bytes": 704,
+      "sha256": "cd18a54c9f8f8d3d990441943aab6b6cabadc54474247faf2e60101e36cab0b1",
+      "line_count": 20,
+      "kind": "json"
+    },
+    {
+      "path": "open-model-market/model_market.py",
+      "size_bytes": 9438,
+      "sha256": "821424951dcecd35916a22ade97c8aecc31d1cd6ca9820f5b2f42059a1aa4b34",
+      "line_count": 282,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/openrouter_api.py",
+      "size_bytes": 19123,
+      "sha256": "d89ebaf74244f4b216c04de026735888c62e144f5c689b07b045773f7fa9b90a",
+      "line_count": 535,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/publish_report.py",
+      "size_bytes": 12276,
+      "sha256": "82a5b528c68115a8028bc526463ccdb0d4327490266e5ef29855da5496dd8fdc",
+      "line_count": 359,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/text_normalization.py",
+      "size_bytes": 446,
+      "sha256": "74007981b68fd4cecf8586f1c9db83c75ed03c9aae3c6ed1d28cd441cf4631f7",
+      "line_count": 12,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v4-contract-isolation-fix-evidence.json",
+      "size_bytes": 694,
+      "sha256": "a331ca57d377076d98df3e945011c27cac08c8cd03e57b058a16aa45faac259a",
+      "line_count": 19,
+      "kind": "json"
+    },
+    {
+      "path": "open-model-market/v5-closed-world-numeric-prompt-fix-evidence.json",
+      "size_bytes": 847,
+      "sha256": "a4c2a65e20b9058d6236fedf984b635a8b8081b64cd7b97b1e91a51c15a5926e",
+      "line_count": 25,
+      "kind": "json"
+    },
+    {
+      "path": "open-model-market/v5-deterministic-answer-normalization-fix-evidence.json",
+      "size_bytes": 1018,
+      "sha256": "c40cf84a8fc1c9cafd0ba05473116e673f605ca9466773bf9570ce21c36575b0",
+      "line_count": 23,
+      "kind": "json"
+    },
+    {
+      "path": "open-model-market/v5_admission_lock.py",
+      "size_bytes": 2275,
+      "sha256": "ad596490f3ddf23b5262789c90cb9915d1668fd32e999517961ae036e7cdf35b",
+      "line_count": 65,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_catalog_view.py",
+      "size_bytes": 16152,
+      "sha256": "e30ec90b6cfaa6863cc12bef42f9e97992c16391c47c7304fbceae48f3e0b41f",
+      "line_count": 501,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_claude_red_team_policy.py",
+      "size_bytes": 17119,
+      "sha256": "0699c433ddabbffcacff885ca22daf8a66676d704f4d2f29ab49796e41d14ecf",
+      "line_count": 457,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_constitutional_runtime.py",
+      "size_bytes": 22962,
+      "sha256": "4c9518ee76266c7285371a2b99205c272b1213992e3f6c2acb46c0215a109015",
+      "line_count": 634,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_cost_reliability_hardening.py",
+      "size_bytes": 11206,
+      "sha256": "2342d42b22e44a09a6bcc6e455a68407b1b792241f27ba8c5ad229d5263a53ec",
+      "line_count": 383,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_deterministic_answer_normalization.py",
+      "size_bytes": 12212,
+      "sha256": "257cf7333244107ed9175f3958f3fa18a47d43916aa2fd49b3ade3c16cf03e9a",
+      "line_count": 338,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_dynamic_prompt_delivery.py",
+      "size_bytes": 1027,
+      "sha256": "a5e5f3ad8dad9e21f6b8899675c5256a875b7f3b81c697a126a8fae2dc62d647",
+      "line_count": 23,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_endpoint_catalog.py",
+      "size_bytes": 2342,
+      "sha256": "878dec651d80128f31a7b77f5b80bfd7d8c43d99cfae10b9e09a3453d0f252c0",
+      "line_count": 74,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_evidence_bundle.py",
+      "size_bytes": 16453,
+      "sha256": "cac5d2975445be224cdd76b19f5522285a4dfea4959564a7ad83bd6f4c71f99a",
+      "line_count": 409,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_execution_auditor.py",
+      "size_bytes": 27619,
+      "sha256": "da4562e5d81d3a17a5416b92e65235538aaf32d74492da3dc8b6a648c2de5377",
+      "line_count": 834,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_execution_auditor_integrity.py",
+      "size_bytes": 24796,
+      "sha256": "7171724688affe5b57e62d56d79dd02c9150afffb1fd381df7f7dd85f9282377",
+      "line_count": 633,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_execution_primitives.py",
+      "size_bytes": 7957,
+      "sha256": "6ca3f81867edd28ae18f6439666936ac1de87b5980dfff0c197ee09ee79e9162",
+      "line_count": 208,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_final_attestation.py",
+      "size_bytes": 3055,
+      "sha256": "d1e482c3d54ff7996a58e2f8b2583cc96330668789a17a0114e6333768348015",
+      "line_count": 80,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_final_status.py",
+      "size_bytes": 2642,
+      "sha256": "7f301b4956e2895eae9510773ba87dc3fbc38bc76f323322feeb3784356874d8",
+      "line_count": 76,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_free_first_preflight.py",
+      "size_bytes": 9698,
+      "sha256": "280fc58c7e86ea312f4970a2627ec8fa09411dd96c75f6ee7796f2db7b86a91d",
+      "line_count": 276,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_free_shadow_acceptance.py",
+      "size_bytes": 20277,
+      "sha256": "4c5381f547eb48f73006e541273031f9c9968ebc0dacfe93d5fd33010fe12483",
+      "line_count": 649,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_free_shadow_compat.py",
+      "size_bytes": 23151,
+      "sha256": "f76a0a10938cb05cfd1a822035b34d7f5c9d40a2cb51dde5b182395c41125572",
+      "line_count": 667,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_free_shadow_support.py",
+      "size_bytes": 16469,
+      "sha256": "3ba32e59ddd8c487caa4705930fcdc24bdb5ea98af527981c4765e189f663c24",
+      "line_count": 474,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_governance_catalog.py",
+      "size_bytes": 8711,
+      "sha256": "8ba187fcc1bfee1dfc4799e53ae9d7941dacf4e530b5c3587ddadc468dcc6c6a",
+      "line_count": 251,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_governance_runtime.py",
+      "size_bytes": 20040,
+      "sha256": "76f627079ce2b4b504945fb1a93886b86343b473484962bdf752e76575d1601e",
+      "line_count": 607,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_gpt_expert_selector.py",
+      "size_bytes": 27455,
+      "sha256": "ce54961a79dd057b4fb205f8f18ae18bd1824ad3368b8242921e2eaa62ecdcdd",
+      "line_count": 763,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_independent_artifact_revalidation.py",
+      "size_bytes": 31747,
+      "sha256": "401059a3f5fbb80861ae56b24334fe9b3b48abc85e42896423b64cb91e133ab2",
+      "line_count": 893,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_issue_ticket.py",
+      "size_bytes": 33653,
+      "sha256": "e57c26b9d1afec4d1febe621403455426b7d6b142a0e497deec64ac3a36f5cd9",
+      "line_count": 907,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_json_io.py",
+      "size_bytes": 613,
+      "sha256": "74728437bc0fb8a17ece8422059a55629fe0b6f2c44717fe2cf30fbe9ec0b0fb",
+      "line_count": 21,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_live_benchmark_suite.json",
+      "size_bytes": 11171,
+      "sha256": "e0993283761b723b2072d0c974ea4fd321917bef53aabf2c6438b71c08786ef8",
+      "line_count": 117,
+      "kind": "json"
+    },
+    {
+      "path": "open-model-market/v5_model_company.py",
+      "size_bytes": 2200,
+      "sha256": "5654690d0b0af498b2b042c19f1e75aa914b63f2992e4e81fe723930d87101f3",
+      "line_count": 77,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_output_contract_delivery.py",
+      "size_bytes": 9258,
+      "sha256": "30aa205a98d8ecafc0fd9581904de2ee9e8fd529cab1af809163a208392de3a7",
+      "line_count": 223,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_pipeline.py",
+      "size_bytes": 24033,
+      "sha256": "9db5025600fe45d182d0c59693ea6c78622e6ed550817530a582a3cd276da08a",
+      "line_count": 701,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_preflight_simulation.py",
+      "size_bytes": 5433,
+      "sha256": "264d059a17475497e77dab2c4a6ba55e14c8c757d18e02a7da2f745d562228ce",
+      "line_count": 142,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_production_ticket.py",
+      "size_bytes": 8949,
+      "sha256": "0871488edd84a6d9d94eac1aa18060d9c270dc0fa2d81ad71ab5c7fcf274ae1d",
+      "line_count": 260,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_proposal_materializer.py",
+      "size_bytes": 27668,
+      "sha256": "59977b7edd06d03fc3986b2763339f130da7457a8dc8809d2ee0e1fb1d927f4d",
+      "line_count": 776,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_quality_status_integrity.py",
+      "size_bytes": 7387,
+      "sha256": "9f46b16d5ea9d9dfa78ad8e2430e0562c5247571d812373ceb50eee7eec133f9",
+      "line_count": 194,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_recovery_runtime.py",
+      "size_bytes": 754,
+      "sha256": "8960b0f59166dbb3ea223c362e16fe59853d3a9eccd3bc6b5a1352e887e49daf",
+      "line_count": 21,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_run_evidence.py",
+      "size_bytes": 20717,
+      "sha256": "b3821fefdfda2d7d7a58f56276146526a02b8e372bd6ad2048b5244943daadfd",
+      "line_count": 569,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_runtime.py",
+      "size_bytes": 72779,
+      "sha256": "d82d6728f88c7ec7f7ca0508969044408f2315328313fcafbc8455ee6aa5f99c",
+      "line_count": 1780,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_structured_output_compat.py",
+      "size_bytes": 3362,
+      "sha256": "bf3f58d57e79582f311fec358887c0520dce8323d162a91781e44bb75e59b8c8",
+      "line_count": 97,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_task_constraints.py",
+      "size_bytes": 6659,
+      "sha256": "1fcf7fe7330d54659b3f6567ee6bc45e42d759d8cf3514b014746097803a7145",
+      "line_count": 183,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_task_constraints_impl.py",
+      "size_bytes": 24960,
+      "sha256": "d399e6789f2262d8df8572f6d75af58449d25dbf500d5095d2e7f1e24222fc94",
+      "line_count": 715,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_task_delivery_contract.py",
+      "size_bytes": 6285,
+      "sha256": "06f4a8b163c652ddf6856e3f6aa9c41f18ca399feab97fa98eb9eec854d9bd1f",
+      "line_count": 171,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_task_delivery_contract_impl.py",
+      "size_bytes": 32711,
+      "sha256": "57905e5c1346c99fbc7b6a89ace9b5233b7ee657edf41cbd0c1e69e91c5a7e58",
+      "line_count": 962,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_task_envelope.py",
+      "size_bytes": 3890,
+      "sha256": "3db536a42ee86b8c44310ed6a9998a8fbf4f4b976cf53435a5c0f89e201c8bae",
+      "line_count": 110,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_ticket_gate.py",
+      "size_bytes": 14669,
+      "sha256": "a6df9c7def3c86d9642719485376ac64ae8ff2c910758db6678a8b1e7422d113",
+      "line_count": 385,
+      "kind": "python"
+    },
+    {
+      "path": "open-model-market/v5_ticket_identity.py",
+      "size_bytes": 1287,
+      "sha256": "538ca056e7283483b00a5042aca758e6423735c399c1c671198d0d07790a256b",
+      "line_count": 41,
+      "kind": "python"
+    },
+    {
+      "path": "requirements-dev.txt",
+      "size_bytes": 96,
+      "sha256": "81b273556b6ea254f18d2a89e342355608d044494d8323d5e7a4c7f676fee829",
+      "line_count": 5,
+      "kind": "requirements"
+    },
+    {
+      "path": "requirements-runtime.txt",
+      "size_bytes": 35,
+      "sha256": "cbca40d6fe5c2145b4349511db1b96b13735eb94a80b6e70d32fa3111b0090dc",
+      "line_count": 2,
+      "kind": "requirements"
+    },
+    {
+      "path": "ruff.toml",
+      "size_bytes": 140,
+      "sha256": "b03c7b14d90dfdca4c99fc22b39f9c2ba3565822b3f509b9e7c53bbda413086c",
+      "line_count": 7,
+      "kind": "text"
+    },
+    {
+      "path": "tests/fixtures/endpoints.json",
+      "size_bytes": 3354,
+      "sha256": "774b57f9c62f0632ae9420c98aa3997e18880c6a7ba3b36bf79b78ca576c9d39",
+      "line_count": 1,
+      "kind": "json"
+    },
+    {
+      "path": "tests/fixtures/models.json",
+      "size_bytes": 8013,
+      "sha256": "0fac8e91936def4659e2eb2005b22caffa6761225cfa790648cc125d49984fc8",
+      "line_count": 1,
+      "kind": "json"
+    },
+    {
+      "path": "tests/test_constitution_hard_rules.py",
+      "size_bytes": 3581,
+      "sha256": "385ddb0f24097b9c8d3e95de34424ee8dd826f0c36d3d68765dccd187c9a29c2",
+      "line_count": 76,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_execution_graph_properties.py",
+      "size_bytes": 4197,
+      "sha256": "53b2c326e8e5294eb3d3eda97802eb48001764dfb252c94ba268c56f7b77a375",
+      "line_count": 119,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_execution_graph_validator.py",
+      "size_bytes": 6255,
+      "sha256": "0c571ad58e36dcb0f985e620646dd991b190959dedc3281e815b7fffb162791e",
+      "line_count": 213,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_legacy_runtime_removed.py",
+      "size_bytes": 2274,
+      "sha256": "4ababee3c7e125113ca069c50f4a6a31db9c5da44ac12d02eae97a02e3ea17dc",
+      "line_count": 56,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_objective_isolation.py",
+      "size_bytes": 2774,
+      "sha256": "d3034de3547e2df75edef575b730b0cd08f73b36b030d3db0ed5d1349a1073b3",
+      "line_count": 69,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_openrouter_hard_deadline.py",
+      "size_bytes": 1980,
+      "sha256": "42bab8dc35a63210f9c4f83ef150e8c94afdb9aa7a1e97ad9f2936b336a35977",
+      "line_count": 67,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_openrouter_response_protocol.py",
+      "size_bytes": 4585,
+      "sha256": "b49df7b8203da0313bac2bd6899545ef175f0fd41476787350bc9faf410e45ed",
+      "line_count": 125,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_private_output_message.py",
+      "size_bytes": 1791,
+      "sha256": "f78b7fff36e2652bea2a8e1cc5d2d3203f6def99c28978e110408ef2dc108e9e",
+      "line_count": 50,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_publish_report.py",
+      "size_bytes": 8202,
+      "sha256": "dc70b2c68594a7e266ddfc6a17ae52ef7607ee0cdf4851679573bf66f43a0ef3",
+      "line_count": 226,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_repository_audit.py",
+      "size_bytes": 3463,
+      "sha256": "d900c9342c31383a10c3d524c82d2aee8400a3f7861366edb75f49abc5004223",
+      "line_count": 89,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_ticket_jsonschema.py",
+      "size_bytes": 4660,
+      "sha256": "747965a71c5b1c2f37fa58afc4d5d68b8fef96c10cbec10814b361b88e7797c8",
+      "line_count": 114,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_ticket_security.py",
+      "size_bytes": 12554,
+      "sha256": "5598c011de5fdb5c5bf5c3c342a1ffca42ba6774f377354d87495c8fc8fb16df",
+      "line_count": 264,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_admission_task_isolation.py",
+      "size_bytes": 3771,
+      "sha256": "351ea03b835bc28950fc2d137d100826b4351d05d47b4cc97f93dd871b65f284",
+      "line_count": 91,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_attestation_source_commit.py",
+      "size_bytes": 3272,
+      "sha256": "231641f4d24a483c83b51abaad5e11fb738158abc62f585653d82d4c4f19fbdb",
+      "line_count": 88,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_catalog_endpoint_eligibility.py",
+      "size_bytes": 9629,
+      "sha256": "4a4c0950a19c9e464c72b67f1f5d825d40b9e4add9c22dd189d6ed42263d1992",
+      "line_count": 267,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_claude_red_team_advice.py",
+      "size_bytes": 7689,
+      "sha256": "f5dd62a29a0dd6b490cdc4adfba8f5449abdb24ed733ef22f87ea0ec4359b1ea",
+      "line_count": 196,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_closed_world_display_and_compaction.py",
+      "size_bytes": 1599,
+      "sha256": "1e0a022fc5a26cbb5fac03a3a7dc2e216ea49ef9f4f072c57c2aa7310d239612",
+      "line_count": 42,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_command_trigger.py",
+      "size_bytes": 3454,
+      "sha256": "88721d87f83d770d59680c2db3ca0eca203014fc14bd2ce9e09013adfc9964e3",
+      "line_count": 96,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_complete_cleanup_regression.py",
+      "size_bytes": 3651,
+      "sha256": "74e43cd3fd1c245315bbab2b01441441265291df5d4f1db5b32b83493b805d25",
+      "line_count": 86,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_constitutional_runtime.py",
+      "size_bytes": 4901,
+      "sha256": "7c9bb3df32e9eded258b4d05a2531f7a59c261c94a626f8a5e82d2601875dfbc",
+      "line_count": 133,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_deterministic_answer_normalization.py",
+      "size_bytes": 7977,
+      "sha256": "4849a95e47f13c1353cc34a9f9cb8e5052df5690976e685e0971c22320c231f4",
+      "line_count": 194,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_dynamic_prompt_delivery.py",
+      "size_bytes": 2447,
+      "sha256": "63dbf4ff6a0d0708d84b5d7f6a075d3220344b8f6694a026be3459ec06e41c98",
+      "line_count": 68,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_endpoint_catalog.py",
+      "size_bytes": 2698,
+      "sha256": "5a41046bcf1e5a428e38d912c9458fd97c757f8f442dcb62194053dee2a57320",
+      "line_count": 87,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_evidence_bundle.py",
+      "size_bytes": 12380,
+      "sha256": "f92f9cd75cab0933804b9ade0a11c2e3903455ddeef17d19855c88ccb0516917",
+      "line_count": 294,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_explicit_markdown_contract_revalidation.py",
+      "size_bytes": 5758,
+      "sha256": "dab4f0f8e27d3f8ccbd1a4bfca572f5e269ee76649610a5919078403c7229b09",
+      "line_count": 170,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_explicit_task_delivery_contract.py",
+      "size_bytes": 6434,
+      "sha256": "6ca73feca54c683f7115b0648765ca2e9d2ed4ace5d290112c7a1fd679953486",
+      "line_count": 170,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_extreme_advisory_stress.py",
+      "size_bytes": 11870,
+      "sha256": "7f2a359cb518012d248f72eefa12bb76d8d7b5aaa6e51bd6cf7db53d757552b4",
+      "line_count": 322,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_fact_label_purity_normalization.py",
+      "size_bytes": 5674,
+      "sha256": "6a2761c86059921348c3ff760c595753089aeb7693c00098dcb375ce341306b6",
+      "line_count": 151,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_fact_provenance_semantic_normalization.py",
+      "size_bytes": 8669,
+      "sha256": "20c6f4b3deaa532c3f62f90387aea8fef4fd540eb75c768a929b4a740cffd2b7",
+      "line_count": 209,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_failure_evidence_chain.py",
+      "size_bytes": 5091,
+      "sha256": "7565adbfb7fa22838217d0b1b7661c8c050fb02229de32d121a987d04f614ebf",
+      "line_count": 129,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_failure_evidence_persistence.py",
+      "size_bytes": 2842,
+      "sha256": "22dff8c477ebc819eb450eeb17e727fd4d70a68461f3bf4feb043758f25b6dd6",
+      "line_count": 76,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_final_contract_runtime_isolation.py",
+      "size_bytes": 5720,
+      "sha256": "7856db12de4ed3cf8c402ed9d0ad67a88c57bc2d7ff598e677c428c8bab3c2b3",
+      "line_count": 148,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_flattened_contract_cardinality.py",
+      "size_bytes": 3959,
+      "sha256": "2d2dc01cf6ce0e77f570a4242acb6d5e8b884edfc38e99b097b25c155894dfbd",
+      "line_count": 93,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_free_first_preflight.py",
+      "size_bytes": 7638,
+      "sha256": "c53dc7516cf5ecaaa85068d428f747eb0285afd795bc6212f78a32bcbaf2674b",
+      "line_count": 187,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_free_shadow_acceptance.py",
+      "size_bytes": 14575,
+      "sha256": "3d93511d6e1c9f6786e977a8df6afcea86f798ec1b07aaa20f4719ebf465c227",
+      "line_count": 381,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_full_load_stability.py",
+      "size_bytes": 7637,
+      "sha256": "8a6859e77a76dfdf09eb3018b8eac37e6d68db08a7efad59ed96c6400ac7ac54",
+      "line_count": 194,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_governance_completion_envelope.py",
+      "size_bytes": 5918,
+      "sha256": "bc2798d911172413d3a99d817db968db0fa3728b3b6be97c8de0ae8f903a9024",
+      "line_count": 177,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_governance_model_resolution.py",
+      "size_bytes": 8108,
+      "sha256": "379f29de0e51787a8a24d765c9931f5706dbaa64287cd239de3d67cd607509b7",
+      "line_count": 234,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_gpt_selector_contract.py",
+      "size_bytes": 9028,
+      "sha256": "20af01bb509c71fad9c2c5dfb5782a358a85aa9b085c710971ae804f0f314e49",
+      "line_count": 246,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_independent_artifact_revalidation.py",
+      "size_bytes": 15263,
+      "sha256": "16b6b5ebdb05186857e5d54864fe982132f7d531e2837133ed0320e39fd0ae46",
+      "line_count": 395,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_inferential_anchor_threshold.py",
+      "size_bytes": 2050,
+      "sha256": "9d31ede06a2a2171a831b850df33114dc212fc87d9828d1d64906573d98ec7f7",
+      "line_count": 57,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_native_audit_contract.py",
+      "size_bytes": 20387,
+      "sha256": "684ca134f1ec1680f1cf0588e8ec1a6d661bd4bc6c742916d988a87703953820",
+      "line_count": 541,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_optional_functions_semantics.py",
+      "size_bytes": 3583,
+      "sha256": "c520987730c5e5fb73beeec4110aeb4b747b697f8ea0d50198c33bc218317da4",
+      "line_count": 94,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_output_contract_delivery.py",
+      "size_bytes": 8661,
+      "sha256": "a0b432a37f5dd0063bde6e049b955d5be0f2ca69bf984dada6a8a2743c6c8358",
+      "line_count": 191,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_p0_governance.py",
+      "size_bytes": 7406,
+      "sha256": "0343084623e80d820a2d7e907fcb7724f5c5210e5db37752903152d9cc9c3b70",
+      "line_count": 184,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_preflight_simulation.py",
+      "size_bytes": 1525,
+      "sha256": "7eb3b682f48ac98fc1a36360960e232c0ec49ec9c40f6964b23346f4e2831fc1",
+      "line_count": 40,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_production_cutover.py",
+      "size_bytes": 10159,
+      "sha256": "860d60d951ba2fafa0b0c332448874f0f6f9b1c07027c44537a8607aa4c60365",
+      "line_count": 284,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_production_independent_revalidation.py",
+      "size_bytes": 2077,
+      "sha256": "0b5aa991cec730ecaa9c4ec2d01de17a7aa6e27cf5c8432bef5ac75ca1b11907",
+      "line_count": 49,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_production_ticket_token_envelope.py",
+      "size_bytes": 2275,
+      "sha256": "fca51584e2c47fd3d6cc8a621bb287a17c4326aac3867ee1fc33aa009f090d1c",
+      "line_count": 71,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_quantity_binding_context.py",
+      "size_bytes": 2490,
+      "sha256": "3ca66bd62e4c625488c16de5abd8d819c2032e3eb6253034f4749462b15f3e01",
+      "line_count": 80,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_reasoning_saturation_recovery.py",
+      "size_bytes": 6125,
+      "sha256": "b0dbc3b91127bfc83fa3856c4734a0532d9910011c22da5370020765baab9590",
+      "line_count": 178,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_reasoning_visible_output_budget.py",
+      "size_bytes": 5643,
+      "sha256": "cc3130947de015723c7b4eeaba20fff96948baa878cb1dfcaf0c0d9955c2b41f",
+      "line_count": 161,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_release_advisory_regression.py",
+      "size_bytes": 2094,
+      "sha256": "8d7ab8e055771a3908c26f8738cc7759e3e1cea55521dcb12c0ad79511821edd",
+      "line_count": 59,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_release_command_contract.py",
+      "size_bytes": 7112,
+      "sha256": "b1ec15ce0149b56f1360f2eb4e5a8384293c60075abc9463e5a3c48c90fca307",
+      "line_count": 163,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_repository_residue_audit.py",
+      "size_bytes": 7895,
+      "sha256": "8038e1df2ceced59e182c43df9c6af248dd3ddc0029ad348b672fbe526970464",
+      "line_count": 180,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_response_diagnostics_evidence.py",
+      "size_bytes": 1686,
+      "sha256": "01ebcbff4852cf2fe6476355a9a354f460cb483028ed099897c73a1ed0e18567",
+      "line_count": 48,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_structured_output_compat.py",
+      "size_bytes": 6798,
+      "sha256": "50684cbde8039947797e30ee916688d28f4ce7dcf7d83b0e96854ed7ff4bcec8",
+      "line_count": 178,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_task_constraints.py",
+      "size_bytes": 8735,
+      "sha256": "988ced166ea9d33a228c9b2781cc581689673223e3849d83ed64f80dda0039f6",
+      "line_count": 213,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_ticket_gate.py",
+      "size_bytes": 5886,
+      "sha256": "f2366bf9be35e302b9f3c08afacf41f8dbe4cc3964e8f9672944f437b1c5136a",
+      "line_count": 168,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_v5_v4_contract_isolation.py",
+      "size_bytes": 8176,
+      "sha256": "ce2550e878e44e3f843dfd575625a328785545511e9c529562061d39a142334f",
+      "line_count": 206,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_workflow_contract.py",
+      "size_bytes": 10004,
+      "sha256": "b8c0ff7aef44a5f1de27b8631bd157cead83669ef045053ff59516f10d6b71d4",
+      "line_count": 206,
+      "kind": "python"
+    },
+    {
+      "path": "tests/test_workflow_node24_actions.py",
+      "size_bytes": 2026,
+      "sha256": "567e4b9c70364a2e5058d0c614900cdab157b06b7ae1f8bcb8d3a6fb4e09ef34",
+      "line_count": 47,
+      "kind": "python"
+    },
+    {
+      "path": "tools/repository_audit.py",
+      "size_bytes": 19663,
+      "sha256": "931f7bbced417f2b276908d551de9bb8891953596014c40cf60a78ef6d088983",
+      "line_count": 623,
+      "kind": "python"
+    },
+    {
+      "path": "tools/run_v5_p0_regressions.py",
+      "size_bytes": 7181,
+      "sha256": "eecddaad2594baae89a5448552ef2e41d1fbb6b2c8aa9cea58caceb39fbec98e",
+      "line_count": 243,
+      "kind": "python"
+    },
+    {
+      "path": "zero-cost-evidence/compile.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "line_count": 0,
+      "kind": "text"
+    },
+    {
+      "path": "zero-cost-evidence/repository-audit.log",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "line_count": 0,
+      "kind": "text"
+    },
+    {
+      "path": "zero-cost-evidence/ruff.log",
+      "size_bytes": 19,
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "line_count": 1,
+      "kind": "text"
+    },
+    {
+      "path": "zero-cost-evidence/tests.log",
+      "size_bytes": 62643,
+      "sha256": "98bd760cc34288890b802f116acef86b3bbb7408c3fb2e11ffc16e17632c2668",
+      "line_count": 402,
+      "kind": "text"
+    }
+  ],
+  "python_metrics": {
+    "open-model-market/artifact_manifest.py": {
+      "functions": 5,
+      "classes": 0,
+      "max_complexity": 6,
+      "max_function_lines": 30
+    },
+    "open-model-market/execution_graph.py": {
+      "functions": 6,
+      "classes": 5,
+      "max_complexity": 8,
+      "max_function_lines": 26
+    },
+    "open-model-market/execution_graph_validator.py": {
+      "functions": 17,
+      "classes": 1,
+      "max_complexity": 9,
+      "max_function_lines": 25
+    },
+    "open-model-market/model_market.py": {
+      "functions": 10,
+      "classes": 3,
+      "max_complexity": 17,
+      "max_function_lines": 95
+    },
+    "open-model-market/openrouter_api.py": {
+      "functions": 21,
+      "classes": 1,
+      "max_complexity": 14,
+      "max_function_lines": 105
+    },
+    "open-model-market/publish_report.py": {
+      "functions": 14,
+      "classes": 0,
+      "max_complexity": 17,
+      "max_function_lines": 50
+    },
+    "open-model-market/text_normalization.py": {
+      "functions": 1,
+      "classes": 0,
+      "max_complexity": 1,
+      "max_function_lines": 6
+    },
+    "open-model-market/v5_admission_lock.py": {
+      "functions": 4,
+      "classes": 0,
+      "max_complexity": 8,
+      "max_function_lines": 18
+    },
+    "open-model-market/v5_catalog_view.py": {
+      "functions": 18,
+      "classes": 1,
+      "max_complexity": 18,
+      "max_function_lines": 66
+    },
+    "open-model-market/v5_claude_red_team_policy.py": {
+      "functions": 22,
+      "classes": 0,
+      "max_complexity": 13,
+      "max_function_lines": 64
+    },
+    "open-model-market/v5_constitutional_runtime.py": {
+      "functions": 23,
+      "classes": 2,
+      "max_complexity": 14,
+      "max_function_lines": 82
+    },
+    "open-model-market/v5_cost_reliability_hardening.py": {
+      "functions": 11,
+      "classes": 0,
+      "max_complexity": 12,
+      "max_function_lines": 76
+    },
+    "open-model-market/v5_deterministic_answer_normalization.py": {
+      "functions": 8,
+      "classes": 0,
+      "max_complexity": 19,
+      "max_function_lines": 79
+    },
+    "open-model-market/v5_dynamic_prompt_delivery.py": {
+      "functions": 1,
+      "classes": 0,
+      "max_complexity": 7,
+      "max_function_lines": 15
+    },
+    "open-model-market/v5_endpoint_catalog.py": {
+      "functions": 2,
+      "classes": 0,
+      "max_complexity": 10,
+      "max_function_lines": 61
+    },
+    "open-model-market/v5_evidence_bundle.py": {
+      "functions": 14,
+      "classes": 1,
+      "max_complexity": 13,
+      "max_function_lines": 89
+    },
+    "open-model-market/v5_execution_auditor.py": {
+      "functions": 27,
+      "classes": 8,
+      "max_complexity": 19,
+      "max_function_lines": 70
+    },
+    "open-model-market/v5_execution_auditor_integrity.py": {
+      "functions": 21,
+      "classes": 0,
+      "max_complexity": 18,
+      "max_function_lines": 53
+    },
+    "open-model-market/v5_execution_primitives.py": {
+      "functions": 8,
+      "classes": 1,
+      "max_complexity": 14,
+      "max_function_lines": 67
+    },
+    "open-model-market/v5_final_attestation.py": {
+      "functions": 2,
+      "classes": 0,
+      "max_complexity": 3,
+      "max_function_lines": 44
+    },
+    "open-model-market/v5_final_status.py": {
+      "functions": 2,
+      "classes": 0,
+      "max_complexity": 5,
+      "max_function_lines": 48
+    },
+    "open-model-market/v5_free_first_preflight.py": {
+      "functions": 14,
+      "classes": 1,
+      "max_complexity": 12,
+      "max_function_lines": 68
+    },
+    "open-model-market/v5_free_shadow_acceptance.py": {
+      "functions": 16,
+      "classes": 0,
+      "max_complexity": 6,
+      "max_function_lines": 73
+    },
+    "open-model-market/v5_free_shadow_compat.py": {
+      "functions": 27,
+      "classes": 1,
+      "max_complexity": 22,
+      "max_function_lines": 79
+    },
+    "open-model-market/v5_free_shadow_support.py": {
+      "functions": 26,
+      "classes": 3,
+      "max_complexity": 15,
+      "max_function_lines": 46
+    },
+    "open-model-market/v5_governance_catalog.py": {
+      "functions": 8,
+      "classes": 1,
+      "max_complexity": 14,
+      "max_function_lines": 69
+    },
+    "open-model-market/v5_governance_runtime.py": {
+      "functions": 16,
+      "classes": 3,
+      "max_complexity": 19,
+      "max_function_lines": 158
+    },
+    "open-model-market/v5_gpt_expert_selector.py": {
+      "functions": 28,
+      "classes": 1,
+      "max_complexity": 17,
+      "max_function_lines": 166
+    },
+    "open-model-market/v5_independent_artifact_revalidation.py": {
+      "functions": 26,
+      "classes": 0,
+      "max_complexity": 18,
+      "max_function_lines": 105
+    },
+    "open-model-market/v5_issue_ticket.py": {
+      "functions": 42,
+      "classes": 0,
+      "max_complexity": 13,
+      "max_function_lines": 56
+    },
+    "open-model-market/v5_json_io.py": {
+      "functions": 2,
+      "classes": 0,
+      "max_complexity": 2,
+      "max_function_lines": 6
+    },
+    "open-model-market/v5_model_company.py": {
+      "functions": 2,
+      "classes": 0,
+      "max_complexity": 8,
+      "max_function_lines": 16
+    },
+    "open-model-market/v5_output_contract_delivery.py": {
+      "functions": 8,
+      "classes": 0,
+      "max_complexity": 17,
+      "max_function_lines": 62
+    },
+    "open-model-market/v5_pipeline.py": {
+      "functions": 22,
+      "classes": 0,
+      "max_complexity": 19,
+      "max_function_lines": 76
+    },
+    "open-model-market/v5_preflight_simulation.py": {
+      "functions": 4,
+      "classes": 1,
+      "max_complexity": 9,
+      "max_function_lines": 37
+    },
+    "open-model-market/v5_production_ticket.py": {
+      "functions": 5,
+      "classes": 0,
+      "max_complexity": 11,
+      "max_function_lines": 142
+    },
+    "open-model-market/v5_proposal_materializer.py": {
+      "functions": 29,
+      "classes": 1,
+      "max_complexity": 20,
+      "max_function_lines": 64
+    },
+    "open-model-market/v5_quality_status_integrity.py": {
+      "functions": 8,
+      "classes": 0,
+      "max_complexity": 11,
+      "max_function_lines": 32
+    },
+    "open-model-market/v5_recovery_runtime.py": {
+      "functions": 1,
+      "classes": 0,
+      "max_complexity": 1,
+      "max_function_lines": 7
+    },
+    "open-model-market/v5_run_evidence.py": {
+      "functions": 25,
+      "classes": 4,
+      "max_complexity": 14,
+      "max_function_lines": 42
+    },
+    "open-model-market/v5_runtime.py": {
+      "functions": 68,
+      "classes": 21,
+      "max_complexity": 19,
+      "max_function_lines": 73
+    },
+    "open-model-market/v5_structured_output_compat.py": {
+      "functions": 2,
+      "classes": 1,
+      "max_complexity": 8,
+      "max_function_lines": 45
+    },
+    "open-model-market/v5_task_constraints.py": {
+      "functions": 6,
+      "classes": 0,
+      "max_complexity": 13,
+      "max_function_lines": 45
+    },
+    "open-model-market/v5_task_constraints_impl.py": {
+      "functions": 32,
+      "classes": 1,
+      "max_complexity": 13,
+      "max_function_lines": 77
+    },
+    "open-model-market/v5_task_delivery_contract.py": {
+      "functions": 6,
+      "classes": 0,
+      "max_complexity": 17,
+      "max_function_lines": 45
+    },
+    "open-model-market/v5_task_delivery_contract_impl.py": {
+      "functions": 30,
+      "classes": 0,
+      "max_complexity": 20,
+      "max_function_lines": 62
+    },
+    "open-model-market/v5_task_envelope.py": {
+      "functions": 4,
+      "classes": 0,
+      "max_complexity": 7,
+      "max_function_lines": 27
+    },
+    "open-model-market/v5_ticket_gate.py": {
+      "functions": 21,
+      "classes": 1,
+      "max_complexity": 9,
+      "max_function_lines": 38
+    },
+    "open-model-market/v5_ticket_identity.py": {
+      "functions": 2,
+      "classes": 0,
+      "max_complexity": 5,
+      "max_function_lines": 24
+    },
+    "tests/test_constitution_hard_rules.py": {
+      "functions": 6,
+      "classes": 1,
+      "max_complexity": 1,
+      "max_function_lines": 18
+    },
+    "tests/test_execution_graph_properties.py": {
+      "functions": 4,
+      "classes": 0,
+      "max_complexity": 12,
+      "max_function_lines": 45
+    },
+    "tests/test_execution_graph_validator.py": {
+      "functions": 9,
+      "classes": 1,
+      "max_complexity": 2,
+      "max_function_lines": 48
+    },
+    "tests/test_legacy_runtime_removed.py": {
+      "functions": 3,
+      "classes": 1,
+      "max_complexity": 4,
+      "max_function_lines": 19
+    },
+    "tests/test_objective_isolation.py": {
+      "functions": 5,
+      "classes": 1,
+      "max_complexity": 2,
+      "max_function_lines": 14
+    },
+    "tests/test_openrouter_hard_deadline.py": {
+      "functions": 7,
+      "classes": 2,
+      "max_complexity": 3,
+      "max_function_lines": 20
+    },
+    "tests/test_openrouter_response_protocol.py": {
+      "functions": 8,
+      "classes": 3,
+      "max_complexity": 3,
+      "max_function_lines": 37
+    },
+    "tests/test_private_output_message.py": {
+      "functions": 1,
+      "classes": 1,
+      "max_complexity": 3,
+      "max_function_lines": 30
+    },
+    "tests/test_publish_report.py": {
+      "functions": 9,
+      "classes": 1,
+      "max_complexity": 5,
+      "max_function_lines": 45
+    },
+    "tests/test_repository_audit.py": {
+      "functions": 5,
+      "classes": 1,
+      "max_complexity": 3,
+      "max_function_lines": 21
+    },
+    "tests/test_ticket_jsonschema.py": {
+      "functions": 9,
+      "classes": 1,
+      "max_complexity": 3,
+      "max_function_lines": 25
+    },
+    "tests/test_ticket_security.py": {
+      "functions": 19,
+      "classes": 1,
+      "max_complexity": 4,
+      "max_function_lines": 23
+    },
+    "tests/test_v5_admission_task_isolation.py": {
+      "functions": 2,
+      "classes": 1,
+      "max_complexity": 2,
+      "max_function_lines": 26
+    },
+    "tests/test_v5_attestation_source_commit.py": {
+      "functions": 3,
+      "classes": 1,
+      "max_complexity": 3,
+      "max_function_lines": 46
+    },
+    "tests/test_v5_catalog_endpoint_eligibility.py": {
+      "functions": 9,
+      "classes": 1,
+      "max_complexity": 2,
+      "max_function_lines": 40
+    },
+    "tests/test_v5_claude_red_team_advice.py": {
+      "functions": 11,
+      "classes": 1,
+      "max_complexity": 3,
+      "max_function_lines": 52
+    },
+    "tests/test_v5_closed_world_display_and_compaction.py": {
+      "functions": 2,
+      "classes": 1,
+      "max_complexity": 1,
+      "max_function_lines": 12
+    },
+    "tests/test_v5_command_trigger.py": {
+      "functions": 6,
+      "classes": 1,
+      "max_complexity": 3,
+      "max_function_lines": 37
+    },
+    "tests/test_v5_complete_cleanup_regression.py": {
+      "functions": 5,
+      "classes": 1,
+      "max_complexity": 2,
+      "max_function_lines": 17
+    },
+    "tests/test_v5_constitutional_runtime.py": {
+      "functions": 6,
+      "classes": 1,
+      "max_complexity": 2,
+      "max_function_lines": 40
+    },
+    "tests/test_v5_deterministic_answer_normalization.py": {
+      "functions": 8,
+      "classes": 1,
+      "max_complexity": 3,
+      "max_function_lines": 28
+    },
+    "tests/test_v5_dynamic_prompt_delivery.py": {
+      "functions": 3,
+      "classes": 1,
+      "max_complexity": 1,
+      "max_function_lines": 33
+    },
+    "tests/test_v5_endpoint_catalog.py": {
+      "functions": 3,
+      "classes": 1,
+      "max_complexity": 6,
+      "max_function_lines": 45
+    },
+    "tests/test_v5_evidence_bundle.py": {
+      "functions": 7,
+      "classes": 1,
+      "max_complexity": 3,
+      "max_function_lines": 112
+    },
+    "tests/test_v5_explicit_markdown_contract_revalidation.py": {
+      "functions": 10,
+      "classes": 1,
+      "max_complexity": 2,
+      "max_function_lines": 27
+    },
+    "tests/test_v5_explicit_task_delivery_contract.py": {
+      "functions": 8,
+      "classes": 1,
+      "max_complexity": 4,
+      "max_function_lines": 25
+    },
+    "tests/test_v5_extreme_advisory_stress.py": {
+      "functions": 15,
+      "classes": 1,
+      "max_complexity": 7,
+      "max_function_lines": 60
+    },
+    "tests/test_v5_fact_label_purity_normalization.py": {
+      "functions": 4,
+      "classes": 1,
+      "max_complexity": 2,
+      "max_function_lines": 44
+    },
+    "tests/test_v5_fact_provenance_semantic_normalization.py": {
+      "functions": 10,
+      "classes": 1,
+      "max_complexity": 5,
+      "max_function_lines": 42
+    },
+    "tests/test_v5_failure_evidence_chain.py": {
+      "functions": 5,
+      "classes": 1,
+      "max_complexity": 3,
+      "max_function_lines": 27
+    },
+    "tests/test_v5_failure_evidence_persistence.py": {
+      "functions": 1,
+      "classes": 1,
+      "max_complexity": 4,
+      "max_function_lines": 55
+    },
+    "tests/test_v5_final_contract_runtime_isolation.py": {
+      "functions": 10,
+      "classes": 1,
+      "max_complexity": 2,
+      "max_function_lines": 26
+    },
+    "tests/test_v5_flattened_contract_cardinality.py": {
+      "functions": 5,
+      "classes": 1,
+      "max_complexity": 3,
+      "max_function_lines": 15
+    },
+    "tests/test_v5_free_first_preflight.py": {
+      "functions": 16,
+      "classes": 1,
+      "max_complexity": 2,
+      "max_function_lines": 22
+    },
+    "tests/test_v5_free_shadow_acceptance.py": {
+      "functions": 14,
+      "classes": 1,
+      "max_complexity": 4,
+      "max_function_lines": 65
+    },
+    "tests/test_v5_full_load_stability.py": {
+      "functions": 9,
+      "classes": 1,
+      "max_complexity": 10,
+      "max_function_lines": 59
+    },
+    "tests/test_v5_governance_completion_envelope.py": {
+      "functions": 9,
+      "classes": 1,
+      "max_complexity": 3,
+      "max_function_lines": 97
+    },
+    "tests/test_v5_governance_model_resolution.py": {
+      "functions": 10,
+      "classes": 1,
+      "max_complexity": 2,
+      "max_function_lines": 26
+    },
+    "tests/test_v5_gpt_selector_contract.py": {
+      "functions": 11,
+      "classes": 1,
+      "max_complexity": 4,
+      "max_function_lines": 54
+    },
+    "tests/test_v5_independent_artifact_revalidation.py": {
+      "functions": 13,
+      "classes": 1,
+      "max_complexity": 4,
+      "max_function_lines": 146
+    },
+    "tests/test_v5_inferential_anchor_threshold.py": {
+      "functions": 2,
+      "classes": 1,
+      "max_complexity": 1,
+      "max_function_lines": 17
+    },
+    "tests/test_v5_native_audit_contract.py": {
+      "functions": 17,
+      "classes": 1,
+      "max_complexity": 4,
+      "max_function_lines": 99
+    },
+    "tests/test_v5_optional_functions_semantics.py": {
+      "functions": 5,
+      "classes": 1,
+      "max_complexity": 2,
+      "max_function_lines": 25
+    },
+    "tests/test_v5_output_contract_delivery.py": {
+      "functions": 10,
+      "classes": 1,
+      "max_complexity": 3,
+      "max_function_lines": 34
+    },
+    "tests/test_v5_p0_governance.py": {
+      "functions": 8,
+      "classes": 1,
+      "max_complexity": 3,
+      "max_function_lines": 36
+    },
+    "tests/test_v5_preflight_simulation.py": {
+      "functions": 3,
+      "classes": 1,
+      "max_complexity": 2,
+      "max_function_lines": 9
+    },
+    "tests/test_v5_production_cutover.py": {
+      "functions": 7,
+      "classes": 1,
+      "max_complexity": 5,
+      "max_function_lines": 153
+    },
+    "tests/test_v5_production_independent_revalidation.py": {
+      "functions": 4,
+      "classes": 1,
+      "max_complexity": 1,
+      "max_function_lines": 12
+    },
+    "tests/test_v5_production_ticket_token_envelope.py": {
+      "functions": 4,
+      "classes": 1,
+      "max_complexity": 3,
+      "max_function_lines": 20
+    },
+    "tests/test_v5_quantity_binding_context.py": {
+      "functions": 3,
+      "classes": 1,
+      "max_complexity": 3,
+      "max_function_lines": 23
+    },
+    "tests/test_v5_reasoning_saturation_recovery.py": {
+      "functions": 6,
+      "classes": 2,
+      "max_complexity": 2,
+      "max_function_lines": 74
+    },
+    "tests/test_v5_reasoning_visible_output_budget.py": {
+      "functions": 5,
+      "classes": 1,
+      "max_complexity": 2,
+      "max_function_lines": 51
+    },
+    "tests/test_v5_release_advisory_regression.py": {
+      "functions": 4,
+      "classes": 1,
+      "max_complexity": 3,
+      "max_function_lines": 18
+    },
+    "tests/test_v5_release_command_contract.py": {
+      "functions": 10,
+      "classes": 1,
+      "max_complexity": 3,
+      "max_function_lines": 25
+    },
+    "tests/test_v5_repository_residue_audit.py": {
+      "functions": 10,
+      "classes": 1,
+      "max_complexity": 4,
+      "max_function_lines": 36
+    },
+    "tests/test_v5_response_diagnostics_evidence.py": {
+      "functions": 1,
+      "classes": 1,
+      "max_complexity": 1,
+      "max_function_lines": 29
+    },
+    "tests/test_v5_structured_output_compat.py": {
+      "functions": 7,
+      "classes": 1,
+      "max_complexity": 6,
+      "max_function_lines": 43
+    },
+    "tests/test_v5_task_constraints.py": {
+      "functions": 16,
+      "classes": 4,
+      "max_complexity": 3,
+      "max_function_lines": 33
+    },
+    "tests/test_v5_ticket_gate.py": {
+      "functions": 11,
+      "classes": 1,
+      "max_complexity": 3,
+      "max_function_lines": 43
+    },
+    "tests/test_v5_v4_contract_isolation.py": {
+      "functions": 8,
+      "classes": 1,
+      "max_complexity": 3,
+      "max_function_lines": 37
+    },
+    "tests/test_workflow_contract.py": {
+      "functions": 13,
+      "classes": 1,
+      "max_complexity": 1,
+      "max_function_lines": 35
+    },
+    "tests/test_workflow_node24_actions.py": {
+      "functions": 2,
+      "classes": 1,
+      "max_complexity": 6,
+      "max_function_lines": 13
+    },
+    "tools/repository_audit.py": {
+      "functions": 23,
+      "classes": 2,
+      "max_complexity": 14,
+      "max_function_lines": 47
+    },
+    "tools/run_v5_p0_regressions.py": {
+      "functions": 4,
+      "classes": 0,
+      "max_complexity": 10,
+      "max_function_lines": 65
+    }
+  },
+  "workflow_entrypoints": [
+    "publish_report",
+    "v5_admission_lock",
+    "v5_execution_auditor_integrity",
+    "v5_final_attestation",
+    "v5_final_status",
+    "v5_independent_artifact_revalidation",
+    "v5_issue_ticket",
+    "v5_pipeline",
+    "v5_production_ticket",
+    "v5_ticket_gate"
+  ],
+  "orphan_candidates": []
+}
