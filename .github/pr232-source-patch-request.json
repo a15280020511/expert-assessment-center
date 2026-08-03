@@ -1,0 +1,8 @@
+{
+  "schema_version": "pr232-source-patch-request-1",
+  "authorization": "EXACT-ZERO-CALL-SOURCE-PATCH",
+  "request_id": "pr232-source-patch-r1",
+  "patch_id": "remove-unused-sequence-import",
+  "target_branch": "fix/v5-free-shadow-production-qualification-20260803",
+  "target_sha": "a6e52e3689de3d98a6dd0ae78a5502a9cde5d4eb"
+}
