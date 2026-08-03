@@ -1,0 +1,265 @@
+name: PR227 Request-Level Free Model Preflight R4
+
+on:
+  push:
+    branches:
+      - acceptance/pr227-free-preflight-20260803-r4
+    paths:
+      - .github/pr227-free-preflight-r4-request.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr227-request-level-free-model-preflight-r4
+  cancel-in-progress: false
+
+jobs:
+  free-preflight:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
+      OPENROUTER_APP_NAME: expert-center-pr227-request-level-free-preflight
+      TARGET_SHA: 0383d2ef80f1890306bc0bc5f7b37836cb2579ca
+      REQUEST_FILE: .github/pr227-free-preflight-r4-request.json
+    steps:
+      - name: Checkout immutable free-only request
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: acceptance/pr227-free-preflight-20260803-r4
+          fetch-depth: 0
+          persist-credentials: true
+          path: request-source
+
+      - name: Validate exact free-only request
+        working-directory: request-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '
+            type == "object" and
+            (keys | sort) == [
+              "authorization",
+              "max_completion_tokens",
+              "maximum_model_requests",
+              "maximum_paid_model_calls",
+              "model",
+              "provider_data_collection",
+              "provider_zdr",
+              "purpose",
+              "schema_version",
+              "target_sha"
+            ] and
+            .schema_version == "pr227-request-level-free-preflight-4" and
+            .authorization == "RUN-FREE-ONLY-ONCE" and
+            .purpose == "request-level-data-policy-free-canary-after-simulation-pass" and
+            .target_sha == env.TARGET_SHA and
+            .model == "openrouter/free" and
+            .provider_data_collection == "allow" and
+            .provider_zdr == false and
+            .maximum_model_requests == 1 and
+            .maximum_paid_model_calls == 0 and
+            .max_completion_tokens == 256
+          ' "$REQUEST_FILE" >/dev/null
+          test "$(git diff --name-only HEAD^ HEAD)" = "$REQUEST_FILE"
+          git merge-base --is-ancestor "$TARGET_SHA" HEAD^
+
+      - name: Checkout prior zero-call simulation receipt
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: acceptance/pr227-free-preflight-20260803-r1
+          persist-credentials: false
+          path: prior-preflight
+
+      - name: Require prior simulation PASS and zero paid calls
+        run: |
+          set -euo pipefail
+          jq -e '
+            .simulation.status == "PASS" and
+            .simulation.model_calls == 0 and
+            .simulation.paid_model_calls == 0 and
+            .maximum_paid_model_calls == 0 and
+            .paid_acceptance_triggered == false and
+            .production_ref_moved == false
+          ' prior-preflight/acceptance-evidence/pr227-free-preflight-result.json >/dev/null
+
+      - name: Checkout exact PR source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: 0383d2ef80f1890306bc0bc5f7b37836cb2579ca
+          persist-credentials: false
+          path: runtime-source
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: runtime-source/requirements-runtime.txt
+
+      - name: Install minimal runtime dependencies
+        working-directory: runtime-source
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
+          python -m pip check
+
+      - name: Execute exactly one zero-price router request
+        id: free_canary
+        continue-on-error: true
+        working-directory: runtime-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${OPENROUTER_API_KEY:-}"
+          mkdir -p /tmp/pr227-free-preflight-r4
+          PYTHONPATH=open-model-market python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          from openrouter_api import CHAT_URL, request_json
+          from v5_execution_primitives import actual_cost, extract_answer, finish_reason
+
+          output = Path('/tmp/pr227-free-preflight-r4/free-canary.json')
+          prompt = 'Reply with exactly PASS and no other text.'
+          result = {
+              'schema_version': 'pr227-request-level-free-canary-4',
+              'status': 'FAIL',
+              'requested_model': 'openrouter/free',
+              'model_requests': 1,
+              'successful_model_calls': 0,
+              'paid_model_calls': 0,
+              'actual_cost_usd': None,
+              'max_completion_tokens': 256,
+              'provider_data_collection': 'allow',
+              'provider_zdr': False,
+              'raw_prompt_persisted': False,
+              'raw_answer_persisted': False,
+              'prompt_sha256': hashlib.sha256(prompt.encode('utf-8')).hexdigest(),
+          }
+          payload = {
+              'model': 'openrouter/free',
+              'messages': [{'role': 'user', 'content': prompt}],
+              'stream': False,
+              'max_tokens': 256,
+              'provider': {
+                  'data_collection': 'allow',
+                  'zdr': False,
+                  'allow_fallbacks': True,
+              },
+          }
+          try:
+              response = request_json(
+                  CHAT_URL,
+                  os.environ['OPENROUTER_API_KEY'],
+                  120,
+                  0,
+                  payload,
+              )
+              result['successful_model_calls'] = 1
+              answer = extract_answer(response)
+              cost = actual_cost(response)
+              result.update({
+                  'selected_response_model': str(response.get('model') or ''),
+                  'provider': str(response.get('provider') or ''),
+                  'finish_reason': finish_reason(response),
+                  'answer_characters': len(answer),
+                  'answer_sha256': hashlib.sha256(answer.encode('utf-8')).hexdigest(),
+                  'actual_cost_usd': cost,
+              })
+              if answer.strip().upper() != 'PASS':
+                  raise RuntimeError('free router did not return the required PASS final answer')
+              if cost > 1e-12:
+                  raise RuntimeError(f'free router returned positive cost: {cost}')
+              result['status'] = 'PASS'
+          except Exception as exc:
+              result['error_type'] = type(exc).__name__
+              result['error_message'] = str(exc)[:1200]
+          finally:
+              output.write_text(
+                  json.dumps(result, ensure_ascii=False, indent=2) + '\n',
+                  encoding='utf-8',
+              )
+              print(json.dumps(result, ensure_ascii=False))
+          if result['status'] != 'PASS':
+              raise SystemExit(1)
+          PY
+
+      - name: Build authoritative zero-cost receipt
+        if: always()
+        env:
+          FREE_CANARY_OUTCOME: ${{ steps.free_canary.outcome }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          mkdir -p /tmp/pr227-free-preflight-r4
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          canary_path = Path('/tmp/pr227-free-preflight-r4/free-canary.json')
+          try:
+              canary = json.loads(canary_path.read_text(encoding='utf-8'))
+          except (FileNotFoundError, json.JSONDecodeError):
+              canary = {}
+          passed = (
+              os.environ.get('FREE_CANARY_OUTCOME') == 'success'
+              and canary.get('status') == 'PASS'
+              and int(canary.get('model_requests') or 0) == 1
+              and int(canary.get('paid_model_calls') or 0) == 0
+              and float(canary.get('actual_cost_usd') or 0.0) == 0.0
+          )
+          result = {
+              'schema_version': 'pr227-free-preflight-r4-result-1',
+              'status': 'PASS' if passed else 'FAIL',
+              'run_id': os.environ.get('RUN_ID'),
+              'target_sha': '0383d2ef80f1890306bc0bc5f7b37836cb2579ca',
+              'prior_zero_call_simulation': 'PASS',
+              'free_canary': canary,
+              'maximum_model_requests': 1,
+              'maximum_paid_model_calls': 0,
+              'paid_acceptance_triggered': False,
+              'production_ref_moved': False,
+          }
+          Path('/tmp/pr227-free-preflight-r4/final-result.json').write_text(
+              json.dumps(result, ensure_ascii=False, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          print(json.dumps(result, ensure_ascii=False))
+          PY
+
+      - name: Upload zero-cost evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr227-free-preflight-r4-${{ github.run_id }}
+          path: /tmp/pr227-free-preflight-r4/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Persist zero-cost result
+        if: always()
+        working-directory: request-source
+        run: |
+          set -euo pipefail
+          mkdir -p acceptance-evidence
+          cp /tmp/pr227-free-preflight-r4/final-result.json \
+            acceptance-evidence/pr227-free-preflight-r4-result.json
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add acceptance-evidence/pr227-free-preflight-r4-result.json
+          git commit -m 'test: persist PR227 request-level free-model result'
+          git push origin HEAD:acceptance/pr227-free-preflight-20260803-r4
+
+      - name: Enforce free-first gate
+        if: always()
+        run: |
+          jq -e '
+            .status == "PASS" and
+            .maximum_paid_model_calls == 0 and
+            .paid_acceptance_triggered == false and
+            .production_ref_moved == false
+          ' /tmp/pr227-free-preflight-r4/final-result.json >/dev/null
