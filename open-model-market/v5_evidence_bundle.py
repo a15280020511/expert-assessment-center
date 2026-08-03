@@ -188,7 +188,7 @@ def _base_status_lines(
     providers: list[Any],
 ) -> list[str]:
     anomaly = record.get("cost_anomaly_usd")
-    anomaly_label = anomaly if anomaly is not None else "account/estimate guard only"
+    anomaly_label = anomaly if anomaly is not None else "not configured"
     return [
         f"## {_status_heading(status)}",
         "",
@@ -203,7 +203,7 @@ def _base_status_lines(
         f"- Completion mode: `{record.get('completion_mode') or ''}`",
         f"- Quality status: `{record.get('quality_status') or ''}`",
         f"- Provider-reported/reconciled cost: `${record.get('provider_actual_cost_usd', 0)}`",
-        f"- Cost anomaly stop: `{anomaly_label}`",
+        f"- Cost advisory threshold: `{anomaly_label}`",
         f"- Provider count: `{record.get('substantive_provider_count', 0)}`",
         f"- Providers: `{', '.join(str(item) for item in providers) or 'unavailable'}`",
         "- External tools: `forbidden`",

@@ -13,7 +13,6 @@ if str(MARKET) not in sys.path:
 from v5_claude_red_team_policy import (  # noqa: E402
     CLAUDE_RED_TEAM_GOVERNANCE_CALLS,
     CLAUDE_RED_TEAM_MAX_CALLS_PER_TASK,
-    CLAUDE_RED_TEAM_MAX_TASK_CHARS,
     CLAUDE_RED_TEAM_MODEL,
     GPT_SYNTHESIS_CALLS,
     RED_TEAM_SCOPE,
@@ -97,6 +96,8 @@ class ClaudeRedTeamAdviceTests(unittest.TestCase):
         self.assertNotIn("APPROVE", json.dumps(schema))
         self.assertNotIn("REJECT", json.dumps(schema))
         self.assertFalse(request["provider"]["allow_fallbacks"])
+        self.assertNotIn("max_tokens", request)
+        self.assertNotIn("max_completion_tokens", request)
 
     def test_unicode_function_descriptions_are_valid_and_bounded(self) -> None:
         payload = unified_payload()
@@ -177,25 +178,26 @@ class ClaudeRedTeamAdviceTests(unittest.TestCase):
         )
         self.assertEqual(2, len(result["suggestions"]))
 
-    def test_prompt_is_exact_nonduplicative_and_truncation_safe(self) -> None:
+    def test_prompt_is_exact_nonduplicative_and_soft_resource_safe(self) -> None:
         prompt = fixed_prompt()
         self.assertIn("一条suggestion只处理一个缺陷", prompt)
         self.assertIn("不得重述已满足条件", prompt)
-        self.assertIn("task_truncated为true", prompt)
         self.assertIn("只返回REVIEW_INPUT_INCOMPLETE", prompt)
+        self.assertIn("不得因费用或Token建议值", prompt)
 
-    def test_truncated_task_excerpt_respects_the_exact_hard_limit(self) -> None:
-        task = "甲" * (CLAUDE_RED_TEAM_MAX_TASK_CHARS + 500)
+    def test_complete_task_is_preserved_without_local_truncation(self) -> None:
+        task = "甲" * 120_000
         excerpt, truncated = _bounded_task_excerpt(task)
-        self.assertTrue(truncated)
-        self.assertEqual(CLAUDE_RED_TEAM_MAX_TASK_CHARS, len(excerpt))
+        self.assertFalse(truncated)
+        self.assertEqual(task, excerpt)
         payload = unified_payload()
         payload["task_excerpt"] = excerpt
         payload["task_characters"] = len(task)
-        payload["task_truncated"] = True
+        payload["task_truncated"] = False
         request = build_claude_red_team_request(payload)
         user = json.loads(request["messages"][1]["content"])
-        self.assertTrue(user["payload"]["task_truncated"])
+        self.assertFalse(user["payload"]["task_truncated"])
+        self.assertEqual(task, user["payload"]["task_excerpt"])
 
     def test_recovery_details_and_edge_relation_are_reviewable(self) -> None:
         payload = unified_payload()

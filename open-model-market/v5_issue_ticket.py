@@ -343,10 +343,9 @@ def _fixed_schema_message(path: str, validator: str) -> str:
         ("evidence", "oneOf"): "evidence must be an object or an array.",
         ("evidence", "type"): "evidence must be an object or an array.",
         ("approved_budget", "type"): "approved_budget must be a V5 budget object.",
-        ("approved_budget.cost_policy", "const"): "approved_budget.cost_policy must be unbounded_with_anomaly_guard.",
-        ("approved_budget.cost_anomaly_usd", "type"): "approved_budget.cost_anomaly_usd must be a finite positive number at most 100.",
-        ("approved_budget.cost_anomaly_usd", "exclusiveMinimum"): "approved_budget.cost_anomaly_usd must be a finite positive number at most 100.",
-        ("approved_budget.cost_anomaly_usd", "maximum"): "approved_budget.cost_anomaly_usd must be a finite positive number at most 100.",
+        ("approved_budget.cost_policy", "enum"): "approved_budget.cost_policy must be prompt_led_soft_governance (legacy alias accepted).",
+        ("approved_budget.cost_anomaly_usd", "type"): "approved_budget.cost_anomaly_usd must be a finite positive number.",
+        ("approved_budget.cost_anomaly_usd", "exclusiveMinimum"): "approved_budget.cost_anomaly_usd must be a finite positive number.",
     }
     return messages.get((path, validator), "")
 
@@ -483,7 +482,6 @@ def _validate_ticket(packet: Mapping[str, Any]) -> tuple[dict[str, Any], list[st
             "maximum_recovery_calls": recovery,
             "cost_policy": _clean_string(budget.get("cost_policy")),
             "cost_anomaly_usd": anomaly,
-            "max_cost_usd": anomaly or 0.0,
         },
         errors,
     )
@@ -549,7 +547,6 @@ def _rewrite_outputs(status: Mapping[str, Any]) -> None:
         "accepted",
         "reason",
         "calls",
-        "max_cost_usd",
         "cost_policy",
         "maximum_replacements",
         "maximum_recovery_calls",
@@ -677,9 +674,12 @@ def _budget_reasons(
             "approved recovery calls must leave at least one initial expert call "
             "after three governance calls"
         )
-    if validated["cost_policy"] != "unbounded_with_anomaly_guard":
+    if validated["cost_policy"] not in {
+        "prompt_led_soft_governance",
+        "unbounded_with_anomaly_guard",
+    }:
         reasons.append(
-            "approved_budget.cost_policy must be unbounded_with_anomaly_guard"
+            "approved_budget.cost_policy must be prompt_led_soft_governance"
         )
     if packet.get("private_output") is True:
         reasons.append(
@@ -717,9 +717,17 @@ def _accepted_status_fields(
         "maximum_recovery_calls": recovery_reserve,
         "maximum_replacements": recovery_reserve,
         "maximum_initial_calls": max(0, total_calls - 3 - recovery_reserve),
-        "max_cost_usd": validated["cost_anomaly_usd"],
         "cost_anomaly_usd": validated["cost_anomaly_usd"],
-        "cost_policy": validated["cost_policy"] or "invalid",
+        "cost_advisory_usd": validated["cost_anomaly_usd"],
+        "cost_policy": (
+            "prompt_led_soft_governance"
+            if validated["cost_policy"] in {
+                "prompt_led_soft_governance",
+                "unbounded_with_anomaly_guard",
+            }
+            else "invalid"
+        ),
+        "cost_threshold_can_stop_execution": False,
         "private_output": bool(packet.get("private_output", False)),
         "is_retry": is_retry,
         "retry_id": retry_id,

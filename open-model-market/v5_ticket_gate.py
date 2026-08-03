@@ -156,26 +156,30 @@ def _cost_policy_errors(
     expected_cost_anomaly_usd: float | None,
 ) -> list[str]:
     errors: list[str] = []
+    accepted = {
+        "prompt_led_soft_governance",
+        "unbounded_with_anomaly_guard",
+    }
     _require(
         errors,
-        str(budget.get("cost_policy") or "") == "unbounded_with_anomaly_guard",
-        "ticket cost policy must be unbounded_with_anomaly_guard",
+        str(budget.get("cost_policy") or "") in accepted,
+        "ticket cost policy must be prompt-led soft governance",
     )
     _require(
         errors,
-        str(status.get("cost_policy") or "") == "unbounded_with_anomaly_guard",
-        "status cost policy must be unbounded_with_anomaly_guard",
+        str(status.get("cost_policy") or "") in accepted,
+        "status cost policy must be prompt-led soft governance",
     )
-    ticket_anomaly = budget.get("cost_anomaly_usd")
+    ticket_advisory = budget.get("cost_anomaly_usd")
     if expected_cost_anomaly_usd is None:
-        _require(errors, ticket_anomaly is None, "ticket anomaly guard must be absent")
-        _require(errors, status.get("cost_anomaly_usd") is None, "status anomaly guard must be absent")
+        _require(errors, ticket_advisory is None, "ticket cost advisory must be absent")
+        _require(errors, status.get("cost_anomaly_usd") is None, "status cost advisory must be absent")
         return errors
     checks = (
-        (expected_cost_anomaly_usd > 0 and math.isfinite(expected_cost_anomaly_usd), "workflow anomaly guard must be finite and positive"),
-        (_same_number(ticket_anomaly, expected_cost_anomaly_usd), "ticket anomaly guard differs from workflow expectation"),
-        (_same_number(status.get("cost_anomaly_usd"), expected_cost_anomaly_usd), "status anomaly guard differs from workflow expectation"),
-        (_same_number(status.get("max_cost_usd"), expected_cost_anomaly_usd), "status max_cost_usd differs from anomaly guard"),
+        (expected_cost_anomaly_usd > 0 and math.isfinite(expected_cost_anomaly_usd), "workflow cost advisory must be finite and positive"),
+        (_same_number(ticket_advisory, expected_cost_anomaly_usd), "ticket cost advisory differs from workflow expectation"),
+        (_same_number(status.get("cost_anomaly_usd"), expected_cost_anomaly_usd), "status cost advisory differs from workflow expectation"),
+        (status.get("cost_threshold_can_stop_execution") is not True, "cost advisory must not stop execution"),
     )
     for condition, message in checks:
         _require(errors, condition, message)

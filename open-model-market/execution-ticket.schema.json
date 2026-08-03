@@ -233,14 +233,16 @@
           "maximum": 4
         },
         "cost_policy": {
-          "description": "No fixed dollar ceiling, but anomalous costs are stopped by task, estimate-deviation, and account-period guards.",
-          "const": "unbounded_with_anomaly_guard"
+          "description": "Token and cost are prompt-led advisory telemetry. They cannot reject, stop, degrade, or invalidate an otherwise valid execution.",
+          "enum": [
+            "prompt_led_soft_governance",
+            "unbounded_with_anomaly_guard"
+          ]
         },
         "cost_anomaly_usd": {
-          "description": "Optional task-level anomaly stop. It is not a spending target and must be enforced before any call that could cross it.",
+          "description": "Optional advisory threshold used only for observability and alerts; crossing it cannot stop execution or invalidate results.",
           "type": "number",
-          "exclusiveMinimum": 0,
-          "maximum": 100
+          "exclusiveMinimum": 0
         }
       }
     },

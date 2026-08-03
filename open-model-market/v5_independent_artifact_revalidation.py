@@ -638,10 +638,6 @@ def _cost_audit(
             failures.append(
                 f"call ledger total cost mismatch: {total_cost}/{ledger_cost}"
             )
-    if not 0.0 <= total_cost <= maximum_cost_usd:
-        failures.append(
-            f"total actual cost outside bound: {total_cost}/{maximum_cost_usd}"
-        )
     return expert_cost, total_cost, ledger_cost, failures
 
 
@@ -792,6 +788,9 @@ def recompute(
         "call_ledger_cost_usd": ledger_cost,
         "maximum_calls": maximum_calls,
         "maximum_cost_usd": maximum_cost_usd,
+        "cost_advisory_usd": maximum_cost_usd,
+        "cost_advisory_exceeded": bool(total_cost > maximum_cost_usd + 1e-12),
+        "cost_threshold_can_invalidate_revalidation": False,
         "node_count": len(nodes),
         "actual_called_models": called_models,
         "duplicate_called_companies_across_nodes": duplicates,
@@ -815,7 +814,14 @@ def main() -> int:
     parser.add_argument("--expected-sha", required=True)
     parser.add_argument("--expected-run-id", required=True)
     parser.add_argument("--maximum-calls", required=True, type=int)
-    parser.add_argument("--maximum-cost-usd", required=True, type=float)
+    parser.add_argument(
+        "--cost-advisory-usd",
+        "--maximum-cost-usd",
+        dest="maximum_cost_usd",
+        required=True,
+        type=float,
+        help="Compatibility name retained; this value is advisory only.",
+    )
     parser.add_argument("--archive")
     parser.add_argument("--expected-artifact-digest")
     parser.add_argument("--output", required=True)
@@ -859,6 +865,9 @@ def main() -> int:
             "call_ledger_cost_usd": None,
             "maximum_calls": args.maximum_calls,
             "maximum_cost_usd": args.maximum_cost_usd,
+            "cost_advisory_usd": args.maximum_cost_usd,
+            "cost_advisory_exceeded": None,
+            "cost_threshold_can_invalidate_revalidation": False,
             "node_count": None,
             "actual_called_models": [],
             "duplicate_called_companies_across_nodes": {},

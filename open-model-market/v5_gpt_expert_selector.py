@@ -8,9 +8,6 @@ from typing import Any, Mapping
 
 GPT_SELECTOR_MODEL = "~openai/gpt-latest"
 GPT_SELECTOR_PROVIDER = "openai"
-GPT_MAX_INPUT_CHARS = 360_000
-GPT_PROMPT_CATALOG_MAX_CHARS = 80_000
-GPT_MAX_OUTPUT_CHARS = 64_000
 GPT_MAX_WORK_ITEMS = 32
 GPT_MAX_NODES = 13
 GPT_MAX_EDGES = 64
@@ -419,18 +416,11 @@ def governance_prompt_catalog(
         "columns": _prompt_catalog_columns(),
         "models": models,
     }
-    if len(_canonical_json(view)) > GPT_PROMPT_CATALOG_MAX_CHARS:
-        raise GPTSelectorError(
-            "compressed GPT selector catalog exceeds hard limit"
-        )
     return view
 
 
 def _content(value: Mapping[str, Any]) -> str:
-    rendered = _canonical_json(value)
-    if len(rendered) > GPT_MAX_INPUT_CHARS:
-        raise GPTSelectorError("GPT selector input exceeds hard limit")
-    return rendered
+    return _canonical_json(value)
 
 
 def _request(
@@ -473,7 +463,7 @@ def _request(
     }
 
 
-def _hard_limits(
+def _execution_constraints(
     *,
     approved_total_calls: int,
     governance_calls_reserved: int,
@@ -522,7 +512,7 @@ def build_proposal_request(
             "task": str(task),
             "task_envelope": task_envelope,
             "catalog": governance_prompt_catalog(catalog),
-            "hard_limits": _hard_limits(
+            "execution_constraints": _execution_constraints(
                 approved_total_calls=approved_total_calls,
                 governance_calls_reserved=governance_calls_reserved,
                 approved_recovery_calls=approved_recovery_calls,
@@ -544,14 +534,14 @@ def build_synthesis_request(
     approved_recovery_calls: int,
     cost_anomaly_usd: float | None,
 ) -> dict[str, Any]:
-    hard = _hard_limits(
+    constraints = _execution_constraints(
         approved_total_calls=approved_total_calls,
         governance_calls_reserved=governance_calls_reserved,
         approved_recovery_calls=approved_recovery_calls,
         cost_anomaly_usd=cost_anomaly_usd,
     )
-    hard["claude_second_review_allowed"] = False
-    hard["claude_is_advisory_only"] = True
+    constraints["claude_second_review_allowed"] = False
+    constraints["claude_is_advisory_only"] = True
     return _request(
         SYNTHESIS_PROMPT,
         SYNTHESIS_PROMPT_SHA256,
@@ -566,7 +556,7 @@ def build_synthesis_request(
             },
             "task_envelope": task_envelope,
             "catalog": governance_prompt_catalog(catalog),
-            "hard_limits": hard,
+            "execution_constraints": constraints,
         },
     )
 
@@ -744,8 +734,6 @@ def _validate_proposal(value: Mapping[str, Any]) -> None:
 def parse_proposal(text: str) -> dict[str, Any]:
     if not isinstance(text, str) or not text.strip():
         raise GPTSelectorError("GPT proposal is empty")
-    if len(text) > GPT_MAX_OUTPUT_CHARS:
-        raise GPTSelectorError("GPT proposal exceeds hard limit")
     try:
         value = json.loads(text)
     except json.JSONDecodeError as exc:

@@ -7,7 +7,6 @@ fact, not a center-defined budget.
 """
 from __future__ import annotations
 
-import json
 from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
@@ -15,8 +14,6 @@ import v5_execution_primitives as primitives
 from execution_graph import SelectedNode
 
 COST_UNCERTAINTY_MULTIPLIER = 1.18
-MAX_UPSTREAM_CHARS_PER_NODE = 6_000
-MAX_UPSTREAM_CHARS_TOTAL = 24_000
 
 
 def _integer(value: Any, default: int = 0) -> int:
@@ -125,59 +122,6 @@ def _strict_json_schema(
     }
 
 
-def _compact_json(value: Mapping[str, Any], limit: int) -> str:
-    for maximum_items, maximum_chars in (
-        (6, 500),
-        (4, 260),
-        (2, 160),
-        (1, 96),
-    ):
-        compact: dict[str, Any] = {}
-        for key, raw in value.items():
-            if isinstance(raw, list):
-                compact[str(key)] = [
-                    str(item)[:maximum_chars]
-                    for item in raw[:maximum_items]
-                ]
-            elif isinstance(raw, Mapping):
-                compact[str(key)] = {
-                    str(inner): str(item)[:maximum_chars]
-                    for inner, item in list(raw.items())[:maximum_items]
-                }
-            else:
-                compact[str(key)] = str(raw)[
-                    : maximum_chars * maximum_items
-                ]
-        rendered = json.dumps(
-            compact,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        if len(rendered) <= limit:
-            return rendered
-    return json.dumps(
-        {str(key): "" for key in value},
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
-
-def _compact_answer(answer: str, limit: int) -> str:
-    if len(answer) <= limit:
-        return answer
-    try:
-        parsed = json.loads(answer)
-    except json.JSONDecodeError:
-        parsed = None
-    if isinstance(parsed, Mapping):
-        return _compact_json(parsed, limit)
-    marker = "\n\n[上游结果已确定性压缩]\n\n"
-    available = max(0, limit - len(marker))
-    head = available * 2 // 3
-    tail = available - head
-    return answer[:head] + marker + answer[-tail:]
-
-
 def _output_allowance(node: SelectedNode) -> tuple[None, int]:
     """Return advisory demand only; no provider request field is selected."""
     recommended = _integer(
@@ -256,26 +200,16 @@ def hardened_build_node_payload(
     upstream: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     """Build a provider-locked payload without local Token ceilings."""
-    compacted: list[dict[str, Any]] = []
-    remaining = MAX_UPSTREAM_CHARS_TOTAL
-    for row in upstream:
-        if remaining <= 0:
-            break
-        answer = str(row.get("answer") or "")
-        if not answer:
-            continue
-        clipped = _compact_answer(
-            answer,
-            min(MAX_UPSTREAM_CHARS_PER_NODE, remaining),
-        )
-        compacted.append({**dict(row), "answer": clipped})
-        remaining -= len(clipped)
-
+    visible_upstream = [
+        dict(row)
+        for row in upstream
+        if isinstance(row, Mapping) and str(row.get("answer") or "")
+    ]
     safe_node = _request_safe_node(node)
     payload = primitives.build_node_payload(
         safe_node,
         original_task,
-        compacted,
+        visible_upstream,
     )
 
     reasoning = payload.get("reasoning")
