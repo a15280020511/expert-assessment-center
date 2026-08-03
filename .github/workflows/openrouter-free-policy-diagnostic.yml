@@ -1,0 +1,228 @@
+name: OpenRouter Free Policy Diagnostic
+
+on:
+  push:
+    branches:
+      - "diagnostic/openrouter-free-policy-*"
+    paths:
+      - ".github/openrouter-free-policy-request.json"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: openrouter-free-policy-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    steps:
+      - name: Check out immutable diagnostic request
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 2
+          persist-credentials: true
+
+      - name: Validate zero-call authorization
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=.github/openrouter-free-policy-request.json
+          jq -e '
+            type == "object" and
+            (keys | sort) == [
+              "authorization",
+              "request_id",
+              "schema_version",
+              "target_sha"
+            ] and
+            .schema_version == "openrouter-free-policy-request-1" and
+            .authorization == "CATALOG-ONLY-ZERO-MODEL-CALLS" and
+            (.request_id | test("^[a-z0-9][a-z0-9._-]{0,63}$")) and
+            (.target_sha | test("^[0-9a-f]{40}$"))
+          ' "$request" >/dev/null
+          test "$(git diff --name-only HEAD^ HEAD)" = "$request"
+          {
+            echo "request_id=$(jq -er '.request_id' "$request")"
+            echo "target_sha=$(jq -er '.target_sha' "$request")"
+          } >> "$GITHUB_OUTPUT"
+          test -n "${OPENROUTER_API_KEY:-}"
+          test "${#OPENROUTER_API_KEY}" -ge 20
+
+      - name: Query account-filtered catalogs without inference
+        env:
+          REQUEST_ID: ${{ steps.request.outputs.request_id }}
+          TARGET_SHA: ${{ steps.request.outputs.target_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          key = os.environ["OPENROUTER_API_KEY"]
+          headers = {
+              "Authorization": f"Bearer {key}",
+              "Accept": "application/json",
+              "HTTP-Referer": "https://github.com/a15280020511/expert-assessment-center",
+              "X-Title": "expert-center-zero-call-policy-diagnostic",
+          }
+
+          def get(url):
+              request = urllib.request.Request(url, headers=headers)
+              try:
+                  with urllib.request.urlopen(request, timeout=60) as response:
+                      return {
+                          "status": response.status,
+                          "payload": json.loads(response.read().decode("utf-8")),
+                      }
+              except urllib.error.HTTPError as exc:
+                  body = exc.read().decode("utf-8", errors="replace")
+                  try:
+                      payload = json.loads(body)
+                  except json.JSONDecodeError:
+                      payload = {"body_excerpt": body[:500]}
+                  return {"status": exc.code, "payload": payload}
+
+          current_key = get("https://openrouter.ai/api/v1/key")
+          user_models = get("https://openrouter.ai/api/v1/models/user")
+          zdr_endpoints = get("https://openrouter.ai/api/v1/endpoints/zdr")
+          providers = get("https://openrouter.ai/api/v1/providers")
+
+          def data_list(response):
+              payload = response.get("payload")
+              if not isinstance(payload, dict):
+                  return []
+              data = payload.get("data")
+              return data if isinstance(data, list) else []
+
+          key_data = current_key.get("payload", {}).get("data", {})
+          if not isinstance(key_data, dict):
+              key_data = {}
+          safe_key = {
+              "status": current_key["status"],
+              "is_free_tier": key_data.get("is_free_tier"),
+              "is_management_key": key_data.get("is_management_key"),
+              "limit": key_data.get("limit"),
+              "limit_remaining": key_data.get("limit_remaining"),
+              "limit_reset": key_data.get("limit_reset"),
+              "usage": key_data.get("usage"),
+              "usage_daily": key_data.get("usage_daily"),
+              "rate_limit": key_data.get("rate_limit"),
+              "expires_at": key_data.get("expires_at"),
+          }
+
+          models = []
+          for row in data_list(user_models):
+              if not isinstance(row, dict):
+                  continue
+              model_id = str(row.get("id") or "")
+              if not model_id.endswith(":free"):
+                  continue
+              pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
+              top = row.get("top_provider") if isinstance(row.get("top_provider"), dict) else {}
+              models.append({
+                  "id": model_id,
+                  "context_length": row.get("context_length"),
+                  "max_completion_tokens": top.get("max_completion_tokens"),
+                  "supported_parameters": row.get("supported_parameters") or [],
+                  "prompt_price": pricing.get("prompt"),
+                  "completion_price": pricing.get("completion"),
+                  "zdr": row.get("zdr"),
+              })
+
+          endpoints = []
+          for row in data_list(zdr_endpoints):
+              if not isinstance(row, dict):
+                  continue
+              model_id = str(row.get("model_id") or "")
+              if not model_id.endswith(":free"):
+                  continue
+              pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
+              try:
+                  prompt = float(pricing.get("prompt", 1))
+                  completion = float(pricing.get("completion", 1))
+              except (TypeError, ValueError):
+                  continue
+              if abs(prompt) > 1e-15 or abs(completion) > 1e-15:
+                  continue
+              endpoints.append({
+                  "model_id": model_id,
+                  "provider": row.get("tag"),
+                  "provider_name": row.get("provider_name"),
+                  "context_length": row.get("context_length"),
+                  "max_completion_tokens": row.get("max_completion_tokens"),
+                  "supported_parameters": row.get("supported_parameters") or [],
+                  "status": row.get("status"),
+                  "uptime_last_5m": row.get("uptime_last_5m"),
+                  "uptime_last_30m": row.get("uptime_last_30m"),
+              })
+
+          user_ids = {row["id"] for row in models}
+          compatible_zdr = [row for row in endpoints if row["model_id"] in user_ids]
+          provider_rows = []
+          for row in data_list(providers):
+              if not isinstance(row, dict):
+                  continue
+              provider_rows.append({
+                  "slug": row.get("slug") or row.get("id"),
+                  "name": row.get("name"),
+                  "may_train_on_inputs": row.get("may_train_on_inputs"),
+                  "retains_prompts": row.get("retains_prompts"),
+                  "supports_zdr": row.get("supports_zdr"),
+              })
+
+          result = {
+              "schema_version": "openrouter-free-policy-diagnostic-1",
+              "status": "PASS" if user_models["status"] == 200 else "FAIL",
+              "request_id": os.environ["REQUEST_ID"],
+              "target_sha": os.environ["TARGET_SHA"],
+              "api_key": safe_key,
+              "models_user_http_status": user_models["status"],
+              "zdr_endpoints_http_status": zdr_endpoints["status"],
+              "providers_http_status": providers["status"],
+              "account_filtered_free_models": models,
+              "account_filtered_free_model_count": len(models),
+              "zero_price_free_zdr_endpoints": endpoints,
+              "zero_price_free_zdr_endpoint_count": len(endpoints),
+              "account_filtered_zdr_compatible_free_endpoints": compatible_zdr,
+              "account_filtered_zdr_compatible_free_endpoint_count": len(compatible_zdr),
+              "providers": provider_rows,
+              "model_calls": 0,
+              "paid_model_calls": 0,
+              "actual_cost_usd": 0.0,
+              "production_ref_moved": False,
+          }
+          Path("openrouter-free-policy-diagnostic.json").write_text(
+              json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps({
+              "status": result["status"],
+              "free_models": len(models),
+              "free_zdr_endpoints": len(endpoints),
+              "compatible_free_zdr_endpoints": len(compatible_zdr),
+              "model_calls": 0,
+          }, ensure_ascii=False))
+          PY
+
+      - name: Persist zero-call diagnostic
+        run: |
+          set -euo pipefail
+          mkdir -p acceptance-evidence
+          cp openrouter-free-policy-diagnostic.json \
+            acceptance-evidence/openrouter-free-policy-diagnostic.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add acceptance-evidence/openrouter-free-policy-diagnostic.json
+          git commit -m "audit: persist zero-call OpenRouter policy diagnostic"
+          git push origin "HEAD:${GITHUB_REF}"
