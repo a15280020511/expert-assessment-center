@@ -6,11 +6,8 @@ import math
 from typing import Any, Mapping, Sequence
 
 from execution_graph import SelectedNode
+from v5_no_tools_policy import assert_request_has_no_tools
 
-FORBIDDEN_FIELDS = {
-    "tools", "tool_choice", "plugins", "web_search", "web_search_options",
-    "file_search", "browser", "code_interpreter", "models",
-}
 PROMPT_MODULES: Mapping[str, str] = {
     "scope_control": "严格限定任务边界，不扩展到题目未提供的事实。",
     "uncertainty_calibration": "明确区分事实、假设、推断、不确定性与证据缺口。",
@@ -78,16 +75,9 @@ def build_node_payload(
         "stream": False,
     }
     payload.update(_json_copy(dict(node.request_config)))
-    forbidden = sorted(FORBIDDEN_FIELDS.intersection(payload))
-    if forbidden:
-        raise V5ExecutionPrimitiveError(
-            f"Forbidden request fields for node {node.node_id}: {forbidden}"
-        )
-    model = str(payload.get("model") or "").casefold()
-    if model.startswith("openrouter/") or ":online" in model or ":batch" in model:
-        raise V5ExecutionPrimitiveError(
-            f"Forbidden routed model for node {node.node_id}: {payload.get('model')}"
-        )
+    assert_request_has_no_tools(
+        payload, context=f"expert node {node.node_id} request"
+    )
     if "max_tokens" in payload or "max_completion_tokens" in payload:
         raise V5ExecutionPrimitiveError(
             "Artificial output token ceilings are forbidden in the base payload."

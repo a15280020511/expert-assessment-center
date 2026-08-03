@@ -13,6 +13,12 @@ from email.utils import parsedate_to_datetime
 from hashlib import sha256
 from typing import Any, Dict, Mapping, Optional
 
+from v5_no_tools_policy import (
+    assert_allowed_model_plane_url,
+    assert_request_has_no_tools,
+    assert_response_has_no_tools,
+)
+
 CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODELS_URL = "https://openrouter.ai/api/v1/models"
 RETRYABLE_HTTP_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
@@ -471,6 +477,9 @@ def request_json(
     max_retries: int,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    assert_allowed_model_plane_url(url)
+    if payload is not None and url == CHAT_URL:
+        assert_request_has_no_tools(payload, context="OpenRouter chat request")
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
     method = "POST" if payload is not None else "GET"
     last_error: Optional[BaseException] = None
@@ -478,11 +487,16 @@ def request_json(
         request = urllib.request.Request(url, data=data, headers=headers(api_key), method=method)
         retry_after = None
         try:
-            return _request_with_hard_deadline(
+            response = _request_with_hard_deadline(
                 request,
                 url,
                 timeout_seconds,
             )
+            if url == CHAT_URL:
+                assert_response_has_no_tools(
+                    response, context="OpenRouter chat response"
+                )
+            return response
         except urllib.error.HTTPError as exc:
             body = exc.read(2000).decode("utf-8", errors="replace")
             retry_after = exc.headers.get("Retry-After") if exc.headers else None

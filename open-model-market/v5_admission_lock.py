@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import urllib.request
+
+from v5_no_tools_policy import assert_allowed_control_plane_url
 from typing import Any, Mapping
 
 
@@ -17,6 +19,7 @@ def _write_output(name: str, value: Any) -> None:
 
 
 def _api_json(url: str) -> Any:
+    assert_allowed_control_plane_url(url)
     token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "v5-admission-lock"}
     if token:

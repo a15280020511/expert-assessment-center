@@ -28,6 +28,10 @@ from v5_proposal_materializer import (
 )
 from v5_soft_resource_governance import SOFT_RESOURCE_INSTRUCTION
 from v5_structured_output_compat import normalize_strict_response_format
+from v5_no_tools_policy import (
+    assert_request_has_no_tools,
+    assert_response_has_no_tools,
+)
 
 
 class GovernanceRuntimeError(RuntimeError):
@@ -459,7 +463,18 @@ def _call_and_parse(
     artifact_root: Path | None,
 ) -> Mapping[str, Any]:
     api_request = _api_payload(request)
-    response, latency = call_fn(run, api_request)
+    try:
+        assert_request_has_no_tools(
+            api_request, context=f"governance {kind} request"
+        )
+        response, latency = call_fn(run, api_request)
+        assert_response_has_no_tools(
+            response, context=f"governance {kind} response"
+        )
+    except Exception as exc:
+        ledger.mark_failure(kind=kind, error=exc, visible_output="")
+        _persist_governance_ledger(artifact_root, ledger, status="FAIL")
+        raise
     text = extract_answer(response)
     ledger.record(
         kind=kind,

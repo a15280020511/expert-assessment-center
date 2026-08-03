@@ -12,6 +12,7 @@ import v5_task_delivery_contract as delivery_contract
 from v5_deterministic_answer_normalization import normalize_answer
 from execution_graph import GraphLimits, SelectedNode
 from v5_model_company import canonical_model_company
+from v5_no_tools_policy import assert_request_has_no_tools
 from v5_runtime import (
     BudgetController,
     ExecutionEngine,
@@ -25,19 +26,6 @@ from v5_task_constraints import (
     compile_task_constraints,
     validate_answer_evidence,
 )
-
-FORBIDDEN_REQUEST_FIELDS = {
-    "tools",
-    "tool_choice",
-    "plugins",
-    "web_search",
-    "web_search_options",
-    "file_search",
-    "browser",
-    "code_interpreter",
-    "models",
-}
-
 
 def validate_scope_boundaries(task: str, answer: str) -> list[str]:
     """Compatibility facade over the shared structured evidence validator."""
@@ -136,9 +124,9 @@ class ConstitutionalPromptPolicy:
             )
         if provider.get("allow_fallbacks") is not False:
             raise RuntimeError("provider fallbacks must be disabled")
-        forbidden = sorted(FORBIDDEN_REQUEST_FIELDS.intersection(payload))
-        if forbidden:
-            raise RuntimeError(f"forbidden request fields: {forbidden}")
+        assert_request_has_no_tools(
+            payload, context=f"constitutional node {node.node_id} request"
+        )
         return payload
 
 

@@ -12,6 +12,8 @@ import json
 import os
 import re
 import urllib.request
+
+from v5_no_tools_policy import assert_allowed_control_plane_url
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -98,6 +100,7 @@ def _read_event(path: str) -> tuple[str, str, int, str, str, str]:
 
 
 def _api_json(url: str) -> Any:
+    assert_allowed_control_plane_url(url)
     token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
     headers = {
         "Accept": "application/vnd.github+json",

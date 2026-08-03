@@ -92,7 +92,7 @@ class ConstitutionPolicyTests(unittest.TestCase):
     def test_dynamic_task_matching_is_required_and_task_local(self) -> None:
         self.assertEqual(
             self.policy["schema_version"],
-            "v5-constitutional-policy-3",
+            "v5-constitutional-policy-4",
         )
         dynamic = self.policy["dynamic_task_matching"]
         self.assertTrue(dynamic["required"])

@@ -33,23 +33,15 @@ from v5_execution_primitives import (
     finish_reason as extract_finish_reason,
 )
 from v5_json_io import write_json
+from v5_no_tools_policy import (
+    assert_request_has_no_tools,
+    assert_response_has_no_tools,
+    forbidden_request_fields,
+)
 
 RUNTIME_VERSION = "v5-native-runtime-1"
 MIN_DEGRADED_WORK_COVERAGE = 2.0 / 3.0
 STRICT_SUCCESS_STATUSES = {"success", "success_retried", "success_recovered"}
-FORBIDDEN_REQUEST_FIELDS = {
-    "tools",
-    "tool_choice",
-    "plugins",
-    "web_search",
-    "web_search_options",
-    "file_search",
-    "browser",
-    "code_interpreter",
-    "models",
-}
-
-
 class FailureCategory(str, Enum):
     CATALOG_UNAVAILABLE = "CATALOG_UNAVAILABLE"
     CATALOG_SCHEMA_CHANGED = "CATALOG_SCHEMA_CHANGED"
@@ -509,9 +501,9 @@ class PromptPolicy:
             raise RuntimeError("provider.only must contain exactly one endpoint provider")
         if provider.get("allow_fallbacks") is not False:
             raise RuntimeError("provider fallbacks must be disabled")
-        forbidden = sorted(FORBIDDEN_REQUEST_FIELDS.intersection(payload))
-        if forbidden:
-            raise RuntimeError(f"forbidden request fields: {forbidden}")
+        assert_request_has_no_tools(
+            payload, context=f"expert node {node.node_id} request"
+        )
         return payload
 
 
@@ -672,7 +664,10 @@ class ExecutionEngine:
         retry_after = getattr(exc, "retry_after_seconds", None)
         retryable = bool(getattr(exc, "retryable", False))
         category_name = str(getattr(exc, "category", "") or "")
-        if category_name in {"rate_limited", FailureCategory.PROVIDER_RATE_LIMITED.value} or status == 429:
+        if category_name in {"tool_invocation_forbidden", "network_egress_forbidden"}:
+            category = FailureCategory.INTERNAL_CONTRACT_VIOLATION
+            retryable = False
+        elif category_name in {"rate_limited", FailureCategory.PROVIDER_RATE_LIMITED.value} or status == 429:
             category = FailureCategory.PROVIDER_RATE_LIMITED
             retryable = True
         elif category_name in {"timeout", FailureCategory.PROVIDER_TIMEOUT.value}:
@@ -962,6 +957,9 @@ class ExecutionEngine:
         try:
             payload = self.prompt_policy.build_payload(node, original_task, upstream)
             response, latency = call_fn(run, payload)
+            assert_response_has_no_tools(
+                response, context=f"expert node {node.node_id} response"
+            )
             answer = cost_hardening.robust_extract_answer(response)
             usage = dict(response.get("usage") or {}) if isinstance(response.get("usage"), Mapping) else {}
             actual_cost = extract_actual_cost(response)
@@ -1378,7 +1376,7 @@ class ExecutionEngine:
             root / "v5-request-audit.json",
             {
                 "status": "PASS" if all(
-                    not FORBIDDEN_REQUEST_FIELDS.intersection(request)
+                    not forbidden_request_fields(request)
                     for request in requests
                 ) else "FAIL",
                 "request_count": len(requests),
