@@ -23,7 +23,7 @@ jobs:
       - name: Check out immutable request
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 2
+          fetch-depth: 0
           persist-credentials: true
           path: request-source
 
@@ -43,7 +43,8 @@ jobs:
           ' "$request" >/dev/null
           test "$(git -C request-source diff --name-only HEAD^ HEAD)" = ".github/pr232-zero-cost-request.json"
           target="$(jq -er '.target_sha' "$request")"
-          test "$(git -C request-source rev-parse HEAD^)" = "$target"
+          git -C request-source cat-file -e "$target^{commit}"
+          git -C request-source merge-base --is-ancestor "$target" HEAD^
           {
             echo "target_sha=$target"
             echo "request_id=$(jq -er '.request_id' "$request")"
@@ -108,11 +109,30 @@ jobs:
         if: always()
         env:
           TARGET_BRANCH: ${{ github.ref_name }}
+          REQUEST_ID: ${{ steps.request.outputs.request_id }}
+          TARGET_SHA: ${{ steps.request.outputs.target_sha }}
         run: |
           set -euo pipefail
           mkdir -p request-source/acceptance-evidence/pr232-zero-cost
-          cp -r runtime-source/zero-cost-evidence/. \
-            request-source/acceptance-evidence/pr232-zero-cost/
+          if [[ -d runtime-source/zero-cost-evidence ]]; then
+            cp -r runtime-source/zero-cost-evidence/. \
+              request-source/acceptance-evidence/pr232-zero-cost/
+          else
+            jq -n \
+              --arg request_id "${REQUEST_ID:-unknown}" \
+              --arg target_sha "${TARGET_SHA:-unknown}" \
+              '{
+                schema_version: "pr232-zero-cost-validation-result-1",
+                status: "FAIL",
+                request_id: $request_id,
+                target_sha: $target_sha,
+                model_calls: 0,
+                paid_model_calls: 0,
+                actual_cost_usd: 0.0,
+                production_ref_moved: false,
+                failure_stage: "pre-validation"
+              }' > request-source/acceptance-evidence/pr232-zero-cost/result.json
+          fi
           git -C request-source config user.name "github-actions[bot]"
           git -C request-source config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git -C request-source add acceptance-evidence/pr232-zero-cost/
