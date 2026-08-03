@@ -1,0 +1,455 @@
+diff --git a/open-model-market/v5_governance_runtime.py b/open-model-market/v5_governance_runtime.py
+index 8f51647..0000000 100644
+--- a/open-model-market/v5_governance_runtime.py
++++ b/open-model-market/v5_governance_runtime.py
+@@ -261,6 +261,9 @@ class GovernanceCall:
+     actual_cost_usd: float
+     latency_seconds: float
+     response_id: str | None
++    finish_reason: str | None
++    visible_output_characters: int
++    visible_output_sha256: str
+ 
+     def to_dict(self) -> dict[str, Any]:
+         return {
+@@ -276,6 +279,9 @@ class GovernanceCall:
+             "actual_cost_usd": self.actual_cost_usd,
+             "latency_seconds": self.latency_seconds,
+             "response_id": self.response_id,
++            "finish_reason": self.finish_reason,
++            "visible_output_characters": self.visible_output_characters,
++            "visible_output_sha256": self.visible_output_sha256,
+         }
+ 
+ 
+@@ -283,6 +289,7 @@ class GovernanceLedger:
+     def __init__(self, maximum_calls: int = 3) -> None:
+         self.maximum_calls = int(maximum_calls)
+         self.calls: list[GovernanceCall] = []
++        self.failure: dict[str, Any] | None = None
+ 
+     def record(
+         self,
+@@ -292,6 +299,7 @@ class GovernanceLedger:
+         request: Mapping[str, Any],
+         response: Mapping[str, Any],
+         latency_seconds: float,
++        visible_output: str,
+     ) -> None:
+         if len(self.calls) >= self.maximum_calls:
+             raise GovernanceRuntimeError("governance call ceiling exceeded")
+@@ -299,6 +307,13 @@ class GovernanceLedger:
+         usage = response.get("usage")
+         usage = dict(usage) if isinstance(usage, Mapping) else {}
+         selected_model = str(request.get("model") or "")
++        choices = response.get("choices")
++        finish_reason = None
++        if isinstance(choices, list) and choices and isinstance(choices[0], Mapping):
++            finish_reason = str(choices[0].get("finish_reason") or "") or None
++        output_sha256 = hashlib.sha256(
++            visible_output.encode("utf-8")
++        ).hexdigest()
+         self.calls.append(
+             GovernanceCall(
+                 sequence=len(self.calls) + 1,
+@@ -320,11 +335,29 @@ class GovernanceLedger:
+                 actual_cost_usd=round(actual_cost(response), 8),
+                 latency_seconds=round(max(0.0, latency_seconds), 6),
+                 response_id=str(response.get("id") or "") or None,
++                finish_reason=finish_reason,
++                visible_output_characters=len(visible_output),
++                visible_output_sha256=output_sha256,
+             )
+         )
+ 
+-    def to_dict(self) -> dict[str, Any]:
++    def mark_failure(
++        self,
++        *,
++        kind: str,
++        error: BaseException,
++        visible_output: str,
++    ) -> None:
++        self.failure = {
++            "kind": kind,
++            "error_type": type(error).__name__,
++            "message": str(error),
++            "visible_output_characters": len(visible_output),
++            "visible_output_sha256": hashlib.sha256(
++                visible_output.encode("utf-8")
++            ).hexdigest(),
++            "raw_visible_output_persisted": False,
++        }
++
++    def to_dict(self, *, status: str = "PASS") -> dict[str, Any]:
+         return {
+-            "schema_version": "v5-advisory-governance-call-ledger-4",
+-            "status": "PASS",
++            "schema_version": "v5-advisory-governance-call-ledger-5",
++            "status": status,
+             "maximum_governance_calls": self.maximum_calls,
+             "actual_governance_calls": len(self.calls),
+@@ -347,10 +380,25 @@ class GovernanceLedger:
+                 sum(row.actual_cost_usd for row in self.calls), 8
+             ),
+             "calls": [row.to_dict() for row in self.calls],
++            "failure": dict(self.failure) if self.failure else None,
+         }
+ 
+ 
++def _persist_governance_ledger(
++    root: Path | None,
++    ledger: GovernanceLedger,
++    *,
++    status: str,
++) -> None:
++    if root is None:
++        return
++    root.mkdir(parents=True, exist_ok=True)
++    path = root / "v5-governance-calls.json"
++    temporary = root / ".v5-governance-calls.json.tmp"
++    temporary.write_text(
++        json.dumps(ledger.to_dict(status=status), ensure_ascii=False, indent=2)
++        + "\n",
++        encoding="utf-8",
++    )
++    temporary.replace(path)
++
++
+ def _default_call(
+     run: Any,
+     request: Mapping[str, Any],
+@@ -376,19 +424,37 @@ def _call_and_parse(
+     ],
+     parser: Callable[[str], Mapping[str, Any]],
++    artifact_root: Path | None,
+ ) -> Mapping[str, Any]:
+     api_request = _api_payload(request)
+     response, latency = call_fn(run, api_request)
++    text = extract_answer(response)
+     ledger.record(
+         kind=kind,
+         request=request,
+         response=response,
+         latency_seconds=latency,
++        visible_output=text,
+     )
+-    text = extract_answer(response)
++    _persist_governance_ledger(
++        artifact_root,
++        ledger,
++        status="IN_PROGRESS",
++    )
+     if not text:
+-        raise GovernanceRuntimeError(f"{kind} returned no visible output")
+-    return parser(text)
++        error = GovernanceRuntimeError(
++            f"{kind} returned no visible output"
++        )
++        ledger.mark_failure(kind=kind, error=error, visible_output=text)
++        _persist_governance_ledger(
++            artifact_root,
++            ledger,
++            status="FAIL",
++        )
++        raise error
++    try:
++        return parser(text)
++    except Exception as exc:
++        ledger.mark_failure(kind=kind, error=exc, visible_output=text)
++        _persist_governance_ledger(
++            artifact_root,
++            ledger,
++            status="FAIL",
++        )
++        raise
+ 
+ 
+ def _validated_governance_models(
+@@ -430,6 +496,7 @@ def run_single_pass_governance(
+     governance_calls_reserved: int,
+     approved_recovery_calls: int,
+     cost_anomaly_usd: float | None,
++    artifact_root: Path | None = None,
+     max_completion_tokens: int | None = None,
+     governance_models: Mapping[str, Any] | None = None,
+     call_fn: Callable[
+@@ -479,6 +546,7 @@ def run_single_pass_governance(
+         ledger=ledger,
+         call_fn=call,
+         parser=parse_proposal,
++        artifact_root=artifact_root,
+     )
+ 
+     claude_input = claude_unified_review_payload(
+@@ -505,6 +573,7 @@ def run_single_pass_governance(
+         ledger=ledger,
+         call_fn=call,
+         parser=parse_claude_red_team_advice,
++        artifact_root=artifact_root,
+     )
+ 
+     synthesis_request = _bind_governance_request(
+@@ -535,6 +604,7 @@ def run_single_pass_governance(
+             ledger=ledger,
+             call_fn=call,
+             parser=parse_proposal,
++            artifact_root=artifact_root,
+         )
+     )
+diff --git a/open-model-market/v5_pipeline.py b/open-model-market/v5_pipeline.py
+index 2fc6498..0000000 100755
+--- a/open-model-market/v5_pipeline.py
++++ b/open-model-market/v5_pipeline.py
+@@ -55,6 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
+     parser.add_argument("--maximum-recovery-calls", type=int, default=1)
+     parser.add_argument("--cost-anomaly-usd", type=float)
+     parser.add_argument("--max-completion-tokens", type=int)
++    parser.add_argument("--governance-max-completion-tokens", type=int)
+     parser.add_argument("--reasoning-effort")
+     parser.add_argument("--require-live-catalog", action="store_true")
+     parser.add_argument("--dry-run", action="store_true")
+@@ -81,6 +82,12 @@ def _validate_budget(args: argparse.Namespace) -> tuple[int, int, int]:
+     ):
+         raise ValueError("max_completion_tokens must be positive")
++    governance_limit = getattr(
++        args, "governance_max_completion_tokens", None
++    )
++    if governance_limit is not None and int(governance_limit) <= 0:
++        raise ValueError(
++            "governance_max_completion_tokens must be positive"
++        )
+     return total, recovery, expert_total
+ 
+ 
+@@ -304,7 +311,10 @@ def _runtime_config_payload(
+         "expert_initial_call_limit": expert_total_calls - recovery_calls,
+         "cost_anomaly_usd": args.cost_anomaly_usd,
+-        "max_completion_tokens": args.max_completion_tokens,
++        "expert_max_completion_tokens": args.max_completion_tokens,
++        "governance_max_completion_tokens": getattr(
++            args, "governance_max_completion_tokens", None
++        ),
+         "selection_authority": "gpt-latest",
+@@ -469,6 +479,7 @@ def _run_governance_and_materialize(
+         approved_recovery_calls=recovery_calls,
+         cost_anomaly_usd=args.cost_anomaly_usd,
+         governance_models=governance_models,
+-        max_completion_tokens=args.max_completion_tokens,
++        max_completion_tokens=args.governance_max_completion_tokens,
++        artifact_root=output,
+         call_fn=governance_call_fn,
+     )
+@@ -636,7 +647,7 @@ def main(
+             total_calls=total_calls,
+             recovery_calls=recovery_calls,
+             cost_anomaly_usd=args.cost_anomaly_usd,
+-            max_completion_tokens=args.max_completion_tokens,
++            max_completion_tokens=args.governance_max_completion_tokens,
+         )
+diff --git a/open-model-market/v5_production_ticket.py b/open-model-market/v5_production_ticket.py
+index a5014b3..0000000 100755
+--- a/open-model-market/v5_production_ticket.py
++++ b/open-model-market/v5_production_ticket.py
+@@ -56,6 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
+     )
+     parser.add_argument("--cost-anomaly-usd", type=float)
+     parser.add_argument("--max-completion-tokens", type=int)
++    parser.add_argument("--governance-max-completion-tokens", type=int)
+     parser.add_argument("--require-live-catalog", action="store_true")
+     return parser
+@@ -87,6 +88,11 @@ def _pipeline_args(
+             str(args.max_completion_tokens),
+         ])
++    if args.governance_max_completion_tokens is not None:
++        values.extend([
++            "--governance-max-completion-tokens",
++            str(args.governance_max_completion_tokens),
++        ])
+     if args.require_live_catalog:
+         values.append("--require-live-catalog")
+@@ -132,6 +138,12 @@ def main(argv: Sequence[str] | None = None) -> int:
+     ):
+         raise ValueError("max-completion-tokens must be positive")
++    if (
++        args.governance_max_completion_tokens is not None
++        and args.governance_max_completion_tokens <= 0
++    ):
++        raise ValueError(
++            "governance-max-completion-tokens must be positive"
++        )
+@@ -186,7 +198,10 @@ def main(argv: Sequence[str] | None = None) -> int:
+             ),
+             "cost_anomaly_usd": args.cost_anomaly_usd,
+-            "max_completion_tokens": args.max_completion_tokens,
++            "expert_max_completion_tokens": args.max_completion_tokens,
++            "governance_max_completion_tokens": (
++                args.governance_max_completion_tokens
++            ),
+@@ -226,7 +241,10 @@ def main(argv: Sequence[str] | None = None) -> int:
+             "node_count": result["node_count"],
+             "approved_total_calls": args.maximum_total_calls,
+-            "max_completion_tokens": args.max_completion_tokens,
++            "expert_max_completion_tokens": args.max_completion_tokens,
++            "governance_max_completion_tokens": (
++                args.governance_max_completion_tokens
++            ),
+@@ -253,7 +271,10 @@ def main(argv: Sequence[str] | None = None) -> int:
+                 "local_planner_present": False,
+                 "optimizer_present": False,
+-                "max_completion_tokens": args.max_completion_tokens,
++                "expert_max_completion_tokens": args.max_completion_tokens,
++                "governance_max_completion_tokens": (
++                    args.governance_max_completion_tokens
++                ),
+diff --git a/.github/workflows/v5-final-paid-claude-acceptance-20260803.yml b/.github/workflows/v5-final-paid-claude-acceptance-20260803.yml
+index 0d6b4cf..0000000 100644
+--- a/.github/workflows/v5-final-paid-claude-acceptance-20260803.yml
++++ b/.github/workflows/v5-final-paid-claude-acceptance-20260803.yml
+@@ -39,6 +39,7 @@ jobs:
+       MAXIMUM_TOTAL_CALLS: "4"
+       MAXIMUM_RECOVERY_CALLS: "0"
+       MAX_COMPLETION_TOKENS: "512"
++      GOVERNANCE_MAX_COMPLETION_TOKENS: "4096"
+@@ -251,6 +252,7 @@ jobs:
+             --maximum-recovery-calls "$MAXIMUM_RECOVERY_CALLS" \
+             --cost-anomaly-usd "$COST_CAP_USD" \
+             --max-completion-tokens "$MAX_COMPLETION_TOKENS" \
++            --governance-max-completion-tokens "$GOVERNANCE_MAX_COMPLETION_TOKENS" \
+             --require-live-catalog
+@@ -275,6 +277,7 @@ jobs:
+           selection = json.loads((root / "v5-selection.json").read_text())
+           ledger = json.loads((root / "call-ledger.json").read_text())
++          runtime = json.loads((root / "v5-runtime-config.json").read_text())
+@@ -299,6 +302,8 @@ jobs:
+           assert audit["external_tools_allowed"] is False
+           assert audit["provider_fallback_allowed"] is False
+           assert ledger["summary"]["provider_actual_cost_usd"] is not None
++          assert runtime["expert_max_completion_tokens"] == 512
++          assert runtime["governance_max_completion_tokens"] == 4096
+diff --git a/tests/test_v5_governance_completion_envelope.py b/tests/test_v5_governance_completion_envelope.py
+index 6e585f4..0000000 100644
+--- a/tests/test_v5_governance_completion_envelope.py
++++ b/tests/test_v5_governance_completion_envelope.py
+@@ -1,6 +1,8 @@
++import json
+ import sys
++import tempfile
+ import unittest
+ from pathlib import Path
+@@ -154,6 +156,7 @@ class GovernanceCompletionEnvelopeTests(unittest.TestCase):
+             maximum_recovery_calls=0,
+             cost_anomaly_usd=0.25,
+             max_completion_tokens=0,
++            governance_max_completion_tokens=None,
+         )
+@@ -166,6 +169,89 @@ class GovernanceCompletionEnvelopeTests(unittest.TestCase):
+         ):
+             v5_pipeline._validate_budget(args)
+ 
++    def test_separate_governance_limit_is_validated(self):
++        args = SimpleNamespace(
++            maximum_total_calls=4,
++            maximum_recovery_calls=0,
++            cost_anomaly_usd=0.25,
++            max_completion_tokens=512,
++            governance_max_completion_tokens=0,
++        )
++        with self.assertRaisesRegex(
++            ValueError,
++            "governance_max_completion_tokens must be positive",
++        ):
++            v5_pipeline._validate_budget(args)
++
++    def test_malformed_paid_output_persists_failure_ledger(self):
++        def fake_call(_run, request):
++            provider = request["provider"]["only"][0]
++            return {
++                "id": "paid-response-1",
++                "model": request["model"],
++                "provider": provider,
++                "choices": [{
++                    "finish_reason": "length",
++                    "message": {"content": '{"work_items":[{"objective":"cut'},
++                }],
++                "usage": {"cost": 0.0123},
++            }, 0.02
++
++        endpoint = {
++            "logical_model": "~openai/gpt-latest",
++            "resolved_model": "openai/gpt-test",
++            "company": "openai",
++            "provider": "openai",
++            "provider_fallback_allowed": False,
++            "official_intelligence_rank": 1,
++            "supported_parameters": ["max_tokens"],
++        }
++        governance_models = {
++            "status": "PASS",
++            "provider_fallback_allowed": False,
++            "gpt": endpoint,
++            "claude": {
++                **endpoint,
++                "logical_model": "~anthropic/claude-opus-latest",
++                "resolved_model": "anthropic/claude-test",
++                "company": "anthropic",
++                "provider": "anthropic",
++            },
++        }
++        with tempfile.TemporaryDirectory() as temporary:
++            root = Path(temporary)
++            with (
++                mock.patch.object(
++                    governance,
++                    "build_proposal_request",
++                    return_value={"max_tokens": 4096},
++                ),
++                self.assertRaisesRegex(
++                    Exception,
++                    "not valid JSON",
++                ),
++            ):
++                governance.run_single_pass_governance(
++                    run=SimpleNamespace(api_key="unused"),
++                    task="closed-world task",
++                    task_digest="a" * 64,
++                    task_envelope={},
++                    catalog={},
++                    approved_total_calls=4,
++                    governance_calls_reserved=3,
++                    approved_recovery_calls=0,
++                    cost_anomaly_usd=0.25,
++                    artifact_root=root,
++                    max_completion_tokens=4096,
++                    governance_models=governance_models,
++                    call_fn=fake_call,
++                )
++            ledger = json.loads(
++                (root / "v5-governance-calls.json").read_text(
++                    encoding="utf-8"
++                )
++            )
++        self.assertEqual(ledger["status"], "FAIL")
++        self.assertEqual(ledger["actual_governance_calls"], 1)
++        self.assertEqual(ledger["calls"][0]["finish_reason"], "length")
++        self.assertGreater(
++            ledger["calls"][0]["visible_output_characters"], 0
++        )
++        self.assertEqual(ledger["failure"]["kind"], "gpt_proposal")
++        self.assertFalse(
++            ledger["failure"]["raw_visible_output_persisted"]
++        )
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/tests/test_workflow_contract.py b/tests/test_workflow_contract.py
+index b2456aa..0000000 100644
+--- a/tests/test_workflow_contract.py
++++ b/tests/test_workflow_contract.py
+@@ -164,6 +164,8 @@ class WorkflowContractTests(unittest.TestCase):
+         self.assertIn('COST_CAP_USD: "0.25"', paid)
+         self.assertIn('MAX_COMPLETION_TOKENS: "512"', paid)
++        self.assertIn('GOVERNANCE_MAX_COMPLETION_TOKENS: "4096"', paid)
++        self.assertIn("--governance-max-completion-tokens", paid)
+         self.assertIn("Complete all zero-call release gates before paid execution", paid)
