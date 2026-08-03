@@ -1,5 +1,5 @@
 {
   "schema_version": "pr232-zero-cost-observer-request-1",
-  "request_id": "pr232-zero-cost-r3-observer",
-  "target_run_head_sha": "3096b8fba3d00f1447d2a715a851114969b456ac"
+  "request_id": "pr232-zero-cost-r4-observer",
+  "target_run_head_sha": "ea4b5fa2cc871838606cbaf815b824b9005c7c6b"
 }
