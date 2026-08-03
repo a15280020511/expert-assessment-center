@@ -43,6 +43,7 @@ jobs:
       MAXIMUM_TOTAL_CALLS: "4"
       MAXIMUM_RECOVERY_CALLS: "0"
       MAX_COMPLETION_TOKENS: "512"
+      GOVERNANCE_MAX_COMPLETION_TOKENS: "4096"
     steps:
       - name: Check out immutable authorization source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -260,6 +261,7 @@ jobs:
             --maximum-recovery-calls "$MAXIMUM_RECOVERY_CALLS" \
             --cost-anomaly-usd "$COST_CAP_USD" \
             --max-completion-tokens "$MAX_COMPLETION_TOKENS" \
+            --governance-max-completion-tokens "$GOVERNANCE_MAX_COMPLETION_TOKENS" \
             --require-live-catalog
 
       - name: Verify exact paid-call constitution
@@ -284,6 +286,7 @@ jobs:
           audit = json.loads((root / "v5-request-audit.json").read_text())
           selection = json.loads((root / "v5-selection.json").read_text())
           ledger = json.loads((root / "call-ledger.json").read_text())
+          runtime = json.loads((root / "v5-runtime-config.json").read_text())
 
           kinds = [row["kind"] for row in calls["calls"]]
           assert resolution["status"] == "PASS"
@@ -315,6 +318,8 @@ jobs:
           assert audit["external_tools_allowed"] is False
           assert audit["provider_fallback_allowed"] is False
           assert ledger["summary"]["provider_actual_cost_usd"] is not None
+          assert runtime["max_completion_tokens"] == 512
+          assert runtime["governance_max_completion_tokens"] == 4096
 
           receipt = {
               "schema_version": "v5-final-paid-claude-acceptance-4",

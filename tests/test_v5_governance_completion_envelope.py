@@ -1,4 +1,6 @@
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +11,7 @@ sys.path.insert(0, str(ROOT / "open-model-market"))
 
 import v5_governance_runtime as governance  # noqa: E402
 import v5_pipeline  # noqa: E402
+from v5_gpt_expert_selector import GPTSelectorError  # noqa: E402
 
 
 class GovernanceCompletionEnvelopeTests(unittest.TestCase):
@@ -165,12 +168,114 @@ class GovernanceCompletionEnvelopeTests(unittest.TestCase):
             maximum_recovery_calls=0,
             cost_anomaly_usd=0.25,
             max_completion_tokens=0,
+            governance_max_completion_tokens=None,
         )
         with self.assertRaisesRegex(
             ValueError,
             "max_completion_tokens must be positive",
         ):
             v5_pipeline._validate_budget(args)
+
+    def test_separate_governance_limit_is_validated(self):
+        args = SimpleNamespace(
+            maximum_total_calls=4,
+            maximum_recovery_calls=0,
+            cost_anomaly_usd=0.25,
+            max_completion_tokens=512,
+            governance_max_completion_tokens=0,
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "governance_max_completion_tokens must be positive",
+        ):
+            v5_pipeline._validate_budget(args)
+
+    def test_malformed_paid_output_persists_failure_ledger(self):
+        def fake_call(_run, request):
+            provider = request["provider"]["only"][0]
+            return {
+                "id": "paid-response-1",
+                "model": request["model"],
+                "provider": provider,
+                "choices": [
+                    {
+                        "finish_reason": "length",
+                        "message": {
+                            "content": '{"work_items":[{"objective":"cut'
+                        },
+                    }
+                ],
+                "usage": {"cost": 0.0123},
+            }, 0.02
+
+        endpoint = {
+            "logical_model": "~openai/gpt-latest",
+            "resolved_model": "openai/gpt-test",
+            "company": "openai",
+            "provider": "openai",
+            "provider_fallback_allowed": False,
+            "official_intelligence_rank": 1,
+            "supported_parameters": ["max_tokens"],
+        }
+        governance_models = {
+            "status": "PASS",
+            "provider_fallback_allowed": False,
+            "gpt": endpoint,
+            "claude": {
+                **endpoint,
+                "logical_model": "~anthropic/claude-opus-latest",
+                "resolved_model": "anthropic/claude-test",
+                "company": "anthropic",
+                "provider": "anthropic",
+            },
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact_root = Path(temporary)
+            with (
+                mock.patch.object(
+                    governance,
+                    "build_proposal_request",
+                    return_value={"max_tokens": 10_000},
+                ),
+                self.assertRaisesRegex(
+                    GPTSelectorError,
+                    "not valid JSON",
+                ),
+            ):
+                governance.run_single_pass_governance(
+                    run=SimpleNamespace(api_key="unused"),
+                    task="closed-world task",
+                    task_digest="a" * 64,
+                    task_envelope={},
+                    catalog={},
+                    approved_total_calls=4,
+                    governance_calls_reserved=3,
+                    approved_recovery_calls=0,
+                    cost_anomaly_usd=0.25,
+                    artifact_root=artifact_root,
+                    max_completion_tokens=4096,
+                    governance_models=governance_models,
+                    call_fn=fake_call,
+                )
+            ledger = json.loads(
+                (artifact_root / "v5-governance-calls.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+        self.assertEqual(ledger["status"], "FAIL")
+        self.assertEqual(ledger["actual_governance_calls"], 1)
+        self.assertEqual(
+            ledger["calls"][0]["finish_reason"],
+            "length",
+        )
+        self.assertGreater(
+            ledger["calls"][0]["visible_output_characters"],
+            0,
+        )
+        self.assertEqual(ledger["failure"]["kind"], "gpt_proposal")
+        self.assertFalse(
+            ledger["failure"]["raw_visible_output_persisted"]
+        )
 
 
 if __name__ == "__main__":

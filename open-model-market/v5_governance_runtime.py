@@ -270,6 +270,9 @@ class GovernanceCall:
     actual_cost_usd: float
     latency_seconds: float
     response_id: str | None
+    finish_reason: str | None
+    visible_output_characters: int
+    visible_output_sha256: str
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -284,6 +287,9 @@ class GovernanceCall:
             "actual_cost_usd": self.actual_cost_usd,
             "latency_seconds": self.latency_seconds,
             "response_id": self.response_id,
+            "finish_reason": self.finish_reason,
+            "visible_output_characters": self.visible_output_characters,
+            "visible_output_sha256": self.visible_output_sha256,
         }
 
 
@@ -291,6 +297,7 @@ class GovernanceLedger:
     def __init__(self, maximum_calls: int = 3) -> None:
         self.maximum_calls = int(maximum_calls)
         self.calls: list[GovernanceCall] = []
+        self.failure: dict[str, Any] | None = None
 
     def record(
         self,
@@ -299,6 +306,7 @@ class GovernanceLedger:
         request: Mapping[str, Any],
         response: Mapping[str, Any],
         latency_seconds: float,
+        visible_output: str,
     ) -> None:
         if len(self.calls) >= self.maximum_calls:
             raise GovernanceRuntimeError("governance call ceiling exceeded")
@@ -306,6 +314,19 @@ class GovernanceLedger:
         usage = response.get("usage")
         usage = dict(usage) if isinstance(usage, Mapping) else {}
         selected_model = str(request.get("model") or "")
+        choices = response.get("choices")
+        finish_reason = None
+        if (
+            isinstance(choices, list)
+            and choices
+            and isinstance(choices[0], Mapping)
+        ):
+            finish_reason = (
+                str(choices[0].get("finish_reason") or "") or None
+            )
+        output_sha256 = hashlib.sha256(
+            visible_output.encode("utf-8")
+        ).hexdigest()
         self.calls.append(
             GovernanceCall(
                 sequence=len(self.calls) + 1,
@@ -326,13 +347,34 @@ class GovernanceLedger:
                 actual_cost_usd=round(actual_cost(response), 8),
                 latency_seconds=round(max(0.0, latency_seconds), 6),
                 response_id=str(response.get("id") or "") or None,
+                finish_reason=finish_reason,
+                visible_output_characters=len(visible_output),
+                visible_output_sha256=output_sha256,
             )
         )
 
-    def to_dict(self) -> dict[str, Any]:
+    def mark_failure(
+        self,
+        *,
+        kind: str,
+        error: BaseException,
+        visible_output: str,
+    ) -> None:
+        self.failure = {
+            "kind": kind,
+            "error_type": type(error).__name__,
+            "message": str(error),
+            "visible_output_characters": len(visible_output),
+            "visible_output_sha256": hashlib.sha256(
+                visible_output.encode("utf-8")
+            ).hexdigest(),
+            "raw_visible_output_persisted": False,
+        }
+
+    def to_dict(self, *, status: str = "PASS") -> dict[str, Any]:
         return {
-            "schema_version": "v5-advisory-governance-call-ledger-4",
-            "status": "PASS",
+            "schema_version": "v5-advisory-governance-call-ledger-5",
+            "status": status,
             "maximum_governance_calls": self.maximum_calls,
             "actual_governance_calls": len(self.calls),
             "gpt_proposal_calls": sum(
@@ -354,7 +396,31 @@ class GovernanceLedger:
                 sum(row.actual_cost_usd for row in self.calls), 8
             ),
             "calls": [row.to_dict() for row in self.calls],
+            "failure": dict(self.failure) if self.failure else None,
         }
+
+
+def _persist_governance_ledger(
+    root: Path | None,
+    ledger: GovernanceLedger,
+    *,
+    status: str,
+) -> None:
+    if root is None:
+        return
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "v5-governance-calls.json"
+    temporary = root / ".v5-governance-calls.json.tmp"
+    temporary.write_text(
+        json.dumps(
+            ledger.to_dict(status=status),
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
 
 def _default_call(
@@ -386,19 +452,52 @@ def _call_and_parse(
         tuple[Mapping[str, Any], float],
     ],
     parser: Callable[[str], Mapping[str, Any]],
+    artifact_root: Path | None,
 ) -> Mapping[str, Any]:
     api_request = _api_payload(request)
     response, latency = call_fn(run, api_request)
+    text = extract_answer(response)
     ledger.record(
         kind=kind,
         request=request,
         response=response,
         latency_seconds=latency,
+        visible_output=text,
     )
-    text = extract_answer(response)
+    _persist_governance_ledger(
+        artifact_root,
+        ledger,
+        status="IN_PROGRESS",
+    )
     if not text:
-        raise GovernanceRuntimeError(f"{kind} returned no visible output")
-    return parser(text)
+        error = GovernanceRuntimeError(
+            f"{kind} returned no visible output"
+        )
+        ledger.mark_failure(
+            kind=kind,
+            error=error,
+            visible_output=text,
+        )
+        _persist_governance_ledger(
+            artifact_root,
+            ledger,
+            status="FAIL",
+        )
+        raise error
+    try:
+        return parser(text)
+    except Exception as exc:
+        ledger.mark_failure(
+            kind=kind,
+            error=exc,
+            visible_output=text,
+        )
+        _persist_governance_ledger(
+            artifact_root,
+            ledger,
+            status="FAIL",
+        )
+        raise
 
 
 def _validated_governance_models(
@@ -432,6 +531,7 @@ def run_single_pass_governance(
     governance_calls_reserved: int,
     approved_recovery_calls: int,
     cost_anomaly_usd: float | None,
+    artifact_root: Path | None = None,
     max_completion_tokens: int | None = None,
     governance_models: Mapping[str, Any] | None = None,
     call_fn: Callable[
@@ -473,6 +573,7 @@ def run_single_pass_governance(
         ledger=ledger,
         call_fn=call,
         parser=parse_proposal,
+        artifact_root=artifact_root,
     )
 
     claude_input = claude_unified_review_payload(
@@ -497,6 +598,7 @@ def run_single_pass_governance(
         ledger=ledger,
         call_fn=call,
         parser=parse_claude_red_team_advice,
+        artifact_root=artifact_root,
     )
 
     synthesis_request = _bind_governance_request(
@@ -521,6 +623,7 @@ def run_single_pass_governance(
             ledger=ledger,
             call_fn=call,
             parser=parse_proposal,
+        artifact_root=artifact_root,
         )
     )
 

@@ -61,6 +61,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--maximum-recovery-calls", type=int, default=1)
     parser.add_argument("--cost-anomaly-usd", type=float)
     parser.add_argument("--max-completion-tokens", type=int)
+    parser.add_argument(
+        "--governance-max-completion-tokens",
+        type=int,
+    )
     parser.add_argument("--reasoning-effort")
     parser.add_argument("--require-live-catalog", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -91,6 +95,15 @@ def _validate_budget(args: argparse.Namespace) -> tuple[int, int, int]:
         and int(args.max_completion_tokens) <= 0
     ):
         raise ValueError("max_completion_tokens must be positive")
+    governance_limit = getattr(
+        args,
+        "governance_max_completion_tokens",
+        None,
+    )
+    if governance_limit is not None and int(governance_limit) <= 0:
+        raise ValueError(
+            "governance_max_completion_tokens must be positive"
+        )
     return total, recovery, expert_total
 
 
@@ -337,6 +350,11 @@ def _runtime_config_payload(
         "expert_initial_call_limit": expert_total_calls - recovery_calls,
         "cost_anomaly_usd": args.cost_anomaly_usd,
         "max_completion_tokens": args.max_completion_tokens,
+        "governance_max_completion_tokens": getattr(
+            args,
+            "governance_max_completion_tokens",
+            None,
+        ),
         "selection_authority": "gpt-latest",
         "selection_model": governance_models["gpt"]["resolved_model"],
         "selection_provider": governance_models["gpt"]["provider"],
@@ -479,7 +497,12 @@ def _run_governance_and_materialize(
         approved_recovery_calls=recovery_calls,
         cost_anomaly_usd=args.cost_anomaly_usd,
         governance_models=governance_models,
-        max_completion_tokens=args.max_completion_tokens,
+        max_completion_tokens=getattr(
+            args,
+            "governance_max_completion_tokens",
+            None,
+        ),
+        artifact_root=output,
         call_fn=governance_call_fn,
     )
     write_governance_artifacts(output, governance, ledger)
@@ -640,7 +663,11 @@ def main(
             total_calls=total_calls,
             recovery_calls=recovery_calls,
             cost_anomaly_usd=args.cost_anomaly_usd,
-            max_completion_tokens=args.max_completion_tokens,
+            max_completion_tokens=getattr(
+                args,
+                "governance_max_completion_tokens",
+                None,
+            ),
         )
         return 0
     _, ledger, graph, limits, governance_cost, remaining = _run_governance_and_materialize(
