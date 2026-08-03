@@ -30,10 +30,10 @@ from v5_governance_runtime import (
 )
 from v5_gpt_expert_selector import build_proposal_request
 from v5_json_io import write_json
-from v5_proposal_materializer import materialize_proposal
 from v5_provider_lock import canonical_provider_lock
 from v5_recovery_runtime import build_production_runtime
 from v5_runtime import RuntimeConfig
+from v5_soft_proposal_materializer import materialize_proposal
 from v5_task_envelope import build_task_envelope
 
 RUNTIME_VERSION = "v5-gpt-claude-runtime-4-soft-resources"
@@ -547,7 +547,7 @@ def _run_governance_and_materialize(
         approved_total_calls=total_calls,
         governance_calls_reserved=CLAUDE_RED_TEAM_GOVERNANCE_CALLS,
         approved_recovery_calls=recovery_calls,
-        cost_anomaly_usd=None,
+        cost_anomaly_usd=cost_advisory,
     )
     governance["materialization_after_governance_cost"] = materialization
     governance["resource_governance"] = {
