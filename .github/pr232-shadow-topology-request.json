@@ -1,0 +1,8 @@
+{
+  "schema_version": "pr232-shadow-topology-request-1",
+  "authorization": "EXACT-ZERO-CALL-SOURCE-PATCH",
+  "request_id": "pr232-shadow-topology-r1",
+  "patch_id": "free-shadow-topology-and-failure-evidence",
+  "target_branch": "fix/v5-free-shadow-production-qualification-20260803",
+  "target_sha": "9a24c8f9d1deee7ef52ef5c68a85a719c0c6fd2e"
+}
