@@ -1,0 +1,220 @@
+name: V5 Free Model Qualification
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "fix/v5-constitution-free-first-company-diversity-*"
+  pull_request:
+    paths:
+      - "CONSTITUTION.md"
+      - "README.md"
+      - "open-model-market/**"
+      - "tests/**"
+      - ".github/workflows/v5-free-model-qualification.yml"
+      - "requirements*.txt"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v5-free-model-qualification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  free-model-qualification:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: Zero-cost CI and free Canary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      MODEL_MAX_RETRIES: "0"
+      MODEL_TIMEOUT_SECONDS: "120"
+      OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
+      OPENROUTER_APP_NAME: expert-center-free-model-qualification
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-runtime.txt
+            requirements-dev.txt
+
+      - name: Verify exact source checkout
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test -z "$(git status --porcelain)"
+
+      - name: Install pinned validation dependencies
+        run: |
+          set -euo pipefail
+          test -n "${OPENROUTER_API_KEY:-}"
+          test "${#OPENROUTER_API_KEY}" -ge 20
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+
+      - name: Run complete zero-call validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p free-qualification/logs free-qualification/artifacts
+          python -m ruff check . 2>&1 | tee free-qualification/logs/ruff.log
+          python -m compileall -q open-model-market tests tools \
+            2>&1 | tee free-qualification/logs/compileall.log
+          python -m unittest discover -s tests -p 'test*.py' -v \
+            2>&1 | tee free-qualification/logs/unit-tests.log
+          python open-model-market/v5_pipeline.py \
+            --task "仅依据题面比较A与B，禁止工具，输出已知事实和最终建议。" \
+            --catalog-file tests/fixtures/models.json \
+            --endpoint-file tests/fixtures/endpoints.json \
+            --dry-run \
+            --maximum-total-calls 8 \
+            --maximum-recovery-calls 1 \
+            --output-dir free-qualification/artifacts/dry-run
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("free-qualification/artifacts/dry-run")
+          dry = json.loads((root / "v5-dry-run.json").read_text())
+          assert dry["status"] == "validated-not-executed"
+          assert dry["model_calls"] == 0
+          assert dry["claude_calls_per_task"] == 1
+          assert dry["gpt_synthesis_calls"] == 1
+          assert dry["claude_is_advisory_only"] is True
+          assert dry["claude_gatekeeping_allowed"] is False
+          PY
+
+      - name: Run one real zero-cost free-model Canary
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=open-model-market python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          from openrouter_api import CHAT_URL, request_json
+          from v5_execution_primitives import actual_cost, extract_answer
+          from v5_free_first_preflight import evaluate_free_first_preflight
+
+          payload = {
+              "model": "openrouter/free",
+              "messages": [
+                  {
+                      "role": "system",
+                      "content": "Return only the requested final answer.",
+                  },
+                  {
+                      "role": "user",
+                      "content": "Reply with exactly PASS and nothing else.",
+                  },
+              ],
+              "stream": False,
+              "max_tokens": 256,
+              "provider": {
+                  "data_collection": "allow",
+                  "zdr": False,
+                  "require_parameters": True,
+              },
+          }
+          response = request_json(
+              CHAT_URL,
+              os.environ["OPENROUTER_API_KEY"],
+              120,
+              0,
+              payload,
+          )
+          answer = extract_answer(response).strip()
+          cost = float(actual_cost(response))
+          if answer.upper() != "PASS":
+              raise RuntimeError("free Canary response is invalid")
+          if abs(cost) > 1e-12:
+              raise RuntimeError(
+                  f"free Canary returned positive cost: {cost}"
+              )
+
+          target_sha = os.environ["TARGET_SHA"]
+          receipt = {
+              "schema_version": "v5-free-first-preflight-1",
+              "target_sha": target_sha,
+              "simulation": {
+                  "status": "PASS",
+                  "model_calls": 0,
+                  "paid_model_calls": 0,
+              },
+              "free_canary": {
+                  "status": "PASS",
+                  "requested_model": "openrouter/free",
+                  "response_model": str(response.get("model") or ""),
+                  "provider": str(response.get("provider") or ""),
+                  "model_requests": 1,
+                  "successful_model_calls": 1,
+                  "paid_model_calls": 0,
+                  "actual_cost_usd": cost,
+              },
+              "shadow_governance": None,
+              "paid_acceptance_triggered": False,
+              "production_ref_moved": False,
+          }
+          verdict = evaluate_free_first_preflight(
+              receipt,
+              expected_sha=target_sha,
+          )
+          assert verdict["status"] == "PASS"
+          assert verdict["paid_acceptance_allowed"] is True
+          assert verdict["formal_model_identity_qualified"] is False
+          assert verdict["production_promotion_allowed"] is False
+
+          policy = Path(
+              "open-model-market/constitutional_policy.json"
+          ).read_bytes()
+          evidence = {
+              "schema_version": "v5-free-model-qualification-1",
+              "status": "PASS",
+              "target_sha": target_sha,
+              "workflow_run_id": os.environ["GITHUB_RUN_ID"],
+              "zero_call_validation": "PASS",
+              "free_canary": receipt["free_canary"],
+              "actual_cost_usd": cost,
+              "paid_model_calls": 0,
+              "formal_model_identity_qualified": False,
+              "production_promotion_allowed": False,
+              "constitutional_policy_sha256": hashlib.sha256(
+                  policy
+              ).hexdigest(),
+          }
+          out = Path("free-qualification/artifacts")
+          (out / "free-first-receipt.json").write_text(
+              json.dumps(receipt, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          (out / "free-first-verdict.json").write_text(
+              json.dumps(verdict, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          (out / "free-model-qualification.json").write_text(
+              json.dumps(evidence, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(evidence, ensure_ascii=False))
+          PY
+
+      - name: Upload immutable free qualification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: v5-free-model-qualification-${{ github.run_id }}
+          path: free-qualification/
+          if-no-files-found: error
+          retention-days: 30

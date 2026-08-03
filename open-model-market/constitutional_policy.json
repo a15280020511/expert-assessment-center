@@ -1,0 +1,42 @@
+{
+  "schema_version": "v5-constitutional-policy-1",
+  "authority": "CONSTITUTION.md",
+  "fail_closed": true,
+  "free_first_testing": {
+    "required_order": [
+      "zero_call_deterministic_validation",
+      "zero_cost_free_model_canary",
+      "explicitly_authorized_paid_acceptance_or_production"
+    ],
+    "free_model_required_before_paid": true,
+    "free_model_actual_cost_usd": 0.0,
+    "paid_models_allowed_for": [
+      "formal_production_execution",
+      "explicitly_authorized_final_paid_acceptance"
+    ],
+    "automatic_paid_retry_allowed": false,
+    "free_evidence_can_qualify_formal_model_identity": false,
+    "free_evidence_can_move_production": false
+  },
+  "expert_company_diversity": {
+    "scope": "task_global_initial_and_recovery_experts",
+    "constraint": "all_different",
+    "provider_can_override_company": false,
+    "reserved_governance_companies": [
+      "openai",
+      "anthropic"
+    ],
+    "pre_execution_validation_required": true,
+    "post_execution_actual_success_audit_required": true,
+    "duplicate_company_action": "fail_closed"
+  },
+  "production_promotion": {
+    "requires_zero_cost_ci": true,
+    "requires_zero_cost_free_canary": true,
+    "requires_explicit_paid_acceptance": true,
+    "requires_independent_artifact_revalidation": true,
+    "requires_run_sha_artifact_digest_binding": true,
+    "automatic_merge_allowed": false,
+    "automatic_production_ref_move_allowed": false
+  }
+}
