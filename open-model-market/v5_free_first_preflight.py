@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 SCHEMA_VERSION = "v5-free-first-preflight-1"
-_SHA256_RE = re.compile(r"^[0-9a-f]{40}$")
+_COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 class FreeFirstPreflightError(ValueError):
@@ -46,9 +46,10 @@ def _zero_cost(value: Any, field: str) -> bool:
     return number == 0.0
 
 
-def _required_false(value: Any, field: str) -> None:
-    if value is not False:
-        raise FreeFirstPreflightError(f"{field} must be false")
+def _false_value(value: Any, field: str) -> bool:
+    if not isinstance(value, bool):
+        raise FreeFirstPreflightError(f"{field} must be boolean")
+    return value is False
 
 
 def _check_simulation(value: Any) -> list[str]:
@@ -83,7 +84,10 @@ def _check_free_canary(value: Any) -> list[str]:
         "free_canary.paid_model_calls",
     ) != 0:
         reasons.append("free-canary-used-paid-call")
-    if not _zero_cost(row.get("actual_cost_usd"), "free_canary.actual_cost_usd"):
+    if not _zero_cost(
+        row.get("actual_cost_usd"),
+        "free_canary.actual_cost_usd",
+    ):
         reasons.append("free-canary-positive-cost")
     requested = str(row.get("requested_model") or "")
     if requested != "openrouter/free" and not requested.endswith(":free"):
@@ -107,10 +111,11 @@ def _check_shadow(value: Any) -> list[str]:
         reasons.append("shadow-used-paid-call")
     if not _zero_cost(row.get("total_cost_usd"), "shadow.total_cost_usd"):
         reasons.append("shadow-positive-cost")
-    _required_false(
+    if not _false_value(
         row.get("formal_model_identity_qualified"),
         "shadow.formal_model_identity_qualified",
-    )
+    ):
+        reasons.append("shadow-claimed-formal-model-identity")
     return reasons
 
 
@@ -127,7 +132,7 @@ def evaluate_free_first_preflight(
         reasons.append("schema-version-invalid")
 
     target_sha = str(row.get("target_sha") or "")
-    if _SHA256_RE.fullmatch(target_sha) is None:
+    if _COMMIT_SHA_RE.fullmatch(target_sha) is None:
         reasons.append("target-sha-invalid")
     if expected_sha is not None and target_sha != expected_sha:
         reasons.append("target-sha-mismatch")
@@ -144,11 +149,16 @@ def evaluate_free_first_preflight(
     elif shadow is not None:
         reasons.extend(_check_shadow(shadow))
 
-    _required_false(
+    if not _false_value(
         row.get("paid_acceptance_triggered"),
         "paid_acceptance_triggered",
-    )
-    _required_false(row.get("production_ref_moved"), "production_ref_moved")
+    ):
+        reasons.append("paid-acceptance-already-triggered")
+    if not _false_value(
+        row.get("production_ref_moved"),
+        "production_ref_moved",
+    ):
+        reasons.append("production-ref-already-moved")
 
     canonical = json.dumps(
         row,
