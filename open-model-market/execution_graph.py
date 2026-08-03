@@ -88,7 +88,7 @@ class SelectedEdge:
 
 @dataclass(frozen=True)
 class ExecutionGraph:
-    """The complete auditable V5 execution plan selected by the optimizer."""
+    """The complete auditable V5 execution plan authored by GPT and hard-validated."""
 
     nodes: tuple[SelectedNode, ...]
     edges: tuple[SelectedEdge, ...]
@@ -134,7 +134,7 @@ class ExecutionGraph:
 
 @dataclass(frozen=True)
 class GraphLimits:
-    """Non-optimizable safety and production-resilience ceilings."""
+    """Deterministic safety and production-resilience ceilings."""
 
     max_nodes: int = 16
     max_edges: int = 64

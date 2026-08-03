@@ -59,8 +59,7 @@ class V5P0GovernanceTests(unittest.TestCase):
             total_call_limit=16,
             recovery_call_limit=2,
             cost_anomaly_usd=None,
-            quality_tier="value",
-        )
+            )
         budget = BudgetController(config, self._budget_graph())
         self.assertEqual(config.initial_call_limit, 14)
         for index in range(14):
@@ -84,7 +83,6 @@ class V5P0GovernanceTests(unittest.TestCase):
             "route": "expert-team",
             "task": {"question": "审计一个自包含的软件治理方案。"},
             "approved_budget": approved_budget,
-            "quality_tier": "value",
             "private_output": False,
         }
         with tempfile.TemporaryDirectory() as folder:
@@ -103,7 +101,7 @@ class V5P0GovernanceTests(unittest.TestCase):
                 {"GITHUB_REPOSITORY_OWNER": "owner"},
                 clear=False,
             ), mock.patch.object(
-                ticket.hardened.base,
+                ticket,
                 "duplicate_reason",
                 return_value="",
             ):
@@ -124,7 +122,7 @@ class V5P0GovernanceTests(unittest.TestCase):
         self.assertEqual(status["execution_id"], "p0-budget-001")
         self.assertEqual(status["calls"], 8)
         self.assertEqual(status["maximum_recovery_calls"], 2)
-        self.assertEqual(status["maximum_initial_calls"], 6)
+        self.assertEqual(status["maximum_initial_calls"], 3)
         self.assertEqual(status["cost_anomaly_usd"], 1.5)
 
     def test_ticket_rejects_recovery_outside_total(self):
@@ -134,7 +132,7 @@ class V5P0GovernanceTests(unittest.TestCase):
             "cost_policy": "unbounded_with_anomaly_guard",
         })
         self.assertFalse(status["accepted"])
-        self.assertIn("leave at least one initial call", status["reason"])
+        self.assertIn("leave at least one initial expert call", status["reason"])
 
     def test_workflow_has_serialized_admission_and_execution(self):
         text = (

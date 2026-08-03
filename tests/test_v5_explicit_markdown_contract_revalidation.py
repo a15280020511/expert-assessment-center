@@ -7,9 +7,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-import task_semantic_compiler as compiler  # noqa: E402
 import v5_independent_artifact_revalidation as independent  # noqa: E402
 import v5_task_delivery_contract as contract_policy  # noqa: E402
+from v5_task_envelope import work_output_contract  # noqa: E402
 
 
 HEADINGS = [
@@ -51,6 +51,14 @@ INTERNAL_HEADINGS = [
     "final_recommendation",
     "uncertainties",
 ]
+
+
+def final_contract(task: str) -> dict:
+    return work_output_contract(
+        task,
+        INTERNAL_HEADINGS,
+        final_node=True,
+    )
 
 
 def report(headings: list[str]) -> str:
@@ -97,15 +105,11 @@ class V5ExplicitMarkdownContractRevalidationTests(unittest.TestCase):
         )
         self.assertEqual(contract["exact_markdown_headings"], HEADINGS)
         self.assertEqual(contract["task_explicit_delivery_section_count"], 8)
-        synthesis = compiler._output_contract(
-            NUMBERED_TRAILING_REQUIREMENT_TASK,
-            {"synthesis": 1.0},
-            False,
-        )
+        synthesis = final_contract(NUMBERED_TRAILING_REQUIREMENT_TASK)
         self.assertEqual(synthesis["required_fields"], HEADINGS)
 
-    def test_synthesis_contract_replaces_internal_generic_headings(self) -> None:
-        contract = compiler._output_contract(TASK, {"synthesis": 1.0}, False)
+    def test_final_contract_replaces_internal_generic_headings(self) -> None:
+        contract = final_contract(TASK)
         self.assertEqual(contract["required_fields"], HEADINGS)
         self.assertEqual(contract["exact_markdown_headings"], HEADINGS)
         self.assertNotIn("agreements", contract["required_fields"])
@@ -139,7 +143,7 @@ class V5ExplicitMarkdownContractRevalidationTests(unittest.TestCase):
         )
 
     def test_exact_report_and_graph_contract_pass_independent_revalidation(self) -> None:
-        contract = compiler._output_contract(TASK, {"synthesis": 1.0}, False)
+        contract = final_contract(TASK)
         self.assertEqual(
             independent._final_contract_violations(
                 graph(contract),
@@ -150,7 +154,7 @@ class V5ExplicitMarkdownContractRevalidationTests(unittest.TestCase):
         )
 
     def test_wrong_order_is_rejected_from_original_task(self) -> None:
-        contract = compiler._output_contract(TASK, {"synthesis": 1.0}, False)
+        contract = final_contract(TASK)
         violations = independent._final_contract_violations(
             graph(contract),
             report(list(reversed(HEADINGS))),

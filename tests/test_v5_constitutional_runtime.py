@@ -50,8 +50,7 @@ class V5ConstitutionalRuntimeTests(unittest.TestCase):
                 total_call_limit=4,
                 recovery_call_limit=1,
                 cost_anomaly_usd=None,
-                quality_tier="value",
-                tools_allowed=False,
+                        tools_allowed=False,
                 provider_lock_required=True,
             )
         )

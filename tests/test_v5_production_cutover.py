@@ -33,8 +33,8 @@ class V5ProductionCutoverTests(unittest.TestCase):
             {
                 "accepted": True,
                 "task_id": "task-v5-production",
-                "calls": 7,
-                "maximum_recovery_calls": 2,
+                "calls": 8,
+                "maximum_recovery_calls": 0,
                 "maximum_initial_calls": 5,
                 "cost_policy": "unbounded_with_anomaly_guard",
                 "cost_anomaly_usd": 1.0,
@@ -46,8 +46,8 @@ class V5ProductionCutoverTests(unittest.TestCase):
             {
                 "fallback_policy": "fail-closed-no-alternate-runtime",
                 "legacy_runtime_present": False,
-                "maximum_model_calls": 7,
-                "maximum_recovery_calls": 2,
+                "maximum_model_calls": 8,
+                "maximum_recovery_calls": 0,
                 "maximum_initial_calls": 5,
             },
         )
@@ -75,7 +75,7 @@ class V5ProductionCutoverTests(unittest.TestCase):
                 "actual_cost_usd": 0.12,
                 "execution_budget": {
                     "calls_reserved": 5,
-                    "maximum_total_calls": 7,
+                    "maximum_total_calls": 5,
                     "maximum_initial_calls": 5,
                     "actual_cost_usd": 0.12,
                 },
@@ -123,10 +123,13 @@ class V5ProductionCutoverTests(unittest.TestCase):
             "request-audit.json",
             {
                 "status": "PASS",
-                "approved_total_call_ceiling": 7,
-                "expected_request_count": 5,
-                "captured_request_count": 5,
+                "approved_total_call_ceiling": 8,
+                "request_count": 8,
+                "governance_request_count": 3,
+                "expert_request_count": 5,
+                "requests": [{} for _ in range(8)],
                 "external_tools_allowed": False,
+                "provider_fallback_allowed": False,
             },
         )
         self._write(
@@ -134,9 +137,11 @@ class V5ProductionCutoverTests(unittest.TestCase):
             "call-ledger.json",
             {
                 "summary": {
-                    "call_count": 5,
-                    "approved_total_call_ceiling": 7,
-                    "approved_recovery_call_ceiling": 2,
+                    "call_count": 8,
+                    "governance_calls": 3,
+                    "expert_calls": 5,
+                    "approved_total_call_ceiling": 8,
+                    "approved_recovery_call_ceiling": 0,
                     "provider_actual_cost_usd": 0.12,
                     "substantive_provider_count": 5,
                     "substantive_providers": [
@@ -182,9 +187,9 @@ class V5ProductionCutoverTests(unittest.TestCase):
                 publish_outcome="success",
             )
             self.assertEqual(result["status"], "PASS", result["failures"])
-            self.assertEqual(result["checks"]["model_calls"], 5)
+            self.assertEqual(result["checks"]["model_calls"], 8)
             self.assertEqual(result["checks"]["node_count"], 5)
-            self.assertEqual(result["checks"]["approved_total_calls"], 7)
+            self.assertEqual(result["checks"]["approved_total_calls"], 8)
             self.assertEqual(
                 result["checks"]["actual_model_company_audit_status"],
                 "PASS",

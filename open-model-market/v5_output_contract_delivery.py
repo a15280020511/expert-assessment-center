@@ -21,6 +21,7 @@ COMPACT_MODE_ENV = "V5_COMPACT_OUTPUT_CONTRACT"
 CONTRACT_METADATA_KEYS = (
     "machine_readable_required",
     "must_separate_fact_assumption_inference",
+    "final_delivery_node",
     "required_fields",
     "exact_top_level_fields",
     "nested_exact_fields",
@@ -153,9 +154,10 @@ def contract_aware_system_prompt(node: SelectedNode) -> str:
         for name in modules
     )
     functions = "、".join(node.functions)
+    function_rule = f"本节点功能：{functions}。" if functions else ""
     return (
         "你是V5动态专家执行图中的一个严格隔离节点。"
-        f"本节点功能：{functions}。负责原子工作：{', '.join(node.assigned_work)}。"
+        f"{function_rule}负责原子工作：{', '.join(node.assigned_work)}。"
         "禁止调用、请求或假装使用网页、搜索、插件、文件、代码执行、数据库、API、浏览器、工具或其他模型。"
         "只能依据原始任务和系统显式传入的上游节点结果。不得读取未声明节点，不得与同独立组节点交换结果。"
         f"{_task_format_scope_rule(node)}{rules}{_delivery_rule(node)}"

@@ -9,7 +9,7 @@ from unittest import mock
 import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
-import issue_ticket  # noqa: E402
+import v5_issue_ticket as issue_ticket  # noqa: E402
 
 
 def packet(task_id="unique-task-0001", question="分析一个独特问题", calls=6, recovery=2, anomaly=1.0):
@@ -29,7 +29,7 @@ def packet(task_id="unique-task-0001", question="分析一个独特问题", call
 
 
 class TicketSecurityTests(unittest.TestCase):
-    def prepare(self, payload, *, actor="owner", association="OWNER", comment_body=""):
+    def prepare(self, payload, *, actor="owner", association="OWNER", comment_body=None):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         args = argparse.Namespace(
@@ -39,7 +39,7 @@ class TicketSecurityTests(unittest.TestCase):
             issue_number=20,
             actor=actor,
             author_association=association,
-            comment_body=comment_body,
+            comment_body=(comment_body if comment_body is not None else f"/run-expert-team {payload.get('task_id', 'invalid-task')}"),
             output_dir=temp.name,
         )
         with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY_OWNER": "owner"}, clear=False), \
@@ -62,9 +62,10 @@ class TicketSecurityTests(unittest.TestCase):
     def test_valid_ticket_is_accepted_and_contains_delegation_boundary(self):
         status, task_text = self.prepare(packet())
         self.assertTrue(status["accepted"])
-        self.assertEqual(status["analysis_owner"], "github-expert-team")
-        self.assertIn("分析、推断与最终结论必须由 GitHub 专家团及裁判生成", task_text)
-        self.assertIn("不得在专家结果产生前自行补充", task_text)
+        self.assertEqual(status["analysis_owner"], "github-v5-gpt-claude-expert-graph")
+        self.assertIn("GPT latest直接拆解并提出专家图", task_text)
+        self.assertIn("Claude Opus latest只执行一次红队审查", task_text)
+        self.assertIn("不得在专家结果产生前替代专家分析", task_text)
 
     def test_multiple_schema_errors_are_reported_together(self):
         payload = {
@@ -120,7 +121,7 @@ class TicketSecurityTests(unittest.TestCase):
             issue_number=20,
             actor="owner",
             author_association="OWNER",
-            comment_body="",
+            comment_body="/run-expert-team unique-task-0001",
             output_dir=temp.name,
         )
         with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY_OWNER": "owner"}, clear=False), \
@@ -143,7 +144,7 @@ class TicketSecurityTests(unittest.TestCase):
             issue_number=20,
             actor="owner",
             author_association="OWNER",
-            comment_body="",
+            comment_body="/run-expert-team unique-task-0001",
             output_dir=temp.name,
         )
         with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY_OWNER": "owner"}, clear=False):
@@ -166,7 +167,7 @@ class TicketSecurityTests(unittest.TestCase):
         one["evidence"] = [{"source": "A", "url": "https://one.example"}]
         two = packet(task_id="unique-task-0002", question="分析 同一个问题")
         two["objective"] = "核验　事实"
-        two["task"]["requirements"] = ["给出风险", "中文", "新增格式要求"]
+        two["task"]["requirements"] = ["给出风险", "中文"]
         two["evidence"] = [{"source": "B", "url": "https://two.example", "note": "不同备注"}]
         self.assertEqual(issue_ticket.task_fingerprint(one), issue_ticket.task_fingerprint(two))
 

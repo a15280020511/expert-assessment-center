@@ -7,7 +7,7 @@ from jsonschema import Draft202012Validator
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-import issue_ticket  # noqa: E402
+import v5_issue_ticket as issue_ticket  # noqa: E402
 
 
 class TicketJsonSchemaTests(unittest.TestCase):
@@ -33,7 +33,6 @@ class TicketJsonSchemaTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(validated["calls"], 6)
         self.assertEqual(validated["max_cost_usd"], 0.0)
-        self.assertEqual(validated["quality_tier"], "value")
 
     def test_structured_cross_center_evidence_is_accepted(self):
         payload = self.valid_packet()

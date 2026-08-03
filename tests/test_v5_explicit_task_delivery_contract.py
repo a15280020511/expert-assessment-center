@@ -6,11 +6,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-import task_semantic_compiler as compiler  # noqa: E402
 import v5_output_contract_delivery as delivery  # noqa: E402
 import v5_task_delivery_contract as contract_policy  # noqa: E402
 from execution_graph import SelectedNode  # noqa: E402
 from v5_runtime import ProductionRuntime, RuntimeConfig  # noqa: E402
+from v5_task_envelope import work_output_contract  # noqa: E402
 
 
 TASK = (
@@ -32,8 +32,22 @@ FIELDS = [
     "red_team",
     "final_recommendation",
 ]
+GENERIC_FIELDS = [
+    "analysis",
+    "assumptions",
+    "uncertainties",
+    "conclusions",
+]
 OPTIONS = ["continue_current", "supplier_a", "supplier_b", "hybrid"]
 DAYS = [f"day_{index}" for index in range(15)]
+
+
+def _contract(*, final_node: bool = True) -> dict:
+    return work_output_contract(
+        TASK,
+        GENERIC_FIELDS,
+        final_node=final_node,
+    )
 
 
 def _node(output_contract):
@@ -87,16 +101,16 @@ class TestV5ExplicitTaskDeliveryContract(unittest.TestCase):
         self.assertEqual(explicit["nested_exact_fields"]["day_by_day_plan"], DAYS)
         self.assertIn("options", explicit["nested_values_must_be_objects"])
 
-    def test_semantic_compiler_replaces_generic_synthesis_schema_only(self):
-        synthesis = compiler._output_contract(TASK, {"synthesis": 1.0}, True)
-        analysis = compiler._output_contract(TASK, {"analysis": 1.0}, True)
-        self.assertEqual(synthesis["required_fields"], FIELDS)
-        self.assertTrue(synthesis["explicit_user_contract"])
-        self.assertIn("conclusions", analysis["required_fields"])
-        self.assertNotIn("explicit_user_contract", analysis)
+    def test_only_final_node_inherits_explicit_user_schema(self):
+        final = _contract(final_node=True)
+        internal = _contract(final_node=False)
+        self.assertEqual(final["required_fields"], FIELDS)
+        self.assertTrue(final["explicit_user_contract"])
+        self.assertEqual(internal["required_fields"], GENERIC_FIELDS)
+        self.assertNotIn("explicit_user_contract", internal)
 
     def test_previous_false_pass_shape_is_rejected(self):
-        contract = compiler._output_contract(TASK, {"synthesis": 1.0}, True)
+        contract = _contract()
         previous_shape = {
             "agreements": ["x"],
             "assumptions": ["x"],
@@ -121,7 +135,7 @@ class TestV5ExplicitTaskDeliveryContract(unittest.TestCase):
         self.assertTrue(any(item.startswith("missing-exact-top-level-keys:") for item in reasons))
 
     def test_exact_contract_accepts_only_complete_nested_shape(self):
-        contract = compiler._output_contract(TASK, {"synthesis": 1.0}, True)
+        contract = _contract()
         payload = _valid_payload()
         self.assertEqual(contract_policy.validate_parsed_contract(payload, contract), [])
         passed, _, reasons = delivery.contract_aware_quality_gate(
@@ -138,14 +152,13 @@ class TestV5ExplicitTaskDeliveryContract(unittest.TestCase):
         self.assertIn("unexpected-nested-keys:day_by_day_plan:day_15", violations)
 
     def test_runtime_contract_evidence_cannot_mark_wrong_shape_complete(self):
-        contract = compiler._output_contract(TASK, {"synthesis": 1.0}, True)
+        contract = _contract()
         runtime = ProductionRuntime(
             RuntimeConfig(
                 total_call_limit=4,
                 recovery_call_limit=1,
                 cost_anomaly_usd=None,
-                quality_tier="value",
-            )
+                    )
         )
         wrong = json.dumps({"assumptions": ["x"], "final_recommendation": ["x"]})
         evidence = runtime.execution_engine._contract(_node(contract), wrong)

@@ -23,12 +23,11 @@ class V5CommandTriggerTests(unittest.TestCase):
             "route": "expert-team",
             "task": {"question": "验证唯一评论命令触发是否确定。"},
             "approved_budget": {
-                "calls": 4,
+                "calls": 5,
                 "maximum_recovery_calls": 1,
                 "cost_policy": "unbounded_with_anomaly_guard",
                 "cost_anomaly_usd": 0.20,
             },
-            "quality_tier": "value",
             "private_output": False,
         }
         with tempfile.TemporaryDirectory() as folder:
@@ -47,7 +46,7 @@ class V5CommandTriggerTests(unittest.TestCase):
                 {"GITHUB_REPOSITORY_OWNER": "owner"},
                 clear=False,
             ), mock.patch.object(
-                ticket.hardened.base,
+                ticket,
                 "duplicate_reason",
                 return_value="",
             ):

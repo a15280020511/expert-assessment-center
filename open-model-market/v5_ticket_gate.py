@@ -6,10 +6,15 @@ import argparse
 import hashlib
 import json
 import math
-import re
-import unicodedata
+import sys
 from pathlib import Path
 from typing import Any, Mapping
+
+MODULE_DIR = Path(__file__).resolve().parent
+if str(MODULE_DIR) not in sys.path:
+    sys.path.insert(0, str(MODULE_DIR))
+
+from v5_ticket_identity import task_fingerprint
 
 
 class TicketGateError(RuntimeError):
@@ -24,39 +29,10 @@ def _load_object(path: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise TicketGateError(f"invalid immutable admission JSON: {path.name}") from exc
     if not isinstance(value, dict):
-        raise TicketGateError(f"immutable admission JSON must be an object: {path.name}")
+        raise TicketGateError(
+            f"immutable admission JSON must be an object: {path.name}"
+        )
     return value
-
-
-def _normalize_semantic_text(value: Any) -> str:
-    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
-    text = re.sub(r"[\s\u3000]+", " ", text)
-    text = re.sub(r"[，。！？；：、,.!?;:]+", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _task_fingerprint(packet: Mapping[str, Any]) -> str:
-    task = packet.get("task") if isinstance(packet.get("task"), Mapping) else {}
-    requirements = task.get("requirements") if isinstance(task.get("requirements"), list) else []
-    canonical = {
-        "question": _normalize_semantic_text(task.get("question")),
-        "requirements": sorted(
-            {
-                normalized
-                for item in requirements
-                if isinstance(item, str)
-                for normalized in [_normalize_semantic_text(item)]
-                if normalized
-            }
-        ),
-    }
-    raw = json.dumps(
-        canonical,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _sha256(path: Path) -> str:
@@ -89,14 +65,7 @@ def _require(errors: list[str], condition: bool, message: str) -> None:
         errors.append(message)
 
 
-def validate_gate(
-    root: Path,
-    *,
-    expected_calls: int,
-    expected_recovery_calls: int,
-    expected_quality_tier: str,
-    expected_cost_anomaly_usd: float | None,
-) -> dict[str, Any]:
+def _admission_paths(root: Path) -> tuple[Path, Path, Path, dict[str, Any], dict[str, Any], str]:
     ticket_path = root / "ticket.json"
     status_path = root / "ticket-status.json"
     task_path = root / "task.txt"
@@ -104,142 +73,175 @@ def validate_gate(
     status = _load_object(status_path)
     if not task_path.is_file():
         raise TicketGateError("missing immutable admission file: task.txt")
-    task_text = task_path.read_text(encoding="utf-8")
-    errors: list[str] = []
+    return ticket_path, status_path, task_path, ticket, status, task_path.read_text(encoding="utf-8")
 
+
+def _ticket_parts(ticket: Mapping[str, Any]) -> tuple[Mapping[str, Any], Mapping[str, Any], str, str]:
     task = ticket.get("task") if isinstance(ticket.get("task"), Mapping) else {}
-    budget = (
-        ticket.get("approved_budget")
-        if isinstance(ticket.get("approved_budget"), Mapping)
-        else {}
+    budget = ticket.get("approved_budget") if isinstance(ticket.get("approved_budget"), Mapping) else {}
+    return task, budget, str(ticket.get("task_id") or ""), str(task.get("question") or "")
+
+
+def _identity_errors(
+    ticket: Mapping[str, Any],
+    status: Mapping[str, Any],
+    task_text: str,
+    task_id: str,
+    question: str,
+) -> tuple[list[str], str]:
+    errors: list[str] = []
+    checks = (
+        (status.get("accepted") is True, "ticket-status.accepted must be true"),
+        (str(ticket.get("route") or "") == "expert-team", "ticket.route must be expert-team"),
+        (bool(task_id), "ticket.task_id is required"),
+        (str(status.get("task_id") or "") == task_id, "ticket/status task_id mismatch"),
+        (bool(question.strip()), "ticket.task.question is required"),
+        (question in task_text, "task.txt does not contain the admitted question"),
+        (bool(task_text.strip()), "task.txt must not be empty"),
     )
-    task_id = str(ticket.get("task_id") or "")
-    question = str(task.get("question") or "")
-    ticket_calls = budget.get("calls")
-    ticket_recovery = budget.get("maximum_recovery_calls")
-    ticket_anomaly = budget.get("cost_anomaly_usd")
-    status_calls = status.get("calls")
-    status_recovery = status.get("maximum_recovery_calls")
-    status_initial = status.get("maximum_initial_calls")
-    mode = str(status.get("trigger_mode") or "")
-    is_retry = status.get("is_retry") is True
-
-    _require(errors, status.get("accepted") is True, "ticket-status.accepted must be true")
-    _require(errors, str(ticket.get("route") or "") == "expert-team", "ticket.route must be expert-team")
-    _require(errors, bool(task_id), "ticket.task_id is required")
-    _require(errors, str(status.get("task_id") or "") == task_id, "ticket/status task_id mismatch")
-    _require(errors, bool(question.strip()), "ticket.task.question is required")
-    _require(errors, question in task_text, "task.txt does not contain the admitted question")
-    _require(errors, bool(task_text.strip()), "task.txt must not be empty")
-
-    fingerprint = _task_fingerprint(ticket)
+    for condition, message in checks:
+        _require(errors, condition, message)
+    fingerprint = task_fingerprint(ticket)
     _require(
         errors,
         str(status.get("task_fingerprint") or "") == fingerprint,
         "ticket/status task fingerprint mismatch",
     )
+    return errors, fingerprint
 
-    _require(errors, _is_int(expected_calls) and 4 <= expected_calls <= 16, "expected calls must be between 4 and 16")
-    _require(errors, _is_int(ticket_calls), "ticket approved_budget.calls must be an integer")
-    _require(errors, _is_int(status_calls), "ticket-status.calls must be an integer")
-    _require(errors, ticket_calls == expected_calls, "ticket calls differ from workflow expectation")
-    _require(errors, status_calls == expected_calls, "status calls differ from workflow expectation")
 
-    _require(
-        errors,
-        _is_int(expected_recovery_calls) and 0 <= expected_recovery_calls <= 4,
-        "expected recovery calls must be between 0 and 4",
+def _call_budget_errors(
+    budget: Mapping[str, Any],
+    status: Mapping[str, Any],
+    expected_calls: int,
+    expected_recovery_calls: int,
+) -> tuple[list[str], int]:
+    errors: list[str] = []
+    ticket_calls = budget.get("calls")
+    ticket_recovery = budget.get("maximum_recovery_calls")
+    status_calls = status.get("calls")
+    status_recovery = status.get("maximum_recovery_calls")
+    checks = (
+        (_is_int(expected_calls) and 4 <= expected_calls <= 16, "expected calls must be between 4 and 16"),
+        (_is_int(ticket_calls), "ticket approved_budget.calls must be an integer"),
+        (_is_int(status_calls), "ticket-status.calls must be an integer"),
+        (ticket_calls == expected_calls, "ticket calls differ from workflow expectation"),
+        (status_calls == expected_calls, "status calls differ from workflow expectation"),
+        (_is_int(expected_recovery_calls) and 0 <= expected_recovery_calls <= 4, "expected recovery calls must be between 0 and 4"),
+        (_is_int(ticket_recovery), "ticket maximum_recovery_calls must be an integer"),
+        (_is_int(status_recovery), "status maximum_recovery_calls must be an integer"),
+        (ticket_recovery == expected_recovery_calls, "ticket recovery differs from workflow expectation"),
+        (status_recovery == expected_recovery_calls, "status recovery differs from workflow expectation"),
+        (expected_recovery_calls <= expected_calls - 4, "recovery calls must leave three governance calls and one expert call"),
     )
-    _require(errors, _is_int(ticket_recovery), "ticket recovery calls must be an integer")
-    _require(errors, _is_int(status_recovery), "status recovery calls must be an integer")
-    _require(errors, ticket_recovery == expected_recovery_calls, "ticket recovery calls differ from workflow expectation")
-    _require(errors, status_recovery == expected_recovery_calls, "status recovery calls differ from workflow expectation")
-    _require(errors, expected_recovery_calls < expected_calls, "recovery pool must leave at least one initial call")
+    for condition, message in checks:
+        _require(errors, condition, message)
+    expected_initial = expected_calls - 3 - expected_recovery_calls
     _require(
         errors,
-        status_initial == expected_calls - expected_recovery_calls,
-        "status initial-call limit is inconsistent",
+        status.get("maximum_initial_calls") == expected_initial,
+        "status initial calls must equal total minus three governance calls and recovery",
     )
     _require(
         errors,
         status.get("maximum_replacements") == expected_recovery_calls,
         "status replacement limit differs from recovery pool",
     )
+    return errors, expected_initial
 
-    _require(
-        errors,
-        str(ticket.get("quality_tier") or "") == expected_quality_tier,
-        "ticket quality tier differs from workflow expectation",
-    )
-    _require(
-        errors,
-        str(status.get("quality_tier") or "") == expected_quality_tier,
-        "status quality tier differs from workflow expectation",
-    )
-    _require(
-        errors,
-        expected_quality_tier in {"budget", "value", "quality"},
-        "unsupported workflow quality tier",
-    )
 
-    if expected_cost_anomaly_usd is None:
-        _require(errors, ticket_anomaly is None, "ticket anomaly guard must be absent")
-        _require(errors, status.get("cost_anomaly_usd") is None, "status anomaly guard must be absent")
-    else:
-        _require(
-            errors,
-            expected_cost_anomaly_usd > 0 and math.isfinite(expected_cost_anomaly_usd),
-            "workflow anomaly guard must be finite and positive",
-        )
-        _require(errors, _same_number(ticket_anomaly, expected_cost_anomaly_usd), "ticket anomaly guard differs from workflow expectation")
-        _require(errors, _same_number(status.get("cost_anomaly_usd"), expected_cost_anomaly_usd), "status anomaly guard differs from workflow expectation")
-        _require(errors, _same_number(status.get("max_cost_usd"), expected_cost_anomaly_usd), "status max_cost_usd differs from anomaly guard")
-
+def _cost_policy_errors(
+    budget: Mapping[str, Any],
+    status: Mapping[str, Any],
+    expected_cost_anomaly_usd: float | None,
+) -> list[str]:
+    errors: list[str] = []
     _require(
         errors,
         str(budget.get("cost_policy") or "") == "unbounded_with_anomaly_guard",
-        "ticket cost policy mismatch",
+        "ticket cost policy must be unbounded_with_anomaly_guard",
     )
     _require(
         errors,
         str(status.get("cost_policy") or "") == "unbounded_with_anomaly_guard",
-        "status cost policy mismatch",
+        "status cost policy must be unbounded_with_anomaly_guard",
     )
-    _require(errors, ticket.get("private_output") is False, "private output is unsupported")
-    _require(errors, status.get("private_output") is False, "status private output must be false")
-    _require(errors, str(status.get("runtime_version") or "") == "v5-native-runtime-1", "runtime version mismatch")
-    _require(errors, str(status.get("authoritative_trigger") or "") == "issue_comment.created", "authoritative trigger mismatch")
-    _require(errors, str(status.get("fallback_policy") or "") == "disabled-fail-closed", "fallback policy mismatch")
-    _require(errors, status.get("legacy_runtime_present") is False, "legacy runtime must be absent")
-    _require(errors, status.get("cross_task_history_used") is False, "cross-task history must be disabled")
+    ticket_anomaly = budget.get("cost_anomaly_usd")
+    if expected_cost_anomaly_usd is None:
+        _require(errors, ticket_anomaly is None, "ticket anomaly guard must be absent")
+        _require(errors, status.get("cost_anomaly_usd") is None, "status anomaly guard must be absent")
+        return errors
+    checks = (
+        (expected_cost_anomaly_usd > 0 and math.isfinite(expected_cost_anomaly_usd), "workflow anomaly guard must be finite and positive"),
+        (_same_number(ticket_anomaly, expected_cost_anomaly_usd), "ticket anomaly guard differs from workflow expectation"),
+        (_same_number(status.get("cost_anomaly_usd"), expected_cost_anomaly_usd), "status anomaly guard differs from workflow expectation"),
+        (_same_number(status.get("max_cost_usd"), expected_cost_anomaly_usd), "status max_cost_usd differs from anomaly guard"),
+    )
+    for condition, message in checks:
+        _require(errors, condition, message)
+    return errors
 
+
+def _runtime_policy_errors(ticket: Mapping[str, Any], status: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    checks = (
+        (ticket.get("private_output") is False, "private output is unsupported"),
+        (status.get("private_output") is False, "status private output must be false"),
+        (str(status.get("analysis_owner") or "") == "github-v5-gpt-claude-expert-graph", "analysis owner mismatch"),
+        (str(status.get("runtime_version") or "") == "v5-native-runtime-1", "runtime version mismatch"),
+        (str(status.get("authoritative_trigger") or "") == "issue_comment.created", "authoritative trigger mismatch"),
+        (str(status.get("fallback_policy") or "") == "disabled-fail-closed", "fallback policy mismatch"),
+        (status.get("legacy_runtime_present") is False, "legacy runtime must be absent"),
+        (status.get("cross_task_history_used") is False, "cross-task history must be disabled"),
+    )
+    for condition, message in checks:
+        _require(errors, condition, message)
+    return errors
+
+
+def _trigger_errors(status: Mapping[str, Any], task_id: str) -> tuple[list[str], str]:
+    errors: list[str] = []
+    mode = str(status.get("trigger_mode") or "")
+    is_retry = status.get("is_retry") is True
     if mode == "run":
-        _require(errors, not is_retry, "run mode cannot be marked as retry")
-        _require(errors, str(status.get("execution_id") or "") == task_id, "run execution_id must equal task_id")
-        _require(errors, not str(status.get("retry_id") or ""), "run mode retry_id must be empty")
-    elif mode == "retry":
-        _require(errors, is_retry, "retry mode must be marked as retry")
-        _require(errors, bool(str(status.get("retry_id") or "")), "retry mode requires retry_id")
-        _require(errors, not str(status.get("execution_id") or ""), "retry mode execution_id must be empty")
-    else:
-        errors.append("trigger_mode must be run or retry")
-
-    if errors:
-        raise TicketGateError("; ".join(errors))
-
-    evidence = {
-        name: {
-            "sha256": _sha256(path),
-            "size_bytes": path.stat().st_size,
-        }
-        for name, path in (
-            ("ticket.json", ticket_path),
-            ("ticket-status.json", status_path),
-            ("task.txt", task_path),
+        checks = (
+            (not is_retry, "run mode cannot be marked as retry"),
+            (str(status.get("execution_id") or "") == task_id, "run execution_id must equal task_id"),
+            (not str(status.get("retry_id") or ""), "run mode retry_id must be empty"),
         )
-    }
+    elif mode == "retry":
+        checks = (
+            (is_retry, "retry mode must be marked as retry"),
+            (bool(str(status.get("retry_id") or "")), "retry mode requires retry_id"),
+            (not str(status.get("execution_id") or ""), "retry mode execution_id must be empty"),
+        )
+    else:
+        return ["trigger_mode must be run or retry"], mode
+    for condition, message in checks:
+        _require(errors, condition, message)
+    return errors, mode
+
+
+def _admission_evidence(paths: tuple[Path, Path, Path]) -> dict[str, Any]:
     return {
-        "schema_version": "v5-ticket-gate-1",
+        path.name: {"sha256": _sha256(path), "size_bytes": path.stat().st_size}
+        for path in paths
+    }
+
+
+def _gate_result(
+    *,
+    task_id: str,
+    fingerprint: str,
+    mode: str,
+    expected_calls: int,
+    expected_initial: int,
+    expected_recovery_calls: int,
+    expected_cost_anomaly_usd: float | None,
+    evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema_version": "v5-ticket-gate-2",
         "status": "PASS",
         "task_id": task_id,
         "task_fingerprint": fingerprint,
@@ -247,15 +249,47 @@ def validate_gate(
         "runtime_version": "v5-native-runtime-1",
         "validated_budget": {
             "maximum_total_calls": expected_calls,
-            "maximum_initial_calls": expected_calls - expected_recovery_calls,
+            "governance_calls": 3,
+            "maximum_initial_calls": expected_initial,
             "maximum_recovery_calls": expected_recovery_calls,
             "cost_anomaly_usd": expected_cost_anomaly_usd,
-            "quality_tier": expected_quality_tier,
         },
-        "immutable_admission_evidence": evidence,
+        "immutable_admission_evidence": dict(evidence),
         "model_calls_performed": 0,
         "mutation_performed": False,
     }
+
+
+def validate_gate(
+    root: Path,
+    *,
+    expected_calls: int,
+    expected_recovery_calls: int,
+    expected_cost_anomaly_usd: float | None,
+) -> dict[str, Any]:
+    ticket_path, status_path, task_path, ticket, status, task_text = _admission_paths(root)
+    _, budget, task_id, question = _ticket_parts(ticket)
+    errors, fingerprint = _identity_errors(ticket, status, task_text, task_id, question)
+    budget_errors, expected_initial = _call_budget_errors(
+        budget, status, expected_calls, expected_recovery_calls
+    )
+    errors.extend(budget_errors)
+    errors.extend(_cost_policy_errors(budget, status, expected_cost_anomaly_usd))
+    errors.extend(_runtime_policy_errors(ticket, status))
+    trigger_errors, mode = _trigger_errors(status, task_id)
+    errors.extend(trigger_errors)
+    if errors:
+        raise TicketGateError("; ".join(errors))
+    return _gate_result(
+        task_id=task_id,
+        fingerprint=fingerprint,
+        mode=mode,
+        expected_calls=expected_calls,
+        expected_initial=expected_initial,
+        expected_recovery_calls=expected_recovery_calls,
+        expected_cost_anomaly_usd=expected_cost_anomaly_usd,
+        evidence=_admission_evidence((ticket_path, status_path, task_path)),
+    )
 
 
 def _write_result(path: Path, payload: Mapping[str, Any]) -> None:
@@ -273,7 +307,6 @@ def run_gate(
     *,
     expected_calls: int,
     expected_recovery_calls: int,
-    expected_quality_tier: str,
     expected_cost_anomaly_usd: float | None,
 ) -> dict[str, Any]:
     output = root / "ticket-gate.json"
@@ -282,14 +315,17 @@ def run_gate(
             root,
             expected_calls=expected_calls,
             expected_recovery_calls=expected_recovery_calls,
-            expected_quality_tier=expected_quality_tier,
             expected_cost_anomaly_usd=expected_cost_anomaly_usd,
         )
     except TicketGateError as exc:
         result = {
-            "schema_version": "v5-ticket-gate-1",
+            "schema_version": "v5-ticket-gate-2",
             "status": "FAIL",
-            "errors": [part.strip() for part in str(exc).split(";") if part.strip()],
+            "errors": [
+                part.strip()
+                for part in str(exc).split(";")
+                if part.strip()
+            ],
             "model_calls_performed": 0,
             "mutation_performed": False,
         }
@@ -306,9 +342,13 @@ def _optional_float(value: str) -> float | None:
     try:
         number = float(text)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError("expected cost anomaly must be numeric") from exc
+        raise argparse.ArgumentTypeError(
+            "expected cost anomaly must be numeric"
+        ) from exc
     if not math.isfinite(number):
-        raise argparse.ArgumentTypeError("expected cost anomaly must be finite")
+        raise argparse.ArgumentTypeError(
+            "expected cost anomaly must be finite"
+        )
     return number
 
 
@@ -317,8 +357,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default="ticket-artifacts")
     parser.add_argument("--expected-calls", required=True, type=int)
     parser.add_argument("--expected-recovery-calls", required=True, type=int)
-    parser.add_argument("--expected-quality-tier", required=True)
-    parser.add_argument("--expected-cost-anomaly-usd", default="", type=_optional_float)
+    parser.add_argument(
+        "--expected-cost-anomaly-usd",
+        default="",
+        type=_optional_float,
+    )
     return parser
 
 
@@ -329,7 +372,6 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.output_dir),
             expected_calls=args.expected_calls,
             expected_recovery_calls=args.expected_recovery_calls,
-            expected_quality_tier=args.expected_quality_tier,
             expected_cost_anomaly_usd=args.expected_cost_anomaly_usd,
         )
     except TicketGateError as exc:

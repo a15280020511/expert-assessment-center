@@ -3,7 +3,6 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
@@ -11,7 +10,6 @@ sys.path.insert(0, str(ROOT / "open-model-market"))
 from v5_constitutional_runtime import ConstitutionalExecutionEngine  # noqa: E402
 from v5_task_constraints import (  # noqa: E402
     compile_task_constraints,
-    dynamic_objective_weights,
     normalized_quantities,
     validate_answer_evidence,
 )
@@ -147,34 +145,6 @@ class ClosedWorldEvidenceExtendedTests(unittest.TestCase):
         violations = validate_answer_evidence(task, unsupported)
         self.assertTrue(
             any(value.startswith("unsupported-fact-label:") for value in violations)
-        )
-
-
-class DynamicObjectiveTests(unittest.TestCase):
-    def test_weights_are_normalized_and_task_dependent(self) -> None:
-        simple = SimpleNamespace(
-            complexity_score=0,
-            requested_context=16_384,
-            high_stakes=False,
-            long_context=False,
-        )
-        strict = SimpleNamespace(
-            complexity_score=7,
-            requested_context=131_072,
-            high_stakes=True,
-            long_context=True,
-        )
-        simple_weights = dynamic_objective_weights(simple, "概括题面")
-        strict_weights = dynamic_objective_weights(
-            strict,
-            "仅依据题面完成医疗合规审计，不得编造。",
-        )
-        self.assertAlmostEqual(sum(simple_weights.values()), 1.0)
-        self.assertAlmostEqual(sum(strict_weights.values()), 1.0)
-        self.assertNotEqual(simple_weights, strict_weights)
-        self.assertGreater(
-            strict_weights["intelligence"],
-            simple_weights["intelligence"],
         )
 
 

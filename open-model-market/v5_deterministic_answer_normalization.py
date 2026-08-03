@@ -6,6 +6,8 @@ from collections import Counter
 from hashlib import sha256
 from typing import Any, Mapping, Sequence
 
+from text_normalization import normalize_heading_key
+
 from v5_task_constraints import (
     TaskConstraints,
     fact_claim_supported,
@@ -35,11 +37,7 @@ _INFERENTIAL_FACT_RE = re.compile(
 )
 
 
-def _heading_key(value: str) -> str:
-    value = re.sub(r"[`*_~]", "", str(value)).strip().casefold()
-    value = re.sub(r"^\d+(?:\.\d+)*[\s.)、:：-]+", "", value)
-    value = re.sub(r"[^0-9a-z_\u4e00-\u9fff]+", "_", value)
-    return value.strip("_")
+_heading_key = normalize_heading_key
 
 
 def _quantity_token(value: tuple[str, str, str]) -> str:

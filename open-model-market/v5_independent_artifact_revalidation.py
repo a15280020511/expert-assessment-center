@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 from pathlib import Path
 from typing import Any, Mapping
 
+from artifact_manifest import sha256_file
 from v5_model_company import canonical_model_company
 from v5_task_constraints import (
     compile_task_constraints,
@@ -44,20 +44,11 @@ def _load_optional(path: Path, default: Any) -> Any:
         return default
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _manifest_checks(
-    root: Path,
+def _manifest_identity(
+    manifest: Mapping[str, Any],
     expected_sha: str,
     expected_run_id: str,
-) -> dict[str, Any]:
-    manifest = _load(root / "artifact-manifest.json")
+) -> tuple[list[str], str, str]:
     failures: list[str] = []
     execution_sha = str(
         manifest.get("execution_sha")
@@ -76,12 +67,14 @@ def _manifest_checks(
         != "checked-out-git-head-is-authoritative"
     ):
         failures.append("manifest execution SHA policy is invalid")
+    return failures, execution_sha, run_id
 
-    entries = manifest.get("files", [])
-    if not isinstance(entries, list) or not entries:
-        failures.append("manifest file list is empty")
-        entries = []
 
+def _manifest_entry_checks(
+    root: Path,
+    entries: list[Any],
+) -> tuple[list[str], set[str], int]:
+    failures: list[str] = []
     listed_paths: set[str] = set()
     checked = 0
     for row in entries:
@@ -89,34 +82,61 @@ def _manifest_checks(
             failures.append("manifest contains a non-object entry")
             continue
         relative = str(row.get("path") or "")
-        if (
-            not relative
-            or relative.startswith("/")
-            or ".." in Path(relative).parts
-        ):
+        if not relative or relative.startswith("/") or ".." in Path(relative).parts:
             failures.append(f"invalid manifest path: {relative}")
             continue
         if relative in listed_paths:
             failures.append(f"duplicate manifest path: {relative}")
             continue
         listed_paths.add(relative)
-        path = root / relative
-        if not path.is_file():
+        artifact_path = root / relative
+        if not artifact_path.is_file():
             failures.append(f"manifest file missing: {relative}")
             continue
         checked += 1
-        if path.stat().st_size != int(row.get("size") or -1):
+        if artifact_path.stat().st_size != int(row.get("size") or -1):
             failures.append(f"manifest size mismatch: {relative}")
-        if _sha256(path) != str(row.get("sha256") or ""):
+        if sha256_file(artifact_path) != str(row.get("sha256") or ""):
             failures.append(f"manifest hash mismatch: {relative}")
+    return failures, listed_paths, checked
 
+
+def _manifest_archive_sets(
+    root: Path,
+    listed_paths: set[str],
+) -> tuple[set[str], list[str], list[str]]:
     actual_paths = {
         str(path.relative_to(root))
         for path in root.rglob("*")
         if path.is_file() and path.name != "artifact-manifest.json"
     }
-    missing_from_manifest = sorted(actual_paths - listed_paths)
-    absent_from_archive = sorted(listed_paths - actual_paths)
+    return (
+        actual_paths,
+        sorted(actual_paths - listed_paths),
+        sorted(listed_paths - actual_paths),
+    )
+
+
+def _manifest_checks(
+    root: Path,
+    expected_sha: str,
+    expected_run_id: str,
+) -> dict[str, Any]:
+    manifest = _load(root / "artifact-manifest.json")
+    failures, execution_sha, run_id = _manifest_identity(
+        manifest,
+        expected_sha,
+        expected_run_id,
+    )
+    entries = manifest.get("files", [])
+    if not isinstance(entries, list) or not entries:
+        failures.append("manifest file list is empty")
+        entries = []
+    entry_failures, listed_paths, checked = _manifest_entry_checks(root, entries)
+    failures.extend(entry_failures)
+    actual_paths, missing_from_manifest, absent_from_archive = (
+        _manifest_archive_sets(root, listed_paths)
+    )
     if missing_from_manifest:
         failures.append(
             "artifact files omitted from manifest: "
@@ -127,7 +147,6 @@ def _manifest_checks(
             "manifest lists absent artifact files: "
             + ",".join(absent_from_archive[:32])
         )
-
     return {
         "failures": failures,
         "execution_sha": execution_sha,
@@ -230,6 +249,30 @@ def _recompiled_task_contract(task: str) -> dict[str, Any]:
     )
 
 
+def _final_delivery_flag_violations(
+    nodes: list[Any],
+    final_ids: set[str],
+) -> list[str]:
+    violations: list[str] = []
+    for node in nodes:
+        if not isinstance(node, Mapping):
+            continue
+        node_id = str(node.get("node_id") or "")
+        expected_final = node_id in final_ids
+        contract = node.get("output_contract")
+        observed_final = (
+            contract.get("final_delivery_node")
+            if isinstance(contract, Mapping)
+            else None
+        )
+        if observed_final is not expected_final:
+            violations.append(
+                "node final_delivery_node flag is missing or inconsistent: "
+                + (node_id or "missing-node-id")
+            )
+    return violations
+
+
 def _final_contract_violations(
     graph: Mapping[str, Any],
     report: str,
@@ -244,7 +287,7 @@ def _final_contract_violations(
     if not isinstance(nodes, list) or not final_ids:
         return ["final graph contract evidence is missing"]
 
-    violations: list[str] = []
+    violations = _final_delivery_flag_violations(nodes, final_ids)
     task_contract = _recompiled_task_contract(task)
     task_kind = explicit_contract_kind(task_contract)
     if task_kind != "generic":
@@ -295,32 +338,30 @@ def _final_contract_violations(
     return list(dict.fromkeys(violations))
 
 
-def recompute(
-    root: Path,
-    *,
-    expected_sha: str,
-    expected_run_id: str,
-    maximum_calls: int,
-    maximum_cost_usd: float,
-    archive: Path | None = None,
-    expected_artifact_digest: str | None = None,
-) -> dict[str, Any]:
-    failures: list[str] = []
-    manifest = _manifest_checks(root, expected_sha, expected_run_id)
-    failures.extend(manifest["failures"])
-
-    result = _load(root / "expert-team-result.json")
-    summary = _load(root / "v5-execution-summary.json")
-    graph = _load(root / "v5-execution-graph.json")
-    nodes = _load(root / "v5-node-results.json")
-    request_audit = _load(root / "v5-request-audit.json")
-    constraints = _load(root / "task-constraints.json")
-    runtime_evidence = _load_optional(root / "evidence-integrity.json", {})
+def _load_revalidation_inputs(root: Path) -> dict[str, Any]:
     ticket = _load(root / "ticket.json")
-    call_ledger = _load_optional(root / "call-ledger.json", {})
-    report = (root / "v5-final-report.md").read_text(encoding="utf-8")
-    task = _canonical_task(ticket if isinstance(ticket, Mapping) else {})
+    return {
+        "result": _load(root / "expert-team-result.json"),
+        "summary": _load(root / "v5-execution-summary.json"),
+        "graph": _load(root / "v5-execution-graph.json"),
+        "nodes": _load(root / "v5-node-results.json"),
+        "request_audit": _load(root / "v5-request-audit.json"),
+        "constraints": _load(root / "task-constraints.json"),
+        "runtime_evidence": _load_optional(root / "evidence-integrity.json", {}),
+        "ticket": ticket,
+        "call_ledger": _load_optional(root / "call-ledger.json", {}),
+        "governance_ledger": _load_optional(root / "v5-governance-calls.json", {}),
+        "report": (root / "v5-final-report.md").read_text(encoding="utf-8"),
+        "task": _canonical_task(ticket if isinstance(ticket, Mapping) else {}),
+    }
 
+
+def _execution_result_failures(
+    result: Mapping[str, Any],
+    summary: Mapping[str, Any],
+    report: str,
+) -> list[str]:
+    failures: list[str] = []
     if result.get("status") != "success" or summary.get("status") != "success":
         failures.append("execution status is not success")
     if (
@@ -337,11 +378,24 @@ def recompute(
         failures.append("v5-result final answer differs from final report")
     if str(summary.get("final_answer") or "").strip() != report.strip():
         failures.append("execution summary final answer differs from final report")
+    if result.get("cross_task_history_used") is not False:
+        failures.append(
+            "expert-team-result does not prove cross_task_history_used=false"
+        )
+    return failures
 
-    if not isinstance(nodes, list) or not nodes:
+
+def _normalized_node_evidence(
+    raw_nodes: Any,
+    graph: Mapping[str, Any],
+) -> tuple[list[Any], list[str]]:
+    failures: list[str] = []
+    if not isinstance(raw_nodes, list) or not raw_nodes:
         failures.append("node evidence is empty")
-        nodes = []
-    graph_nodes = graph.get("nodes", []) if isinstance(graph, Mapping) else []
+        nodes: list[Any] = []
+    else:
+        nodes = raw_nodes
+    graph_nodes = graph.get("nodes", [])
     if len(nodes) != len(graph_nodes):
         failures.append(
             f"node result count mismatch: {len(nodes)}/{len(graph_nodes)}"
@@ -360,57 +414,157 @@ def recompute(
             failures.append(
                 f"node contract is incomplete: {node.get('node_id')}"
             )
+    return nodes, failures
 
-    report_contract_violations = _final_contract_violations(
-        graph if isinstance(graph, Mapping) else {},
-        report,
-        task,
-    )
-    failures.extend(report_contract_violations)
 
+def _governance_audit(
+    governance_ledger: Mapping[str, Any],
+) -> tuple[list[Mapping[str, Any]], int, float, list[str]]:
+    failures: list[str] = []
+    rows = [
+        row
+        for row in governance_ledger.get("calls", [])
+        if isinstance(row, Mapping)
+    ]
+    calls = int(governance_ledger.get("actual_governance_calls") or len(rows))
+    kinds = [str(row.get("kind") or "") for row in rows]
+    if calls != 3 or len(rows) != 3:
+        failures.append(
+            "governance call count differs from required sequence: "
+            f"{calls}/{len(rows)}"
+        )
+    if kinds != ["gpt_proposal", "claude_red_team", "gpt_synthesis"]:
+        failures.append(f"governance call sequence is invalid: {kinds}")
+    if int(governance_ledger.get("claude_red_team_calls") or 0) != 1:
+        failures.append("Claude red-team call count is not one")
+    if int(governance_ledger.get("gpt_synthesis_calls") or 0) != 1:
+        failures.append("GPT synthesis call count is not one")
+    for field, expected in (
+        ("claude_is_advisory_only", True),
+        ("claude_gatekeeping_allowed", False),
+        ("second_claude_review_allowed", False),
+        ("model_loop_allowed", False),
+    ):
+        if governance_ledger.get(field) is not expected:
+            failures.append(f"governance flag {field} is not {expected}")
+    try:
+        cost = float(governance_ledger.get("actual_cost_usd") or 0.0)
+    except (TypeError, ValueError):
+        cost = -1.0
+    if not math.isfinite(cost) or cost < 0:
+        failures.append("governance actual cost is invalid")
+    return rows, calls, cost, failures
+
+
+def _call_budget_audit(
+    nodes: list[Any],
+    summary: Mapping[str, Any],
+    governance_ledger: Mapping[str, Any],
+    maximum_calls: int,
+) -> tuple[list[dict[str, Any]], int, int, int, float, list[str]]:
+    failures: list[str] = []
     attempts = _attempts(nodes)
-    calls = len(attempts)
+    expert_calls = len(attempts)
     budget = summary.get("execution_budget", {})
     reserved = (
         int(budget.get("calls_reserved") or 0)
         if isinstance(budget, Mapping)
         else 0
     )
-    if calls != reserved:
+    if expert_calls != reserved:
         failures.append(
-            f"attempt count differs from reserved calls: {calls}/{reserved}"
+            "expert attempt count differs from reserved calls: "
+            f"{expert_calls}/{reserved}"
         )
-    if not 1 <= calls <= maximum_calls:
+    _, governance_calls, governance_cost, governance_failures = _governance_audit(
+        governance_ledger
+    )
+    failures.extend(governance_failures)
+    total_calls = governance_calls + expert_calls
+    if not 4 <= total_calls <= maximum_calls:
         failures.append(
-            f"model call count outside bound: {calls}/{maximum_calls}"
+            f"total model call count outside bound: {total_calls}/{maximum_calls}"
         )
+    return (
+        attempts,
+        expert_calls,
+        governance_calls,
+        total_calls,
+        governance_cost,
+        failures,
+    )
 
-    requests = [row.get("request", {}) for row in attempts]
-    if int(request_audit.get("request_count") or 0) != calls:
-        failures.append("request audit count differs from primitive attempts")
+
+def _request_shape_failures(
+    request: Any,
+    index: int,
+) -> list[str]:
+    failures: list[str] = []
+    if not isinstance(request, Mapping):
+        return [f"request {index} is not an object"]
+    forbidden = sorted(FORBIDDEN_REQUEST_FIELDS.intersection(request))
+    if forbidden:
+        failures.append(
+            f"request {index} contains forbidden fields: {forbidden}"
+        )
+    provider = request.get("provider")
+    if not isinstance(provider, Mapping):
+        failures.append(f"request {index} has no provider lock")
+        return failures
+    only = provider.get("only")
+    if not isinstance(only, list) or len(only) != 1:
+        failures.append(f"request {index} provider.only is not singular")
+    order = provider.get("order")
+    if not isinstance(order, list) or order != only:
+        failures.append(
+            f"request {index} provider.order does not match provider.only"
+        )
+    if provider.get("allow_fallbacks") is not False:
+        failures.append(f"request {index} allows provider fallback")
+    return failures
+
+
+def _request_audit_failures(
+    request_audit: Mapping[str, Any],
+    *,
+    expert_calls: int,
+    governance_calls: int,
+    total_calls: int,
+) -> list[str]:
+    failures: list[str] = []
+    requests = request_audit.get("requests", [])
+    if not isinstance(requests, list):
+        requests = []
+        failures.append("request audit requests are not a list")
+    if int(request_audit.get("request_count") or 0) != total_calls:
+        failures.append(
+            "request audit total count differs from governance plus expert calls"
+        )
+    if (
+        int(request_audit.get("governance_request_count") or 0)
+        != governance_calls
+    ):
+        failures.append(
+            "request audit governance count differs from governance ledger"
+        )
+    if int(request_audit.get("expert_request_count") or 0) != expert_calls:
+        failures.append(
+            "request audit expert count differs from primitive attempts"
+        )
+    if len(requests) != total_calls:
+        failures.append("request audit row count differs from total model calls")
     if request_audit.get("external_tools_allowed") is not False:
         failures.append("external tools are not explicitly prohibited")
+    if request_audit.get("provider_fallback_allowed") is not False:
+        failures.append("provider fallback is not explicitly prohibited")
     for index, request in enumerate(requests, 1):
-        if not isinstance(request, Mapping):
-            failures.append(f"request {index} is not an object")
-            continue
-        forbidden = sorted(FORBIDDEN_REQUEST_FIELDS.intersection(request))
-        if forbidden:
-            failures.append(
-                f"request {index} contains forbidden fields: {forbidden}"
-            )
-        provider = request.get("provider")
-        if not isinstance(provider, Mapping):
-            failures.append(f"request {index} has no provider lock")
-            continue
-        only = provider.get("only")
-        if not isinstance(only, list) or len(only) != 1:
-            failures.append(
-                f"request {index} provider.only is not singular"
-            )
-        if provider.get("allow_fallbacks") is not False:
-            failures.append(f"request {index} allows provider fallback")
+        failures.extend(_request_shape_failures(request, index))
+    return failures
 
+
+def _called_model_audit(
+    attempts: list[dict[str, Any]],
+) -> tuple[list[dict[str, str]], dict[str, list[str]], list[dict[str, str]], list[str]]:
     company_nodes: dict[str, set[str]] = {}
     called_models: list[dict[str, str]] = []
     for row in attempts:
@@ -436,15 +590,35 @@ def recompute(
         for row in called_models
         if not row["company"] or row["company"] == "unknown"
     ]
+    failures = []
     if duplicates:
         failures.append("actual called companies repeat across nodes")
     if unresolved:
         failures.append("actual called company identity is unresolved")
+    return called_models, duplicates, unresolved, failures
 
-    node_cost = _actual_cost_from_nodes(nodes)
+
+def _cost_audit(
+    nodes: list[Any],
+    summary: Mapping[str, Any],
+    call_ledger: Any,
+    governance_cost: float,
+    maximum_cost_usd: float,
+) -> tuple[float, float, float | None, list[str]]:
+    failures: list[str] = []
+    expert_cost = _actual_cost_from_nodes(nodes)
+    total_cost = round(expert_cost + governance_cost, 8)
     summary_cost = float(summary.get("actual_cost_usd") or 0.0)
-    if abs(node_cost - summary_cost) > 1e-8:
-        failures.append(f"actual cost mismatch: {node_cost}/{summary_cost}")
+    if abs(total_cost - summary_cost) > 1e-8:
+        failures.append(f"total actual cost mismatch: {total_cost}/{summary_cost}")
+    expert_summary = summary.get("expert_actual_cost_usd")
+    if (
+        expert_summary is not None
+        and abs(expert_cost - float(expert_summary)) > 1e-8
+    ):
+        failures.append(
+            f"expert actual cost mismatch: {expert_cost}/{float(expert_summary)}"
+        )
     ledger_summary = (
         call_ledger.get("summary", {})
         if isinstance(call_ledger, Mapping)
@@ -455,20 +629,29 @@ def recompute(
         if isinstance(ledger_summary, Mapping)
         else None
     )
-    if ledger_cost_value is not None:
-        ledger_cost = float(ledger_cost_value)
-        if abs(node_cost - ledger_cost) > 1e-8:
-            failures.append(
-                f"call ledger cost mismatch: {node_cost}/{ledger_cost}"
-            )
-    else:
+    if ledger_cost_value is None:
         ledger_cost = None
         failures.append("call ledger actual provider cost is missing")
-    if not 0.0 <= node_cost <= maximum_cost_usd:
+    else:
+        ledger_cost = float(ledger_cost_value)
+        if abs(total_cost - ledger_cost) > 1e-8:
+            failures.append(
+                f"call ledger total cost mismatch: {total_cost}/{ledger_cost}"
+            )
+    if not 0.0 <= total_cost <= maximum_cost_usd:
         failures.append(
-            f"actual cost outside bound: {node_cost}/{maximum_cost_usd}"
+            f"total actual cost outside bound: {total_cost}/{maximum_cost_usd}"
         )
+    return expert_cost, total_cost, ledger_cost, failures
 
+
+def _independent_evidence_audit(
+    task: str,
+    report: str,
+    constraints: Mapping[str, Any],
+    runtime_evidence: Mapping[str, Any],
+) -> tuple[list[str], list[str]]:
+    failures: list[str] = []
     if not task:
         failures.append("canonical task cannot be reconstructed from ticket")
         recomputed_constraints: Mapping[str, Any] = {}
@@ -498,25 +681,97 @@ def recompute(
         or runtime_evidence.get("violations")
     ):
         failures.append("runtime evidence integrity is not PASS")
-    if (
-        runtime_evidence.get("fact_truth_not_inferred_from_structure")
-        is not True
-    ):
+    if runtime_evidence.get("fact_truth_not_inferred_from_structure") is not True:
         failures.append("fact truth remains conflated with structure")
     if len(report.strip()) < 160:
         failures.append("final report is missing or too short")
+    return recomputed_evidence, failures
 
-    archive_sha256 = None
-    if archive is not None:
-        archive_sha256 = _sha256(archive)
-        expected = str(expected_artifact_digest or "").removeprefix(
-            "sha256:"
+
+def _archive_digest_audit(
+    archive: Path | None,
+    expected_artifact_digest: str | None,
+) -> tuple[str | None, list[str]]:
+    if archive is None:
+        return None, []
+    archive_sha256 = sha256_file(archive)
+    expected = str(expected_artifact_digest or "").removeprefix("sha256:")
+    failures = []
+    if not expected or archive_sha256 != expected:
+        failures.append("downloaded ZIP digest differs from platform artifact digest")
+    return archive_sha256, failures
+
+
+def recompute(
+    root: Path,
+    *,
+    expected_sha: str,
+    expected_run_id: str,
+    maximum_calls: int,
+    maximum_cost_usd: float,
+    archive: Path | None = None,
+    expected_artifact_digest: str | None = None,
+) -> dict[str, Any]:
+    failures: list[str] = []
+    manifest = _manifest_checks(root, expected_sha, expected_run_id)
+    failures.extend(manifest["failures"])
+    data = _load_revalidation_inputs(root)
+    result = data["result"]
+    summary = data["summary"]
+    graph = data["graph"]
+    report = data["report"]
+    task = data["task"]
+    failures.extend(_execution_result_failures(result, summary, report))
+    nodes, node_failures = _normalized_node_evidence(data["nodes"], graph)
+    failures.extend(node_failures)
+    report_contract_violations = _final_contract_violations(graph, report, task)
+    failures.extend(report_contract_violations)
+    (
+        attempts,
+        expert_calls,
+        governance_calls,
+        total_calls,
+        governance_cost,
+        call_failures,
+    ) = _call_budget_audit(
+        nodes,
+        summary,
+        data["governance_ledger"],
+        maximum_calls,
+    )
+    failures.extend(call_failures)
+    failures.extend(
+        _request_audit_failures(
+            data["request_audit"],
+            expert_calls=expert_calls,
+            governance_calls=governance_calls,
+            total_calls=total_calls,
         )
-        if not expected or archive_sha256 != expected:
-            failures.append(
-                "downloaded ZIP digest differs from platform artifact digest"
-            )
-
+    )
+    called_models, duplicates, unresolved, company_failures = _called_model_audit(
+        attempts
+    )
+    failures.extend(company_failures)
+    expert_cost, total_cost, ledger_cost, cost_failures = _cost_audit(
+        nodes,
+        summary,
+        data["call_ledger"],
+        governance_cost,
+        maximum_cost_usd,
+    )
+    failures.extend(cost_failures)
+    recomputed_evidence, evidence_failures = _independent_evidence_audit(
+        task,
+        report,
+        data["constraints"],
+        data["runtime_evidence"],
+    )
+    failures.extend(evidence_failures)
+    archive_sha256, archive_failures = _archive_digest_audit(
+        archive,
+        expected_artifact_digest,
+    )
+    failures.extend(archive_failures)
     return {
         "schema_version": "v5-independent-artifact-revalidation-3",
         "status": "PASS" if not failures else "FAIL",
@@ -527,8 +782,13 @@ def recompute(
         "manifest_file_count": manifest["manifest_file_count"],
         "manifest_files_checked": manifest["manifest_files_checked"],
         "actual_artifact_file_count": manifest["actual_file_count"],
-        "model_calls": calls,
-        "actual_cost_usd": node_cost,
+        "model_calls": total_calls,
+        "total_model_calls": total_calls,
+        "governance_model_calls": governance_calls,
+        "expert_model_calls": expert_calls,
+        "actual_cost_usd": total_cost,
+        "governance_actual_cost_usd": governance_cost,
+        "expert_actual_cost_usd": expert_cost,
         "call_ledger_cost_usd": ledger_cost,
         "maximum_calls": maximum_calls,
         "maximum_cost_usd": maximum_cost_usd,
@@ -538,7 +798,7 @@ def recompute(
         "unresolved_called_companies": unresolved,
         "completion_mode": summary.get("completion_mode"),
         "quality_status": summary.get("quality_status"),
-        "runtime_evidence_integrity_status": runtime_evidence.get("status"),
+        "runtime_evidence_integrity_status": data["runtime_evidence"].get("status"),
         "independently_recomputed_evidence_violations": recomputed_evidence,
         "final_report_contract_violations": report_contract_violations,
         "archive_sha256": archive_sha256,
@@ -572,7 +832,11 @@ def main() -> int:
             expected_artifact_digest=args.expected_artifact_digest,
         )
     except Exception as exc:
-        archive_sha256 = _sha256(archive) if archive is not None and archive.is_file() else None
+        archive_sha256 = (
+            sha256_file(archive)
+            if archive is not None and archive.is_file()
+            else None
+        )
         result = {
             "schema_version": "v5-independent-artifact-revalidation-3",
             "status": "FAIL",
@@ -586,7 +850,12 @@ def main() -> int:
                 1 for path in Path(args.artifact_dir).rglob("*") if path.is_file()
             ),
             "model_calls": None,
+            "total_model_calls": None,
+            "governance_model_calls": None,
+            "expert_model_calls": None,
             "actual_cost_usd": None,
+            "governance_actual_cost_usd": None,
+            "expert_actual_cost_usd": None,
             "call_ledger_cost_usd": None,
             "maximum_calls": args.maximum_calls,
             "maximum_cost_usd": args.maximum_cost_usd,

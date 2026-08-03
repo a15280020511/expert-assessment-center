@@ -27,7 +27,12 @@ import v5_quality_status_integrity as quality_integrity
 from execution_graph import ExecutionGraph, GraphLimits, SelectedNode
 from execution_graph_validator import validate_execution_graph
 from openrouter_api import CHAT_URL, request_json
-from v5_planning_runtime import PlannerPolicy
+from text_normalization import normalize_heading_key
+from v5_execution_primitives import (
+    actual_cost as extract_actual_cost,
+    finish_reason as extract_finish_reason,
+)
+from v5_json_io import write_json
 
 RUNTIME_VERSION = "v5-native-runtime-1"
 MIN_DEGRADED_WORK_COVERAGE = 2.0 / 3.0
@@ -89,12 +94,9 @@ class RuntimeConfig:
     total_call_limit: int
     recovery_call_limit: int
     cost_anomaly_usd: float | None
-    quality_tier: str
     tools_allowed: bool = False
     live_catalog_required: bool = False
     provider_lock_required: bool = True
-    maximum_candidates_per_work: int = 12
-    solver_timeout_seconds: float = 20.0
     cost_risk_multiplier: float = 1.18
     max_provider_failures: int = 2
 
@@ -108,16 +110,10 @@ class RuntimeConfig:
             or float(self.cost_anomaly_usd) <= 0
         ):
             raise ValueError("cost_anomaly_usd must be finite and positive")
-        if self.quality_tier not in {"budget", "value", "quality"}:
-            raise ValueError("quality_tier must be budget, value, or quality")
         if self.tools_allowed:
             raise ValueError("V5 expert runtime forbids external tools")
         if not self.provider_lock_required:
             raise ValueError("V5 production runtime requires explicit provider lock")
-        if int(self.maximum_candidates_per_work) < 2:
-            raise ValueError("maximum_candidates_per_work must be at least 2")
-        if float(self.solver_timeout_seconds) < 1.0:
-            raise ValueError("solver_timeout_seconds must be at least 1")
 
     @property
     def initial_call_limit(self) -> int:
@@ -495,6 +491,8 @@ class QualityGatePolicy:
 
 
 class ExecutionEngine:
+    _write_json = staticmethod(write_json)
+
     def __init__(
         self,
         config: RuntimeConfig,
@@ -542,16 +540,6 @@ class ExecutionEngine:
             independence_group=selected.independence_group,
         )
 
-    @staticmethod
-    def _actual_cost(response: Mapping[str, Any]) -> float:
-        usage = response.get("usage") if isinstance(response.get("usage"), Mapping) else {}
-        for key in ("cost", "total_cost"):
-            try:
-                if usage.get(key) is not None:
-                    return max(0.0, float(usage[key]))
-            except (TypeError, ValueError):
-                continue
-        return 0.0
 
     @staticmethod
     def _reasoning_saturation_evidence(
@@ -641,13 +629,6 @@ class ExecutionEngine:
         )
 
     @staticmethod
-    def _finish_reason(response: Mapping[str, Any]) -> str:
-        choices = response.get("choices")
-        if isinstance(choices, list) and choices and isinstance(choices[0], Mapping):
-            return str(choices[0].get("finish_reason") or "")
-        return ""
-
-    @staticmethod
     def _failure_from_exception(
         exc: BaseException,
         node: SelectedNode,
@@ -683,12 +664,7 @@ class ExecutionEngine:
             ),
         )
 
-    @staticmethod
-    def _normalized_contract_field(value: str) -> str:
-        value = re.sub(r"[`*_~]", "", str(value)).strip().casefold()
-        value = re.sub(r"^\d+(?:\.\d+)*[\s.)、:：-]+", "", value)
-        value = re.sub(r"[^0-9a-z_\u4e00-\u9fff]+", "_", value)
-        return value.strip("_")
+    _normalized_contract_field = staticmethod(normalize_heading_key)
 
     @classmethod
     def _markdown_contract_fields(
@@ -797,6 +773,146 @@ class ExecutionEngine:
             **standard,
         }
 
+    def _attempt_risk_multiplier(self, node: SelectedNode, kind: str) -> float | None:
+        if kind != "replacement":
+            return None
+        try:
+            return float(
+                node.parameter_profile.get(
+                    "recovery_cost_risk_multiplier",
+                    self.config.cost_risk_multiplier,
+                )
+            )
+        except (TypeError, ValueError):
+            return float(self.config.cost_risk_multiplier)
+
+    def _empty_response_attempt(
+        self,
+        node: SelectedNode,
+        kind: str,
+        attempt_index: int,
+        payload: Mapping[str, Any],
+        response: Mapping[str, Any],
+        latency: float,
+        usage: Mapping[str, Any],
+        actual_cost: float,
+    ) -> RuntimeAttempt:
+        saturation = self._reasoning_saturation_evidence(usage, payload)
+        reasons = ["empty-output"]
+        transformations: list[Mapping[str, Any]] = []
+        message = "provider returned no usable answer"
+        if saturation["reasoning_saturated_empty_output"]:
+            reasons.append("reasoning-saturated-empty-output")
+            message += " after reasoning consumed the visible-output path"
+            transformations.append({"type": "reasoning-saturation-evidence", **saturation})
+        failure = ExecutionFailure(
+            category=FailureCategory.PROVIDER_EMPTY_RESPONSE,
+            retryable=True,
+            model=node.model,
+            provider_endpoint=node.provider_endpoint,
+            request_sent=True,
+            response_received=True,
+            usage_received=bool(usage),
+            actual_cost_usd=actual_cost,
+            message=message,
+        )
+        return RuntimeAttempt(
+            attempt_index, kind, node.node_id, node.model, node.provider_endpoint,
+            payload, "call_failed", None, 0.0, reasons, round(float(latency), 6),
+            dict(usage), str(response.get("id") or "") or None,
+            str(response.get("model") or node.model) or None,
+            str(response.get("provider") or "") or None, failure.to_dict(),
+            answer_transformations=transformations,
+        )
+
+    @staticmethod
+    def _response_failure(
+        node: SelectedNode,
+        response: Mapping[str, Any],
+        usage: Mapping[str, Any],
+        actual_cost: float,
+        passed: bool,
+        reasons: Sequence[str],
+        finish_reason: str,
+        budget_exceeded: bool,
+    ) -> ExecutionFailure | None:
+        if budget_exceeded:
+            return ExecutionFailure(
+                category=FailureCategory.BUDGET_INSUFFICIENT, retryable=False,
+                model=node.model, provider_endpoint=node.provider_endpoint,
+                request_sent=True, response_received=True, usage_received=bool(usage),
+                actual_cost_usd=actual_cost,
+                message="actual cost exceeded the approved anomaly guard",
+            )
+        if finish_reason in {"length", "max_tokens"}:
+            return ExecutionFailure(
+                category=FailureCategory.OUTPUT_TRUNCATED, retryable=False,
+                model=node.model, provider_endpoint=node.provider_endpoint,
+                request_sent=True, response_received=True, usage_received=bool(usage),
+                actual_cost_usd=actual_cost,
+                message="provider stopped because output allowance was exhausted",
+            )
+        if not passed:
+            return ExecutionFailure(
+                category=FailureCategory.QUALITY_GATE_FAILED, retryable=False,
+                model=node.model, provider_endpoint=node.provider_endpoint,
+                request_sent=True, response_received=True, usage_received=bool(usage),
+                actual_cost_usd=actual_cost, message=";".join(reasons),
+            )
+        return None
+
+    def _response_attempt(
+        self,
+        node: SelectedNode,
+        kind: str,
+        attempt_index: int,
+        payload: Mapping[str, Any],
+        response: Mapping[str, Any],
+        latency: float,
+        answer: str,
+        usage: Mapping[str, Any],
+        actual_cost: float,
+        budget_exceeded: bool,
+    ) -> RuntimeAttempt:
+        passed, quality, evaluated_reasons = self.quality_policy.evaluate(node, response, answer)
+        reasons = list(evaluated_reasons)
+        if budget_exceeded:
+            reasons.append("actual-budget-exceeded")
+        failure = self._response_failure(
+            node, response, usage, actual_cost, passed, reasons,
+            extract_finish_reason(response).casefold(), budget_exceeded,
+        )
+        status = "passed" if passed and not budget_exceeded else "quality_gate_failed"
+        return RuntimeAttempt(
+            attempt_index, kind, node.node_id, node.model, node.provider_endpoint,
+            payload, status, answer, quality, reasons, round(float(latency), 6),
+            dict(usage), str(response.get("id") or "") or None,
+            str(response.get("model") or node.model) or None,
+            str(response.get("provider") or "") or None,
+            failure.to_dict() if failure else None,
+        )
+
+    def _exception_attempt(
+        self,
+        node: SelectedNode,
+        kind: str,
+        attempt_index: int,
+        payload: Mapping[str, Any],
+        exc: Exception,
+        latency: float,
+        started_at: float,
+        budget: BudgetController,
+    ) -> RuntimeAttempt:
+        if latency <= 0.0:
+            latency = max(0.0, time.monotonic() - started_at)
+        budget.reconcile(0.0)
+        failure = self._failure_from_exception(exc, node)
+        return RuntimeAttempt(
+            attempt_index, kind, node.node_id, node.model, node.provider_endpoint,
+            payload, "call_failed", None, 0.0, [failure.category.value],
+            round(float(latency), 6), {}, None, None, None, failure.to_dict(),
+        )
+
     def _attempt(
         self,
         node: SelectedNode,
@@ -811,27 +927,13 @@ class ExecutionEngine:
     ) -> RuntimeAttempt | None:
         if not budget.endpoint_available(node.provider_endpoint):
             return None
-        risk_multiplier = None
-        if kind == "replacement":
-            try:
-                risk_multiplier = float(
-                    node.parameter_profile.get(
-                        "recovery_cost_risk_multiplier",
-                        self.config.cost_risk_multiplier,
-                    )
-                )
-            except (TypeError, ValueError):
-                risk_multiplier = float(self.config.cost_risk_multiplier)
         allowed, _ = budget.reserve(
-            kind,
-            node.estimated_cost,
-            selected_node_id,
-            risk_multiplier=risk_multiplier,
+            kind, node.estimated_cost, selected_node_id,
+            risk_multiplier=self._attempt_risk_multiplier(node, kind),
         )
         if not allowed:
             return None
         payload: Mapping[str, Any] = {}
-        response: Mapping[str, Any] = {}
         latency = 0.0
         started_at = time.monotonic()
         try:
@@ -839,103 +941,21 @@ class ExecutionEngine:
             response, latency = call_fn(run, payload)
             answer = cost_hardening.robust_extract_answer(response)
             usage = dict(response.get("usage") or {}) if isinstance(response.get("usage"), Mapping) else {}
-            actual_cost = self._actual_cost(response)
+            actual_cost = extract_actual_cost(response)
             budget_exceeded = budget.reconcile(actual_cost)
             if not answer:
-                saturation = self._reasoning_saturation_evidence(usage, payload)
-                gate_reasons = ["empty-output"]
-                transformations: list[Mapping[str, Any]] = []
-                message = "provider returned no usable answer"
-                if saturation["reasoning_saturated_empty_output"]:
-                    gate_reasons.append("reasoning-saturated-empty-output")
-                    message += " after reasoning consumed the visible-output path"
-                    transformations.append({
-                        "type": "reasoning-saturation-evidence",
-                        **saturation,
-                    })
-                failure = ExecutionFailure(
-                    category=FailureCategory.PROVIDER_EMPTY_RESPONSE,
-                    retryable=True,
-                    model=node.model,
-                    provider_endpoint=node.provider_endpoint,
-                    request_sent=True,
-                    response_received=True,
-                    usage_received=bool(usage),
-                    actual_cost_usd=actual_cost,
-                    message=message,
+                return self._empty_response_attempt(
+                    node, kind, attempt_index, payload, response, latency, usage, actual_cost
                 )
-                return RuntimeAttempt(
-                    attempt_index, kind, node.node_id, node.model, node.provider_endpoint,
-                    payload, "call_failed", None, 0.0, gate_reasons,
-                    round(float(latency), 6), usage,
-                    str(response.get("id") or "") or None,
-                    str(response.get("model") or node.model) or None,
-                    str(response.get("provider") or "") or None,
-                    failure.to_dict(),
-                    answer_transformations=transformations,
-                )
-            passed, quality, reasons = self.quality_policy.evaluate(node, response, answer)
-            finish = self._finish_reason(response).casefold()
-            if finish in {"length", "max_tokens"}:
-                failure = ExecutionFailure(
-                    category=FailureCategory.OUTPUT_TRUNCATED,
-                    retryable=False,
-                    model=node.model,
-                    provider_endpoint=node.provider_endpoint,
-                    request_sent=True,
-                    response_received=True,
-                    usage_received=bool(usage),
-                    actual_cost_usd=actual_cost,
-                    message="provider stopped because output allowance was exhausted",
-                )
-            elif not passed:
-                failure = ExecutionFailure(
-                    category=FailureCategory.QUALITY_GATE_FAILED,
-                    retryable=False,
-                    model=node.model,
-                    provider_endpoint=node.provider_endpoint,
-                    request_sent=True,
-                    response_received=True,
-                    usage_received=bool(usage),
-                    actual_cost_usd=actual_cost,
-                    message=";".join(reasons),
-                )
-            else:
-                failure = None
-            status = "passed" if passed and not budget_exceeded else "quality_gate_failed"
-            if budget_exceeded:
-                reasons = list(reasons) + ["actual-budget-exceeded"]
-                failure = ExecutionFailure(
-                    category=FailureCategory.BUDGET_INSUFFICIENT,
-                    retryable=False,
-                    model=node.model,
-                    provider_endpoint=node.provider_endpoint,
-                    request_sent=True,
-                    response_received=True,
-                    usage_received=bool(usage),
-                    actual_cost_usd=actual_cost,
-                    message="actual cost exceeded the approved anomaly guard",
-                )
-            return RuntimeAttempt(
-                attempt_index, kind, node.node_id, node.model, node.provider_endpoint,
-                payload, status, answer, quality, list(reasons),
-                round(float(latency), 6), usage,
-                str(response.get("id") or "") or None,
-                str(response.get("model") or node.model) or None,
-                str(response.get("provider") or "") or None,
-                failure.to_dict() if failure else None,
+            return self._response_attempt(
+                node, kind, attempt_index, payload, response, latency, answer, usage,
+                actual_cost, budget_exceeded,
             )
         except Exception as exc:  # noqa: BLE001 - converted into structured evidence
-            if latency <= 0.0:
-                latency = max(0.0, time.monotonic() - started_at)
-            budget.reconcile(0.0)
-            failure = self._failure_from_exception(exc, node)
-            return RuntimeAttempt(
-                attempt_index, kind, node.node_id, node.model, node.provider_endpoint,
-                payload, "call_failed", None, 0.0, [failure.category.value],
-                round(float(latency), 6), {}, None, None, None,
-                failure.to_dict(),
+            return self._exception_attempt(
+                node, kind, attempt_index, payload, exc, latency, started_at, budget
             )
+
 
     @staticmethod
     def _category(attempt: RuntimeAttempt | None) -> FailureCategory:
@@ -956,7 +976,11 @@ class ExecutionEngine:
         if node.output_contract.get("machine_readable_required"):
             return False
         text = str(attempt.answer).strip()
-        minimum = 260 if "synthesis" in node.functions else 120
+        minimum = (
+            260
+            if node.output_contract.get("final_delivery_node") is True
+            else 120
+        )
         return len(text) >= minimum and not any(
             value in text.casefold()
             for value in ("i cannot access", "无法访问互联网", "作为ai无法", "没有提供任何答案")
@@ -982,12 +1006,152 @@ class ExecutionEngine:
             attempts=attempts,
             actual_cost_usd=round(
                 sum(
-                    self._actual_cost({"usage": row.usage})
+                    extract_actual_cost({"usage": row.usage})
                     for row in attempts
                 ),
                 8,
             ),
             contract=self._contract(selected, attempt.answer),
+        )
+
+    @staticmethod
+    def _retry_after(attempt: RuntimeAttempt | None) -> float:
+        if attempt is None or not isinstance(attempt.failure, Mapping):
+            return 0.0
+        try:
+            return max(0.0, min(60.0, float(attempt.failure.get("retry_after_seconds") or 0.0)))
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _better_degraded(
+        best: tuple[RuntimeAttempt, SelectedNode] | None,
+        attempt: RuntimeAttempt | None,
+        node: SelectedNode,
+        usable: bool,
+    ) -> tuple[RuntimeAttempt, SelectedNode] | None:
+        if not usable or attempt is None:
+            return best
+        if best is None or attempt.quality_score > best[0].quality_score:
+            return attempt, node
+        return best
+
+    def _recorded_call(
+        self,
+        selected: SelectedNode,
+        attempts: list[RuntimeAttempt],
+        original_task: str,
+        upstream: Sequence[Mapping[str, Any]],
+        run: Any,
+        call_fn: Callable[[Any, Mapping[str, Any]], tuple[Mapping[str, Any], float]],
+        budget: BudgetController,
+        node: SelectedNode,
+        kind: str,
+    ) -> RuntimeAttempt | None:
+        attempt = self._attempt(
+            node, selected.node_id, kind, original_task, upstream, run, call_fn, budget,
+            len(attempts) + 1,
+        )
+        if attempt is None:
+            return None
+        attempts.append(attempt)
+        category = self._category(attempt)
+        circuit_failures = {
+            FailureCategory.PROVIDER_RATE_LIMITED,
+            FailureCategory.PROVIDER_TIMEOUT,
+            FailureCategory.PROVIDER_EMPTY_RESPONSE,
+            FailureCategory.UNSUPPORTED_PARAMETER,
+            FailureCategory.CONTEXT_OVERFLOW,
+        }
+        if category in circuit_failures:
+            budget.fail_endpoint(node.provider_endpoint, category)
+        return attempt
+
+    def _retry_selected_node(
+        self,
+        selected: SelectedNode,
+        attempts: list[RuntimeAttempt],
+        initial: RuntimeAttempt | None,
+        best: tuple[RuntimeAttempt, SelectedNode] | None,
+        call: Callable[[SelectedNode, str], RuntimeAttempt | None],
+    ) -> tuple[RuntimeNodeResult | None, tuple[RuntimeAttempt, SelectedNode] | None, FailureCategory]:
+        category = self._category(initial)
+        if category not in self.retry_policy.retry_same_endpoint_categories:
+            return None, best, category
+        retry_after = self._retry_after(initial)
+        if retry_after:
+            time.sleep(retry_after)
+        retried = call(selected, "retry")
+        if retried is not None and retried.status == "passed":
+            return self._node_result(selected, selected, attempts, retried, "success_retried"), best, self._category(retried)
+        best = self._better_degraded(
+            best, retried, selected, self._degraded_usable(selected, retried)
+        )
+        return None, best, self._category(retried)
+
+    def _replacement_adaptation(
+        self,
+        replacement: SelectedNode,
+        source: RuntimeAttempt | None,
+        reasoning_saturated: bool,
+    ) -> tuple[SelectedNode, dict[str, Any] | None]:
+        if not reasoning_saturated:
+            return replacement, None
+        adapted = self._visible_output_only_candidate(replacement)
+        return adapted, {
+            "type": "recovery-request-adaptation",
+            "policy": "reasoning-saturated-empty-output-visible-only-v1",
+            "source_model": source.model if source else None,
+            "source_provider_endpoint": source.provider_endpoint if source else None,
+            "replacement_model": adapted.model,
+            "replacement_provider_endpoint": adapted.provider_endpoint,
+            "reasoning_removed": True,
+            "substantive_prompt_changed": False,
+        }
+
+    def _recover_node(
+        self,
+        selected: SelectedNode,
+        attempts: list[RuntimeAttempt],
+        recovery_rows: Sequence[Mapping[str, Any]],
+        category: FailureCategory,
+        best: tuple[RuntimeAttempt, SelectedNode] | None,
+        call: Callable[[SelectedNode, str], RuntimeAttempt | None],
+    ) -> tuple[RuntimeNodeResult | None, tuple[RuntimeAttempt, SelectedNode] | None, SelectedNode]:
+        last_node = selected
+        if category not in self.recovery_policy.replace_categories:
+            return None, best, last_node
+        source = attempts[-1] if attempts else None
+        saturated = self._reasoning_saturated_attempt(source)
+        for candidate in (self._candidate(row, selected) for row in recovery_rows):
+            original = candidate
+            candidate, adaptation = self._replacement_adaptation(candidate, source, saturated)
+            attempted = call(candidate, "replacement")
+            if attempted is None:
+                continue
+            if adaptation is not None:
+                attempted.answer_transformations.append(adaptation)
+            last_node = candidate
+            if attempted.status == "passed":
+                return self._node_result(selected, candidate, attempts, attempted, "success_recovered"), best, last_node
+            quality_node = candidate if adaptation is not None else original
+            best = self._better_degraded(
+                best, attempted, candidate, self._degraded_usable(quality_node, attempted)
+            )
+        return None, best, last_node
+
+    def _failed_node_result(
+        self, selected: SelectedNode, resolved: SelectedNode, attempts: list[RuntimeAttempt]
+    ) -> RuntimeNodeResult:
+        return RuntimeNodeResult(
+            node_id=selected.node_id, assigned_work=selected.assigned_work, status="failed",
+            selected_model=selected.model, resolved_model=resolved.model,
+            provider_endpoint=resolved.provider_endpoint, answer=None, quality_score=0.0,
+            attempts=attempts,
+            actual_cost_usd=round(
+                sum(extract_actual_cost({"usage": row.usage}) for row in attempts), 8
+            ),
+            contract=self._contract(selected, None),
         )
 
     def execute_node(
@@ -1001,110 +1165,38 @@ class ExecutionEngine:
         budget: BudgetController,
     ) -> RuntimeNodeResult:
         attempts: list[RuntimeAttempt] = []
-        best: tuple[RuntimeAttempt, SelectedNode] | None = None
-
         def call(node: SelectedNode, kind: str) -> RuntimeAttempt | None:
-            attempt = self._attempt(
-                node, selected.node_id, kind, original_task, upstream,
-                run, call_fn, budget, len(attempts) + 1,
+            return self._recorded_call(
+                selected,
+                attempts,
+                original_task,
+                upstream,
+                run,
+                call_fn,
+                budget,
+                node,
+                kind,
             )
-            if attempt is not None:
-                attempts.append(attempt)
-                category = self._category(attempt)
-                if category in {
-                    FailureCategory.PROVIDER_RATE_LIMITED,
-                    FailureCategory.PROVIDER_TIMEOUT,
-                    FailureCategory.PROVIDER_EMPTY_RESPONSE,
-                    FailureCategory.UNSUPPORTED_PARAMETER,
-                    FailureCategory.CONTEXT_OVERFLOW,
-                }:
-                    budget.fail_endpoint(node.provider_endpoint, category)
-            return attempt
-
         initial = call(selected, "initial")
         if initial is not None and initial.status == "passed":
             return self._node_result(selected, selected, attempts, initial, "success")
-        if self._degraded_usable(selected, initial):
-            best = (initial, selected)
-
-        category = self._category(initial)
-        if category in self.retry_policy.retry_same_endpoint_categories:
-            retry_after = 0.0
-            if initial and isinstance(initial.failure, Mapping):
-                try:
-                    retry_after = max(0.0, min(60.0, float(initial.failure.get("retry_after_seconds") or 0.0)))
-                except (TypeError, ValueError):
-                    retry_after = 0.0
-            if retry_after:
-                time.sleep(retry_after)
-            retried = call(selected, "retry")
-            if retried is not None and retried.status == "passed":
-                return self._node_result(selected, selected, attempts, retried, "success_retried")
-            if self._degraded_usable(selected, retried) and (
-                best is None or retried.quality_score > best[0].quality_score
-            ):
-                best = (retried, selected)
-            category = self._category(retried)
-
-        # Recovery rows are already frozen and ranked by the run-local
-        # CrossEndpointPlannerPolicy. Re-sorting here would silently replace the
-        # audited effective-cost-per-quality policy with a different objective.
-        alternatives = [self._candidate(row, selected) for row in recovery_rows]
-        last_attempted_node = selected
-        source_attempt = attempts[-1] if attempts else initial
-        reasoning_saturated = self._reasoning_saturated_attempt(source_attempt)
-        if category in self.recovery_policy.replace_categories:
-            for replacement in alternatives:
-                original_replacement = replacement
-                adaptation: dict[str, Any] | None = None
-                if reasoning_saturated:
-                    replacement = self._visible_output_only_candidate(replacement)
-                    adaptation = {
-                        "type": "recovery-request-adaptation",
-                        "policy": "reasoning-saturated-empty-output-visible-only-v1",
-                        "source_model": source_attempt.model if source_attempt else None,
-                        "source_provider_endpoint": (
-                            source_attempt.provider_endpoint if source_attempt else None
-                        ),
-                        "replacement_model": replacement.model,
-                        "replacement_provider_endpoint": replacement.provider_endpoint,
-                        "reasoning_removed": True,
-                        "substantive_prompt_changed": False,
-                    }
-                attempted = call(replacement, "replacement")
-                if attempted is None:
-                    continue
-                if adaptation is not None:
-                    attempted.answer_transformations.append(adaptation)
-                last_attempted_node = replacement
-                if attempted.status == "passed":
-                    return self._node_result(
-                        selected, replacement, attempts, attempted, "success_recovered"
-                    )
-                quality_node = replacement if adaptation is not None else original_replacement
-                if self._degraded_usable(quality_node, attempted) and (
-                    best is None or attempted.quality_score > best[0].quality_score
-                ):
-                    best = (attempted, replacement)
-
+        best = self._better_degraded(
+            None, initial, selected, self._degraded_usable(selected, initial)
+        )
+        retry_result, best, category = self._retry_selected_node(
+            selected, attempts, initial, best, call
+        )
+        if retry_result is not None:
+            return retry_result
+        recovery_result, best, last_node = self._recover_node(
+            selected, attempts, recovery_rows, category, best, call
+        )
+        if recovery_result is not None:
+            return recovery_result
         if best is not None:
             return self._node_result(selected, best[1], attempts, best[0], "success_degraded")
-        active = last_attempted_node
-        return RuntimeNodeResult(
-            node_id=selected.node_id,
-            assigned_work=selected.assigned_work,
-            status="failed",
-            selected_model=selected.model,
-            resolved_model=active.model,
-            provider_endpoint=active.provider_endpoint,
-            answer=None,
-            quality_score=0.0,
-            attempts=attempts,
-            actual_cost_usd=round(
-                sum(self._actual_cost({"usage": row.usage}) for row in attempts), 8
-            ),
-            contract=self._contract(selected, None),
-        )
+        return self._failed_node_result(selected, last_node, attempts)
+
 
     def _default_call(
         self,
@@ -1126,13 +1218,14 @@ class ExecutionEngine:
 
     @staticmethod
     def _content_work_ids(graph: ExecutionGraph) -> set[str]:
-        synthesis = {
+        final_node_ids = set(graph.final_nodes)
+        final_work = {
             work_id
             for node in graph.nodes
-            if "synthesis" in node.functions
+            if node.node_id in final_node_ids
             for work_id in node.assigned_work
         }
-        return set(graph.required_work) - synthesis or set(graph.required_work)
+        return set(graph.required_work) - final_work or set(graph.required_work)
 
     @staticmethod
     def _best_outputs_by_work(
@@ -1250,14 +1343,14 @@ class ExecutionEngine:
     ) -> None:
         root.mkdir(parents=True, exist_ok=True)
         node_rows = [asdict(outputs[node_id]) for node_id in sorted(outputs)]
-        self._write_json(root / "v5-node-results.json", node_rows)
-        self._write_json(
+        write_json(root / "v5-node-results.json", node_rows)
+        write_json(
             root / "v5-execution-summary.json",
             {key: value for key, value in result.items() if key != "node_results"},
         )
         attempts = [attempt for row in outputs.values() for attempt in row.attempts]
         requests = [attempt.request for attempt in attempts]
-        self._write_json(
+        write_json(
             root / "v5-request-audit.json",
             {
                 "status": "PASS" if all(
@@ -1288,12 +1381,290 @@ class ExecutionEngine:
             encoding="utf-8",
         )
 
+    def _validated_graph(
+        self,
+        graph: ExecutionGraph | Mapping[str, Any],
+        limits: GraphLimits | None,
+    ) -> tuple[ExecutionGraph, GraphLimits]:
+        parsed = graph if isinstance(graph, ExecutionGraph) else ExecutionGraph.from_mapping(graph)
+        active_limits = limits or GraphLimits()
+        structural = [
+            issue for issue in validate_execution_graph(parsed, active_limits)
+            if issue.code != "budget_limit"
+        ]
+        if structural:
+            raise RuntimeError(
+                "Invalid execution graph: "
+                + "; ".join(f"{issue.code}:{issue.message}" for issue in structural)
+            )
+        if len(parsed.nodes) > self.config.initial_call_limit:
+            raise RuntimeError("planned nodes exceed RuntimeConfig.initial_call_limit")
+        return parsed, active_limits
+
+    def _reject_preflight(
+        self, root: Path | None, preflight: Mapping[str, Any]
+    ) -> None:
+        if root is not None:
+            write_json(root / "v5-node-results.json", [])
+            write_json(
+                root / "v5-execution-summary.json",
+                {
+                    "version": 5, "status": "failed", "completion_mode": "none",
+                    "quality_status": "failed", "final_answer": None,
+                    "actual_cost_usd": 0.0,
+                    "execution_budget": {
+                        "maximum_total_calls": self.config.total_call_limit,
+                        "maximum_initial_calls": self.config.initial_call_limit,
+                        "maximum_recovery_calls": self.config.recovery_call_limit,
+                        "calls_reserved": 0,
+                    },
+                    "cost_preflight": preflight,
+                    "stop_reason": "native-runtime-preflight-rejected",
+                },
+            )
+            write_json(
+                root / "v5-request-audit.json",
+                {"status": "PASS", "request_count": 0, "requests": []},
+            )
+        raise RuntimeError("V5 graph rejected before model calls")
+
     @staticmethod
-    def _write_json(path: Path, value: Any) -> None:
-        path.write_text(
-            json.dumps(value, ensure_ascii=False, indent=2, default=str),
-            encoding="utf-8",
+    def _incoming_nodes(graph: ExecutionGraph) -> dict[str, list[str]]:
+        incoming = {node.node_id: [] for node in graph.nodes}
+        for edge in graph.edges:
+            incoming[edge.target].append(edge.source)
+        return incoming
+
+    @staticmethod
+    def _upstream_rows(
+        node_id: str,
+        incoming: Mapping[str, list[str]],
+        outputs: Mapping[str, RuntimeNodeResult],
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "node_id": source, "answer": outputs[source].answer,
+                "quality_score": outputs[source].quality_score,
+                "contract": outputs[source].contract,
+            }
+            for source in incoming[node_id]
+            if source in outputs and outputs[source].answer
+        ]
+
+    def _execute_stage(
+        self,
+        stage: Sequence[str],
+        *,
+        graph: ExecutionGraph,
+        run: Any,
+        original_task: str,
+        call: Callable[[Any, Mapping[str, Any]], tuple[Mapping[str, Any], float]],
+        node_by_id: Mapping[str, SelectedNode],
+        incoming: Mapping[str, list[str]],
+        outputs: Mapping[str, RuntimeNodeResult],
+        recovery: Mapping[str, Any],
+        budget: BudgetController,
+    ) -> list[RuntimeNodeResult]:
+        configured = max(1, int(getattr(run, "parallel_workers", len(stage) or 1)))
+        workers = 1 if self.config.cost_anomaly_usd is not None else min(configured, len(stage))
+        futures = {}
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+            for node_id in stage:
+                rows = list(recovery.get(node_id, [])) if isinstance(recovery, Mapping) else []
+                future = pool.submit(
+                    self.execute_node, node_by_id[node_id], original_task,
+                    self._upstream_rows(node_id, incoming, outputs), run, call, rows, budget,
+                )
+                futures[future] = node_id
+            results = [future.result() for future in as_completed(futures)]
+        return sorted(results, key=lambda row: row.node_id)
+
+    def _execute_stages(
+        self,
+        graph: ExecutionGraph,
+        run: Any,
+        original_task: str,
+        call: Callable[[Any, Mapping[str, Any]], tuple[Mapping[str, Any], float]],
+        budget: BudgetController,
+    ) -> tuple[dict[str, RuntimeNodeResult], list[dict[str, Any]]]:
+        node_by_id = {node.node_id: node for node in graph.nodes}
+        incoming = self._incoming_nodes(graph)
+        recovery = graph.metadata.get("recovery_pool", {}) if isinstance(graph.metadata, Mapping) else {}
+        outputs: dict[str, RuntimeNodeResult] = {}
+        records: list[dict[str, Any]] = []
+        for stage_index, stage in enumerate(graph.execution_stages):
+            results = self._execute_stage(
+                stage, graph=graph, run=run, original_task=original_task, call=call,
+                node_by_id=node_by_id, incoming=incoming, outputs=outputs,
+                recovery=recovery, budget=budget,
+            )
+            outputs.update({row.node_id: row for row in results})
+            failed = [row.node_id for row in results if row.status not in STRICT_SUCCESS_STATUSES]
+            records.append({
+                "stage_index": stage_index, "node_ids": list(stage),
+                "failed_node_ids": failed, "status": "degraded" if failed else "success",
+                "continued_after_failure": bool(failed),
+            })
+            if budget.calls_reserved >= self.config.total_call_limit:
+                break
+        return outputs, records
+
+    @staticmethod
+    def _preferred_final_answer(
+        graph: ExecutionGraph,
+        outputs: Mapping[str, RuntimeNodeResult],
+    ) -> str:
+        finals = [
+            outputs[node_id]
+            for node_id in graph.final_nodes
+            if node_id in outputs
+            and outputs[node_id].status.startswith("success")
+            and outputs[node_id].answer
+        ]
+        return "\n\n".join(row.answer or "" for row in finals).strip()
+
+    @staticmethod
+    def _delivery_metadata_sets(
+        graph: ExecutionGraph,
+    ) -> tuple[set[str], set[str]]:
+        metadata = graph.metadata if isinstance(graph.metadata, Mapping) else {}
+        optional = {str(value) for value in metadata.get("optional_work_ids", [])}
+        non_degradable = {
+            str(value) for value in metadata.get("non_degradable_work_ids", [])
+        }
+        return optional, non_degradable
+
+    @staticmethod
+    def _node_completion_flags(
+        graph: ExecutionGraph,
+        outputs: Mapping[str, RuntimeNodeResult],
+    ) -> tuple[bool, bool]:
+        complete = len(outputs) == len(graph.nodes) and all(
+            row.status in STRICT_SUCCESS_STATUSES for row in outputs.values()
         )
+        degraded = any(
+            row.status.startswith("success")
+            and row.status not in STRICT_SUCCESS_STATUSES
+            for row in outputs.values()
+        )
+        return complete, degraded
+
+    def _delivery_state(
+        self, graph: ExecutionGraph, outputs: Mapping[str, RuntimeNodeResult], limits: GraphLimits
+    ) -> dict[str, Any]:
+        preferred = self._preferred_final_answer(graph, outputs)
+        optional, non_degradable = self._delivery_metadata_sets(graph)
+        content = self._content_work_ids(graph) - optional
+        best = {
+            work_id: result
+            for work_id, result in self._best_outputs_by_work(graph, outputs).items()
+            if work_id in content
+        }
+        covered = set(best)
+        missing = sorted(content - covered)
+        coverage = len(covered) / max(1, len(content))
+        minimum = max(0.0, min(1.0, float(limits.min_required_work_coverage)))
+        complete, degraded = self._node_completion_flags(graph, outputs)
+        answer = preferred
+        if not answer and coverage >= minimum:
+            answer = self._degraded_synthesis(best, missing)
+            degraded = True
+        elif preferred and (missing or not complete):
+            degraded = True
+        return {
+            "preferred": preferred, "final_answer": answer, "optional": optional,
+            "non_degradable": non_degradable, "content": content, "best": best,
+            "covered": covered, "missing": missing, "coverage": coverage,
+            "minimum": minimum, "complete": complete, "degraded": degraded,
+            "usable_nodes": len({result.node_id for result in best.values()}),
+            "successful_nodes": len({
+                result.node_id for result in best.values()
+                if result.status in STRICT_SUCCESS_STATUSES
+            }),
+        }
+
+    @staticmethod
+    def _delivery_blockers(state: Mapping[str, Any], limits: GraphLimits) -> tuple[list[str], list[str]]:
+        blockers: list[str] = []
+        missing_non_degradable = sorted(state["non_degradable"].intersection(state["missing"]))
+        if missing_non_degradable:
+            blockers.append("missing-non-degradable-work")
+        if state["coverage"] + 1e-12 < state["minimum"]:
+            blockers.append("insufficient-required-work-coverage")
+        if state["successful_nodes"] < int(limits.min_successful_content_nodes):
+            blockers.append("insufficient-successful-content-nodes")
+        if state["degraded"] and not limits.allow_degraded_success:
+            blockers.append("degraded-success-disabled")
+        return blockers, missing_non_degradable
+
+    @staticmethod
+    def _completion_status(state: Mapping[str, Any], blockers: Sequence[str]) -> tuple[str, str, str, str]:
+        if state["final_answer"] and not state["degraded"] and state["complete"] and not state["missing"] and not blockers:
+            return "success", "full", "full_success", "all-quality-gates-passed"
+        if state["final_answer"] and not blockers:
+            return "success", "degraded", "degraded_success", "partial-success-deterministic-synthesis"
+        reason = blockers[0] if blockers else "insufficient-work-coverage-after-recovery"
+        return "failed", "none", "failed", reason
+
+    def _execution_result(
+        self, graph: ExecutionGraph, outputs: Mapping[str, RuntimeNodeResult],
+        stage_records: Sequence[Mapping[str, Any]], budget: BudgetController,
+        preflight: Mapping[str, Any], limits: GraphLimits, state: Mapping[str, Any],
+        blockers: list[str], missing_non_degradable: list[str],
+    ) -> dict[str, Any]:
+        status, mode, quality, reason = self._completion_status(state, blockers)
+        return {
+            "version": 5, "runtime_version": RUNTIME_VERSION,
+            "executor": "v5-native-execution-engine", "status": status,
+            "completion_mode": mode, "quality_status": quality,
+            "execution_stages": list(stage_records),
+            "node_results": [asdict(outputs[node_id]) for node_id in sorted(outputs)],
+            "final_node_ids": list(graph.final_nodes),
+            "final_answer": state["final_answer"] or None,
+            "actual_cost_usd": round(sum(row.actual_cost_usd for row in outputs.values()), 8),
+            "recovery_used": any(
+                attempt.attempt_kind in {"retry", "replacement"}
+                for row in outputs.values() for attempt in row.attempts
+            ),
+            "execution_budget": budget.snapshot(), "cost_preflight": preflight,
+            "work_coverage": {
+                "required_content_work_ids": sorted(state["content"]),
+                "covered_work_ids": sorted(state["covered"]),
+                "missing_work_ids": state["missing"],
+                "coverage_ratio": round(state["coverage"], 6),
+                "minimum_degraded_coverage": state["minimum"],
+                "usable_content_nodes": state["usable_nodes"],
+                "successful_content_nodes": state["successful_nodes"],
+            },
+            "delivery_policy": {
+                "optional_work_ids": sorted(state["optional"]),
+                "non_degradable_work_ids": sorted(state["non_degradable"]),
+                "missing_non_degradable_work_ids": missing_non_degradable,
+                "minimum_required_work_coverage": state["minimum"],
+                "minimum_successful_content_nodes": int(limits.min_successful_content_nodes),
+                "planned_content_node_ids": list(preflight["delivery_feasibility"]["planned_content_node_ids"]),
+                "planned_content_node_count": int(preflight["delivery_feasibility"]["planned_content_node_count"]),
+                "allow_degraded_success": bool(limits.allow_degraded_success),
+                "blockers": blockers,
+            },
+            "degradation": {
+                "used": state["degraded"],
+                "mode": "deterministic-successful-node-synthesis" if state["degraded"] else None,
+                "extra_model_calls": 0,
+            },
+            "stop_reason": reason,
+        }
+
+    @staticmethod
+    def _raise_failed_result(result: Mapping[str, Any]) -> None:
+        if result["status"] != "failed":
+            return
+        reason = str(result["stop_reason"])
+        if reason == "insufficient-successful-content-nodes":
+            raise RuntimeError("insufficient-successful-content-nodes")
+        if reason in {"missing-non-degradable-work", "degraded-success-disabled"}:
+            raise RuntimeError("V5 execution failed production delivery policy")
+        raise RuntimeError("V5 execution could not reach the minimum audited work-coverage gate")
 
     def execute_graph(
         self,
@@ -1305,252 +1676,27 @@ class ExecutionEngine:
         output_dir: str | Path | None = None,
         limits: GraphLimits | None = None,
     ) -> dict[str, Any]:
-        graph = graph if isinstance(graph, ExecutionGraph) else ExecutionGraph.from_mapping(graph)
-        limits = limits or GraphLimits()
-        issues = validate_execution_graph(graph, limits)
-        structural = [issue for issue in issues if issue.code != "budget_limit"]
-        if structural:
-            raise RuntimeError(
-                "Invalid execution graph: "
-                + "; ".join(f"{issue.code}:{issue.message}" for issue in structural)
-            )
-        if len(graph.nodes) > self.config.initial_call_limit:
-            raise RuntimeError("planned nodes exceed RuntimeConfig.initial_call_limit")
-
+        graph, limits = self._validated_graph(graph, limits)
         preflight = self._preflight(graph, limits)
         root = Path(output_dir) if output_dir is not None else None
         if preflight["blockers"]:
-            if root is not None:
-                self._write_json(root / "v5-node-results.json", [])
-                self._write_json(
-                    root / "v5-execution-summary.json",
-                    {
-                        "version": 5,
-                        "status": "failed",
-                        "completion_mode": "none",
-                        "quality_status": "failed",
-                        "final_answer": None,
-                        "actual_cost_usd": 0.0,
-                        "execution_budget": {
-                            "maximum_total_calls": self.config.total_call_limit,
-                            "maximum_initial_calls": self.config.initial_call_limit,
-                            "maximum_recovery_calls": self.config.recovery_call_limit,
-                            "calls_reserved": 0,
-                        },
-                        "cost_preflight": preflight,
-                        "stop_reason": "native-runtime-preflight-rejected",
-                    },
-                )
-                self._write_json(root / "v5-request-audit.json", {"status": "PASS", "request_count": 0, "requests": []})
-            raise RuntimeError("V5 graph rejected before model calls")
-
-        call = call_fn or self._default_call
-        node_by_id = {node.node_id: node for node in graph.nodes}
-        incoming: dict[str, list[str]] = {node.node_id: [] for node in graph.nodes}
-        for edge in graph.edges:
-            incoming[edge.target].append(edge.source)
+            self._reject_preflight(root, preflight)
         budget = BudgetController(self.config, graph)
-        outputs: dict[str, RuntimeNodeResult] = {}
-        recovery = graph.metadata.get("recovery_pool", {}) if isinstance(graph.metadata, Mapping) else {}
-        stage_records: list[dict[str, Any]] = []
-
-        for stage_index, stage in enumerate(graph.execution_stages):
-            configured = max(1, int(getattr(run, "parallel_workers", len(stage) or 1)))
-            workers = 1 if self.config.cost_anomaly_usd is not None else min(configured, len(stage))
-            futures = {}
-            with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-                for node_id in stage:
-                    upstream = [
-                        {
-                            "node_id": source,
-                            "answer": outputs[source].answer,
-                            "quality_score": outputs[source].quality_score,
-                            "contract": outputs[source].contract,
-                        }
-                        for source in incoming[node_id]
-                        if source in outputs and outputs[source].answer
-                    ]
-                    futures[
-                        pool.submit(
-                            self.execute_node,
-                            node_by_id[node_id],
-                            original_task,
-                            upstream,
-                            run,
-                            call,
-                            list(recovery.get(node_id, [])) if isinstance(recovery, Mapping) else [],
-                            budget,
-                        )
-                    ] = node_id
-                stage_results = [future.result() for future in as_completed(futures)]
-            stage_results.sort(key=lambda row: row.node_id)
-            for row in stage_results:
-                outputs[row.node_id] = row
-            failed = [
-                row.node_id
-                for row in stage_results
-                if row.status not in STRICT_SUCCESS_STATUSES
-            ]
-            stage_records.append(
-                {
-                    "stage_index": stage_index,
-                    "node_ids": list(stage),
-                    "failed_node_ids": failed,
-                    "status": "degraded" if failed else "success",
-                    "continued_after_failure": bool(failed),
-                }
-            )
-            if budget.calls_reserved >= self.config.total_call_limit:
-                break
-
-        successful_finals = [
-            outputs[node_id]
-            for node_id in graph.final_nodes
-            if node_id in outputs
-            and outputs[node_id].status.startswith("success")
-            and outputs[node_id].answer
-        ]
-        preferred_final = "\n\n".join(row.answer or "" for row in successful_finals).strip()
-        optional_work = {
-            str(value)
-            for value in graph.metadata.get("optional_work_ids", [])
-        } if isinstance(graph.metadata, Mapping) else set()
-        non_degradable_work = {
-            str(value)
-            for value in graph.metadata.get("non_degradable_work_ids", [])
-        } if isinstance(graph.metadata, Mapping) else set()
-        content_work = self._content_work_ids(graph) - optional_work
-        best_by_work = {
-            work_id: result
-            for work_id, result in self._best_outputs_by_work(graph, outputs).items()
-            if work_id in content_work
-        }
-        covered = set(best_by_work)
-        missing = sorted(content_work - covered)
-        coverage = len(covered) / max(1, len(content_work))
-        usable_content_nodes = len(
-            {result.node_id for result in best_by_work.values()}
+        outputs, records = self._execute_stages(
+            graph, run, original_task, call_fn or self._default_call, budget
         )
-        successful_content_nodes = len(
-            {
-                result.node_id
-                for result in best_by_work.values()
-                if result.status in STRICT_SUCCESS_STATUSES
-            }
+        state = self._delivery_state(graph, outputs, limits)
+        blockers, missing_non_degradable = self._delivery_blockers(state, limits)
+        result = self._execution_result(
+            graph, outputs, records, budget, preflight, limits, state, blockers,
+            missing_non_degradable,
         )
-        complete_nodes = (
-            len(outputs) == len(graph.nodes)
-            and all(
-                row.status in STRICT_SUCCESS_STATUSES
-                for row in outputs.values()
-            )
-        )
-        minimum_coverage = max(0.0, min(1.0, float(limits.min_required_work_coverage)))
-        degradation_used = any(
-            row.status.startswith("success")
-            and row.status not in STRICT_SUCCESS_STATUSES
-            for row in outputs.values()
-        )
-        final_answer = preferred_final
-        if not final_answer and coverage >= minimum_coverage:
-            final_answer = self._degraded_synthesis(best_by_work, missing)
-            degradation_used = True
-        elif preferred_final and (missing or not complete_nodes):
-            degradation_used = True
-
-        delivery_blockers: list[str] = []
-        missing_non_degradable = sorted(non_degradable_work.intersection(missing))
-        if missing_non_degradable:
-            delivery_blockers.append("missing-non-degradable-work")
-        if coverage + 1e-12 < minimum_coverage:
-            delivery_blockers.append("insufficient-required-work-coverage")
-        if successful_content_nodes < int(limits.min_successful_content_nodes):
-            delivery_blockers.append("insufficient-successful-content-nodes")
-        if degradation_used and not limits.allow_degraded_success:
-            delivery_blockers.append("degraded-success-disabled")
-
-        if (
-            final_answer
-            and not degradation_used
-            and complete_nodes
-            and not missing
-            and not delivery_blockers
-        ):
-            status = "success"
-            completion_mode = "full"
-            quality_status = "full_success"
-            stop_reason = "all-quality-gates-passed"
-        elif final_answer and not delivery_blockers:
-            status = "success"
-            completion_mode = "degraded"
-            quality_status = "degraded_success"
-            stop_reason = "partial-success-deterministic-synthesis"
-        else:
-            status = "failed"
-            completion_mode = "none"
-            quality_status = "failed"
-            stop_reason = delivery_blockers[0] if delivery_blockers else "insufficient-work-coverage-after-recovery"
-
-        result = {
-            "version": 5,
-            "runtime_version": RUNTIME_VERSION,
-            "executor": "v5-native-execution-engine",
-            "status": status,
-            "completion_mode": completion_mode,
-            "quality_status": quality_status,
-            "execution_stages": stage_records,
-            "node_results": [asdict(outputs[node_id]) for node_id in sorted(outputs)],
-            "final_node_ids": list(graph.final_nodes),
-            "final_answer": final_answer or None,
-            "actual_cost_usd": round(sum(row.actual_cost_usd for row in outputs.values()), 8),
-            "recovery_used": any(
-                attempt.attempt_kind in {"retry", "replacement"}
-                for row in outputs.values()
-                for attempt in row.attempts
-            ),
-            "execution_budget": budget.snapshot(),
-            "cost_preflight": preflight,
-            "work_coverage": {
-                "required_content_work_ids": sorted(content_work),
-                "covered_work_ids": sorted(covered),
-                "missing_work_ids": missing,
-                "coverage_ratio": round(coverage, 6),
-                "minimum_degraded_coverage": minimum_coverage,
-                "usable_content_nodes": usable_content_nodes,
-                "successful_content_nodes": successful_content_nodes,
-            },
-            "delivery_policy": {
-                "optional_work_ids": sorted(optional_work),
-                "non_degradable_work_ids": sorted(non_degradable_work),
-                "missing_non_degradable_work_ids": missing_non_degradable,
-                "minimum_required_work_coverage": minimum_coverage,
-                "minimum_successful_content_nodes": int(limits.min_successful_content_nodes),
-                "planned_content_node_ids": list(
-                    preflight["delivery_feasibility"]["planned_content_node_ids"]
-                ),
-                "planned_content_node_count": int(
-                    preflight["delivery_feasibility"]["planned_content_node_count"]
-                ),
-                "allow_degraded_success": bool(limits.allow_degraded_success),
-                "blockers": delivery_blockers,
-            },
-            "degradation": {
-                "used": degradation_used,
-                "mode": "deterministic-successful-node-synthesis" if degradation_used else None,
-                "extra_model_calls": 0,
-            },
-            "stop_reason": stop_reason,
-        }
         result = quality_integrity.enforce_result_integrity(result)
         if root is not None:
             self._write_artifacts(root, result, outputs)
-        if status == "failed":
-            if stop_reason == "insufficient-successful-content-nodes":
-                raise RuntimeError("insufficient-successful-content-nodes")
-            if stop_reason in {"missing-non-degradable-work", "degraded-success-disabled"}:
-                raise RuntimeError("V5 execution failed production delivery policy")
-            raise RuntimeError("V5 execution could not reach the minimum audited work-coverage gate")
+        self._raise_failed_result(result)
         return result
+
 
 
 @dataclass
@@ -1568,11 +1714,7 @@ class ProductionRuntime:
     output_policy: OutputPolicy = field(default_factory=OutputPolicy)
     quality_policy: QualityGatePolicy = field(default_factory=QualityGatePolicy)
     audit_policy: AuditPolicy = field(default_factory=AuditPolicy)
-    planner_policy: Any | None = None
-
     def __post_init__(self) -> None:
-        if self.planner_policy is None:
-            self.planner_policy = PlannerPolicy(self.config)
         self.execution_engine = ExecutionEngine(
             self.config,
             prompt_policy=self.prompt_policy,
@@ -1632,10 +1774,6 @@ class ProductionRuntime:
                 "token": asdict(self.token_policy),
                 "output": asdict(self.output_policy),
                 "audit": asdict(self.audit_policy),
-                "planner": {
-                    "implementation": type(self.planner_policy).__name__,
-                    "composition": "explicit-direct-call",
-                },
             },
             "global_monkey_patching": False,
             "cross_task_history_used": False,

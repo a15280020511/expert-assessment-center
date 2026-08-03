@@ -55,6 +55,11 @@ class TestV5FailureEvidenceChain(unittest.TestCase):
                 manifest["publication_status"], "skipped_failed_execution"
             )
             self.assertEqual(manifest["comment_count"], 0)
+            self.assertEqual(
+                manifest["report_comment_preparation_status"],
+                "NOT_APPLICABLE",
+            )
+            self.assertFalse(manifest["issue_context_required"])
             self.assertIsNone(manifest["report_sha256"])
             self.assertTrue(
                 (root / "report-comments" / "report-comments-manifest.json").is_file()
@@ -74,6 +79,7 @@ class TestV5FailureEvidenceChain(unittest.TestCase):
                 commit_sha="c" * 40,
                 final_status_file=final_status,
             )
+            self.assertEqual(attestation["status"], "FAIL")
             self.assertFalse(attestation["report_required"])
             self.assertFalse(attestation["report_present"])
             self.assertIsNone(attestation["report_sha256"])

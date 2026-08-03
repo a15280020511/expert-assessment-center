@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any, Mapping, Sequence
 
 from execution_graph import SelectedNode
@@ -41,9 +42,10 @@ def system_prompt(node: SelectedNode) -> str:
     )
     contract = json.dumps(dict(node.output_contract), ensure_ascii=False, sort_keys=True)
     functions = "、".join(node.functions)
+    function_rule = f"本节点功能：{functions}。" if functions else ""
     return (
         "你是V5动态专家执行图中的一个严格隔离节点。"
-        f"本节点功能：{functions}。负责原子工作：{', '.join(node.assigned_work)}。"
+        f"{function_rule}负责原子工作：{', '.join(node.assigned_work)}。"
         "禁止调用、请求或假装使用网页、搜索、插件、文件、代码执行、数据库、API、浏览器、工具或其他模型。"
         "只能依据原始任务和系统显式传入的上游节点结果。不得读取未声明节点，不得与同独立组节点交换结果。"
         f"{rules}输出契约：{contract}。输出完整可交付正文；不要展示隐藏思维过程。"
@@ -111,6 +113,14 @@ def extract_answer(response: Mapping[str, Any]) -> str:
     return ""
 
 
+def finite_number(value: Any, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if math.isfinite(number) else default
+
+
 def finish_reason(response: Mapping[str, Any]) -> str:
     choices = response.get("choices")
     if isinstance(choices, list) and choices and isinstance(choices[0], Mapping):
@@ -140,9 +150,7 @@ def quality_gate(
         reasons.append("truncated-output")
     minimum_chars = (
         320
-        if "synthesis" in node.functions
-        else 180
-        if "implementation" in node.functions
+        if node.output_contract.get("final_delivery_node") is True
         else 120
     )
     if len(answer) < minimum_chars:

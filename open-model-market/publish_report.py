@@ -110,6 +110,9 @@ def write_comments(
         "max_comment_chars": max_chars,
         "files": files,
         "publication_gate": "strict-full-success-only",
+        "report_comment_preparation_status": "PASS",
+        "report_comment_preparation_mode": "deterministic-files",
+        "issue_context_required": False,
     }
     (output_dir / "report-comments-manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
@@ -138,13 +141,10 @@ def _node_rows(artifact_root: Path) -> list[Mapping[str, Any]]:
     return [row for row in value if isinstance(row, Mapping)]
 
 
-def strict_publication_gate(artifact_root: Path) -> tuple[bool, list[str]]:
-    """Fail closed unless the frozen runtime result is strict full success."""
-    summary = _load_mapping(artifact_root / "v5-execution-summary.json")
-    result = _load_mapping(artifact_root / "expert-team-result.json")
-    rows = _node_rows(artifact_root)
-    blockers: list[str] = []
-
+def _publication_state_blockers(
+    summary: Mapping[str, Any],
+    result: Mapping[str, Any],
+) -> list[str]:
     status = str(summary.get("status") or result.get("status") or "").casefold()
     completion_mode = str(
         summary.get("completion_mode") or result.get("completion_mode") or ""
@@ -155,7 +155,7 @@ def strict_publication_gate(artifact_root: Path) -> tuple[bool, list[str]]:
     integrity = summary.get("quality_integrity")
     integrity = dict(integrity) if isinstance(integrity, Mapping) else {}
     integrity_status = str(integrity.get("status") or "").upper()
-
+    blockers: list[str] = []
     if status != "success":
         blockers.append(f"execution-status:{status or 'missing'}")
     if completion_mode != "full":
@@ -164,9 +164,13 @@ def strict_publication_gate(artifact_root: Path) -> tuple[bool, list[str]]:
         blockers.append(f"quality-status:{quality_status or 'missing'}")
     if integrity_status != "PASS":
         blockers.append(f"quality-integrity:{integrity_status or 'missing'}")
-    if not rows:
-        blockers.append("node-results:missing")
+    return blockers
 
+
+def _node_publication_blockers(rows: list[Mapping[str, Any]]) -> list[str]:
+    if not rows:
+        return ["node-results:missing"]
+    blockers: list[str] = []
     for row in rows:
         node_id = str(row.get("node_id") or "unknown")
         node_status = str(row.get("status") or "")
@@ -176,6 +180,16 @@ def strict_publication_gate(artifact_root: Path) -> tuple[bool, list[str]]:
             blockers.append(f"node-status:{node_id}:{node_status or 'missing'}")
         if contract.get("required_fields_complete") is not True:
             blockers.append(f"node-contract-incomplete:{node_id}")
+    return blockers
+
+
+def strict_publication_gate(artifact_root: Path) -> tuple[bool, list[str]]:
+    """Fail closed unless the frozen runtime result is strict full success."""
+    summary = _load_mapping(artifact_root / "v5-execution-summary.json")
+    result = _load_mapping(artifact_root / "expert-team-result.json")
+    rows = _node_rows(artifact_root)
+    blockers = _publication_state_blockers(summary, result)
+    blockers.extend(_node_publication_blockers(rows))
 
     return not blockers, list(dict.fromkeys(blockers))
 
@@ -220,6 +234,9 @@ def write_skip_manifest(
         "max_comment_chars": max_chars,
         "files": [],
         "publication_gate": "strict-full-success-only",
+        "report_comment_preparation_status": "NOT_APPLICABLE",
+        "report_comment_preparation_mode": "deterministic-files",
+        "issue_context_required": False,
         "publication_blockers": blockers,
     }
     (output_dir / "report-comments-manifest.json").write_text(

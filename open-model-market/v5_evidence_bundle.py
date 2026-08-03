@@ -1,390 +1,20 @@
-"""Build the V5 evidence chain from one immutable in-memory input snapshot.
+"""Post-upload final status and attestation helpers.
 
-The builder has two deterministic phases:
-1. pre-upload: normalize runtime evidence and create the primary manifest;
-2. post-upload: inject the immutable Artifact identity into final status and
-   final attestation without reinterpreting task, model, cost, or quality data.
+Pre-upload execution evidence is built only by :mod:`v5_run_evidence`. This
+module intentionally contains no planning, optimization, model selection, or
+legacy evidence-bundle builder.
 """
 from __future__ import annotations
 
-import json
-import math
 import os
 from dataclasses import dataclass
-from hashlib import sha256
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
-from artifact_manifest import sha256_file, write_manifest
+from artifact_manifest import sha256_file
+from v5_json_io import load_json_or_default
 
 RUNTIME_VERSION = "v5-native-runtime-1"
-
-
-def _load(path: Path, default: Any) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return default
-
-
-def _write(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
-
-
-def _canonical_sha(value: Any) -> str:
-    rendered = json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    return sha256(rendered.encode("utf-8")).hexdigest()
-
-
-def _provider_slug(endpoint: str) -> str:
-    return endpoint.rsplit("@", 1)[-1] if "@" in endpoint else endpoint
-
-
-def _request_provider(request: Mapping[str, Any]) -> str | None:
-    provider = request.get("provider")
-    if not isinstance(provider, Mapping):
-        return None
-    values = provider.get("only") or provider.get("order")
-    if isinstance(values, list) and values:
-        return str(values[0])
-    return None
-
-
-def _attempt_rows(node_results: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, Any], ...]:
-    rows: list[Mapping[str, Any]] = []
-    for node in node_results:
-        attempts = node.get("attempts", [])
-        if isinstance(attempts, list):
-            rows.extend(attempt for attempt in attempts if isinstance(attempt, Mapping))
-    return tuple(rows)
-
-
-def _cost_from_attempts(attempts: Sequence[Mapping[str, Any]]) -> float:
-    total = 0.0
-    for attempt in attempts:
-        usage = attempt.get("usage") if isinstance(attempt.get("usage"), Mapping) else {}
-        for key in ("cost", "total_cost"):
-            try:
-                if usage.get(key) is not None:
-                    total += max(0.0, float(usage[key]))
-                    break
-            except (TypeError, ValueError):
-                continue
-    return round(total, 8)
-
-
-def _providers(
-    attempts: Sequence[Mapping[str, Any]],
-    requests: Sequence[Mapping[str, Any]],
-) -> tuple[list[str], list[str]]:
-    attempted = {
-        provider
-        for request in requests
-        for provider in [_request_provider(request)]
-        if provider
-    }
-    substantive: set[str] = set()
-    for attempt in attempts:
-        provider = str(attempt.get("response_provider") or "").strip()
-        endpoint = str(attempt.get("provider_endpoint") or "").strip()
-        usage = attempt.get("usage") if isinstance(attempt.get("usage"), Mapping) else {}
-        if provider:
-            substantive.add(provider)
-        elif usage and endpoint:
-            substantive.add(_provider_slug(endpoint))
-        if endpoint:
-            attempted.add(_provider_slug(endpoint))
-    return sorted(attempted), sorted(substantive)
-
-
-@dataclass(frozen=True)
-class EvidenceInputs:
-    runtime_config: Mapping[str, Any]
-    catalog_snapshot: Mapping[str, Any]
-    execution_graph: Mapping[str, Any]
-    node_results: tuple[Mapping[str, Any], ...]
-    call_attempts: tuple[Mapping[str, Any], ...]
-    final_report: str
-    execution_summary: Mapping[str, Any]
-    optimization: Mapping[str, Any]
-    ticket: Mapping[str, Any]
-    source_request_audit: Mapping[str, Any]
-
-    @classmethod
-    def from_directory(cls, root: Path) -> "EvidenceInputs":
-        summary = _load(root / "v5-execution-summary.json", {})
-        graph = _load(root / "v5-execution-graph.json", {})
-        raw_nodes = _load(root / "v5-node-results.json", [])
-        nodes = tuple(row for row in raw_nodes if isinstance(row, Mapping)) if isinstance(raw_nodes, list) else ()
-        request_audit = _load(root / "v5-request-audit.json", {})
-        optimization = _load(root / "v5-optimization.json", {})
-        ticket = _load(root / "ticket-status.json", {})
-        runtime = _load(root / "v5-runtime-config.json", {})
-        snapshot = _load(root / "catalog-snapshot.json", {})
-        report_path = root / "v5-final-report.md"
-        report = report_path.read_text(encoding="utf-8") if report_path.is_file() else ""
-        return cls(
-            runtime_config=dict(runtime) if isinstance(runtime, Mapping) else {},
-            catalog_snapshot=dict(snapshot) if isinstance(snapshot, Mapping) else {},
-            execution_graph=dict(graph) if isinstance(graph, Mapping) else {},
-            node_results=nodes,
-            call_attempts=_attempt_rows(nodes),
-            final_report=report,
-            execution_summary=dict(summary) if isinstance(summary, Mapping) else {},
-            optimization=dict(optimization) if isinstance(optimization, Mapping) else {},
-            ticket=dict(ticket) if isinstance(ticket, Mapping) else {},
-            source_request_audit=(
-                dict(request_audit) if isinstance(request_audit, Mapping) else {}
-            ),
-        )
-
-
-@dataclass(frozen=True)
-class ApprovedRun:
-    total_calls: int
-    recovery_calls: int
-    cost_anomaly_usd: float | None
-
-    @property
-    def initial_calls(self) -> int:
-        return self.total_calls - self.recovery_calls
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "maximum_total_calls": self.total_calls,
-            "maximum_recovery_calls": self.recovery_calls,
-            "maximum_initial_calls": self.initial_calls,
-            "cost_anomaly_usd": self.cost_anomaly_usd,
-        }
-
-
-class EvidenceBundleBuilder:
-    """Create every pre-upload evidence document from one EvidenceInputs object."""
-
-    def __init__(self, inputs: EvidenceInputs, approved: ApprovedRun) -> None:
-        if not 1 <= approved.total_calls <= 16:
-            raise ValueError("approved total calls must be between 1 and 16")
-        if not 0 <= approved.recovery_calls < approved.total_calls:
-            raise ValueError("approved recovery calls must leave an initial call")
-        self.inputs = inputs
-        self.approved = approved
-
-    def build(self, *, require_report: bool) -> dict[str, Any]:
-        inputs = self.inputs
-        source_audit = inputs.source_request_audit
-        requests_raw = source_audit.get("requests")
-        requests = [row for row in requests_raw if isinstance(row, Mapping)] if isinstance(requests_raw, list) else []
-        request_count = int(source_audit.get("request_count") or len(requests))
-        budget = inputs.execution_summary.get("execution_budget")
-        budget = dict(budget) if isinstance(budget, Mapping) else {}
-        calls_reserved = int(budget.get("calls_reserved") or request_count)
-        actual_cost = float(
-            inputs.execution_summary.get("actual_cost_usd")
-            or budget.get("actual_cost_usd")
-            or _cost_from_attempts(inputs.call_attempts)
-        )
-        if not math.isfinite(actual_cost) or actual_cost < 0:
-            actual_cost = _cost_from_attempts(inputs.call_attempts)
-        if calls_reserved > self.approved.total_calls or request_count > self.approved.total_calls:
-            raise RuntimeError(
-                "V5 exceeded approved total paid-call ceiling: "
-                f"reserved={calls_reserved}, captured={request_count}, "
-                f"approved={self.approved.total_calls}"
-            )
-
-        nodes_raw = inputs.execution_graph.get("nodes")
-        nodes = [row for row in nodes_raw if isinstance(row, Mapping)] if isinstance(nodes_raw, list) else []
-        if len(nodes) > self.approved.initial_calls:
-            raise RuntimeError(
-                "V5 planned more initial nodes than the approved total leaves after recovery reserve"
-            )
-        endpoints = sorted({
-            str(row.get("provider_endpoint"))
-            for row in nodes
-            if row.get("provider_endpoint")
-        })
-        models = sorted({str(row.get("model")) for row in nodes if row.get("model")})
-        attempted_providers, substantive_providers = _providers(inputs.call_attempts, requests)
-
-        source_status = str(source_audit.get("status") or "missing")
-        request_status = (
-            "PASS"
-            if source_status == "PASS"
-            and request_count == len(requests)
-            and request_count == calls_reserved
-            else source_status
-        )
-        request_audit = {
-            "version": 5,
-            "runtime_version": RUNTIME_VERSION,
-            "status": request_status,
-            "approved_total_call_ceiling": self.approved.total_calls,
-            "approved_recovery_call_ceiling": self.approved.recovery_calls,
-            "expected_request_count": calls_reserved,
-            "captured_request_count": request_count,
-            "requests": requests,
-            "external_tools_allowed": False,
-            "dynamic_output_allowance_sent": bool(source_audit.get("dynamic_output_allowance_sent")),
-            "bounded_output_allowance_sent": bool(source_audit.get("bounded_output_allowance_sent")),
-            "artificial_token_ceiling_sent": bool(source_audit.get("artificial_token_ceiling_sent", False)),
-            "quality_integrity_status": source_audit.get("quality_integrity_status"),
-            "source": "v5-request-audit.json",
-        }
-        ledger = {
-            "version": 5,
-            "runtime_version": RUNTIME_VERSION,
-            "summary": {
-                "call_count": calls_reserved,
-                "approved_total_call_ceiling": self.approved.total_calls,
-                "approved_recovery_call_ceiling": self.approved.recovery_calls,
-                "provider_actual_cost_usd": round(actual_cost, 8),
-                "conservative_cost_usd": round(actual_cost, 8),
-                "cost_evidence_status": (
-                    "provider_actual_or_runtime_reconciled"
-                    if actual_cost > 0
-                    else "request_attempt_recorded_no_provider_usage"
-                ),
-                "cost_anomaly_usd": self.approved.cost_anomaly_usd,
-                "attempted_providers": attempted_providers,
-                "attempted_provider_count": len(attempted_providers),
-                "substantive_providers": substantive_providers,
-                "substantive_provider_count": len(substantive_providers),
-                "all_providers": sorted(set(attempted_providers) | set(substantive_providers)),
-                "replacement_calls": int(budget.get("replacements_reserved") or 0),
-                "retry_calls": int(budget.get("retries_reserved") or 0),
-                "recovery_calls": int(budget.get("recovery_calls_reserved") or 0),
-            },
-            "node_results": list(inputs.node_results),
-        }
-        selection = {
-            "version": 5,
-            "runtime_version": RUNTIME_VERSION,
-            "models": models,
-            "provider_endpoints": endpoints,
-            "node_count": len(nodes),
-            "selected_interpretation": inputs.optimization.get("selected_interpretation"),
-            "catalog_snapshot_id": inputs.catalog_snapshot.get("catalog_snapshot_id"),
-            "cross_task_history_used": False,
-        }
-        routing = {
-            "version": 5,
-            "runtime_version": RUNTIME_VERSION,
-            "status": "PASS" if inputs.execution_graph else "FAIL",
-            "mode": "dynamic-v5-dag",
-            "call_consumed": False,
-        }
-        execution_summary = {
-            **dict(inputs.execution_summary),
-            "runtime_version": RUNTIME_VERSION,
-            "approved_budget": self.approved.to_dict(),
-            "catalog_snapshot_id": inputs.catalog_snapshot.get("catalog_snapshot_id"),
-            "evidence_input_sha256": self.input_sha256(),
-        }
-        answer = str(inputs.execution_summary.get("final_answer") or "").strip()
-        if require_report and (not inputs.final_report.strip() or not answer):
-            raise RuntimeError("V5 did not produce a final report")
-        result = {
-            "version": 5,
-            "runtime_version": RUNTIME_VERSION,
-            "status": str(inputs.execution_summary.get("status") or "failed"),
-            "completion_mode": str(inputs.execution_summary.get("completion_mode") or "none"),
-            "quality_status": str(inputs.execution_summary.get("quality_status") or "failed"),
-            "quality_integrity": inputs.execution_summary.get("quality_integrity"),
-            "final_answer": answer,
-            "actual_cost_usd": round(actual_cost, 8),
-            "executor": inputs.execution_summary.get("executor"),
-            "work_coverage": inputs.execution_summary.get("work_coverage"),
-            "degradation": inputs.execution_summary.get("degradation"),
-            "delivery_policy": inputs.execution_summary.get("delivery_policy"),
-            "execution_budget": budget,
-            "approved_budget": self.approved.to_dict(),
-            "catalog_snapshot_id": inputs.catalog_snapshot.get("catalog_snapshot_id"),
-            "node_count": len(nodes),
-            "model_count": len(models),
-            "provider_count": len(substantive_providers),
-            "attempted_provider_count": len(attempted_providers),
-            "production_entrypoint": True,
-            "fallback_used": False,
-            "legacy_runtime_present": False,
-            "ticket_task_id": inputs.ticket.get("task_id"),
-            "evidence_input_sha256": self.input_sha256(),
-        }
-        runtime = {
-            "runtime_version": RUNTIME_VERSION,
-            "entrypoint": "v5_production_ticket.py",
-            "runtime_constructor": "v5_runtime.ProductionRuntime",
-            "global_monkey_patching": False,
-            **self.approved.to_dict(),
-            "fallback_policy": "fail-closed-no-alternate-runtime",
-            "legacy_runtime_present": False,
-            "cross_task_history_used": False,
-            "catalog_snapshot_id": inputs.catalog_snapshot.get("catalog_snapshot_id"),
-        }
-        return {
-            "request-audit.json": request_audit,
-            "call-ledger.json": ledger,
-            "model-selection.json": selection,
-            "task-routing.json": routing,
-            "execution-summary.json": execution_summary,
-            "expert-team-result.json": result,
-            "production-runtime.json": runtime,
-        }
-
-    def input_sha256(self) -> str:
-        return _canonical_sha({
-            "runtime_config": self.inputs.runtime_config,
-            "catalog_snapshot": self.inputs.catalog_snapshot,
-            "execution_graph": self.inputs.execution_graph,
-            "node_results": self.inputs.node_results,
-            "call_attempts": self.inputs.call_attempts,
-            "final_report": self.inputs.final_report,
-            "execution_summary": self.inputs.execution_summary,
-            "optimization": self.inputs.optimization,
-            "ticket": self.inputs.ticket,
-            "source_request_audit": self.inputs.source_request_audit,
-            "approved": self.approved.to_dict(),
-        })
-
-    def write(self, root: Path, *, require_report: bool) -> dict[str, Any]:
-        root.mkdir(parents=True, exist_ok=True)
-        documents = self.build(require_report=require_report)
-        for name, document in documents.items():
-            _write(root / name, document)
-        if require_report:
-            (root / "expert-team-report.md").write_text(
-                self.inputs.final_report,
-                encoding="utf-8",
-            )
-        snapshot = {
-            "schema_version": "v5-evidence-bundle-1",
-            "runtime_version": RUNTIME_VERSION,
-            "input_sha256": self.input_sha256(),
-            "approved": self.approved.to_dict(),
-            "catalog_snapshot_id": self.inputs.catalog_snapshot.get("catalog_snapshot_id"),
-            "generated_documents": {
-                name: _canonical_sha(document)
-                for name, document in sorted(documents.items())
-            },
-            "business_evidence_frozen": True,
-            "post_upload_fields_pending": [
-                "primary_artifact_id",
-                "primary_artifact_digest",
-                "primary_artifact_url",
-            ],
-        }
-        _write(root / "evidence-bundle.json", snapshot)
-        write_manifest(root)
-        return documents["expert-team-result.json"]
 
 
 @dataclass(frozen=True)
@@ -400,7 +30,7 @@ class FinalStatusInputs:
     @classmethod
     def from_directory(cls, root: Path) -> "FinalStatusInputs":
         def mapping(name: str, default: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
-            value = _load(root / name, default or {})
+            value = load_json_or_default(root / name, default or {})
             return dict(value) if isinstance(value, Mapping) else {}
         return cls(
             ticket=mapping("ticket-status.json"),
@@ -416,6 +46,61 @@ class FinalStatusInputs:
         )
 
 
+def _final_status_context(
+    inputs: FinalStatusInputs,
+    *,
+    audit_outcome: str,
+    manifest_outcome: str,
+    ticket_upload_outcome: str,
+    independent_revalidation: Mapping[str, Any] | None,
+) -> tuple[
+    Mapping[str, Any],
+    list[Any],
+    list[Any],
+    str,
+    dict[str, Any],
+    str,
+]:
+    audit = inputs.diagnosis
+    failures = list(audit.get("failures") or [])
+    degradations = list(audit.get("degradations") or [])
+    status = str(audit.get("status") or "FAIL")
+    independent = (
+        dict(independent_revalidation)
+        if isinstance(independent_revalidation, Mapping)
+        else {}
+    )
+    independent_status = str(independent.get("status") or "MISSING").upper()
+    if audit_outcome != "success":
+        status = "FAIL"
+        failures.append(f"V5 audit step outcome is {audit_outcome}")
+    if manifest_outcome != "success":
+        status = "FAIL"
+        failures.append(
+            f"primary artifact manifest step outcome is {manifest_outcome}"
+        )
+    if ticket_upload_outcome != "success":
+        status = "FAIL"
+        failures.append(
+            "primary ticket artifact upload outcome is "
+            f"{ticket_upload_outcome}"
+        )
+    if status in {"PASS", "DEGRADED"} and independent_status != "PASS":
+        status = "FAIL"
+        failures.append(
+            "independent artifact revalidation is not PASS: "
+            f"{independent_status}"
+        )
+    return (
+        audit,
+        failures,
+        degradations,
+        status,
+        independent,
+        independent_status,
+    )
+
+
 def build_final_status_record(
     inputs: FinalStatusInputs,
     *,
@@ -426,20 +111,22 @@ def build_final_status_record(
     artifact_id: str,
     artifact_url: str,
     artifact_digest: str,
+    independent_revalidation: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    audit = inputs.diagnosis
-    failures = list(audit.get("failures") or [])
-    degradations = list(audit.get("degradations") or [])
-    status = str(audit.get("status") or "FAIL")
-    if audit_outcome != "success":
-        status = "FAIL"
-        failures.append(f"V5 audit step outcome is {audit_outcome}")
-    if manifest_outcome != "success":
-        status = "FAIL"
-        failures.append(f"primary artifact manifest step outcome is {manifest_outcome}")
-    if ticket_upload_outcome != "success":
-        status = "FAIL"
-        failures.append(f"primary ticket artifact upload outcome is {ticket_upload_outcome}")
+    (
+        audit,
+        failures,
+        degradations,
+        status,
+        independent,
+        independent_status,
+    ) = _final_status_context(
+        inputs,
+        audit_outcome=audit_outcome,
+        manifest_outcome=manifest_outcome,
+        ticket_upload_outcome=ticket_upload_outcome,
+        independent_revalidation=independent_revalidation,
+    )
     summary = inputs.ledger.get("summary")
     summary = dict(summary) if isinstance(summary, Mapping) else {}
     nodes = inputs.graph.get("nodes")
@@ -467,6 +154,11 @@ def build_final_status_record(
         "cost_anomaly_usd": summary.get("cost_anomaly_usd"),
         "substantive_providers": summary.get("substantive_providers", []),
         "substantive_provider_count": summary.get("substantive_provider_count", 0),
+        "independent_artifact_revalidation_status": independent_status,
+        "independent_artifact_revalidation_schema": independent.get("schema_version"),
+        "independent_recomputed_from_primitive_evidence": bool(
+            independent.get("recomputed_from_primitive_evidence")
+        ),
         "legacy_runtime_present": inputs.runtime.get("legacy_runtime_present"),
         "primary_artifact": {
             "artifact_id": artifact_id,
@@ -481,19 +173,24 @@ def build_final_status_record(
     }
 
 
-def render_final_status_markdown(record: Mapping[str, Any]) -> str:
-    status = str(record.get("status") or "FAIL")
-    heading = {
+def _status_heading(status: str) -> str:
+    return {
         "PASS": "EXECUTION_COMPLETED",
         "DEGRADED": "EXECUTION_DEGRADED",
         "FAIL": "EXECUTION_FAILED",
     }.get(status, "EXECUTION_FAILED")
-    artifact = record.get("primary_artifact")
-    artifact = artifact if isinstance(artifact, Mapping) else {}
-    providers = record.get("substantive_providers")
-    providers = providers if isinstance(providers, list) else []
-    lines = [
-        f"## {heading}",
+
+
+def _base_status_lines(
+    record: Mapping[str, Any],
+    status: str,
+    artifact: Mapping[str, Any],
+    providers: list[Any],
+) -> list[str]:
+    anomaly = record.get("cost_anomaly_usd")
+    anomaly_label = anomaly if anomaly is not None else "account/estimate guard only"
+    return [
+        f"## {_status_heading(status)}",
         "",
         "- Runtime: `V5 native production runtime`",
         f"- Deterministic audit status: `{status}`",
@@ -506,7 +203,7 @@ def render_final_status_markdown(record: Mapping[str, Any]) -> str:
         f"- Completion mode: `{record.get('completion_mode') or ''}`",
         f"- Quality status: `{record.get('quality_status') or ''}`",
         f"- Provider-reported/reconciled cost: `${record.get('provider_actual_cost_usd', 0)}`",
-        f"- Cost anomaly stop: `{record.get('cost_anomaly_usd') if record.get('cost_anomaly_usd') is not None else 'account/estimate guard only'}`",
+        f"- Cost anomaly stop: `{anomaly_label}`",
         f"- Provider count: `{record.get('substantive_provider_count', 0)}`",
         f"- Providers: `{', '.join(str(item) for item in providers) or 'unavailable'}`",
         "- External tools: `forbidden`",
@@ -517,33 +214,108 @@ def render_final_status_markdown(record: Mapping[str, Any]) -> str:
         f"- Primary Artifact digest: `{artifact.get('artifact_digest') or 'unavailable'}`",
         "- Final evidence: `a separate post-upload final-attestation Artifact is required before the Job can pass`",
     ]
-    if artifact.get("artifact_url"):
-        lines.append(f"- Primary Artifact: {artifact['artifact_url']}")
+
+
+def _diagnosis_lines(record: Mapping[str, Any]) -> list[str]:
     primary = record.get("primary_failure")
     primary = primary if isinstance(primary, Mapping) else {}
-    if primary.get("code") or primary.get("message"):
-        lines.extend([
-            "",
-            "### Primary diagnosis",
-            "",
-            f"- Error code: `{primary.get('code') or 'NONE'}`",
-            f"- Stage: `{primary.get('stage') or 'v5-production'}`",
-            f"- Message: {primary.get('message') or 'No direct error message was recorded.'}",
-            f"- Retryable: `{str(bool(primary.get('retryable'))).lower()}`",
-        ])
-    failures = record.get("failures")
-    if isinstance(failures, list) and failures:
-        lines.extend(["", "### Failure reasons", ""] + [f"- {row}" for row in failures])
-    degradations = record.get("degradations")
-    if isinstance(degradations, list) and degradations:
-        lines.extend(["", "### Degradation reasons", ""] + [f"- {row}" for row in degradations])
-    if status == "PASS":
-        lines.extend(["", "V5 动态专家图已完成生产任务；业务证据在主 Artifact 上传前已冻结，上传后只注入 Artifact 身份并生成最终证明。"])
-    elif status == "DEGRADED":
-        lines.extend(["", "V5 已交付，但发生受控降级。不得表述为完整正常 PASS；系统不会调用其他运行时。"])
-    else:
-        lines.extend(["", "本次 V5 运行不得表述为成功。系统已失败关闭，不调用其他运行时。"])
+    if not (primary.get("code") or primary.get("message")):
+        return []
+    return [
+        "",
+        "### Primary diagnosis",
+        "",
+        f"- Error code: `{primary.get('code') or 'NONE'}`",
+        f"- Stage: `{primary.get('stage') or 'v5-production'}`",
+        f"- Message: {primary.get('message') or 'No direct error message was recorded.'}",
+        f"- Retryable: `{str(bool(primary.get('retryable'))).lower()}`",
+    ]
+
+
+def _reason_lines(record: Mapping[str, Any], key: str, heading: str) -> list[str]:
+    rows = record.get(key)
+    if not isinstance(rows, list) or not rows:
+        return []
+    return ["", heading, "", *[f"- {row}" for row in rows]]
+
+
+def _terminal_status_line(status: str) -> str:
+    return {
+        "PASS": "V5 动态专家图已完成生产任务；业务证据在主 Artifact 上传前已冻结，上传后只注入 Artifact 身份并生成最终证明。",
+        "DEGRADED": "V5 已交付，但发生受控降级。不得表述为完整正常 PASS；系统不会调用其他运行时。",
+    }.get(status, "本次 V5 运行不得表述为成功。系统已失败关闭，不调用其他运行时。")
+
+
+def render_final_status_markdown(record: Mapping[str, Any]) -> str:
+    status = str(record.get("status") or "FAIL")
+    artifact = record.get("primary_artifact")
+    artifact = artifact if isinstance(artifact, Mapping) else {}
+    providers = record.get("substantive_providers")
+    providers = providers if isinstance(providers, list) else []
+    lines = _base_status_lines(record, status, artifact, providers)
+    if artifact.get("artifact_url"):
+        lines.append(f"- Primary Artifact: {artifact['artifact_url']}")
+    lines.extend(_diagnosis_lines(record))
+    lines.extend(_reason_lines(record, "failures", "### Failure reasons"))
+    lines.extend(_reason_lines(record, "degradations", "### Degradation reasons"))
+    lines.extend(["", _terminal_status_line(status)])
     return "\n".join(lines) + "\n"
+
+
+def _load_independent_attestation(
+    path: Path | None,
+) -> tuple[dict[str, Any], bool]:
+    raw = load_json_or_default(path, {}) if path is not None else {}
+    independent = dict(raw) if isinstance(raw, Mapping) else {}
+    valid = (
+        independent.get("schema_version")
+        == "v5-independent-artifact-revalidation-3"
+        and independent.get("status") == "PASS"
+        and independent.get("recomputed_from_primitive_evidence") is True
+        and independent.get("paid_acceptance_verdict_used_as_source") is False
+    )
+    return independent, valid
+
+
+def _require_attestation_inputs(
+    *,
+    manifest: Path,
+    bundle: Path,
+    final_status_file: Path,
+    report: Path,
+    diagnosis_path: Path,
+    report_required: bool,
+    normalized_audit_status: str,
+    primary_artifact_id: str,
+    primary_artifact_digest: str,
+) -> None:
+    required_paths = (manifest, bundle, final_status_file)
+    if not all(item.is_file() for item in required_paths):
+        raise RuntimeError("manifest, evidence bundle, and final status must exist")
+    if report_required and not report.is_file():
+        raise RuntimeError("successful or degraded execution requires a report")
+    if normalized_audit_status == "FAIL" and not diagnosis_path.is_file():
+        raise RuntimeError("failed execution requires deterministic diagnosis evidence")
+    if not primary_artifact_id or not primary_artifact_digest:
+        raise RuntimeError("primary artifact identity is required")
+
+
+def _attestation_status(
+    *,
+    normalized_audit_status: str,
+    diagnosis_status: str,
+    report_present: bool,
+    evidence_frozen: bool,
+    independent_valid: bool,
+) -> str:
+    valid = (
+        normalized_audit_status in {"PASS", "DEGRADED"}
+        and diagnosis_status == normalized_audit_status
+        and report_present
+        and evidence_frozen
+        and independent_valid
+    )
+    return normalized_audit_status if valid else "FAIL"
 
 
 def build_final_attestation_record(
@@ -556,27 +328,50 @@ def build_final_attestation_record(
     run_id: str,
     commit_sha: str,
     final_status_file: Path,
+    independent_revalidation_file: Path | None = None,
 ) -> dict[str, Any]:
     report = root / "expert-team-report.md"
     manifest = root / "artifact-manifest.json"
     bundle = root / "evidence-bundle.json"
     diagnosis_path = root / "execution-diagnosis.json"
     normalized_audit_status = str(audit_status or "FAIL").upper()
+    independent_path = independent_revalidation_file
+    independent, independent_valid = _load_independent_attestation(independent_path)
     report_required = normalized_audit_status in {"PASS", "DEGRADED"}
-    required_paths = (manifest, bundle, final_status_file)
-    if not all(item.is_file() for item in required_paths):
-        raise RuntimeError("manifest, evidence bundle, and final status must exist")
-    if report_required and not report.is_file():
-        raise RuntimeError("successful or degraded execution requires a report")
-    if normalized_audit_status == "FAIL" and not diagnosis_path.is_file():
-        raise RuntimeError("failed execution requires deterministic diagnosis evidence")
-    if not primary_artifact_id or not primary_artifact_digest:
-        raise RuntimeError("primary artifact identity is required")
-    diagnosis = _load(diagnosis_path, {})
-    evidence = _load(bundle, {})
+    _require_attestation_inputs(
+        manifest=manifest,
+        bundle=bundle,
+        final_status_file=final_status_file,
+        report=report,
+        diagnosis_path=diagnosis_path,
+        report_required=report_required,
+        normalized_audit_status=normalized_audit_status,
+        primary_artifact_id=primary_artifact_id,
+        primary_artifact_digest=primary_artifact_digest,
+    )
+    diagnosis = load_json_or_default(diagnosis_path, {})
+    evidence = load_json_or_default(bundle, {})
     report_present = report.is_file()
+    diagnosis_status = (
+        str(diagnosis.get("status") or "FAIL").upper()
+        if isinstance(diagnosis, Mapping)
+        else "FAIL"
+    )
+    evidence_frozen = bool(
+        evidence.get("business_evidence_frozen")
+        if isinstance(evidence, Mapping)
+        else False
+    )
+    attestation_status = _attestation_status(
+        normalized_audit_status=normalized_audit_status,
+        diagnosis_status=diagnosis_status,
+        report_present=report_present,
+        evidence_frozen=evidence_frozen,
+        independent_valid=independent_valid,
+    )
     return {
         "version": 2,
+        "status": attestation_status,
         "runtime": RUNTIME_VERSION,
         "run_id": int(run_id),
         "commit_sha": commit_sha,
@@ -586,10 +381,15 @@ def build_final_attestation_record(
             "artifact_url": primary_artifact_url,
         },
         "audit_status": normalized_audit_status,
-        "diagnosis_status": diagnosis.get("status") if isinstance(diagnosis, Mapping) else None,
+        "diagnosis_status": diagnosis_status,
         "evidence_input_sha256": evidence.get("input_sha256") if isinstance(evidence, Mapping) else None,
-        "business_evidence_frozen_before_upload": bool(
-            evidence.get("business_evidence_frozen") if isinstance(evidence, Mapping) else False
+        "business_evidence_frozen_before_upload": evidence_frozen,
+        "independent_artifact_revalidation": dict(independent),
+        "independent_artifact_revalidation_valid": independent_valid,
+        "independent_artifact_revalidation_sha256": (
+            sha256_file(independent_path)
+            if independent_path is not None and independent_path.is_file()
+            else None
         ),
         "report_required": report_required,
         "report_present": report_present,
@@ -599,7 +399,11 @@ def build_final_attestation_record(
         "final_status_sha256": sha256_file(final_status_file),
         "external_tools_allowed": False,
         "alternate_runtime_fallback": False,
-        "evidence_chain": "frozen-business-evidence -> primary-artifact -> final-status -> final-attestation-artifact",
+        "evidence_chain": (
+            "frozen-business-evidence -> primary-artifact -> "
+            "independent-artifact-revalidation -> final-status -> "
+            "final-attestation-artifact"
+        ),
         "generator": "v5_evidence_bundle.build_final_attestation_record",
         "github_repository": os.getenv("GITHUB_REPOSITORY", ""),
     }

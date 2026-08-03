@@ -40,6 +40,7 @@ def main() -> int:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--commit-sha", required=True)
     parser.add_argument("--final-status-file", required=True)
+    parser.add_argument("--independent-revalidation-file", default="")
     parser.add_argument("--output", default="final-attestation.json")
     args = parser.parse_args()
 
@@ -54,6 +55,11 @@ def main() -> int:
             run_id=args.run_id,
             commit_sha=execution_commit_sha,
             final_status_file=Path(args.final_status_file),
+            independent_revalidation_file=(
+                Path(args.independent_revalidation_file)
+                if args.independent_revalidation_file
+                else None
+            ),
         )
         attestation["commit_sha_source"] = "checked-out-git-head"
         attestation["event_context_commit_sha"] = str(args.commit_sha).strip().casefold()

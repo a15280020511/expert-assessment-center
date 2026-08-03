@@ -5,7 +5,12 @@
   "description": "Execution contract for the GitHub-owned V5 dynamic expert DAG. The approved budget is a hard total paid-call ceiling that includes initial, retry, and replacement calls. GPTs submits and retrieves; GitHub owns planning, model and Provider selection, execution, synthesis, and deterministic acceptance.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["task_id", "route", "task", "approved_budget"],
+  "required": [
+    "task_id",
+    "route",
+    "task",
+    "approved_budget"
+  ],
   "properties": {
     "task_id": {
       "type": "string",
@@ -21,7 +26,10 @@
     "pipeline": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["pipeline_id", "stage_id"],
+      "required": [
+        "pipeline_id",
+        "stage_id"
+      ],
       "properties": {
         "pipeline_id": {
           "type": "string",
@@ -31,33 +39,74 @@
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$"
         },
-        "sequence_reason": {"type": "string", "maxLength": 2000},
+        "sequence_reason": {
+          "type": "string",
+          "maxLength": 2000
+        },
         "upstream_refs": {
           "type": "array",
           "maxItems": 20,
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["center", "task_id", "file", "sha256"],
+            "required": [
+              "center",
+              "task_id",
+              "file",
+              "sha256"
+            ],
             "properties": {
-              "center": {"enum": ["api", "compute", "expert", "user", "public_source"]},
-              "task_id": {"type": "string", "maxLength": 128},
-              "issue_number": {"type": "integer", "minimum": 1},
-              "run_id": {"type": "integer", "minimum": 1},
-              "artifact_id": {"type": "integer", "minimum": 1},
-              "file": {"type": "string", "maxLength": 500},
-              "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-              "observed_at": {"type": "string", "maxLength": 100}
+              "center": {
+                "enum": [
+                  "api",
+                  "compute",
+                  "expert",
+                  "user",
+                  "public_source"
+                ]
+              },
+              "task_id": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "issue_number": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "run_id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "artifact_id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "file": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "observed_at": {
+                "type": "string",
+                "maxLength": 100
+              }
             }
           }
         }
       }
     },
-    "route": {"const": "expert-team"},
+    "route": {
+      "const": "expert-team"
+    },
     "task": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["question"],
+      "required": [
+        "question"
+      ],
       "properties": {
         "question": {
           "type": "string",
@@ -68,16 +117,26 @@
           "description": "Substantive requirements sent to the dynamic nodes. GitHub run, Job, Artifact, and acceptance checks do not belong here.",
           "type": "array",
           "maxItems": 20,
-          "items": {"type": "string", "maxLength": 2000}
+          "items": {
+            "type": "string",
+            "maxLength": 2000
+          }
         },
-        "language": {"type": "string", "maxLength": 64}
+        "language": {
+          "type": "string",
+          "maxLength": 64
+        }
       }
     },
     "execution_acceptance": {
       "description": "Deterministic GitHub-side acceptance checks. These labels are stored with the ticket but are not sent to experts as substantive analysis instructions.",
       "type": "array",
       "maxItems": 40,
-      "items": {"type": "string", "minLength": 1, "maxLength": 500}
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      }
     },
     "evidence": {
       "oneOf": [
@@ -85,7 +144,10 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "note": {"type": "string", "maxLength": 5000}
+            "note": {
+              "type": "string",
+              "maxLength": 5000
+            }
           }
         },
         {
@@ -95,21 +157,55 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "source_level": {"type": "string", "maxLength": 5000},
-              "source": {"type": "string", "maxLength": 5000},
-              "url": {"type": "string", "maxLength": 5000},
-              "note": {"type": "string", "maxLength": 5000},
-              "center": {"type": "string", "enum": ["api", "compute", "expert", "gpts", "external"]},
-              "run_id": {"type": "string", "pattern": "^[0-9]{1,32}$"},
-              "artifact_id": {"type": "string", "pattern": "^[0-9]{1,32}$"},
+              "source_level": {
+                "type": "string",
+                "maxLength": 5000
+              },
+              "source": {
+                "type": "string",
+                "maxLength": 5000
+              },
+              "url": {
+                "type": "string",
+                "maxLength": 5000
+              },
+              "note": {
+                "type": "string",
+                "maxLength": 5000
+              },
+              "center": {
+                "type": "string",
+                "enum": [
+                  "api",
+                  "compute",
+                  "expert",
+                  "gpts",
+                  "external"
+                ]
+              },
+              "run_id": {
+                "type": "string",
+                "pattern": "^[0-9]{1,32}$"
+              },
+              "artifact_id": {
+                "type": "string",
+                "pattern": "^[0-9]{1,32}$"
+              },
               "file": {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 512,
                 "pattern": "^[^\\\\]+$"
               },
-              "sha256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
-              "observed_at": {"type": "string", "format": "date-time", "maxLength": 64}
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{64}$"
+              },
+              "observed_at": {
+                "type": "string",
+                "format": "date-time",
+                "maxLength": 64
+              }
             }
           }
         }
@@ -118,7 +214,11 @@
     "approved_budget": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["calls", "maximum_recovery_calls", "cost_policy"],
+      "required": [
+        "calls",
+        "maximum_recovery_calls",
+        "cost_policy"
+      ],
       "properties": {
         "calls": {
           "description": "Hard ceiling for all paid model calls combined: initial calls + retries + replacements. The runtime must not silently increase this value.",
@@ -143,12 +243,6 @@
           "maximum": 100
         }
       }
-    },
-    "quality_tier": {
-      "description": "User cost/quality preference. Value remains the default and keeps price-performance first.",
-      "type": "string",
-      "enum": ["budget", "value", "quality"],
-      "default": "value"
     },
     "private_output": {
       "description": "Private delivery is not implemented for this public repository. Omit this field or set it to false.",
