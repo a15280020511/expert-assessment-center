@@ -1,0 +1,10 @@
+{
+  "schema_version": "pr232-zero-cost-validation-result-1",
+  "status": "PASS",
+  "request_id": "pr232-zero-cost-r3",
+  "target_sha": "9a24c8f9d1deee7ef52ef5c68a85a719c0c6fd2e",
+  "model_calls": 0,
+  "paid_model_calls": 0,
+  "actual_cost_usd": 0.0,
+  "production_ref_moved": false
+}
