@@ -282,39 +282,78 @@ class FreeShadowAcceptanceTests(unittest.TestCase):
             receipt["calls"][0]["wire_adaptation"]["json_fence_removed"]
         )
 
-    def test_topology_instruction_forbids_virtual_single_node_edges(self) -> None:
+    def test_dynamic_schema_caps_nodes_and_recovery(self) -> None:
         schema = {
             "type": "object",
             "properties": {
-                "selected_nodes": {"type": "array"},
+                "nodes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 13,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "recovery": {
+                                "type": "array",
+                                "maxItems": 2,
+                            }
+                        },
+                    },
+                },
                 "edges": {"type": "array"},
+                "final_nodes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 13,
+                },
             },
         }
-        text = shadow_compat._topology_instruction(schema)
+        limits = {
+            "maximum_expert_initial_calls": 1,
+            "approved_recovery_calls": 0,
+        }
+        tightened = shadow_compat._tightened_schema(schema, limits)
+        properties = tightened["properties"]
+        self.assertEqual(properties["nodes"]["maxItems"], 1)
+        self.assertEqual(properties["final_nodes"]["maxItems"], 1)
+        self.assertEqual(
+            properties["nodes"]["items"]["properties"]["recovery"]["maxItems"],
+            0,
+        )
+        text = shadow_compat._topology_instruction(tightened, limits)
+        self.assertIn("nodes必须恰好一个元素", text)
         self.assertIn("edges必须为[]", text)
-        self.assertIn("禁止创建source", text)
-        self.assertIn("只能引用selected_nodes", text)
+        self.assertIn("只能引用nodes", text)
+        self.assertIn("node.recovery必须为[]", text)
 
     def test_safe_output_summary_records_topology_without_raw_text(self) -> None:
         value = {
-            "work_items": [{"id": "work_1"}],
-            "selected_nodes": [{"node_id": "node_1"}],
-            "edges": [
+            "work_items": [{"work_id": "work_1"}],
+            "nodes": [
                 {
-                    "from_node_id": "node_1",
-                    "to_node_id": "ghost_node",
+                    "node_id": "node_1",
+                    "recovery": [],
                 }
             ],
-            "recovery_selection": [],
+            "edges": [
+                {
+                    "source": "node_1",
+                    "target": "ghost_node",
+                }
+            ],
+            "final_nodes": ["node_1"],
         }
         text = json.dumps(value, ensure_ascii=False)
         summary = shadow_compat._safe_output_summary(text)
         self.assertTrue(summary["parsed_json_object"])
-        self.assertEqual(summary["selected_node_ids"], ["node_1"])
+        self.assertEqual(summary["work_item_ids"], ["work_1"])
+        self.assertEqual(summary["node_ids"], ["node_1"])
+        self.assertEqual(summary["node_recovery_counts"], [0])
         self.assertEqual(
-            summary["edge_pairs"][0]["to_node_id"],
+            summary["edge_pairs"][0]["target"],
             "ghost_node",
         )
+        self.assertEqual(summary["final_node_ids"], ["node_1"])
         self.assertNotIn("raw_output", summary)
         self.assertEqual(summary["output_characters"], len(text))
 

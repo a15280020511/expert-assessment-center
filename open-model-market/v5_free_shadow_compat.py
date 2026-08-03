@@ -234,30 +234,129 @@ def compatibility_governance_resolution(
     }
 
 
-def _topology_instruction(schema: Mapping[str, Any]) -> str:
+def _limit(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _hard_limits_from_messages(
+    messages: list[dict[str, Any]],
+) -> dict[str, Any]:
+    for message in reversed(messages):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if not isinstance(content, str):
+            continue
+        try:
+            value = json.loads(content)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(value, Mapping):
+            continue
+        limits = value.get("hard_limits")
+        if isinstance(limits, Mapping):
+            return dict(limits)
+    return {}
+
+
+def _bounded_maximum(row: dict[str, Any], maximum: int) -> None:
+    current = _limit(row.get("maxItems"))
+    row["maxItems"] = maximum if current is None else min(current, maximum)
+
+
+def _tightened_schema(
+    schema: Mapping[str, Any],
+    hard_limits: Mapping[str, Any],
+) -> dict[str, Any]:
+    tightened = json.loads(json.dumps(schema, ensure_ascii=False))
+    properties = tightened.get("properties")
+    if not isinstance(properties, dict):
+        return tightened
+    maximum_nodes = _limit(
+        hard_limits.get("maximum_expert_initial_calls")
+    )
+    recovery_calls = _limit(
+        hard_limits.get("approved_recovery_calls")
+    )
+    nodes = properties.get("nodes")
+    final_nodes = properties.get("final_nodes")
+    if maximum_nodes is not None and maximum_nodes >= 1:
+        if isinstance(nodes, dict):
+            _bounded_maximum(nodes, maximum_nodes)
+        if isinstance(final_nodes, dict):
+            _bounded_maximum(final_nodes, maximum_nodes)
+    if recovery_calls is not None and isinstance(nodes, dict):
+        items = nodes.get("items")
+        items = items if isinstance(items, dict) else {}
+        node_properties = items.get("properties")
+        if isinstance(node_properties, dict):
+            recovery = node_properties.get("recovery")
+            if isinstance(recovery, dict):
+                _bounded_maximum(recovery, recovery_calls)
+    return tightened
+
+
+def _topology_instruction(
+    schema: Mapping[str, Any],
+    hard_limits: Mapping[str, Any],
+) -> str:
     properties = schema.get("properties")
     if not isinstance(properties, Mapping):
         return ""
-    if not {"selected_nodes", "edges"}.issubset(properties):
+    if not {"nodes", "edges", "final_nodes"}.issubset(properties):
         return ""
+    maximum_nodes = _limit(
+        hard_limits.get("maximum_expert_initial_calls")
+    )
+    recovery_calls = _limit(
+        hard_limits.get("approved_recovery_calls")
+    )
+    capacity = (
+        f"nodes数量不得超过maximum_expert_initial_calls={maximum_nodes}；"
+        if maximum_nodes is not None
+        else ""
+    )
+    single = (
+        "本次maximum_expert_initial_calls=1，因此nodes必须恰好一个元素，"
+        "该节点必须承接全部work_items，edges必须为[]，"
+        "final_nodes必须仅包含该node_id；"
+        if maximum_nodes == 1
+        else ""
+    )
+    recovery = (
+        "本次approved_recovery_calls=0，因此每个node.recovery必须为[]；"
+        if recovery_calls == 0
+        else ""
+    )
     return (
-        "引用完整性硬约束："
-        "selected_nodes中的node_id必须唯一；"
-        "edges中的from_node_id和to_node_id只能引用selected_nodes中已定义的node_id；"
-        "禁止创建source、sink、start、end、final等虚拟节点；"
-        "若selected_nodes只有一个元素，edges必须为[]；"
-        "若硬上限maximum_recovery_nodes为0，recovery_selection必须为[]；"
-        "每个work_item只能分配给已定义节点，且不得遗漏或重复。\n"
+        "引用与容量硬约束："
+        + capacity
+        + "nodes中的node_id必须唯一；"
+        + "edges中的source和target只能引用nodes中已定义的node_id；"
+        + "禁止创建source、sink、start、end、final等虚拟节点；"
+        + single
+        + recovery
+        + "每个work_item必须由已定义节点恰好分配一次，不得遗漏或重复。\n"
     )
 
 
-def _schema_instruction(response_format: Mapping[str, Any]) -> str:
+def _schema_instruction(
+    response_format: Mapping[str, Any],
+    hard_limits: Mapping[str, Any],
+) -> str:
     json_schema = response_format.get("json_schema")
     json_schema = json_schema if isinstance(json_schema, Mapping) else {}
     schema = json_schema.get("schema")
     schema = schema if isinstance(schema, Mapping) else {}
+    tightened = _tightened_schema(schema, hard_limits)
     compact = json.dumps(
-        schema,
+        tightened,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -266,7 +365,7 @@ def _schema_instruction(response_format: Mapping[str, Any]) -> str:
         "\n\nFREE_SHADOW_JSON_COMPATIBILITY:\n"
         "只输出一个有效JSON对象；不要Markdown代码块、解释或额外文字。"
         "对象必须严格满足以下JSON Schema，禁止额外字段。\n"
-        + _topology_instruction(schema)
+        + _topology_instruction(tightened, hard_limits)
         + "JSON Schema：\n"
         + compact
     )
@@ -280,7 +379,8 @@ def _adapt_messages(
         raise FreeShadowError("free compatibility request has no messages")
     adapted = [dict(row) for row in messages if isinstance(row, Mapping)]
     if response_format:
-        instruction = _schema_instruction(response_format)
+        hard_limits = _hard_limits_from_messages(adapted)
+        instruction = _schema_instruction(response_format, hard_limits)
         if adapted and adapted[-1].get("role") == "user":
             adapted[-1]["content"] = (
                 str(adapted[-1].get("content") or "") + instruction
@@ -346,36 +446,39 @@ def _safe_output_summary(text: str) -> dict[str, Any]:
     summary["parsed_json_object"] = True
     summary["top_level_keys"] = sorted(str(key) for key in value)
     work_items = value.get("work_items")
-    selected_nodes = value.get("selected_nodes")
+    nodes = value.get("nodes")
     edges = value.get("edges")
-    recovery = value.get("recovery_selection")
+    final_nodes = value.get("final_nodes")
     if isinstance(work_items, list):
         summary["work_item_ids"] = [
-            str(row.get("id") or "")
+            str(row.get("work_id") or "")
             for row in work_items
             if isinstance(row, Mapping)
         ]
-    if isinstance(selected_nodes, list):
-        summary["selected_node_ids"] = [
+    if isinstance(nodes, list):
+        summary["node_ids"] = [
             str(row.get("node_id") or "")
-            for row in selected_nodes
+            for row in nodes
             if isinstance(row, Mapping)
+        ]
+        summary["node_recovery_counts"] = [
+            len(row.get("recovery") or [])
+            if isinstance(row, Mapping)
+            and isinstance(row.get("recovery"), list)
+            else None
+            for row in nodes
         ]
     if isinstance(edges, list):
         summary["edge_pairs"] = [
             {
-                "from_node_id": str(row.get("from_node_id") or ""),
-                "to_node_id": str(row.get("to_node_id") or ""),
+                "source": str(row.get("source") or ""),
+                "target": str(row.get("target") or ""),
             }
             for row in edges
             if isinstance(row, Mapping)
         ]
-    if isinstance(recovery, list):
-        summary["recovery_node_ids"] = [
-            str(row.get("node_id") or "")
-            for row in recovery
-            if isinstance(row, Mapping)
-        ]
+    if isinstance(final_nodes, list):
+        summary["final_node_ids"] = [str(value) for value in final_nodes]
     return summary
 
 
