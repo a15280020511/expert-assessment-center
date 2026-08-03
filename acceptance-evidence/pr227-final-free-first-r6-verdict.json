@@ -1,0 +1,14 @@
+{
+  "schema_version": "v5-free-first-preflight-verdict-1",
+  "status": "PASS",
+  "target_sha": "607bbb2eb224de7c32fe5029d8e6d48265d7a340",
+  "receipt_sha256": "c83a591ede0f97a7c7c3c638239726b190f3af12849a98cdadb0c23976eeb669",
+  "zero_call_simulation_passed": true,
+  "zero_cost_free_canary_passed": true,
+  "shadow_governance_required": false,
+  "paid_acceptance_allowed": true,
+  "formal_model_identity_qualified": false,
+  "merge_allowed": false,
+  "production_promotion_allowed": false,
+  "reasons": []
+}
