@@ -26,6 +26,7 @@ from v5_proposal_materializer import (
     deterministic_violations,
     materialize_proposal,
 )
+from v5_soft_resource_governance import SOFT_RESOURCE_INSTRUCTION
 from v5_structured_output_compat import normalize_strict_response_format
 
 
@@ -78,41 +79,46 @@ def bounded_governance_request(
     request: Mapping[str, Any],
     maximum_completion_tokens: int | None,
 ) -> dict[str, Any]:
-    """Apply a task envelope without exceeding a protocol-native limit."""
-    bounded = dict(request)
-    if maximum_completion_tokens is None:
-        return bounded
-    limit = int(maximum_completion_tokens)
-    if limit <= 0:
-        raise GovernanceRuntimeError(
-            "maximum governance completion tokens must be positive"
+    """Apply prompt-led soft resource governance without local token ceilings.
+
+    ``maximum_completion_tokens`` remains in the compatibility signature so old
+    tickets and workflows continue to parse, but it is advisory only and is not
+    emitted to the provider request.
+    """
+    del maximum_completion_tokens
+    softened = dict(request)
+    softened.pop("max_tokens", None)
+    softened.pop("max_completion_tokens", None)
+
+    reasoning = softened.get("reasoning")
+    if isinstance(reasoning, Mapping):
+        soft_reasoning = dict(reasoning)
+        for key in (
+            "max_tokens",
+            "max_completion_tokens",
+            "budget_tokens",
+            "token_budget",
+        ):
+            soft_reasoning.pop(key, None)
+        if soft_reasoning:
+            softened["reasoning"] = soft_reasoning
+        else:
+            softened.pop("reasoning", None)
+
+    messages = softened.get("messages")
+    if (
+        isinstance(messages, list)
+        and messages
+        and isinstance(messages[0], Mapping)
+    ):
+        updated = list(messages)
+        first = dict(updated[0])
+        first["content"] = (
+            str(first.get("content") or "") + SOFT_RESOURCE_INSTRUCTION
         )
-    found = False
-    for key in ("max_tokens", "max_completion_tokens"):
-        if key not in bounded:
-            continue
-        value = bounded[key]
-        if isinstance(value, bool):
-            raise GovernanceRuntimeError(
-                "governance output limit must be a positive integer"
-            )
-        try:
-            protocol_limit = int(value)
-        except (TypeError, ValueError) as exc:
-            raise GovernanceRuntimeError(
-                "governance output limit must be a positive integer"
-            ) from exc
-        if protocol_limit <= 0:
-            raise GovernanceRuntimeError(
-                "governance output limit must be a positive integer"
-            )
-        bounded[key] = min(protocol_limit, limit)
-        found = True
-    if not found:
-        raise GovernanceRuntimeError(
-            "governance request is missing an enforceable output limit"
-        )
-    return bounded
+        updated[0] = first
+        softened["messages"] = updated
+    return softened
 
 
 def _bind_governance_request(
@@ -159,13 +165,6 @@ def _bind_governance_request(
 
     if "temperature" in bound and "temperature" not in supported:
         bound.pop("temperature")
-    if "max_tokens" in bound and "max_tokens" not in supported:
-        if "max_completion_tokens" in supported:
-            bound["max_completion_tokens"] = bound.pop("max_tokens")
-        else:
-            raise GovernanceRuntimeError(
-                "governance endpoint cannot enforce output limit"
-            )
     if "reasoning" in bound and not {
         "reasoning",
         "reasoning_effort",
@@ -243,6 +242,8 @@ def _request_receipt(request: Mapping[str, Any]) -> dict[str, Any]:
         "temperature": request.get("temperature"),
         "max_tokens": request.get("max_tokens"),
         "max_completion_tokens": request.get("max_completion_tokens"),
+        "local_token_ceiling_enforced": False,
+        "resource_governance_mode": "prompt-led-soft-governance",
         "reasoning": dict(request.get("reasoning") or {})
         if isinstance(request.get("reasoning"), Mapping)
         else {},
@@ -373,7 +374,7 @@ class GovernanceLedger:
 
     def to_dict(self, *, status: str = "PASS") -> dict[str, Any]:
         return {
-            "schema_version": "v5-advisory-governance-call-ledger-5",
+            "schema_version": "v5-advisory-governance-call-ledger-6",
             "status": status,
             "maximum_governance_calls": self.maximum_calls,
             "actual_governance_calls": len(self.calls),
@@ -392,6 +393,9 @@ class GovernanceLedger:
             "claude_covers_external_information": True,
             "second_claude_review_allowed": False,
             "model_loop_allowed": False,
+            "resource_governance_mode": "prompt-led-soft-governance",
+            "local_token_ceiling_enforced": False,
+            "cost_threshold_can_stop_governance": False,
             "actual_cost_usd": round(
                 sum(row.actual_cost_usd for row in self.calls), 8
             ),
@@ -550,7 +554,15 @@ def run_single_pass_governance(
         "approved_total_calls": approved_total_calls,
         "governance_calls_reserved": governance_calls_reserved,
         "approved_recovery_calls": approved_recovery_calls,
-        "cost_anomaly_usd": cost_anomaly_usd,
+        "cost_anomaly_usd": None,
+    }
+    resource_advisory = {
+        "mode": "prompt-led-soft-governance",
+        "requested_cost_advisory_usd": cost_anomaly_usd,
+        "requested_token_advisory": max_completion_tokens,
+        "cost_threshold_can_reject_plan": False,
+        "cost_threshold_can_stop_execution": False,
+        "local_token_ceiling_enforced": False,
     }
     ledger = GovernanceLedger(maximum_calls=governance_calls_reserved)
 
@@ -623,7 +635,7 @@ def run_single_pass_governance(
             ledger=ledger,
             call_fn=call,
             parser=parse_proposal,
-        artifact_root=artifact_root,
+            artifact_root=artifact_root,
         )
     )
 
@@ -664,7 +676,7 @@ def run_single_pass_governance(
         **limits,
     )
     governance = {
-        "schema_version": "v5-advisory-governance-result-4",
+        "schema_version": "v5-advisory-governance-result-5",
         "status": "PASS",
         "initial_proposal": initial,
         "claude_advice": dict(claude_advice),
@@ -678,10 +690,13 @@ def run_single_pass_governance(
         "claude_covers_external_information": True,
         "second_claude_review_allowed": False,
         "model_loop_allowed": False,
+        "resource_governance": resource_advisory,
         "final_authority": "deterministic-constitutional-validator",
         "materialization": materialization,
     }
-    return graph, graph_limits, governance, ledger.to_dict()
+    ledger_payload = ledger.to_dict()
+    ledger_payload["resource_governance"] = resource_advisory
+    return graph, graph_limits, governance, ledger_payload
 
 
 def write_governance_artifacts(
