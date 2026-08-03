@@ -6,15 +6,23 @@ on:
       - codex/no-tools-network-granular-audit-20260804
     paths:
       - .github/audit_no_tools_patch.py
+      - .github/audit_no_tools_patch_extra.py
+      - .github/workflows/apply-no-tools-audit-patch.yml
   pull_request:
     branches:
       - main
     types: [opened, synchronize]
     paths:
       - .github/audit_no_tools_patch.py
+      - .github/audit_no_tools_patch_extra.py
+      - .github/workflows/apply-no-tools-audit-patch.yml
 
 permissions:
   contents: write
+
+concurrency:
+  group: apply-no-tools-network-audit
+  cancel-in-progress: true
 
 jobs:
   apply:
@@ -31,13 +39,30 @@ jobs:
         with:
           python-version: '3.12'
       - name: Apply audited patch
-        run: python .github/audit_no_tools_patch.py
+        run: |
+          set -euo pipefail
+          python .github/audit_no_tools_patch.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tests/test_v5_no_tools_network_policy.py')
+          text = path.read_text(encoding='utf-8')
+          anchor = 'import json\n'
+          if 'import re\n' not in text:
+              if text.count(anchor) != 1:
+                  raise RuntimeError('test import anchor mismatch')
+              text = text.replace(anchor, anchor + 'import re\n', 1)
+              path.write_text(text, encoding='utf-8')
+          PY
+          python .github/audit_no_tools_patch_extra.py
       - name: Validate patch locally
         run: |
+          set -euo pipefail
           python -m compileall -q open-model-market tests tools
           python -m unittest tests.test_v5_no_tools_network_policy -v
       - name: Commit audited patch
         run: |
+          set -euo pipefail
+          git checkout origin/main -- .github/workflows/validate.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
