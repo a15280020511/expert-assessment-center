@@ -1,9 +1,8 @@
 name: PR227 R6 Governance Input Compaction
 
 on:
-  push:
-    branches:
-      - fix/v5-claude-unified-red-team-cleanup-20260803
+  pull_request:
+    branches: [main]
     paths:
       - tools/.pr227-r6-governance-input-compaction.patch.gz.b64
       - .github/workflows/pr227-r6-governance-input-compaction.yml
@@ -17,6 +16,9 @@ concurrency:
 
 jobs:
   validate-and-commit:
+    if: >-
+      github.event.pull_request.number == 227 &&
+      github.event.pull_request.head.ref == 'fix/v5-claude-unified-red-team-cleanup-20260803'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
@@ -57,25 +59,14 @@ jobs:
           python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
           python -m pip check
 
-      - name: Run static and focused gates
+      - name: Run static and complete regression gates
         run: |
           set -euo pipefail
           python -m ruff check .
           python -m compileall -q open-model-market tests tools
-          python -m unittest \
-            tests.test_v5_gpt_selector_contract \
-            tests.test_v5_governance_cost_guard_evidence \
-            tests.test_v5_extreme_advisory_stress \
-            tests.test_v5_full_load_stability \
-            tests.test_v5_governance_model_resolution \
-            -v
-
-      - name: Run complete regression suite including Hypothesis
-        run: |
-          set -euo pipefail
           python -m unittest discover -s tests -p 'test*.py' -v
 
-      - name: Validate live catalog prompt projection without chat calls
+      - name: Validate live catalog projection without chat calls
         shell: bash
         run: |
           set -euo pipefail
@@ -161,7 +152,7 @@ jobs:
               "edges": [],
               "final_nodes": ["n1"],
           }
-          request_1 = build_proposal_request(
+          proposal_request = build_proposal_request(
               task=args.task,
               task_envelope=task_envelope,
               catalog=catalog,
@@ -170,7 +161,7 @@ jobs:
               approved_recovery_calls=0,
               cost_anomaly_usd=0.25,
           )
-          request_2 = build_synthesis_request(
+          synthesis_request = build_synthesis_request(
               task=args.task,
               initial_proposal=proposal,
               claude_advice={"suggestions": []},
@@ -191,8 +182,8 @@ jobs:
               for provider_row in model_row[3]
           }
           message_characters = [
-              len(request_1["messages"][1]["content"]),
-              len(request_2["messages"][1]["content"]),
+              len(proposal_request["messages"][1]["content"]),
+              len(synthesis_request["messages"][1]["content"]),
           ]
           assert source_pairs == projected_pairs
           assert view["source_endpoint_count"] == len(source_pairs)
