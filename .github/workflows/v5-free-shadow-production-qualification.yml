@@ -23,6 +23,7 @@ jobs:
     outputs:
       target_sha: ${{ steps.request.outputs.target_sha }}
       request_id: ${{ steps.request.outputs.request_id }}
+      shadow_mode: ${{ steps.request.outputs.shadow_mode }}
       artifact_name: v5-free-shadow-primitive-${{ github.run_id }}
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -53,10 +54,12 @@ jobs:
               "maximum_paid_model_calls",
               "request_id",
               "schema_version",
+              "shadow_mode",
               "target_sha"
             ] and
-            .schema_version == "v5-free-shadow-request-1" and
+            .schema_version == "v5-free-shadow-request-2" and
             .authorization == "FREE-SHADOW-ONLY-NO-PAID-FALLBACK" and
+            .shadow_mode == "single-endpoint-zdr-compatibility" and
             (.request_id | test("^[a-z0-9][a-z0-9._-]{0,63}$")) and
             (.target_sha | test("^[0-9a-f]{40}$")) and
             .maximum_model_calls == 4 and
@@ -68,6 +71,7 @@ jobs:
           {
             echo "target_sha=$target"
             echo "request_id=$(jq -er '.request_id' "$request")"
+            echo "shadow_mode=$(jq -er '.shadow_mode' "$request")"
           } >> "$GITHUB_OUTPUT"
 
       - name: Check out exact candidate source
@@ -108,6 +112,7 @@ jobs:
         working-directory: runtime-source
         env:
           TARGET_SHA: ${{ steps.request.outputs.target_sha }}
+          SHADOW_MODE: ${{ steps.request.outputs.shadow_mode }}
         shell: bash
         run: |
           set -euo pipefail
@@ -115,13 +120,15 @@ jobs:
           GITHUB_SHA="$TARGET_SHA" PYTHONPATH=open-model-market python \
             open-model-market/v5_free_shadow_acceptance.py \
             --output-dir free-shadow-artifacts \
-            --max-completion-tokens 2048
+            --max-completion-tokens 2048 \
+            --mode "$SHADOW_MODE"
 
       - name: Verify free-only full-chain constitution
         working-directory: runtime-source
         env:
           TARGET_SHA: ${{ steps.request.outputs.target_sha }}
           REQUEST_ID: ${{ steps.request.outputs.request_id }}
+          SHADOW_MODE: ${{ steps.request.outputs.shadow_mode }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -134,29 +141,47 @@ jobs:
           boundary = json.loads((root / "free-shadow-call-boundary.json").read_text())
           identity = json.loads((root / "free-shadow-identity.json").read_text())
           governance = json.loads((root / "v5-governance-calls.json").read_text())
+          graph = json.loads((root / "v5-execution-graph.json").read_text())
           result = json.loads((root / "expert-team-result.json").read_text())
           audit = json.loads((root / "v5-request-audit.json").read_text())
 
           assert receipt["status"] == "PASS"
           assert receipt["target_sha"] == os.environ["TARGET_SHA"]
+          assert receipt["shadow_mode"] == os.environ["SHADOW_MODE"]
           assert receipt["total_model_calls"] == 4
           assert receipt["successful_free_model_calls"] == 4
           assert receipt["paid_model_calls"] == 0
           assert receipt["actual_cost_usd"] == 0.0
           assert receipt["completion_mode"] == "full"
           assert receipt["quality_status"] == "full_success"
+          assert receipt["expert_company_uniqueness_required"] is True
+          assert receipt["governance_company_diversity_qualified"] is False
+          assert receipt["wire_parity_qualified"] is False
           assert receipt["formal_model_identity_qualified"] is False
           assert receipt["production_promotion_authorized"] is False
           assert receipt["production_ref_moved"] is False
+
           assert boundary["status"] == "PASS"
+          assert boundary["mode"] == "single-endpoint-zdr-prompt-json-compatibility"
           assert boundary["actual_calls"] == 4
           assert boundary["paid_model_calls"] == 0
           assert boundary["actual_cost_usd"] == 0.0
+          assert boundary["zdr_required"] is True
+          assert boundary["wire_parity_qualified"] is False
           assert all(row["model"].endswith(":free") for row in boundary["calls"])
-          assert len({row["company"] for row in boundary["calls"]}) >= 3
+          assert all(row["wire_adaptation"]["zdr_forced"] is True for row in boundary["calls"])
+          assert all(row["wire_adaptation"]["provider_fallback_allowed"] is False for row in boundary["calls"])
+          assert all(row["wire_adaptation"]["response_format_moved_to_prompt"] is True for row in boundary["calls"][:3])
+
           assert [row["kind"] for row in governance["calls"]] == [
               "gpt_proposal", "claude_red_team", "gpt_synthesis"
           ]
+          nodes = graph.get("nodes") or []
+          assert len(nodes) == 1
+          companies = [str(row.get("company") or "") for row in nodes]
+          assert all(companies)
+          assert len(companies) == len(set(companies))
+
           assert result["status"] == "success"
           assert result["total_model_calls"] == 4
           assert result["actual_cost_usd"] == 0.0
@@ -164,6 +189,8 @@ jobs:
           assert audit["request_count"] == 4
           assert audit["external_tools_allowed"] is False
           assert audit["provider_fallback_allowed"] is False
+          assert identity["mode"] == os.environ["SHADOW_MODE"]
+          assert identity["expert_company_uniqueness_required"] is True
           assert identity["formal_model_identity_qualified"] is False
           assert identity["production_promotion_authorized"] is False
           assert identity["production_ref_moved"] is False
@@ -201,6 +228,7 @@ jobs:
       SHADOW_RUN_ID: ${{ github.run_id }}
       TARGET_SHA: ${{ needs.execute-free-shadow.outputs.target_sha }}
       REQUEST_ID: ${{ needs.execute-free-shadow.outputs.request_id }}
+      SHADOW_MODE: ${{ needs.execute-free-shadow.outputs.shadow_mode }}
       EXPECTED_ARTIFACT_NAME: ${{ needs.execute-free-shadow.outputs.artifact_name }}
     steps:
       - name: Check out exact independent validator source
@@ -281,16 +309,18 @@ jobs:
             --arg request_id "$REQUEST_ID" \
             --arg run_id "$SHADOW_RUN_ID" \
             --arg target_sha "$TARGET_SHA" \
+            --arg shadow_mode "$SHADOW_MODE" \
             --arg artifact_name "$EXPECTED_ARTIFACT_NAME" \
             --arg artifact_digest "$ARTIFACT_DIGEST" \
             --argjson artifact_id "$ARTIFACT_ID" \
             --slurpfile recomputed independent-free-shadow-revalidation.json \
             '{
-              schema_version: "v5-free-shadow-attestation-1",
+              schema_version: "v5-free-shadow-attestation-2",
               status: (if $recomputed[0].status == "PASS" then "PASS" else "FAIL" end),
               request_id: $request_id,
               workflow_run_id: $run_id,
               target_sha: $target_sha,
+              shadow_mode: $shadow_mode,
               artifact_id: $artifact_id,
               artifact_name: $artifact_name,
               artifact_digest: $artifact_digest,
@@ -300,6 +330,9 @@ jobs:
               successful_free_model_calls: 4,
               paid_model_calls: 0,
               actual_cost_usd: 0.0,
+              expert_company_uniqueness_required: true,
+              governance_company_diversity_qualified: false,
+              wire_parity_qualified: false,
               formal_model_identity_qualified: false,
               production_promotion_authorized: false,
               production_ref_moved: false
