@@ -1,0 +1,6 @@
+{
+  "schema_version": "pr232-zero-cost-request-1",
+  "authorization": "ZERO-CALL-VALIDATION-ONLY",
+  "request_id": "pr232-zero-cost-r4",
+  "target_sha": "215afc53138b057f57b737ac93a4b54b4c6e6bfb"
+}
