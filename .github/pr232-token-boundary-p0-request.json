@@ -1,0 +1,8 @@
+{
+  "schema_version": "pr232-token-boundary-p0-request-1",
+  "authorization": "EXACT-ZERO-CALL-SOURCE-PATCH",
+  "request_id": "pr232-token-boundary-p0-r1",
+  "patch_id": "materializer-runtime-token-boundary",
+  "target_branch": "fix/v5-free-shadow-production-qualification-20260803",
+  "target_sha": "d61f487d4a4ca7bc800523662ed83f3eb92c27b6"
+}
