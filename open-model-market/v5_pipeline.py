@@ -31,6 +31,7 @@ from v5_governance_runtime import (
 from v5_gpt_expert_selector import build_proposal_request
 from v5_json_io import write_json
 from v5_proposal_materializer import materialize_proposal
+from v5_provider_lock import canonical_provider_lock
 from v5_recovery_runtime import build_production_runtime
 from v5_runtime import RuntimeConfig
 from v5_task_envelope import build_task_envelope
@@ -92,24 +93,6 @@ def _validate_budget(args: argparse.Namespace) -> tuple[int, int, int]:
         raise ValueError("max_completion_tokens must be positive")
     return total, recovery, expert_total
 
-
-def _canonical_provider_lock(request: Mapping[str, Any]) -> bool:
-    provider = request.get("provider")
-    if not isinstance(provider, Mapping):
-        return False
-    only = provider.get("only")
-    order = provider.get("order")
-    if not isinstance(only, list) or len(only) != 1:
-        return False
-    if not isinstance(order, list):
-        return False
-    normalized_only = [str(value).strip() for value in only]
-    normalized_order = [str(value).strip() for value in order]
-    return (
-        bool(normalized_only[0])
-        and normalized_order == normalized_only
-        and provider.get("allow_fallbacks") is False
-    )
 
 
 _FORBIDDEN_REQUEST_FIELDS = frozenset(
@@ -183,7 +166,7 @@ def _merge_request_audit(
         "PASS"
         if len(requests) <= approved_total_calls
         and all(not _forbidden_request_fields(row) for row in requests)
-        and all(_canonical_provider_lock(row) for row in requests)
+        and all(canonical_provider_lock(row) for row in requests)
         else "FAIL"
     )
     write_json(
@@ -198,7 +181,7 @@ def _merge_request_audit(
             "requests": requests,
             "provider_lock_contract": "provider.only/order-exact-single-endpoint",
             "provider_locks_valid": all(
-                _canonical_provider_lock(row) for row in requests
+                canonical_provider_lock(row) for row in requests
             ),
             "legacy_provider_order_required": False,
             "external_tools_allowed": False,

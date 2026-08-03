@@ -11,7 +11,7 @@ from typing import Any, Mapping
 from artifact_manifest import write_manifest
 from v5_claude_red_team_policy import CLAUDE_RED_TEAM_GOVERNANCE_CALLS
 from v5_json_io import load_json_or_default, write_json
-
+from v5_provider_lock import canonical_provider_lock
 RUNTIME_VERSION = "v5-gpt-claude-runtime-1"
 
 
@@ -277,24 +277,6 @@ def _prepare_evidence(
     )
 
 
-def _canonical_provider_lock(request: Mapping[str, Any]) -> bool:
-    provider = request.get("provider")
-    if not isinstance(provider, Mapping):
-        return False
-    only = provider.get("only")
-    order = provider.get("order")
-    if not isinstance(only, list) or len(only) != 1:
-        return False
-    if not isinstance(order, list):
-        return False
-    normalized_only = [str(value).strip() for value in only]
-    normalized_order = [str(value).strip() for value in order]
-    return (
-        bool(normalized_only[0])
-        and normalized_order == normalized_only
-        and provider.get("allow_fallbacks") is False
-    )
-
 
 def _request_audit_document(
     inputs: EvidenceInputs,
@@ -306,7 +288,7 @@ def _request_audit_document(
     provider_locks_valid = (
         len(requests) == prepared.request_count
         and all(
-            isinstance(row, Mapping) and _canonical_provider_lock(row)
+            isinstance(row, Mapping) and canonical_provider_lock(row)
             for row in requests
         )
     )

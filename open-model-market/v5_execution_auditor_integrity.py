@@ -9,16 +9,11 @@ from typing import Any, Mapping
 
 import v5_execution_auditor as base
 from v5_json_io import load_json_or_default
+from v5_provider_lock import canonical_provider_lock
 from v5_quality_status_integrity import (
     DEGRADED_SUCCESS_STATUSES,
     STRICT_SUCCESS_STATUSES,
 )
-from v5_run_evidence import RUNTIME_VERSION as GOVERNED_RUNTIME_VERSION
-
-NATIVE_RUNTIME_VERSION = GOVERNED_RUNTIME_VERSION
-NATIVE_EXECUTOR = "v5-native-execution-engine"
-LEGACY_RUNTIME_FAILURE = "V5 production result envelope is missing"
-LEGACY_EXECUTOR_FAILURE = "R8 fault-aware executor evidence is missing"
 PLANNING_FAILURE_PREFIXES = (
     "BUDGET_INSUFFICIENT_",
     "CAPABILITY_",
@@ -128,93 +123,6 @@ def _node_quality(root: Path) -> dict[str, Any]:
     }
 
 
-def _native_contract_evidence(
-    root: Path,
-) -> tuple[set[str], str]:
-    envelope = load_json_or_default(root / "expert-team-result.json", {})
-    envelope = envelope if isinstance(envelope, Mapping) else {}
-    summary = load_json_or_default(root / "v5-execution-summary.json", {})
-    summary = summary if isinstance(summary, Mapping) else {}
-    runtime = load_json_or_default(root / "production-runtime.json", {})
-    runtime = runtime if isinstance(runtime, Mapping) else {}
-    runtime_versions = {
-        str(envelope.get("runtime_version") or ""),
-        str(runtime.get("runtime_version") or ""),
-    }
-    runtime_versions.discard("")
-    executor = str(summary.get("executor") or envelope.get("executor") or "")
-    return runtime_versions, executor
-
-
-def _native_contract_failures(
-    failures: list[str],
-    runtime_versions: set[str],
-    executor: str,
-    executor_required: bool,
-) -> tuple[list[str], bool, bool]:
-    runtime_valid = runtime_versions == {NATIVE_RUNTIME_VERSION}
-    if runtime_valid:
-        failures = [reason for reason in failures if reason != LEGACY_RUNTIME_FAILURE]
-    else:
-        observed = ", ".join(sorted(runtime_versions)) if runtime_versions else "missing"
-        failures.append(
-            "native runtime version evidence is missing or inconsistent: " + observed
-        )
-    executor_valid = executor == NATIVE_EXECUTOR
-    if executor_valid:
-        failures = [reason for reason in failures if reason != LEGACY_EXECUTOR_FAILURE]
-    elif executor_required:
-        failures.append(
-            f"native executor evidence is missing or inconsistent: {executor or 'missing'}"
-        )
-    else:
-        failures = [reason for reason in failures if reason != LEGACY_EXECUTOR_FAILURE]
-    return failures, runtime_valid, executor_valid
-
-
-def _native_contract_status(
-    runtime_valid: bool,
-    executor_valid: bool,
-    executor_required: bool,
-) -> str:
-    if runtime_valid and executor_valid:
-        return "PASS"
-    if runtime_valid and not executor_required:
-        return "PASS_PRE_EXECUTION"
-    return "FAIL"
-
-
-def _apply_native_contract(
-    root: Path,
-    result: dict[str, Any],
-    planning_failure: Mapping[str, Any] | None,
-) -> dict[str, Any]:
-    runtime_versions, executor = _native_contract_evidence(root)
-    failures = list(result.get("failures") or [])
-    executor_required = planning_failure is None
-    failures, runtime_valid, executor_valid = _native_contract_failures(
-        failures, runtime_versions, executor, executor_required
-    )
-
-    checks = dict(result.get("checks") or {})
-    checks.update(
-        {
-            "native_runtime_version": NATIVE_RUNTIME_VERSION,
-            "observed_runtime_versions": sorted(runtime_versions),
-            "native_executor": NATIVE_EXECUTOR,
-            "observed_executor": executor,
-            "native_executor_required": executor_required,
-            "native_contract_status": _native_contract_status(
-                runtime_valid, executor_valid, executor_required
-            ),
-        }
-    )
-    result["runtime_version"] = NATIVE_RUNTIME_VERSION
-    result["checks"] = checks
-    result["failures"] = list(dict.fromkeys(failures))
-    return result
-
-
 def _normalize_planning_failure(
     root: Path,
     result: dict[str, Any],
@@ -322,24 +230,6 @@ def _constitutional_evidence(root: Path) -> dict[str, Any]:
     }
 
 
-def _canonical_provider_lock(request: Mapping[str, Any]) -> bool:
-    provider = request.get("provider")
-    if not isinstance(provider, Mapping):
-        return False
-    only = provider.get("only")
-    order = provider.get("order")
-    if not isinstance(only, list) or len(only) != 1:
-        return False
-    if not isinstance(order, list):
-        return False
-    normalized_only = [str(value).strip() for value in only]
-    normalized_order = [str(value).strip() for value in order]
-    return (
-        bool(normalized_only[0])
-        and normalized_order == normalized_only
-        and provider.get("allow_fallbacks") is False
-    )
-
 
 def _history_isolation_evidence(
     result: Mapping[str, Any],
@@ -398,7 +288,7 @@ def _provider_lock_evidence(
     rows: list[bool] = []
     failures: list[str] = []
     for index, request in enumerate(requests, 1):
-        valid = isinstance(request, Mapping) and _canonical_provider_lock(request)
+        valid = isinstance(request, Mapping) and canonical_provider_lock(request)
         rows.append(valid)
         if not valid:
             failures.append(
@@ -565,7 +455,6 @@ def audit(
         execute_outcome=execute_outcome,
         publish_outcome=publish_outcome,
     )
-    result = _apply_native_contract(root, result, planning)
     if planning is not None:
         return _normalize_planning_failure(root, result, planning)
 

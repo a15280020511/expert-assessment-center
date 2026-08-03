@@ -75,6 +75,39 @@ class RepositoryAuditTests(unittest.TestCase):
         self.assertTrue(repository_audit.should_fail(report, "critical"))
         self.assertTrue(repository_audit.should_fail(report, "high"))
 
+    def test_duplicate_production_function_bodies_are_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            market = root / "open-model-market"
+            market.mkdir(parents=True)
+            body = (
+                "def validate(value):\n"
+                "    if not isinstance(value, dict):\n"
+                "        return False\n"
+                "    rows = value.get('rows')\n"
+                "    if not isinstance(rows, list) or len(rows) != 1:\n"
+                "        return False\n"
+                "    normalized = [str(item).strip() for item in rows]\n"
+                "    return bool(normalized[0]) and normalized == rows\n"
+            )
+            (market / "one.py").write_text(body, encoding="utf-8")
+            (market / "two.py").write_text(body.replace("validate", "check"), encoding="utf-8")
+            report = repository_audit.audit(root)
+        rules = [row["rule"] for row in report["findings"]]
+        self.assertIn("PY-DUPLICATE-FUNCTION-BODY", rules)
+
+    def test_test_only_import_does_not_hide_production_orphan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module = root / "open-model-market" / "unused.py"
+            test_file = root / "tests" / "test_unused.py"
+            module.parent.mkdir(parents=True)
+            test_file.parent.mkdir(parents=True)
+            module.write_text("VALUE = 1\n", encoding="utf-8")
+            test_file.write_text("import unused\n", encoding="utf-8")
+            report = repository_audit.audit(root)
+        self.assertIn("open-model-market/unused.py", report["orphan_candidates"])
+
     def test_unreferenced_module_remains_an_orphan_candidate(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

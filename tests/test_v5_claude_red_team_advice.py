@@ -13,13 +13,16 @@ if str(MARKET) not in sys.path:
 from v5_claude_red_team_policy import (  # noqa: E402
     CLAUDE_RED_TEAM_GOVERNANCE_CALLS,
     CLAUDE_RED_TEAM_MAX_CALLS_PER_TASK,
+    CLAUDE_RED_TEAM_MAX_TASK_CHARS,
     CLAUDE_RED_TEAM_MODEL,
     GPT_SYNTHESIS_CALLS,
     RED_TEAM_SCOPE,
     build_claude_red_team_request,
+    fixed_prompt,
     forbidden_claude_capabilities,
     parse_claude_red_team_advice,
 )
+from v5_proposal_materializer import _bounded_task_excerpt  # noqa: E402
 
 
 def unified_payload() -> dict[str, object]:
@@ -69,10 +72,11 @@ def unified_payload() -> dict[str, object]:
                 "provider": "provider-a",
                 "estimated_cost_usd": 0.01,
                 "contract_kind": "gpt-authored-expert-node",
-                "recovery_candidate_ids": [],
+                "recovery_candidates": [],
             }
         ],
         "edges": [],
+        "final_nodes": ["node-1"],
     }
 
 
@@ -85,6 +89,8 @@ class ClaudeRedTeamAdviceTests(unittest.TestCase):
         self.assertEqual(RED_TEAM_SCOPE, user["scope"])
         self.assertIn("task_excerpt", user["payload"])
         self.assertIn("nodes", user["payload"])
+        self.assertEqual(["node-1"], user["payload"]["final_nodes"])
+        self.assertEqual([], user["payload"]["nodes"][0]["recovery_candidates"])
         schema = request["response_format"]["json_schema"]["schema"]
         self.assertEqual(["suggestions"], schema["required"])
         self.assertNotIn("decision", schema["properties"])
@@ -115,7 +121,7 @@ class ClaudeRedTeamAdviceTests(unittest.TestCase):
                     "suggestions": [
                         {
                             "code": "CONTRACT_MISMATCH",
-                            "target": "  最终建议部分  ",
+                            "target": "contract",
                             "change": "给出唯一推荐并列出两条题面内理由。",
                         }
                     ]
@@ -123,7 +129,7 @@ class ClaudeRedTeamAdviceTests(unittest.TestCase):
                 ensure_ascii=False,
             )
         )
-        self.assertEqual("最终建议部分", result["suggestions"][0]["target"])
+        self.assertEqual("contract", result["suggestions"][0]["target"])
 
     def test_advisory_target_control_character_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "target contains control characters"):
@@ -133,7 +139,7 @@ class ClaudeRedTeamAdviceTests(unittest.TestCase):
                         "suggestions": [
                             {
                                 "code": "CONTRACT_MISMATCH",
-                                "target": "final\u0001section",
+                                "target": "node:final\u0001section",
                                 "change": "修复交付合同。",
                             }
                         ]
@@ -156,7 +162,7 @@ class ClaudeRedTeamAdviceTests(unittest.TestCase):
                     "suggestions": [
                         {
                             "code": "WORK_UNCOVERED",
-                            "target": "work-2",
+                            "target": "work:work-2",
                             "change": "为work-2增加明确负责节点并补齐依赖边。",
                         },
                         {
@@ -170,6 +176,92 @@ class ClaudeRedTeamAdviceTests(unittest.TestCase):
             )
         )
         self.assertEqual(2, len(result["suggestions"]))
+
+    def test_prompt_is_exact_nonduplicative_and_truncation_safe(self) -> None:
+        prompt = fixed_prompt()
+        self.assertIn("一条suggestion只处理一个缺陷", prompt)
+        self.assertIn("不得重述已满足条件", prompt)
+        self.assertIn("task_truncated为true", prompt)
+        self.assertIn("只返回REVIEW_INPUT_INCOMPLETE", prompt)
+
+    def test_truncated_task_excerpt_respects_the_exact_hard_limit(self) -> None:
+        task = "甲" * (CLAUDE_RED_TEAM_MAX_TASK_CHARS + 500)
+        excerpt, truncated = _bounded_task_excerpt(task)
+        self.assertTrue(truncated)
+        self.assertEqual(CLAUDE_RED_TEAM_MAX_TASK_CHARS, len(excerpt))
+        payload = unified_payload()
+        payload["task_excerpt"] = excerpt
+        payload["task_characters"] = len(task)
+        payload["task_truncated"] = True
+        request = build_claude_red_team_request(payload)
+        user = json.loads(request["messages"][1]["content"])
+        self.assertTrue(user["payload"]["task_truncated"])
+
+    def test_recovery_details_and_edge_relation_are_reviewable(self) -> None:
+        payload = unified_payload()
+        payload["nodes"][0]["recovery_candidates"] = [
+            {
+                "candidate_id": "company-b/model-b@provider-b",
+                "model": "company-b/model-b",
+                "company": "company-b",
+                "provider": "provider-b",
+                "estimated_cost_usd": 0.02,
+            }
+        ]
+        payload["nodes"].append(
+            {
+                "node_id": "node-2",
+                "candidate_id": "company-c/model-c@provider-c",
+                "work_ids": ["work-2"],
+                "role": "Final decision synthesizer",
+                "functions": ["synthesis"],
+                "model": "company-c/model-c",
+                "company": "company-c",
+                "provider": "provider-c",
+                "estimated_cost_usd": 0.03,
+                "contract_kind": "gpt-authored-expert-node",
+                "recovery_candidates": [],
+            }
+        )
+        payload["edges"] = [
+            {
+                "source": "node-1",
+                "target": "node-2",
+                "relation_type": "synthesis",
+            }
+        ]
+        payload["final_nodes"] = ["node-2"]
+        request = build_claude_red_team_request(payload)
+        user = json.loads(request["messages"][1]["content"])["payload"]
+        self.assertEqual("company-b", user["nodes"][0]["recovery_candidates"][0]["company"] )
+        self.assertEqual("synthesis", user["edges"][0]["relation_type"])
+        self.assertEqual(["node-2"], user["final_nodes"])
+
+    def test_non_exact_target_and_duplicate_suggestions_are_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "exact review target"):
+            parse_claude_red_team_advice(
+                json.dumps(
+                    {
+                        "suggestions": [
+                            {
+                                "code": "ROLE_MISMATCH",
+                                "target": "some vague section",
+                                "change": "明确角色职责。",
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        row = {
+            "code": "ROLE_MISMATCH",
+            "target": "node:node-1",
+            "change": "使角色与分配工作一致。",
+        }
+        with self.assertRaisesRegex(ValueError, "exact duplicates"):
+            parse_claude_red_team_advice(
+                json.dumps({"suggestions": [row, row]}, ensure_ascii=False)
+            )
 
     def test_approval_or_rejection_fields_are_rejected(self) -> None:
         for payload in (

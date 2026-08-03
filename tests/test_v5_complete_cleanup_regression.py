@@ -68,6 +68,39 @@ class CompleteCleanupRegressionTests(unittest.TestCase):
         for name in forbidden:
             self.assertFalse((MODULE / name).exists(), name)
 
+    def test_one_time_diagnostics_and_stale_evidence_are_absent(self) -> None:
+        forbidden = (
+            ROOT / ".github/workflows/v5-governance-endpoint-diagnostic-20260803.yml",
+            ROOT / ".github/workflows/v5-live-catalog-diagnostic-20260803.yml",
+            MODULE / "v5_preflight_simulation.py",
+            ROOT / "tests/test_v5_preflight_simulation.py",
+            MODULE / "live-recovery-budget-fix-evidence.json",
+            MODULE / "v4-contract-isolation-fix-evidence.json",
+            MODULE / "v5-closed-world-numeric-prompt-fix-evidence.json",
+            MODULE / "v5-deterministic-answer-normalization-fix-evidence.json",
+            MODULE / "v5_live_benchmark_suite.json",
+        )
+        existing = [str(path.relative_to(ROOT)) for path in forbidden if path.exists()]
+        self.assertEqual([], existing)
+
+    def test_provider_lock_has_one_authoritative_implementation(self) -> None:
+        definitions = []
+        for path in MODULE.glob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            if "def canonical_provider_lock(" in text:
+                definitions.append(path.name)
+            self.assertNotIn("def _canonical_provider_lock(", text, path.name)
+        self.assertEqual(["v5_provider_lock.py"], definitions)
+
+    def test_native_auditor_contains_no_r8_compatibility_runtime(self) -> None:
+        for name in (
+            "v5_execution_auditor.py",
+            "v5_execution_auditor_integrity.py",
+        ):
+            text = (MODULE / name).read_text(encoding="utf-8")
+            self.assertNotIn("v5-r8", text, name)
+            self.assertNotIn("R8 fault-aware", text, name)
+
     def test_quality_tier_and_obsolete_fixed_team_assets_are_absent(self) -> None:
         runtime = (MODULE / "v5_runtime.py").read_text(encoding="utf-8")
         pipeline = (MODULE / "v5_pipeline.py").read_text(encoding="utf-8")

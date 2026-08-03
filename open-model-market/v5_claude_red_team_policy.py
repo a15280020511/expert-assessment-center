@@ -30,6 +30,11 @@ RED_TEAM_SCOPE = "unified_selection_and_information"
 
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9_.~:@/+-]{1,160}$")
+_TARGET_RE = re.compile(
+    r"^(?:task|contract|work:[A-Za-z0-9_.:-]{1,96}|"
+    r"node:[A-Za-z0-9_.:-]{1,64}|"
+    r"edge:[A-Za-z0-9_.:-]{1,64}->[A-Za-z0-9_.:-]{1,64})$"
+)
 
 RED_TEAM_CODES = frozenset(
     {
@@ -52,19 +57,22 @@ RED_TEAM_CODES = frozenset(
         "LOCATION_CONFLICT",
         "SOURCE_MISSING",
         "UNKNOWN_NOT_PRESERVED",
-        "CONTRACT_VIOLATION",
         "INFORMATION_INCOMPLETE",
         "REVIEW_INPUT_INCOMPLETE",
     }
 )
 
 UNIFIED_RED_TEAM_PROMPT = (
-    "你是专家团中心唯一且固定的Claude红队顾问。你每个任务只执行一次，同时审查两部分："
-    "第一，GPT已经提出的任务拆解、专家角色、模型、Provider、恢复顺序和执行图；第二，原始任务与"
-    "输入证据中的事实来源、数量、位置、未知项、推断边界和用户交付合同。你只给出具体、可执行、"
-    "最小必要的修改意见。你不是批准者、否决者或门禁，不得输出APPROVE、REJECT、通过、不通过或"
-    "任何执行许可；不得直接选择专家、修改执行图、执行任务、写最终报告、调用工具或浏览；不得要求"
-    "第二次复审。只返回严格JSON；没有修改意见时返回空suggestions。"
+    "你是专家团中心唯一且固定的Claude红队顾问，每个任务只审查一次。审查对象仅限输入payload，"
+    "不得补充外部事实、目录外模型或未提供的能力。按以下优先级核对：第一，调用、恢复、费用、"
+    "Provider单锁、禁用工具、初始与恢复专家公司全局不同等硬约束；第二，work覆盖、依赖、边类型、"
+    "最终节点和用户交付合同；第三，事实来源、数量、位置、未知项、事实与推断边界。只对真实且尚未"
+    "满足的缺陷给出意见；一条suggestion只处理一个缺陷，必须指向明确的task、contract、work_id、"
+    "node_id或source->target边，修改动作应最小、可执行且不与其他意见重复或冲突。不得给一般性建议，"
+    "不得重述已满足条件，不得直接改图、选择专家、执行任务、写报告、调用工具、浏览或要求复审。若"
+    "task_truncated为true，或输入不足以安全判断，只返回REVIEW_INPUT_INCOMPLETE意见并禁止猜测缺失内容。"
+    "你不是批准者、否决者或门禁，不得输出APPROVE、REJECT、通过、不通过或执行许可。只返回严格JSON；"
+    "没有必要修改时返回空suggestions。"
 )
 UNIFIED_RED_TEAM_PROMPT_SHA256 = sha256(
     UNIFIED_RED_TEAM_PROMPT.encode("utf-8")
@@ -164,6 +172,7 @@ def _validate_payload_header(payload: Mapping[str, Any]) -> tuple[int, int, int]
         "work_items",
         "nodes",
         "edges",
+        "final_nodes",
     }
     if set(payload) != expected:
         raise ValueError("Claude unified review has missing or extra fields")
@@ -250,7 +259,23 @@ def _validate_work_items(payload: Mapping[str, Any]) -> set[str]:
     return known_work
 
 
-def _validate_node(node: Any, index: int) -> None:
+def _validate_recovery_candidate(value: Any, field: str) -> str:
+    expected = {
+        "candidate_id",
+        "model",
+        "company",
+        "provider",
+        "estimated_cost_usd",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected:
+        raise ValueError(f"{field} has missing or extra fields")
+    for name in ("candidate_id", "model", "company", "provider"):
+        _identifier(value[name], f"{field}.{name}")
+    _number(value["estimated_cost_usd"], f"{field}.estimated_cost_usd")
+    return str(value["candidate_id"])
+
+
+def _validate_node(node: Any, index: int) -> str:
     node_fields = {
         "node_id",
         "candidate_id",
@@ -262,7 +287,7 @@ def _validate_node(node: Any, index: int) -> None:
         "provider",
         "estimated_cost_usd",
         "contract_kind",
-        "recovery_candidate_ids",
+        "recovery_candidates",
     }
     if not isinstance(node, Mapping) or set(node) != node_fields:
         raise ValueError(f"nodes[{index}] has missing or extra fields")
@@ -281,40 +306,69 @@ def _validate_node(node: Any, index: int) -> None:
     _text_list(functions, f"nodes[{index}].functions", 12, 96)
     if len(functions) != len(set(functions)):
         raise ValueError(f"nodes[{index}].functions contains duplicates")
-    _id_list(
-        node["recovery_candidate_ids"],
-        f"nodes[{index}].recovery_candidate_ids",
-        4,
-    )
+    recoveries = node["recovery_candidates"]
+    if not isinstance(recoveries, list) or len(recoveries) > 4:
+        raise ValueError(f"nodes[{index}].recovery_candidates must be bounded")
+    recovery_ids = [
+        _validate_recovery_candidate(
+            value,
+            f"nodes[{index}].recovery_candidates[{recovery_index}]",
+        )
+        for recovery_index, value in enumerate(recoveries)
+    ]
+    if len(recovery_ids) != len(set(recovery_ids)):
+        raise ValueError(f"nodes[{index}].recovery_candidates contains duplicates")
     _number(node["estimated_cost_usd"], f"nodes[{index}].estimated_cost_usd")
+    return str(node["node_id"])
 
 
-def _validate_nodes(payload: Mapping[str, Any], maximum_nodes: int) -> None:
+def _validate_nodes(payload: Mapping[str, Any], maximum_nodes: int) -> set[str]:
     nodes = payload["nodes"]
     if not isinstance(nodes, list) or not nodes:
         raise ValueError("nodes exceed expert-call capacity")
     if len(nodes) > min(CLAUDE_RED_TEAM_MAX_ITEMS, maximum_nodes):
         raise ValueError("nodes exceed expert-call capacity")
-    for index, node in enumerate(nodes):
-        _validate_node(node, index)
+    node_ids = [_validate_node(node, index) for index, node in enumerate(nodes)]
+    if len(node_ids) != len(set(node_ids)):
+        raise ValueError("nodes contain duplicate node ids")
+    return set(node_ids)
 
 
-def _validate_edges(payload: Mapping[str, Any]) -> None:
+def _validate_edges(payload: Mapping[str, Any], known_nodes: set[str]) -> None:
     edges = payload["edges"]
     if not isinstance(edges, list) or len(edges) > CLAUDE_RED_TEAM_MAX_EDGES:
         raise ValueError("edges must be bounded")
+    identities: list[tuple[str, str, str]] = []
     for index, edge in enumerate(edges):
-        if not isinstance(edge, Mapping) or set(edge) != {"source", "target"}:
+        expected = {"source", "target", "relation_type"}
+        if not isinstance(edge, Mapping) or set(edge) != expected:
             raise ValueError(f"edges[{index}] has missing or extra fields")
-        _identifier(edge["source"], f"edges[{index}].source")
-        _identifier(edge["target"], f"edges[{index}].target")
+        source = _identifier(edge["source"], f"edges[{index}].source")
+        target = _identifier(edge["target"], f"edges[{index}].target")
+        relation = _identifier(
+            edge["relation_type"],
+            f"edges[{index}].relation_type",
+        )
+        if source not in known_nodes or target not in known_nodes or source == target:
+            raise ValueError(f"edges[{index}] references invalid nodes")
+        identities.append((source, target, relation))
+    if len(identities) != len(set(identities)):
+        raise ValueError("edges contain duplicates")
+
+
+def _validate_final_nodes(payload: Mapping[str, Any], known_nodes: set[str]) -> None:
+    final_nodes = payload["final_nodes"]
+    _id_list(final_nodes, "final_nodes", CLAUDE_RED_TEAM_MAX_ITEMS)
+    if not final_nodes or not set(final_nodes).issubset(known_nodes):
+        raise ValueError("final_nodes contain unknown nodes or are empty")
 
 
 def _validate_payload(payload: Mapping[str, Any]) -> None:
     total, governance, recovery = _validate_payload_header(payload)
     _validate_work_items(payload)
-    _validate_nodes(payload, total - governance - recovery)
-    _validate_edges(payload)
+    known_nodes = _validate_nodes(payload, total - governance - recovery)
+    _validate_edges(payload, known_nodes)
+    _validate_final_nodes(payload, known_nodes)
 
 
 def canonical_review_input(payload: Mapping[str, Any]) -> str:
@@ -356,6 +410,7 @@ def advice_json_schema() -> dict[str, Any]:
                                 },
                                 "target": {
                                     "type": "string",
+                                    "pattern": _TARGET_RE.pattern,
                                     "minLength": 1,
                                     "maxLength": 160,
                                 },
@@ -424,11 +479,19 @@ def parse_claude_red_team_advice(text: str) -> dict[str, Any]:
         code = str(suggestion["code"])
         if code not in RED_TEAM_CODES:
             raise ValueError(f"suggestions[{index}].code is invalid")
-        target = _text(suggestion["target"], f"suggestions[{index}].target", 160)
-        change = _text(suggestion["change"], f"suggestions[{index}].change", 240)
+        target = _text(suggestion["target"], f"suggestions[{index}].target", 160).strip()
+        if _TARGET_RE.fullmatch(target) is None:
+            raise ValueError(f"suggestions[{index}].target is not an exact review target")
+        change = _text(suggestion["change"], f"suggestions[{index}].change", 240).strip()
         normalized.append(
-            {"code": code, "target": target.strip(), "change": change.strip()}
+            {"code": code, "target": target, "change": change}
         )
+    identities = [
+        (row["code"], row["target"], row["change"])
+        for row in normalized
+    ]
+    if len(identities) != len(set(identities)):
+        raise ValueError("Claude suggestions contain exact duplicates")
     return {
         "suggestions": normalized,
         "scope": RED_TEAM_SCOPE,

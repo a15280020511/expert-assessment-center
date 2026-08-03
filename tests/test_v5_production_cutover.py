@@ -44,6 +44,7 @@ class V5ProductionCutoverTests(unittest.TestCase):
             root,
             "production-runtime.json",
             {
+                "runtime_version": "v5-gpt-claude-runtime-1",
                 "fallback_policy": "fail-closed-no-alternate-runtime",
                 "legacy_runtime_present": False,
                 "maximum_model_calls": 8,
@@ -55,11 +56,11 @@ class V5ProductionCutoverTests(unittest.TestCase):
             root,
             "expert-team-result.json",
             {
-                "runtime_version": "v5-r8",
+                "runtime_version": "v5-gpt-claude-runtime-1",
                 "status": "success",
                 "completion_mode": "full",
                 "final_answer": report,
-                "executor": "v5-r8-fault-aware",
+                "executor": "v5-native-execution-engine",
                 "fallback_used": False,
                 "legacy_runtime_present": False,
             },
@@ -70,7 +71,7 @@ class V5ProductionCutoverTests(unittest.TestCase):
             {
                 "status": "success",
                 "completion_mode": "full",
-                "executor": "v5-r8-fault-aware",
+                "executor": "v5-native-execution-engine",
                 "final_answer": report,
                 "actual_cost_usd": 0.12,
                 "execution_budget": {
