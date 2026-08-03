@@ -3,7 +3,9 @@
 This module contains no scoring, optimization, Pareto pruning, or heuristic
 candidate selection. It only applies constitutional eligibility filters,
 preserves OpenRouter's official intelligence ordering, and exposes exact
-model/provider rows to GPT.
+model/provider rows to GPT. Native context and completion capacity remain
+compatibility facts; support for a local Token-cap request parameter is not an
+eligibility condition.
 """
 from __future__ import annotations
 
@@ -26,7 +28,6 @@ FORBIDDEN_MODEL_TERMS = (
     "preview",
 )
 GOVERNANCE_COMPANIES = frozenset({"openai", "anthropic"})
-OUTPUT_LIMIT_PARAMETERS = frozenset({"max_tokens", "max_completion_tokens"})
 
 
 class CatalogViewError(RuntimeError):
@@ -63,7 +64,7 @@ def eligible_models(
 
     Model-level ``max_completion_tokens`` is deliberately not a hard filter.
     OpenRouter may omit it at the aggregate model layer while exact provider
-    endpoints expose a valid limit. Completion capacity is enforced only after
+    endpoints expose valid native capacity. Capacity is checked only after
     exact endpoint inventories are fetched.
     """
     rows: list[Any] = []
@@ -228,15 +229,13 @@ def _endpoint_rejection_reason(
     context_floor: int,
     completion_floor: int,
 ) -> str:
+    del supported
     if not provider:
         return "endpoint-missing-provider"
     if context_length < context_floor:
         return "endpoint-insufficient-context"
     if completion_tokens < completion_floor:
-        return "endpoint-missing-completion-limit"
-    supported_folded = {value.casefold() for value in supported}
-    if not OUTPUT_LIMIT_PARAMETERS.intersection(supported_folded):
-        return "endpoint-cannot-enforce-output-limit"
+        return "endpoint-insufficient-native-completion-capacity"
     if prompt < 0 or completion < 0:
         return "invalid-pricing"
     return ""
@@ -288,6 +287,8 @@ def _catalog_endpoint_row(
         "output_modalities": list(
             getattr(model, "output_modalities", []) or ["text"]
         ),
+        "local_token_ceiling_parameter_required": False,
+        "native_completion_capacity_checked": True,
         "synthetic_fixture_only": bool(endpoint.get("synthetic_fixture_only")),
     }, ""
 
@@ -300,6 +301,8 @@ _ROUTE_IDENTITY_FIELDS = (
     "provider_endpoint",
     "input_modalities",
     "output_modalities",
+    "local_token_ceiling_parameter_required",
+    "native_completion_capacity_checked",
 )
 _ROUTE_VARIABLE_FIELDS = (
     "context_length",
@@ -348,12 +351,6 @@ def _merge_provider_route_rows(
             for value in candidate.get("supported_parameters", [])
         }
     )
-    if not OUTPUT_LIMIT_PARAMETERS.intersection(
-        {value.casefold() for value in supported}
-    ):
-        raise CatalogViewError(
-            f"conflicting duplicate provider route capabilities: {key}"
-        )
     merged = dict(existing)
     merged.update(
         {
@@ -466,6 +463,9 @@ def compact_endpoint_catalog(
         "governance_companies_excluded": sorted(GOVERNANCE_COMPANIES),
         "required_context_tokens": context_floor,
         "minimum_completion_tokens": completion_floor,
+        "minimum_native_completion_capacity_tokens": completion_floor,
+        "local_token_ceiling_parameter_required": False,
+        "native_completion_capacity_checked": True,
         "endpoints": rows,
         "rejected": rejected,
     }
