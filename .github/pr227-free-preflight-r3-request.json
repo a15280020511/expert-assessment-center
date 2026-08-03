@@ -1,0 +1,10 @@
+{
+  "schema_version": "pr227-dynamic-free-model-preflight-3",
+  "authorization": "RUN-FREE-ONLY-ONCE",
+  "purpose": "dynamic-zero-price-model-after-zero-call-simulation",
+  "target_sha": "0383d2ef80f1890306bc0bc5f7b37836cb2579ca",
+  "model_selection": "openrouter-live-zero-price-catalog",
+  "maximum_model_calls": 1,
+  "maximum_paid_model_calls": 0,
+  "max_completion_tokens": 256
+}
