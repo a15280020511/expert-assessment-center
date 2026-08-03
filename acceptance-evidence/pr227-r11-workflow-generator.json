@@ -1,0 +1,20 @@
+{
+  "schema_version": "pr227-r11-workflow-generator-1",
+  "status": "PASS",
+  "template_ref": "acceptance/pr227-final-paid-20260803-r10",
+  "template_blob_sha": "31b398fbb9b6d4f57dd5e8c753290d03d7ad3689",
+  "target_sha": "0383d2ef80f1890306bc0bc5f7b37836cb2579ca",
+  "generated_path": ".github/workflows/pr227-production-paid-acceptance-r11.yml",
+  "generated_blob_sha": "7b5a89f84106f64b1c42da9e535ed3c8893c3cdb",
+  "generated_sha256": "d178cb938a5cde98d60e2a32b3e9bf0793cea732fa43640faa693cfec3035327",
+  "generated_size_bytes": 21733,
+  "max_completion_tokens": 8000,
+  "authorization_fetch_depth": 0,
+  "independent_revalidation_bindings": 2,
+  "maximum_total_calls": 4,
+  "maximum_recovery_calls": 0,
+  "maximum_cost_usd": 0.25,
+  "chat_model_calls": 0,
+  "paid_model_calls": 0,
+  "generator_commit_sha": "d08b6ce020050c242eb57e8749a6d4a8ff178ff2"
+}
