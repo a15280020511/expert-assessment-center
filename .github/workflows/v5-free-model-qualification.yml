@@ -5,6 +5,14 @@ on:
   push:
     branches:
       - "fix/v5-constitution-free-first-company-diversity-*"
+  pull_request:
+    paths:
+      - "CONSTITUTION.md"
+      - "README.md"
+      - "open-model-market/**"
+      - "tests/**"
+      - ".github/workflows/v5-free-model-qualification.yml"
+      - "requirements*.txt"
 
 permissions:
   contents: read
@@ -15,6 +23,7 @@ concurrency:
 
 jobs:
   free-model-qualification:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Zero-cost CI and free Canary
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -24,9 +33,11 @@ jobs:
       MODEL_TIMEOUT_SECONDS: "120"
       OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
       OPENROUTER_APP_NAME: expert-center-free-model-qualification
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ env.TARGET_SHA }}
           persist-credentials: false
 
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -36,6 +47,12 @@ jobs:
           cache-dependency-path: |
             requirements-runtime.txt
             requirements-dev.txt
+
+      - name: Verify exact source checkout
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test -z "$(git status --porcelain)"
 
       - name: Install pinned validation dependencies
         run: |
@@ -127,7 +144,7 @@ jobs:
                   f"free Canary returned positive cost: {cost}"
               )
 
-          target_sha = os.environ["GITHUB_SHA"]
+          target_sha = os.environ["TARGET_SHA"]
           receipt = {
               "schema_version": "v5-free-first-preflight-1",
               "target_sha": target_sha,
