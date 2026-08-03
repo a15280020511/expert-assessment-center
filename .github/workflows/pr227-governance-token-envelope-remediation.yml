@@ -17,7 +17,7 @@ concurrency:
 jobs:
   validate-and-persist:
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 41
     steps:
       - name: Checkout exact PR branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -83,7 +83,7 @@ jobs:
               "claude_effective_limit": 512,
               "gpt_synthesis_protocol_limit": 10000,
               "gpt_synthesis_effective_limit": 8000,
-              "default_behavior_unchanged_when_omitted": True,
+              "default_behavior_unchanged_when_omitted": true,
               "random_seeds": [0, 1, 7, 42, 31337, 65535, 99991, 104729],
           }
           root = Path('/tmp/pr227-governance-token-envelope')
