@@ -1,0 +1,218 @@
+name: OpenRouter ZDR Free Canary
+
+on:
+  push:
+    branches:
+      - "acceptance/openrouter-zdr-canary-*"
+    paths:
+      - ".github/openrouter-zdr-canary-request.json"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: openrouter-zdr-free-canary
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    steps:
+      - name: Check out immutable canary request
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 2
+          persist-credentials: true
+
+      - name: Validate one-call free authorization
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=.github/openrouter-zdr-canary-request.json
+          jq -e '
+            type == "object" and
+            (keys | sort) == [
+              "authorization",
+              "maximum_model_requests",
+              "maximum_paid_model_calls",
+              "model",
+              "provider",
+              "request_id",
+              "schema_version",
+              "target_sha"
+            ] and
+            .schema_version == "openrouter-zdr-canary-request-1" and
+            .authorization == "ONE-ZDR-FREE-CALL-NO-PAID-FALLBACK" and
+            .maximum_model_requests == 1 and
+            .maximum_paid_model_calls == 0 and
+            .model == "inclusionai/ling-3.0-flash:free" and
+            .provider == "novita" and
+            (.request_id | test("^[a-z0-9][a-z0-9._-]{0,63}$")) and
+            (.target_sha | test("^[0-9a-f]{40}$"))
+          ' "$request" >/dev/null
+          test "$(git diff --name-only HEAD^ HEAD)" = "$request"
+          test "$(git rev-parse HEAD^)" = "$(jq -er '.target_sha' "$request")"
+          {
+            echo "request_id=$(jq -er '.request_id' "$request")"
+            echo "target_sha=$(jq -er '.target_sha' "$request")"
+          } >> "$GITHUB_OUTPUT"
+          test -n "${OPENROUTER_API_KEY:-}"
+          test "${#OPENROUTER_API_KEY}" -ge 20
+
+      - name: Execute one explicit ZDR free call
+        env:
+          REQUEST_ID: ${{ steps.request.outputs.request_id }}
+          TARGET_SHA: ${{ steps.request.outputs.target_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          model = "inclusionai/ling-3.0-flash:free"
+          provider = "novita"
+          payload = {
+              "model": model,
+              "messages": [
+                  {
+                      "role": "system",
+                      "content": "Return only the requested final answer. Do not explain.",
+                  },
+                  {
+                      "role": "user",
+                      "content": "Reply with exactly PASS and nothing else.",
+                  },
+              ],
+              "stream": False,
+              "max_tokens": 64,
+              "reasoning": {"effort": "none", "exclude": True},
+              "provider": {
+                  "only": [provider],
+                  "order": [provider],
+                  "allow_fallbacks": False,
+                  "require_parameters": True,
+                  "data_collection": "allow",
+                  "zdr": True,
+              },
+          }
+          request = urllib.request.Request(
+              "https://openrouter.ai/api/v1/chat/completions",
+              data=json.dumps(payload).encode("utf-8"),
+              headers={
+                  "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
+                  "Content-Type": "application/json",
+                  "Accept": "application/json",
+                  "HTTP-Referer": "https://github.com/a15280020511/expert-assessment-center",
+                  "X-Title": "expert-center-zdr-free-canary",
+              },
+              method="POST",
+          )
+          response = None
+          error = None
+          status_code = None
+          try:
+              with urllib.request.urlopen(request, timeout=120) as response_handle:
+                  status_code = response_handle.status
+                  response = json.loads(response_handle.read().decode("utf-8"))
+          except urllib.error.HTTPError as exc:
+              status_code = exc.code
+              body = exc.read().decode("utf-8", errors="replace")
+              try:
+                  parsed = json.loads(body)
+              except json.JSONDecodeError:
+                  parsed = {"body_excerpt": body[:500]}
+              error = parsed.get("error") if isinstance(parsed, dict) else parsed
+          except Exception as exc:  # noqa: BLE001
+              error = {"type": type(exc).__name__, "message": str(exc)}
+
+          answer = ""
+          response_model = None
+          response_provider = None
+          usage = {}
+          actual_cost = None
+          if isinstance(response, dict):
+              response_model = response.get("model")
+              response_provider = response.get("provider")
+              usage = response.get("usage") if isinstance(response.get("usage"), dict) else {}
+              cost_value = usage.get("cost")
+              actual_cost = float(cost_value or 0.0)
+              choices = response.get("choices")
+              if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                  message = choices[0].get("message")
+                  if isinstance(message, dict):
+                      answer = str(message.get("content") or "").strip()
+
+          passed = (
+              status_code == 200
+              and response_model == model
+              and str(response_provider or "").casefold() == provider
+              and answer == "PASS"
+              and actual_cost == 0.0
+          )
+          receipt = {
+              "schema_version": "openrouter-zdr-free-canary-result-1",
+              "status": "PASS" if passed else "FAIL",
+              "request_id": os.environ["REQUEST_ID"],
+              "target_sha": os.environ["TARGET_SHA"],
+              "requested_model": model,
+              "requested_provider": provider,
+              "response_model": response_model,
+              "response_provider": response_provider,
+              "http_status": status_code,
+              "answer_sha256": None,
+              "answer_exact_pass": answer == "PASS",
+              "model_requests": 1,
+              "successful_model_calls": 1 if status_code == 200 else 0,
+              "paid_model_calls": 0,
+              "actual_cost_usd": actual_cost,
+              "provider_fallback_allowed": False,
+              "zdr_required": True,
+              "reasoning_effort": "none",
+              "usage": usage,
+              "error": error,
+              "production_ref_moved": False,
+          }
+          if answer:
+              import hashlib
+              receipt["answer_sha256"] = hashlib.sha256(answer.encode("utf-8")).hexdigest()
+          Path("openrouter-zdr-free-canary-result.json").write_text(
+              json.dumps(receipt, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps({
+              "status": receipt["status"],
+              "http_status": status_code,
+              "response_model": response_model,
+              "response_provider": response_provider,
+              "actual_cost_usd": actual_cost,
+              "paid_model_calls": 0,
+          }, ensure_ascii=False))
+          PY
+
+      - name: Persist authoritative canary receipt
+        run: |
+          set -euo pipefail
+          mkdir -p acceptance-evidence
+          cp openrouter-zdr-free-canary-result.json \
+            acceptance-evidence/openrouter-zdr-free-canary-result.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add acceptance-evidence/openrouter-zdr-free-canary-result.json
+          git commit -m "audit: persist one-call ZDR free canary result"
+          git push origin "HEAD:${GITHUB_REF}"
+
+      - name: Enforce canary result after persistence
+        run: |
+          set -euo pipefail
+          test "$(jq -r '.status' openrouter-zdr-free-canary-result.json)" = "PASS"
+          test "$(jq -r '.paid_model_calls' openrouter-zdr-free-canary-result.json)" = "0"
+          test "$(jq -r '.actual_cost_usd' openrouter-zdr-free-canary-result.json)" = "0"
