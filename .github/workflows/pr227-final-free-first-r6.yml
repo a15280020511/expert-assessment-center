@@ -1,0 +1,306 @@
+name: PR227 Final Free-First Evidence R6
+
+on:
+  push:
+    branches:
+      - acceptance/pr227-final-free-first-20260803-r6
+    paths:
+      - .github/pr227-final-free-first-r6-request.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr227-final-free-first-r6
+  cancel-in-progress: false
+
+jobs:
+  final-free-first:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
+      OPENROUTER_APP_NAME: expert-center-pr227-final-free-first
+      TARGET_SHA: 607bbb2eb224de7c32fe5029d8e6d48265d7a340
+      REQUEST_FILE: .github/pr227-final-free-first-r6-request.json
+    steps:
+      - name: Checkout immutable request
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: acceptance/pr227-final-free-first-20260803-r6
+          fetch-depth: 0
+          persist-credentials: true
+          path: request-source
+
+      - name: Validate request-only commit
+        working-directory: request-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '
+            type == "object" and
+            (keys | sort) == [
+              "authorization",
+              "max_completion_tokens",
+              "maximum_free_model_requests",
+              "maximum_paid_model_calls",
+              "model",
+              "provider_data_collection",
+              "provider_zdr",
+              "purpose",
+              "schema_version",
+              "target_sha"
+            ] and
+            .schema_version == "pr227-final-free-first-request-6" and
+            .authorization == "RUN-ZERO-COST-PREFLIGHT-ONCE" and
+            .purpose == "final-zero-call-simulation-and-free-canary" and
+            .target_sha == env.TARGET_SHA and
+            .model == "openrouter/free" and
+            .provider_data_collection == "allow" and
+            .provider_zdr == false and
+            .maximum_free_model_requests == 1 and
+            .maximum_paid_model_calls == 0 and
+            .max_completion_tokens == 256
+          ' "$REQUEST_FILE" >/dev/null
+          test "$(git diff --name-only HEAD^ HEAD)" = "$REQUEST_FILE"
+          git merge-base --is-ancestor "$TARGET_SHA" HEAD^
+
+      - name: Checkout exact PR source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: 607bbb2eb224de7c32fe5029d8e6d48265d7a340
+          fetch-depth: 0
+          persist-credentials: false
+          path: runtime-source
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: runtime-source/requirements-dev.txt
+
+      - name: Install pinned validation dependencies
+        working-directory: runtime-source
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+
+      - name: Run zero-call simulation and focused policy tests
+        working-directory: runtime-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/pr227-final-free-first-r6/simulation
+          python -m ruff check \
+            open-model-market/v5_free_first_preflight.py \
+            tests/test_v5_free_first_preflight.py
+          python -m compileall -q \
+            open-model-market/v5_free_first_preflight.py \
+            tests/test_v5_free_first_preflight.py
+          PYTHONPATH=tests python -m unittest test_v5_free_first_preflight -v
+          python open-model-market/v5_pipeline.py \
+            --task '仅依据题面比较A方案月费20元100GB与B方案月费30元150GB，给出唯一推荐。' \
+            --catalog-file tests/fixtures/models.json \
+            --endpoint-file tests/fixtures/endpoints.json \
+            --dry-run \
+            --maximum-total-calls 4 \
+            --maximum-recovery-calls 0 \
+            --max-completion-tokens 512 \
+            --output-dir /tmp/pr227-final-free-first-r6/simulation/dry-run
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('/tmp/pr227-final-free-first-r6/simulation/dry-run')
+          dry = json.loads((root / 'v5-dry-run.json').read_text(encoding='utf-8'))
+          runtime = json.loads(
+              (root / 'v5-runtime-config.json').read_text(encoding='utf-8')
+          )
+          assert dry['status'] == 'validated-not-executed'
+          assert dry['model_calls'] == 0
+          assert runtime['max_completion_tokens'] == 512
+          result = {
+              'status': 'PASS',
+              'model_calls': 0,
+              'paid_model_calls': 0,
+              'target_sha': '607bbb2eb224de7c32fe5029d8e6d48265d7a340',
+              'focused_policy_tests': 10,
+              'dry_run_status': dry['status'],
+          }
+          Path('/tmp/pr227-final-free-first-r6/simulation/result.json').write_text(
+              json.dumps(result, ensure_ascii=False, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          print(json.dumps(result, ensure_ascii=False))
+          PY
+
+      - name: Execute one free-model Canary
+        id: free_canary
+        continue-on-error: true
+        working-directory: runtime-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${OPENROUTER_API_KEY:-}"
+          mkdir -p /tmp/pr227-final-free-first-r6/free-canary
+          PYTHONPATH=open-model-market python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          from openrouter_api import CHAT_URL, request_json
+          from v5_execution_primitives import actual_cost, extract_answer, finish_reason
+
+          prompt = 'Reply with exactly PASS and no other text.'
+          output = Path('/tmp/pr227-final-free-first-r6/free-canary/result.json')
+          result = {
+              'status': 'FAIL',
+              'requested_model': 'openrouter/free',
+              'model_requests': 1,
+              'successful_model_calls': 0,
+              'paid_model_calls': 0,
+              'actual_cost_usd': None,
+              'max_completion_tokens': 256,
+              'provider_data_collection': 'allow',
+              'provider_zdr': False,
+              'raw_prompt_persisted': False,
+              'raw_answer_persisted': False,
+              'prompt_sha256': hashlib.sha256(prompt.encode('utf-8')).hexdigest(),
+          }
+          payload = {
+              'model': 'openrouter/free',
+              'messages': [{'role': 'user', 'content': prompt}],
+              'stream': False,
+              'max_tokens': 256,
+              'provider': {
+                  'data_collection': 'allow',
+                  'zdr': False,
+                  'allow_fallbacks': True,
+              },
+          }
+          try:
+              response = request_json(
+                  CHAT_URL,
+                  os.environ['OPENROUTER_API_KEY'],
+                  120,
+                  0,
+                  payload,
+              )
+              result['successful_model_calls'] = 1
+              answer = extract_answer(response)
+              cost = actual_cost(response)
+              result.update({
+                  'selected_response_model': str(response.get('model') or ''),
+                  'provider': str(response.get('provider') or ''),
+                  'finish_reason': finish_reason(response),
+                  'answer_characters': len(answer),
+                  'answer_sha256': hashlib.sha256(answer.encode('utf-8')).hexdigest(),
+                  'actual_cost_usd': cost,
+              })
+              if answer.strip().upper() != 'PASS':
+                  raise RuntimeError('free Canary did not return PASS')
+              if cost > 1e-12:
+                  raise RuntimeError(f'free Canary returned positive cost: {cost}')
+              result['status'] = 'PASS'
+          except Exception as exc:
+              result['error_type'] = type(exc).__name__
+              result['error_message'] = str(exc)[:1200]
+          finally:
+              output.write_text(
+                  json.dumps(result, ensure_ascii=False, indent=2) + '\n',
+                  encoding='utf-8',
+              )
+              print(json.dumps(result, ensure_ascii=False))
+          if result['status'] != 'PASS':
+              raise SystemExit(1)
+          PY
+
+      - name: Build and validate free-first authorization receipt
+        id: authorize
+        if: always()
+        working-directory: runtime-source
+        env:
+          FREE_CANARY_OUTCOME: ${{ steps.free_canary.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/pr227-final-free-first-r6/final
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path('/tmp/pr227-final-free-first-r6')
+          simulation = json.loads(
+              (root / 'simulation' / 'result.json').read_text(encoding='utf-8')
+          )
+          canary = json.loads(
+              (root / 'free-canary' / 'result.json').read_text(encoding='utf-8')
+          )
+          receipt = {
+              'schema_version': 'v5-free-first-preflight-1',
+              'target_sha': '607bbb2eb224de7c32fe5029d8e6d48265d7a340',
+              'simulation': simulation,
+              'free_canary': canary,
+              'shadow_governance': None,
+              'paid_acceptance_triggered': False,
+              'production_ref_moved': False,
+          }
+          if os.environ.get('FREE_CANARY_OUTCOME') != 'success':
+              receipt['free_canary']['status'] = 'FAIL'
+          (root / 'final' / 'free-first-receipt.json').write_text(
+              json.dumps(receipt, ensure_ascii=False, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          PY
+          python open-model-market/v5_free_first_preflight.py \
+            --receipt /tmp/pr227-final-free-first-r6/final/free-first-receipt.json \
+            --expected-sha "$TARGET_SHA" \
+            --output /tmp/pr227-final-free-first-r6/final/free-first-verdict.json
+
+      - name: Upload final free-first evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr227-final-free-first-r6-${{ github.run_id }}
+          path: /tmp/pr227-final-free-first-r6/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Persist final free-first receipt
+        if: always()
+        working-directory: request-source
+        run: |
+          set -euo pipefail
+          mkdir -p acceptance-evidence
+          cp /tmp/pr227-final-free-first-r6/final/free-first-receipt.json \
+            acceptance-evidence/pr227-final-free-first-r6-receipt.json
+          cp /tmp/pr227-final-free-first-r6/final/free-first-verdict.json \
+            acceptance-evidence/pr227-final-free-first-r6-verdict.json
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add acceptance-evidence/
+          git commit -m 'test: persist PR227 final free-first evidence'
+          git push origin HEAD:acceptance/pr227-final-free-first-20260803-r6
+
+      - name: Enforce final free-first gate
+        if: always()
+        run: |
+          set -euo pipefail
+          jq -e '
+            .status == "PASS" and
+            .paid_acceptance_allowed == true and
+            .formal_model_identity_qualified == false and
+            .merge_allowed == false and
+            .production_promotion_allowed == false
+          ' /tmp/pr227-final-free-first-r6/final/free-first-verdict.json >/dev/null
+          jq -e '
+            .free_canary.status == "PASS" and
+            .free_canary.paid_model_calls == 0 and
+            .free_canary.actual_cost_usd == 0 and
+            .paid_acceptance_triggered == false and
+            .production_ref_moved == false
+          ' /tmp/pr227-final-free-first-r6/final/free-first-receipt.json >/dev/null
