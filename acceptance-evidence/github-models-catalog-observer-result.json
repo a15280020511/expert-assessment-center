@@ -1,0 +1,30 @@
+{
+  "schema_version": "github-models-catalog-observer-result-1",
+  "status": "FAIL",
+  "request_id": "pr232-github-models-catalog-r1-observer",
+  "target_run_head_sha": "352fae484d54d3e5237d8f54ed06687913c9371c",
+  "run": {
+    "id": 30793216492,
+    "name": "GitHub Models Catalog Diagnostic",
+    "status": "completed",
+    "conclusion": "failure",
+    "run_attempt": 1,
+    "html_url": "https://github.com/a15280020511/expert-assessment-center/actions/runs/30793216492"
+  },
+  "jobs": [
+    {
+      "id": 91620989284,
+      "name": "diagnose",
+      "status": "completed",
+      "conclusion": "failure",
+      "failed_steps": [
+        {
+          "number": 4,
+          "name": "Query GitHub Models catalog without inference"
+        }
+      ]
+    }
+  ],
+  "inference_calls_triggered_by_observer": 0,
+  "production_ref_moved": false
+}
