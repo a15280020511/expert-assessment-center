@@ -1,0 +1,288 @@
+name: PR227 Specific Free Model Preflight R2
+
+on:
+  push:
+    branches:
+      - acceptance/pr227-free-preflight-20260803-r2
+    paths:
+      - .github/pr227-free-preflight-r2-request.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr227-specific-free-model-preflight-r2
+  cancel-in-progress: false
+
+jobs:
+  free-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
+      OPENROUTER_APP_NAME: expert-center-pr227-specific-free-preflight
+      TARGET_SHA: 0383d2ef80f1890306bc0bc5f7b37836cb2579ca
+      REQUEST_FILE: .github/pr227-free-preflight-r2-request.json
+    steps:
+      - name: Checkout immutable free-only request
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: acceptance/pr227-free-preflight-20260803-r2
+          fetch-depth: 0
+          persist-credentials: true
+          path: request-source
+
+      - name: Validate exact free-only request
+        working-directory: request-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '
+            type == "object" and
+            (keys | sort) == [
+              "authorization",
+              "max_completion_tokens",
+              "maximum_model_calls",
+              "maximum_paid_model_calls",
+              "model",
+              "purpose",
+              "schema_version",
+              "target_sha"
+            ] and
+            .schema_version == "pr227-specific-free-model-preflight-2" and
+            .authorization == "RUN-FREE-ONLY-ONCE" and
+            .purpose == "specific-free-model-after-zero-call-simulation" and
+            .target_sha == env.TARGET_SHA and
+            .model == "openai/gpt-oss-120b:free" and
+            .maximum_model_calls == 1 and
+            .maximum_paid_model_calls == 0 and
+            .max_completion_tokens == 256
+          ' "$REQUEST_FILE" >/dev/null
+          test "$(git diff --name-only HEAD^ HEAD)" = "$REQUEST_FILE"
+          git merge-base --is-ancestor "$TARGET_SHA" HEAD^
+
+      - name: Checkout prior zero-call simulation receipt
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: acceptance/pr227-free-preflight-20260803-r1
+          persist-credentials: false
+          path: prior-preflight
+
+      - name: Require prior simulation PASS and zero paid calls
+        run: |
+          jq -e '
+            .simulation.status == "PASS" and
+            .simulation.model_calls == 0 and
+            .simulation.paid_model_calls == 0 and
+            .maximum_paid_model_calls == 0 and
+            .paid_acceptance_triggered == false
+          ' prior-preflight/acceptance-evidence/pr227-free-preflight-result.json >/dev/null
+
+      - name: Checkout exact PR source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: 0383d2ef80f1890306bc0bc5f7b37836cb2579ca
+          persist-credentials: false
+          path: runtime-source
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: runtime-source/requirements-runtime.txt
+
+      - name: Install runtime dependencies
+        working-directory: runtime-source
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
+          python -m pip check
+
+      - name: Call one specific OpenRouter free model
+        id: free_canary
+        continue-on-error: true
+        working-directory: runtime-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${OPENROUTER_API_KEY:-}"
+          mkdir -p /tmp/pr227-free-preflight-r2
+          PYTHONPATH=open-model-market python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          from openrouter_api import CHAT_URL, request_json
+          from v5_execution_primitives import actual_cost, extract_answer, finish_reason
+
+          output = Path('/tmp/pr227-free-preflight-r2/free-canary.json')
+          model = 'openai/gpt-oss-120b:free'
+          system = 'Return only JSON matching the supplied schema. Do not call tools.'
+          user = 'Return status PASS and phase specific-free-canary.'
+          payload = {
+              'model': model,
+              'messages': [
+                  {'role': 'system', 'content': system},
+                  {'role': 'user', 'content': user},
+              ],
+              'stream': False,
+              'max_tokens': 256,
+              'reasoning': {'effort': 'low', 'exclude': True},
+              'response_format': {
+                  'type': 'json_schema',
+                  'json_schema': {
+                      'name': 'pr227_specific_free_canary',
+                      'strict': True,
+                      'schema': {
+                          'type': 'object',
+                          'additionalProperties': False,
+                          'properties': {
+                              'status': {'type': 'string', 'enum': ['PASS']},
+                              'phase': {
+                                  'type': 'string',
+                                  'enum': ['specific-free-canary'],
+                              },
+                          },
+                          'required': ['status', 'phase'],
+                      },
+                  },
+              },
+          }
+          result = {
+              'schema_version': 'pr227-specific-free-canary-2',
+              'status': 'FAIL',
+              'requested_model': model,
+              'model_calls': 1,
+              'paid_model_calls': 0,
+              'max_completion_tokens': 256,
+              'actual_cost_usd': None,
+              'prompt_sha256': hashlib.sha256(
+                  (system + '\n' + user).encode('utf-8')
+              ).hexdigest(),
+              'raw_prompt_persisted': False,
+              'raw_answer_persisted': False,
+          }
+          try:
+              response = request_json(
+                  CHAT_URL,
+                  os.environ['OPENROUTER_API_KEY'],
+                  120,
+                  0,
+                  payload,
+              )
+              answer = extract_answer(response)
+              first = {}
+              choices = response.get('choices')
+              if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                  first = choices[0]
+              message = first.get('message') if isinstance(first.get('message'), dict) else {}
+              reasoning = str(message.get('reasoning') or '')
+              cost = actual_cost(response)
+              result.update({
+                  'selected_model': str(response.get('model') or ''),
+                  'provider': str(response.get('provider') or ''),
+                  'actual_cost_usd': cost,
+                  'finish_reason': finish_reason(response),
+                  'answer_characters': len(answer),
+                  'reasoning_characters': len(reasoning),
+                  'answer_sha256': hashlib.sha256(answer.encode('utf-8')).hexdigest(),
+              })
+              candidate = answer.strip()
+              if candidate.startswith('```') and candidate.endswith('```'):
+                  lines = candidate.splitlines()
+                  candidate = '\n'.join(lines[1:-1]).strip()
+              parsed = json.loads(candidate)
+              if parsed != {
+                  'status': 'PASS',
+                  'phase': 'specific-free-canary',
+              }:
+                  raise RuntimeError(f'unexpected free-model JSON: {parsed!r}')
+              if cost > 1e-12:
+                  raise RuntimeError(f'free model returned positive cost: {cost}')
+              if not str(response.get('model') or '').strip():
+                  raise RuntimeError('free model response omitted selected model')
+              result['status'] = 'PASS'
+          except Exception as exc:
+              result['error_type'] = type(exc).__name__
+              result['error_message'] = str(exc)[:1000]
+          finally:
+              output.write_text(
+                  json.dumps(result, ensure_ascii=False, indent=2) + '\n',
+                  encoding='utf-8',
+              )
+              print(json.dumps(result, ensure_ascii=False))
+          if result['status'] != 'PASS':
+              raise SystemExit(1)
+          PY
+
+      - name: Build final zero-cost receipt
+        if: always()
+        env:
+          FREE_CANARY_OUTCOME: ${{ steps.free_canary.outcome }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path('/tmp/pr227-free-preflight-r2/free-canary.json')
+          try:
+              canary = json.loads(path.read_text(encoding='utf-8'))
+          except (FileNotFoundError, json.JSONDecodeError):
+              canary = {}
+          passed = (
+              os.environ.get('FREE_CANARY_OUTCOME') == 'success'
+              and canary.get('status') == 'PASS'
+              and int(canary.get('paid_model_calls') or 0) == 0
+              and float(canary.get('actual_cost_usd') or 0.0) == 0.0
+          )
+          result = {
+              'schema_version': 'pr227-free-preflight-r2-result-1',
+              'status': 'PASS' if passed else 'FAIL',
+              'run_id': os.environ.get('RUN_ID'),
+              'target_sha': '0383d2ef80f1890306bc0bc5f7b37836cb2579ca',
+              'prior_zero_call_simulation': 'PASS',
+              'free_canary': canary,
+              'maximum_model_calls': 1,
+              'maximum_paid_model_calls': 0,
+              'paid_acceptance_triggered': False,
+              'production_ref_moved': False,
+          }
+          Path('/tmp/pr227-free-preflight-r2/final-result.json').write_text(
+              json.dumps(result, ensure_ascii=False, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          print(json.dumps(result, ensure_ascii=False))
+          PY
+
+      - name: Upload zero-cost evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr227-free-preflight-r2-${{ github.run_id }}
+          path: /tmp/pr227-free-preflight-r2/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Persist zero-cost result
+        if: always()
+        working-directory: request-source
+        run: |
+          set -euo pipefail
+          mkdir -p acceptance-evidence
+          cp /tmp/pr227-free-preflight-r2/final-result.json \
+            acceptance-evidence/pr227-free-preflight-r2-result.json
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add acceptance-evidence/pr227-free-preflight-r2-result.json
+          git commit -m 'test: persist PR227 specific free-model preflight result'
+          git push origin HEAD:acceptance/pr227-free-preflight-20260803-r2
+
+      - name: Enforce free-first gate
+        if: always()
+        run: |
+          jq -e '.status == "PASS" and .maximum_paid_model_calls == 0 and .paid_acceptance_triggered == false' \
+            /tmp/pr227-free-preflight-r2/final-result.json >/dev/null
