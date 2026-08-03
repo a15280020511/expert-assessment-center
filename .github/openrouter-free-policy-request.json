@@ -1,0 +1,6 @@
+{
+  "schema_version": "openrouter-free-policy-request-1",
+  "authorization": "CATALOG-ONLY-ZERO-MODEL-CALLS",
+  "request_id": "pr232-openrouter-policy-r1",
+  "target_sha": "5e1f95240a709fa11a70058e8c2a9cd3ae71b1d0"
+}
