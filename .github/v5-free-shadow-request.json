@@ -1,0 +1,9 @@
+{
+  "schema_version": "v5-free-shadow-request-2",
+  "authorization": "FREE-SHADOW-ONLY-NO-PAID-FALLBACK",
+  "request_id": "pr232-free-shadow-r4",
+  "target_sha": "d61f487d4a4ca7bc800523662ed83f3eb92c27b6",
+  "shadow_mode": "single-endpoint-zdr-compatibility",
+  "maximum_model_calls": 4,
+  "maximum_paid_model_calls": 0
+}
