@@ -11,7 +11,7 @@ import json
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 from openrouter_api import CHAT_URL, request_json
 from v5_execution_primitives import actual_cost
