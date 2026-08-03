@@ -87,6 +87,50 @@ def _validate_budget(args: argparse.Namespace) -> tuple[int, int, int]:
     return total, recovery, expert_total
 
 
+def _canonical_provider_lock(request: Mapping[str, Any]) -> bool:
+    provider = request.get("provider")
+    if not isinstance(provider, Mapping):
+        return False
+    only = provider.get("only")
+    order = provider.get("order")
+    if not isinstance(only, list) or len(only) != 1:
+        return False
+    if not isinstance(order, list):
+        return False
+    normalized_only = [str(value).strip() for value in only]
+    normalized_order = [str(value).strip() for value in order]
+    return (
+        bool(normalized_only[0])
+        and normalized_order == normalized_only
+        and provider.get("allow_fallbacks") is False
+    )
+
+
+_FORBIDDEN_REQUEST_FIELDS = frozenset(
+    {
+        "tools",
+        "tool_choice",
+        "plugins",
+        "web_search",
+        "web_search_options",
+        "file_search",
+        "browser",
+        "code_interpreter",
+        "models",
+    }
+)
+
+
+def _forbidden_request_fields(row: Mapping[str, Any]) -> set[str]:
+    direct = set(_FORBIDDEN_REQUEST_FIELDS.intersection(row))
+    recorded = row.get("request_fields")
+    if isinstance(recorded, list):
+        direct.update(
+            _FORBIDDEN_REQUEST_FIELDS.intersection(str(value) for value in recorded)
+        )
+    return direct
+
+
 def _merge_request_audit(
     output: Path,
     governance_ledger: Mapping[str, Any],
@@ -129,31 +173,11 @@ def _merge_request_audit(
         for row in governance_calls
     ]
     requests = [*governance_requests, *expert_requests]
-    forbidden = {
-        "tools",
-        "tool_choice",
-        "plugins",
-        "web_search",
-        "web_search_options",
-        "file_search",
-        "browser",
-        "code_interpreter",
-        "models",
-    }
-
-    def forbidden_fields(row: Mapping[str, Any]) -> set[str]:
-        direct = forbidden.intersection(row)
-        recorded = row.get("request_fields")
-        if isinstance(recorded, list):
-            direct.update(
-                forbidden.intersection(str(value) for value in recorded)
-            )
-        return direct
-
     status = (
         "PASS"
         if len(requests) <= approved_total_calls
-        and all(not forbidden_fields(row) for row in requests)
+        and all(not _forbidden_request_fields(row) for row in requests)
+        and all(_canonical_provider_lock(row) for row in requests)
         else "FAIL"
     )
     write_json(
@@ -166,6 +190,11 @@ def _merge_request_audit(
             "governance_request_count": len(governance_requests),
             "expert_request_count": len(expert_requests),
             "requests": requests,
+            "provider_lock_contract": "provider.only/order-exact-single-endpoint",
+            "provider_locks_valid": all(
+                _canonical_provider_lock(row) for row in requests
+            ),
+            "legacy_provider_order_required": False,
             "external_tools_allowed": False,
             "provider_fallback_allowed": False,
             "claude_is_advisory_only": True,

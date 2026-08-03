@@ -104,6 +104,7 @@ def work_output_contract(
     }
     operations = ("synthesis",) if final_node else ()
     result = delivery_contract.apply_explicit_contract(task, operations, base)
+    result["final_delivery_node"] = bool(final_node)
     if not final_node:
         result["required_fields"] = fields
     return dict(result)

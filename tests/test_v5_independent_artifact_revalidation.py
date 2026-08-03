@@ -82,6 +82,7 @@ class IndependentArtifactRevalidationTests(unittest.TestCase):
                     "output_contract": {
                         "required_fields": ["facts", "conclusion"],
                         "machine_readable_required": False,
+                        "final_delivery_node": True,
                     },
                     "parameter_profile": {},
                 }
@@ -131,6 +132,7 @@ class IndependentArtifactRevalidationTests(unittest.TestCase):
             "actual_cost_usd": 0.016,
             "expert_actual_cost_usd": 0.01,
             "execution_budget": {"calls_reserved": 1},
+            "cross_task_history_used": False,
         }
         self._write(root, "ticket.json", {"task": task})
         self._write(root, "expert-team-result.json", summary)
@@ -246,6 +248,71 @@ class IndependentArtifactRevalidationTests(unittest.TestCase):
                 )
             )
 
+    def test_provider_order_is_recomputed_from_canonical_request(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sha, run_id = self._fixture(root)
+            audit = json.loads(
+                (root / "v5-request-audit.json").read_text(encoding="utf-8")
+            )
+            audit["requests"][0]["provider"].pop("order")
+            self._write(root, "v5-request-audit.json", audit)
+            self._manifest(root, sha=sha, run_id=run_id)
+            result = recompute(
+                root,
+                expected_sha=sha,
+                expected_run_id=run_id,
+                maximum_calls=4,
+                maximum_cost_usd=0.03,
+            )
+            self.assertEqual(result["status"], "FAIL")
+            self.assertTrue(
+                any("provider.order" in value for value in result["failures"])
+            )
+
+    def test_final_delivery_flag_is_recomputed_from_graph(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sha, run_id = self._fixture(root)
+            graph = json.loads(
+                (root / "v5-execution-graph.json").read_text(encoding="utf-8")
+            )
+            graph["nodes"][0]["output_contract"].pop("final_delivery_node")
+            self._write(root, "v5-execution-graph.json", graph)
+            self._manifest(root, sha=sha, run_id=run_id)
+            result = recompute(
+                root,
+                expected_sha=sha,
+                expected_run_id=run_id,
+                maximum_calls=4,
+                maximum_cost_usd=0.03,
+            )
+            self.assertEqual(result["status"], "FAIL")
+            self.assertTrue(
+                any("final_delivery_node" in value for value in result["failures"])
+            )
+
+    def test_result_history_isolation_is_recomputed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sha, run_id = self._fixture(root)
+            result_path = root / "expert-team-result.json"
+            value = json.loads(result_path.read_text(encoding="utf-8"))
+            value.pop("cross_task_history_used")
+            self._write(root, "expert-team-result.json", value)
+            self._manifest(root, sha=sha, run_id=run_id)
+            result = recompute(
+                root,
+                expected_sha=sha,
+                expected_run_id=run_id,
+                maximum_calls=4,
+                maximum_cost_usd=0.03,
+            )
+            self.assertEqual(result["status"], "FAIL")
+            self.assertTrue(
+                any("cross_task_history_used" in value for value in result["failures"])
+            )
+
     def test_invalid_governance_sequence_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -311,6 +378,7 @@ class IndependentArtifactRevalidationTests(unittest.TestCase):
                     "output_contract": {
                         "required_fields": ["facts", "conclusion"],
                         "machine_readable_required": False,
+                        "final_delivery_node": True,
                     },
                     "parameter_profile": {},
                 }

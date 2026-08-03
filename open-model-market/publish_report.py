@@ -110,6 +110,9 @@ def write_comments(
         "max_comment_chars": max_chars,
         "files": files,
         "publication_gate": "strict-full-success-only",
+        "report_comment_preparation_status": "PASS",
+        "report_comment_preparation_mode": "deterministic-files",
+        "issue_context_required": False,
     }
     (output_dir / "report-comments-manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
@@ -231,6 +234,9 @@ def write_skip_manifest(
         "max_comment_chars": max_chars,
         "files": [],
         "publication_gate": "strict-full-success-only",
+        "report_comment_preparation_status": "NOT_APPLICABLE",
+        "report_comment_preparation_mode": "deterministic-files",
+        "issue_context_required": False,
         "publication_blockers": blockers,
     }
     (output_dir / "report-comments-manifest.json").write_text(

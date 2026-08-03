@@ -60,6 +60,7 @@ class V5NativeAuditContractTests(unittest.TestCase):
                 "executor": "v5-native-execution-engine",
                 "fallback_used": False,
                 "legacy_runtime_present": False,
+                "cross_task_history_used": False,
             },
         )
         self._write(
@@ -86,9 +87,18 @@ class V5NativeAuditContractTests(unittest.TestCase):
             "v5-execution-graph.json",
             {
                 "nodes": [
-                    {"node_id": "node-a"},
-                    {"node_id": "node-b"},
-                    {"node_id": "node-final"},
+                    {
+                        "node_id": "node-a",
+                        "output_contract": {"final_delivery_node": False},
+                    },
+                    {
+                        "node_id": "node-b",
+                        "output_contract": {"final_delivery_node": False},
+                    },
+                    {
+                        "node_id": "node-final",
+                        "output_contract": {"final_delivery_node": True},
+                    },
                 ],
                 "final_nodes": ["node-final"],
             },
@@ -215,7 +225,17 @@ class V5NativeAuditContractTests(unittest.TestCase):
                 "request_count": 7,
                 "governance_request_count": 3,
                 "expert_request_count": 4,
-                "requests": [{} for _ in range(7)],
+                "requests": [
+                    {
+                        "model": f"vendor/model-{index}",
+                        "provider": {
+                            "only": [f"provider-{index}"],
+                            "order": [f"provider-{index}"],
+                            "allow_fallbacks": False,
+                        },
+                    }
+                    for index in range(7)
+                ],
                 "external_tools_allowed": False,
                 "provider_fallback_allowed": False,
             },
@@ -253,11 +273,14 @@ class V5NativeAuditContractTests(unittest.TestCase):
             root,
             "report-comments/report-comments-manifest.json",
             {
-                "version": 2,
+                "version": 3,
                 "report_sha256": hashlib.sha256(answer.encode("utf-8")).hexdigest(),
                 "run_url": run_url,
                 "run_id": "30619634773",
                 "files": ["report-comment-001.md"],
+                "report_comment_preparation_status": "PASS",
+                "report_comment_preparation_mode": "deterministic-files",
+                "issue_context_required": False,
             },
         )
 
@@ -304,6 +327,11 @@ class V5NativeAuditContractTests(unittest.TestCase):
                 0.09615135,
                 result["checks"]["actual_cost_usd"],
             )
+            self.assertFalse(result["checks"]["legacy_provider_order_required"])
+            self.assertEqual(
+                "PENDING_POST_UPLOAD",
+                result["stage_status"]["independent_artifact_revalidation"],
+            )
 
     def test_missing_report_run_identity_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -330,6 +358,79 @@ class V5NativeAuditContractTests(unittest.TestCase):
             self.assertIn(
                 "published report run identity is missing or invalid",
                 result["failures"],
+            )
+
+    def test_missing_result_history_isolation_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._fixture(root)
+            path = root / "expert-team-result.json"
+            value = json.loads(path.read_text(encoding="utf-8"))
+            value.pop("cross_task_history_used")
+            path.write_text(json.dumps(value), encoding="utf-8")
+            result = auditor.audit(
+                root,
+                execute_outcome="success",
+                publish_outcome="success",
+            )
+            self.assertEqual("FAIL", result["status"])
+            self.assertIn(
+                "expert-team-result does not prove cross_task_history_used=false",
+                result["failures"],
+            )
+
+    def test_missing_provider_order_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._fixture(root)
+            path = root / "request-audit.json"
+            value = json.loads(path.read_text(encoding="utf-8"))
+            value["requests"][0]["provider"].pop("order")
+            path.write_text(json.dumps(value), encoding="utf-8")
+            result = auditor.audit(
+                root,
+                execute_outcome="success",
+                publish_outcome="success",
+            )
+            self.assertEqual("FAIL", result["status"])
+            self.assertTrue(
+                any("provider.only/order" in row for row in result["failures"])
+            )
+
+    def test_missing_final_delivery_flag_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._fixture(root)
+            path = root / "v5-execution-graph.json"
+            value = json.loads(path.read_text(encoding="utf-8"))
+            value["nodes"][0]["output_contract"].pop("final_delivery_node")
+            path.write_text(json.dumps(value), encoding="utf-8")
+            result = auditor.audit(
+                root,
+                execute_outcome="success",
+                publish_outcome="success",
+            )
+            self.assertEqual("FAIL", result["status"])
+            self.assertTrue(
+                any("final_delivery_node" in row for row in result["failures"])
+            )
+
+    def test_missing_report_preparation_receipt_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._fixture(root)
+            path = root / "report-comments/report-comments-manifest.json"
+            value = json.loads(path.read_text(encoding="utf-8"))
+            value.pop("report_comment_preparation_status")
+            path.write_text(json.dumps(value), encoding="utf-8")
+            result = auditor.audit(
+                root,
+                execute_outcome="success",
+                publish_outcome="success",
+            )
+            self.assertEqual("FAIL", result["status"])
+            self.assertTrue(
+                any("preparation receipt" in row for row in result["failures"])
             )
 
     def test_incomplete_node_contract_cannot_pass_as_full_success(self) -> None:

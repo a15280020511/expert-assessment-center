@@ -23,10 +23,24 @@ from v5_run_evidence import (  # noqa: E402
 
 
 class V5EvidenceBundleTests(unittest.TestCase):
+    @staticmethod
+    def independent_revalidation() -> dict[str, object]:
+        return {
+            "schema_version": "v5-independent-artifact-revalidation-3",
+            "status": "PASS",
+            "recomputed_from_primitive_evidence": True,
+            "paid_acceptance_verdict_used_as_source": False,
+            "actual_cost_usd": 0.002,
+        }
+
     def seed(self, root: Path) -> None:
         governance_request = {
             "model": "~openai/gpt-latest",
-            "provider": {"only": ["openai"], "allow_fallbacks": False},
+            "provider": {
+                "only": ["openai"],
+                "order": ["openai"],
+                "allow_fallbacks": False,
+            },
             "request_fields": ["model", "messages", "provider"],
             "messages": [{"role": "system", "characters": 10, "sha256": "a" * 64}],
             "raw_message_content_persisted": False,
@@ -52,7 +66,12 @@ class V5EvidenceBundleTests(unittest.TestCase):
             },
             "catalog-snapshot.json": {"catalog_snapshot_id": "catalog-test"},
             "v5-execution-graph.json": {
-                "nodes": [node],
+                "nodes": [
+                    {
+                        **node,
+                        "output_contract": {"final_delivery_node": True},
+                    }
+                ],
                 "required_work": ["work-a"],
                 "final_nodes": ["node-a"],
             },
@@ -142,6 +161,7 @@ class V5EvidenceBundleTests(unittest.TestCase):
             self.assertTrue(bundle["business_evidence_frozen"])
             self.assertEqual(ledger["summary"]["call_count"], 4)
             self.assertFalse(selection["optimizer_used"])
+            self.assertFalse(result["cross_task_history_used"])
             self.assertTrue((root / "artifact-manifest.json").is_file())
 
     def test_builder_rejects_call_count_split_brain(self):
@@ -166,6 +186,11 @@ class V5EvidenceBundleTests(unittest.TestCase):
                 EvidenceInputs.from_directory(root),
                 ApprovedRun(total_calls=5, recovery_calls=1, cost_anomaly_usd=0.20),
             ).write(root, require_report=True)
+            independent_path = root / "independent-revalidation.json"
+            independent_path.write_text(
+                json.dumps(self.independent_revalidation()),
+                encoding="utf-8",
+            )
             status = build_final_status_record(
                 FinalStatusInputs.from_directory(root),
                 run_url="https://example.invalid/run/1",
@@ -175,6 +200,7 @@ class V5EvidenceBundleTests(unittest.TestCase):
                 artifact_id="123",
                 artifact_url="https://example.invalid/artifact/123",
                 artifact_digest="sha256:test",
+                independent_revalidation=self.independent_revalidation(),
             )
             status_md = root / "final-status.md"
             status_md.write_text(render_final_status_markdown(status), encoding="utf-8")
@@ -188,12 +214,41 @@ class V5EvidenceBundleTests(unittest.TestCase):
                 run_id="1",
                 commit_sha="a" * 40,
                 final_status_file=status_md,
+                independent_revalidation_file=independent_path,
             )
             bundle = json.loads((root / "evidence-bundle.json").read_text(encoding="utf-8"))
             self.assertEqual(status["status"], "PASS")
             self.assertEqual(attestation["status"], "PASS")
             self.assertEqual(attestation["evidence_input_sha256"], bundle["input_sha256"])
             self.assertEqual(attestation["primary_artifact"]["artifact_id"], 123)
+
+    def test_positive_final_status_requires_independent_revalidation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.seed(root)
+            EvidenceBundleBuilder(
+                EvidenceInputs.from_directory(root),
+                ApprovedRun(
+                    total_calls=5,
+                    recovery_calls=1,
+                    cost_anomaly_usd=0.20,
+                ),
+            ).write(root, require_report=True)
+            status = build_final_status_record(
+                FinalStatusInputs.from_directory(root),
+                run_url="https://example.invalid/run/1",
+                ticket_upload_outcome="success",
+                audit_outcome="success",
+                manifest_outcome="success",
+                artifact_id="123",
+                artifact_url="https://example.invalid/artifact/123",
+                artifact_digest="sha256:test",
+            )
+            self.assertEqual(status["status"], "FAIL")
+            self.assertEqual(
+                status["independent_artifact_revalidation_status"],
+                "MISSING",
+            )
 
     def test_attestation_fails_closed_when_audit_and_diagnosis_disagree(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -211,6 +266,11 @@ class V5EvidenceBundleTests(unittest.TestCase):
                 json.dumps(diagnosis),
                 encoding="utf-8",
             )
+            independent_path = root / "independent-revalidation.json"
+            independent_path.write_text(
+                json.dumps(self.independent_revalidation()),
+                encoding="utf-8",
+            )
             status_md = root / "final-status.md"
             status_md.write_text("## EXECUTION_COMPLETED\n", encoding="utf-8")
             write_manifest(root)
@@ -223,6 +283,7 @@ class V5EvidenceBundleTests(unittest.TestCase):
                 run_id="1",
                 commit_sha="a" * 40,
                 final_status_file=status_md,
+                independent_revalidation_file=independent_path,
             )
             self.assertEqual(attestation["status"], "FAIL")
             self.assertEqual(attestation["audit_status"], "PASS")

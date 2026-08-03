@@ -46,6 +46,61 @@ class FinalStatusInputs:
         )
 
 
+def _final_status_context(
+    inputs: FinalStatusInputs,
+    *,
+    audit_outcome: str,
+    manifest_outcome: str,
+    ticket_upload_outcome: str,
+    independent_revalidation: Mapping[str, Any] | None,
+) -> tuple[
+    Mapping[str, Any],
+    list[Any],
+    list[Any],
+    str,
+    dict[str, Any],
+    str,
+]:
+    audit = inputs.diagnosis
+    failures = list(audit.get("failures") or [])
+    degradations = list(audit.get("degradations") or [])
+    status = str(audit.get("status") or "FAIL")
+    independent = (
+        dict(independent_revalidation)
+        if isinstance(independent_revalidation, Mapping)
+        else {}
+    )
+    independent_status = str(independent.get("status") or "MISSING").upper()
+    if audit_outcome != "success":
+        status = "FAIL"
+        failures.append(f"V5 audit step outcome is {audit_outcome}")
+    if manifest_outcome != "success":
+        status = "FAIL"
+        failures.append(
+            f"primary artifact manifest step outcome is {manifest_outcome}"
+        )
+    if ticket_upload_outcome != "success":
+        status = "FAIL"
+        failures.append(
+            "primary ticket artifact upload outcome is "
+            f"{ticket_upload_outcome}"
+        )
+    if status in {"PASS", "DEGRADED"} and independent_status != "PASS":
+        status = "FAIL"
+        failures.append(
+            "independent artifact revalidation is not PASS: "
+            f"{independent_status}"
+        )
+    return (
+        audit,
+        failures,
+        degradations,
+        status,
+        independent,
+        independent_status,
+    )
+
+
 def build_final_status_record(
     inputs: FinalStatusInputs,
     *,
@@ -56,20 +111,22 @@ def build_final_status_record(
     artifact_id: str,
     artifact_url: str,
     artifact_digest: str,
+    independent_revalidation: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    audit = inputs.diagnosis
-    failures = list(audit.get("failures") or [])
-    degradations = list(audit.get("degradations") or [])
-    status = str(audit.get("status") or "FAIL")
-    if audit_outcome != "success":
-        status = "FAIL"
-        failures.append(f"V5 audit step outcome is {audit_outcome}")
-    if manifest_outcome != "success":
-        status = "FAIL"
-        failures.append(f"primary artifact manifest step outcome is {manifest_outcome}")
-    if ticket_upload_outcome != "success":
-        status = "FAIL"
-        failures.append(f"primary ticket artifact upload outcome is {ticket_upload_outcome}")
+    (
+        audit,
+        failures,
+        degradations,
+        status,
+        independent,
+        independent_status,
+    ) = _final_status_context(
+        inputs,
+        audit_outcome=audit_outcome,
+        manifest_outcome=manifest_outcome,
+        ticket_upload_outcome=ticket_upload_outcome,
+        independent_revalidation=independent_revalidation,
+    )
     summary = inputs.ledger.get("summary")
     summary = dict(summary) if isinstance(summary, Mapping) else {}
     nodes = inputs.graph.get("nodes")
@@ -97,6 +154,11 @@ def build_final_status_record(
         "cost_anomaly_usd": summary.get("cost_anomaly_usd"),
         "substantive_providers": summary.get("substantive_providers", []),
         "substantive_provider_count": summary.get("substantive_provider_count", 0),
+        "independent_artifact_revalidation_status": independent_status,
+        "independent_artifact_revalidation_schema": independent.get("schema_version"),
+        "independent_recomputed_from_primitive_evidence": bool(
+            independent.get("recomputed_from_primitive_evidence")
+        ),
         "legacy_runtime_present": inputs.runtime.get("legacy_runtime_present"),
         "primary_artifact": {
             "artifact_id": artifact_id,
@@ -200,6 +262,62 @@ def render_final_status_markdown(record: Mapping[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _load_independent_attestation(
+    path: Path | None,
+) -> tuple[dict[str, Any], bool]:
+    raw = load_json_or_default(path, {}) if path is not None else {}
+    independent = dict(raw) if isinstance(raw, Mapping) else {}
+    valid = (
+        independent.get("schema_version")
+        == "v5-independent-artifact-revalidation-3"
+        and independent.get("status") == "PASS"
+        and independent.get("recomputed_from_primitive_evidence") is True
+        and independent.get("paid_acceptance_verdict_used_as_source") is False
+    )
+    return independent, valid
+
+
+def _require_attestation_inputs(
+    *,
+    manifest: Path,
+    bundle: Path,
+    final_status_file: Path,
+    report: Path,
+    diagnosis_path: Path,
+    report_required: bool,
+    normalized_audit_status: str,
+    primary_artifact_id: str,
+    primary_artifact_digest: str,
+) -> None:
+    required_paths = (manifest, bundle, final_status_file)
+    if not all(item.is_file() for item in required_paths):
+        raise RuntimeError("manifest, evidence bundle, and final status must exist")
+    if report_required and not report.is_file():
+        raise RuntimeError("successful or degraded execution requires a report")
+    if normalized_audit_status == "FAIL" and not diagnosis_path.is_file():
+        raise RuntimeError("failed execution requires deterministic diagnosis evidence")
+    if not primary_artifact_id or not primary_artifact_digest:
+        raise RuntimeError("primary artifact identity is required")
+
+
+def _attestation_status(
+    *,
+    normalized_audit_status: str,
+    diagnosis_status: str,
+    report_present: bool,
+    evidence_frozen: bool,
+    independent_valid: bool,
+) -> str:
+    valid = (
+        normalized_audit_status in {"PASS", "DEGRADED"}
+        and diagnosis_status == normalized_audit_status
+        and report_present
+        and evidence_frozen
+        and independent_valid
+    )
+    return normalized_audit_status if valid else "FAIL"
+
+
 def build_final_attestation_record(
     *,
     root: Path,
@@ -210,22 +328,27 @@ def build_final_attestation_record(
     run_id: str,
     commit_sha: str,
     final_status_file: Path,
+    independent_revalidation_file: Path | None = None,
 ) -> dict[str, Any]:
     report = root / "expert-team-report.md"
     manifest = root / "artifact-manifest.json"
     bundle = root / "evidence-bundle.json"
     diagnosis_path = root / "execution-diagnosis.json"
     normalized_audit_status = str(audit_status or "FAIL").upper()
+    independent_path = independent_revalidation_file
+    independent, independent_valid = _load_independent_attestation(independent_path)
     report_required = normalized_audit_status in {"PASS", "DEGRADED"}
-    required_paths = (manifest, bundle, final_status_file)
-    if not all(item.is_file() for item in required_paths):
-        raise RuntimeError("manifest, evidence bundle, and final status must exist")
-    if report_required and not report.is_file():
-        raise RuntimeError("successful or degraded execution requires a report")
-    if normalized_audit_status == "FAIL" and not diagnosis_path.is_file():
-        raise RuntimeError("failed execution requires deterministic diagnosis evidence")
-    if not primary_artifact_id or not primary_artifact_digest:
-        raise RuntimeError("primary artifact identity is required")
+    _require_attestation_inputs(
+        manifest=manifest,
+        bundle=bundle,
+        final_status_file=final_status_file,
+        report=report,
+        diagnosis_path=diagnosis_path,
+        report_required=report_required,
+        normalized_audit_status=normalized_audit_status,
+        primary_artifact_id=primary_artifact_id,
+        primary_artifact_digest=primary_artifact_digest,
+    )
     diagnosis = load_json_or_default(diagnosis_path, {})
     evidence = load_json_or_default(bundle, {})
     report_present = report.is_file()
@@ -239,13 +362,12 @@ def build_final_attestation_record(
         if isinstance(evidence, Mapping)
         else False
     )
-    attestation_status = (
-        normalized_audit_status
-        if normalized_audit_status in {"PASS", "DEGRADED"}
-        and diagnosis_status == normalized_audit_status
-        and report_present
-        and evidence_frozen
-        else "FAIL"
+    attestation_status = _attestation_status(
+        normalized_audit_status=normalized_audit_status,
+        diagnosis_status=diagnosis_status,
+        report_present=report_present,
+        evidence_frozen=evidence_frozen,
+        independent_valid=independent_valid,
     )
     return {
         "version": 2,
@@ -262,6 +384,13 @@ def build_final_attestation_record(
         "diagnosis_status": diagnosis_status,
         "evidence_input_sha256": evidence.get("input_sha256") if isinstance(evidence, Mapping) else None,
         "business_evidence_frozen_before_upload": evidence_frozen,
+        "independent_artifact_revalidation": dict(independent),
+        "independent_artifact_revalidation_valid": independent_valid,
+        "independent_artifact_revalidation_sha256": (
+            sha256_file(independent_path)
+            if independent_path is not None and independent_path.is_file()
+            else None
+        ),
         "report_required": report_required,
         "report_present": report_present,
         "report_sha256": sha256_file(report) if report_present else None,
@@ -270,7 +399,11 @@ def build_final_attestation_record(
         "final_status_sha256": sha256_file(final_status_file),
         "external_tools_allowed": False,
         "alternate_runtime_fallback": False,
-        "evidence_chain": "frozen-business-evidence -> primary-artifact -> final-status -> final-attestation-artifact",
+        "evidence_chain": (
+            "frozen-business-evidence -> primary-artifact -> "
+            "independent-artifact-revalidation -> final-status -> "
+            "final-attestation-artifact"
+        ),
         "generator": "v5_evidence_bundle.build_final_attestation_record",
         "github_repository": os.getenv("GITHUB_REPOSITORY", ""),
     }

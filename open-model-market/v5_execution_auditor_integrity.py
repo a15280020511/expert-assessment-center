@@ -322,6 +322,149 @@ def _constitutional_evidence(root: Path) -> dict[str, Any]:
     }
 
 
+def _canonical_provider_lock(request: Mapping[str, Any]) -> bool:
+    provider = request.get("provider")
+    if not isinstance(provider, Mapping):
+        return False
+    only = provider.get("only")
+    order = provider.get("order")
+    if not isinstance(only, list) or len(only) != 1:
+        return False
+    if not isinstance(order, list):
+        return False
+    normalized_only = [str(value).strip() for value in only]
+    normalized_order = [str(value).strip() for value in order]
+    return (
+        bool(normalized_only[0])
+        and normalized_order == normalized_only
+        and provider.get("allow_fallbacks") is False
+    )
+
+
+def _history_isolation_evidence(
+    result: Mapping[str, Any],
+) -> tuple[bool, list[str]]:
+    disabled = result.get("cross_task_history_used") is False
+    failures = [] if disabled else [
+        "expert-team-result does not prove cross_task_history_used=false"
+    ]
+    return disabled, failures
+
+
+def _final_delivery_contract_evidence(
+    graph: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    final_ids = {
+        str(value)
+        for value in graph.get("final_nodes", [])
+        if str(value)
+    }
+    raw_nodes = graph.get("nodes", [])
+    nodes = raw_nodes if isinstance(raw_nodes, list) else []
+    rows: list[dict[str, Any]] = []
+    failures: list[str] = []
+    for node in nodes:
+        if not isinstance(node, Mapping):
+            failures.append("execution graph contains a non-object node")
+            continue
+        node_id = str(node.get("node_id") or "")
+        expected = node_id in final_ids
+        contract = node.get("output_contract")
+        observed = (
+            contract.get("final_delivery_node")
+            if isinstance(contract, Mapping)
+            else None
+        )
+        rows.append(
+            {
+                "node_id": node_id,
+                "expected_final_delivery_node": expected,
+                "observed_final_delivery_node": observed,
+            }
+        )
+        if observed is not expected:
+            failures.append(
+                "graph output_contract final_delivery_node mismatch: "
+                + (node_id or "missing-node-id")
+            )
+    return rows, failures
+
+
+def _provider_lock_evidence(
+    request_audit: Mapping[str, Any],
+) -> tuple[list[bool], list[str]]:
+    raw_requests = request_audit.get("requests", [])
+    requests = raw_requests if isinstance(raw_requests, list) else []
+    rows: list[bool] = []
+    failures: list[str] = []
+    for index, request in enumerate(requests, 1):
+        valid = isinstance(request, Mapping) and _canonical_provider_lock(request)
+        rows.append(valid)
+        if not valid:
+            failures.append(
+                f"request {index} provider.only/order lock is missing or inconsistent"
+            )
+    return rows, failures
+
+
+def _report_preparation_evidence(
+    report_manifest: Mapping[str, Any],
+) -> tuple[str, str, Any, list[str]]:
+    status = str(report_manifest.get("report_comment_preparation_status") or "")
+    mode = str(report_manifest.get("report_comment_preparation_mode") or "")
+    issue_required = report_manifest.get("issue_context_required")
+    valid = (
+        status == "PASS"
+        and mode == "deterministic-files"
+        and issue_required is False
+    )
+    failures = [] if valid else [
+        "deterministic report-comment preparation receipt is missing"
+    ]
+    return status, mode, issue_required, failures
+
+
+def _native_phase_contract_evidence(root: Path) -> dict[str, Any]:
+    result = load_json_or_default(root / "expert-team-result.json", {})
+    result = result if isinstance(result, Mapping) else {}
+    graph = load_json_or_default(root / "v5-execution-graph.json", {})
+    graph = graph if isinstance(graph, Mapping) else {}
+    request_audit = load_json_or_default(root / "request-audit.json", {})
+    request_audit = request_audit if isinstance(request_audit, Mapping) else {}
+    report_manifest = load_json_or_default(
+        root / "report-comments" / "report-comments-manifest.json",
+        {},
+    )
+    report_manifest = report_manifest if isinstance(report_manifest, Mapping) else {}
+
+    history_disabled, history_failures = _history_isolation_evidence(result)
+    node_rows, node_failures = _final_delivery_contract_evidence(graph)
+    request_rows, request_failures = _provider_lock_evidence(request_audit)
+    report_status, report_mode, issue_required, report_failures = (
+        _report_preparation_evidence(report_manifest)
+    )
+    return {
+        "failures": [
+            *history_failures,
+            *node_failures,
+            *request_failures,
+            *report_failures,
+        ],
+        "checks": {
+            "cross_task_history_used": result.get("cross_task_history_used"),
+            "cross_task_history_disabled": history_disabled,
+            "final_delivery_node_contracts": node_rows,
+            "provider_lock_contract": "provider.only/order-exact-single-endpoint",
+            "provider_lock_rows_valid": request_rows,
+            "legacy_provider_order_required": False,
+            "report_comment_preparation_status": report_status,
+            "report_comment_preparation_mode": report_mode,
+            "issue_context_required": issue_required,
+            "independent_artifact_revalidation_status": "PENDING_POST_UPLOAD",
+        },
+    }
+
+
 def _quality_evidence_updates(
     node_evidence: Mapping[str, Any],
     completion_mode: str,
@@ -430,12 +573,14 @@ def audit(
     summary = summary if isinstance(summary, Mapping) else {}
     node_evidence = _node_quality(root)
     constitutional = _constitutional_evidence(root)
+    phase_contract = _native_phase_contract_evidence(root)
     failures = [
         reason
         for reason in list(result.get("failures") or [])
         if not reason.startswith(_OBSOLETE_COMPANY_FAILURE_PREFIXES)
     ]
     failures.extend(constitutional["failures"])
+    failures.extend(phase_contract["failures"])
     degradations = list(result.get("degradations") or [])
     completion_mode = str(summary.get("completion_mode") or "")
     quality_status = str(summary.get("quality_status") or "")
@@ -450,8 +595,12 @@ def audit(
 
     checks = dict(result.get("checks") or {})
     checks.update(constitutional["checks"])
+    checks.update(phase_contract["checks"])
     checks.update(_quality_checks(quality_status, integrity, node_evidence))
     result["checks"] = checks
+    stage_status = dict(result.get("stage_status") or {})
+    stage_status["independent_artifact_revalidation"] = "PENDING_POST_UPLOAD"
+    result["stage_status"] = stage_status
     return _finalize_audit_result(result, failures, degradations)
 
 

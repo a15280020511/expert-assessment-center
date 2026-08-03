@@ -277,11 +277,39 @@ def _prepare_evidence(
     )
 
 
+def _canonical_provider_lock(request: Mapping[str, Any]) -> bool:
+    provider = request.get("provider")
+    if not isinstance(provider, Mapping):
+        return False
+    only = provider.get("only")
+    order = provider.get("order")
+    if not isinstance(only, list) or len(only) != 1:
+        return False
+    if not isinstance(order, list):
+        return False
+    normalized_only = [str(value).strip() for value in only]
+    normalized_order = [str(value).strip() for value in order]
+    return (
+        bool(normalized_only[0])
+        and normalized_order == normalized_only
+        and provider.get("allow_fallbacks") is False
+    )
+
+
 def _request_audit_document(
     inputs: EvidenceInputs,
     approved: ApprovedRun,
     prepared: PreparedEvidence,
 ) -> dict[str, Any]:
+    raw_requests = inputs.request_audit.get("requests", [])
+    requests = raw_requests if isinstance(raw_requests, list) else []
+    provider_locks_valid = (
+        len(requests) == prepared.request_count
+        and all(
+            isinstance(row, Mapping) and _canonical_provider_lock(row)
+            for row in requests
+        )
+    )
     document = {
         **dict(inputs.request_audit),
         "runtime_version": RUNTIME_VERSION,
@@ -289,11 +317,15 @@ def _request_audit_document(
             "PASS"
             if inputs.request_audit.get("status") == "PASS"
             and prepared.request_count == prepared.call_count
+            and provider_locks_valid
             else "FAIL"
         ),
         "approved_total_call_ceiling": approved.total_calls,
         "governance_call_count": prepared.governance_calls,
         "expert_call_count": prepared.expert_calls,
+        "provider_lock_contract": "provider.only/order-exact-single-endpoint",
+        "provider_locks_valid": provider_locks_valid,
+        "legacy_provider_order_required": False,
     }
     if document["status"] != "PASS":
         raise RuntimeError("complete request audit did not pass")
@@ -415,6 +447,7 @@ def _result_document(
         "production_entrypoint": True,
         "fallback_used": False,
         "legacy_runtime_present": False,
+        "cross_task_history_used": False,
         "ticket_task_id": inputs.ticket.get("task_id"),
         "evidence_input_sha256": builder.input_sha256(),
     }

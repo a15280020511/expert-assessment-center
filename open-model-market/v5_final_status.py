@@ -32,11 +32,24 @@ def main() -> int:
     parser.add_argument("--artifact-id", default="")
     parser.add_argument("--artifact-url", default="")
     parser.add_argument("--artifact-digest", default="")
+    parser.add_argument("--independent-revalidation-file", default="")
     parser.add_argument("--json-output", default="")
     args = parser.parse_args()
 
     root = Path(args.output_dir)
     inputs = FinalStatusInputs.from_directory(root)
+    independent: dict[str, Any] = {}
+    if args.independent_revalidation_file:
+        try:
+            raw_independent = json.loads(
+                Path(args.independent_revalidation_file).read_text(
+                    encoding="utf-8"
+                )
+            )
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            raw_independent = {}
+        if isinstance(raw_independent, dict):
+            independent = raw_independent
     record = build_final_status_record(
         inputs,
         run_url=args.run_url,
@@ -46,6 +59,7 @@ def main() -> int:
         artifact_id=args.artifact_id,
         artifact_url=args.artifact_url,
         artifact_digest=args.artifact_digest,
+        independent_revalidation=independent,
     )
     json_path = Path(args.json_output) if args.json_output else root / "final-status.json"
     json_path.write_text(

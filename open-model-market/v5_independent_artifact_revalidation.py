@@ -249,6 +249,30 @@ def _recompiled_task_contract(task: str) -> dict[str, Any]:
     )
 
 
+def _final_delivery_flag_violations(
+    nodes: list[Any],
+    final_ids: set[str],
+) -> list[str]:
+    violations: list[str] = []
+    for node in nodes:
+        if not isinstance(node, Mapping):
+            continue
+        node_id = str(node.get("node_id") or "")
+        expected_final = node_id in final_ids
+        contract = node.get("output_contract")
+        observed_final = (
+            contract.get("final_delivery_node")
+            if isinstance(contract, Mapping)
+            else None
+        )
+        if observed_final is not expected_final:
+            violations.append(
+                "node final_delivery_node flag is missing or inconsistent: "
+                + (node_id or "missing-node-id")
+            )
+    return violations
+
+
 def _final_contract_violations(
     graph: Mapping[str, Any],
     report: str,
@@ -263,7 +287,7 @@ def _final_contract_violations(
     if not isinstance(nodes, list) or not final_ids:
         return ["final graph contract evidence is missing"]
 
-    violations: list[str] = []
+    violations = _final_delivery_flag_violations(nodes, final_ids)
     task_contract = _recompiled_task_contract(task)
     task_kind = explicit_contract_kind(task_contract)
     if task_kind != "generic":
@@ -354,6 +378,10 @@ def _execution_result_failures(
         failures.append("v5-result final answer differs from final report")
     if str(summary.get("final_answer") or "").strip() != report.strip():
         failures.append("execution summary final answer differs from final report")
+    if result.get("cross_task_history_used") is not False:
+        failures.append(
+            "expert-team-result does not prove cross_task_history_used=false"
+        )
     return failures
 
 
@@ -486,6 +514,11 @@ def _request_shape_failures(
     only = provider.get("only")
     if not isinstance(only, list) or len(only) != 1:
         failures.append(f"request {index} provider.only is not singular")
+    order = provider.get("order")
+    if not isinstance(order, list) or order != only:
+        failures.append(
+            f"request {index} provider.order does not match provider.only"
+        )
     if provider.get("allow_fallbacks") is not False:
         failures.append(f"request {index} allows provider fallback")
     return failures
