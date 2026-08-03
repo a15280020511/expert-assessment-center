@@ -566,34 +566,41 @@ def execute_shadow(
             compatibility_endpoint,
             maximum_calls=4,
         )
-    graph, limits, _, ledger = _run_governance_stage(
-        output_dir,
-        run,
-        task,
-        task_digest,
-        envelope,
-        catalog,
-        resolution,
-        boundary,
-        maximum_completion_tokens,
-    )
-    result = _run_expert_stage(
-        output_dir,
-        run,
-        task,
-        graph,
-        limits,
-        resolution,
-        ledger,
-        boundary,
-    )
-    return _normalize_and_receipt(
-        output_dir,
-        result,
-        ledger,
-        boundary,
-        selected_mode,
-    )
+    try:
+        graph, limits, _, ledger = _run_governance_stage(
+            output_dir,
+            run,
+            task,
+            task_digest,
+            envelope,
+            catalog,
+            resolution,
+            boundary,
+            maximum_completion_tokens,
+        )
+        result = _run_expert_stage(
+            output_dir,
+            run,
+            task,
+            graph,
+            limits,
+            resolution,
+            ledger,
+            boundary,
+        )
+        return _normalize_and_receipt(
+            output_dir,
+            result,
+            ledger,
+            boundary,
+            selected_mode,
+        )
+    except Exception:
+        write_json(
+            output_dir / "free-shadow-call-boundary.json",
+            boundary.receipt(),
+        )
+        raise
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -631,6 +638,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "production_ref_moved": False,
         }
         write_json(root / "free-shadow-acceptance-receipt.json", failure)
+        write_manifest(root)
         print(json.dumps(failure, ensure_ascii=False))
         return 1
     print(json.dumps(receipt, ensure_ascii=False))

@@ -234,6 +234,23 @@ def compatibility_governance_resolution(
     }
 
 
+def _topology_instruction(schema: Mapping[str, Any]) -> str:
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping):
+        return ""
+    if not {"selected_nodes", "edges"}.issubset(properties):
+        return ""
+    return (
+        "引用完整性硬约束："
+        "selected_nodes中的node_id必须唯一；"
+        "edges中的from_node_id和to_node_id只能引用selected_nodes中已定义的node_id；"
+        "禁止创建source、sink、start、end、final等虚拟节点；"
+        "若selected_nodes只有一个元素，edges必须为[]；"
+        "若硬上限maximum_recovery_nodes为0，recovery_selection必须为[]；"
+        "每个work_item只能分配给已定义节点，且不得遗漏或重复。\n"
+    )
+
+
 def _schema_instruction(response_format: Mapping[str, Any]) -> str:
     json_schema = response_format.get("json_schema")
     json_schema = json_schema if isinstance(json_schema, Mapping) else {}
@@ -248,7 +265,9 @@ def _schema_instruction(response_format: Mapping[str, Any]) -> str:
     return (
         "\n\nFREE_SHADOW_JSON_COMPATIBILITY:\n"
         "只输出一个有效JSON对象；不要Markdown代码块、解释或额外文字。"
-        "对象必须严格满足以下JSON Schema，禁止额外字段：\n"
+        "对象必须严格满足以下JSON Schema，禁止额外字段。\n"
+        + _topology_instruction(schema)
+        + "JSON Schema：\n"
         + compact
     )
 
@@ -310,6 +329,54 @@ def _strip_json_fence(text: str) -> tuple[str, bool]:
     if lines[-1].strip() != "```":
         return stripped, False
     return "\n".join(lines[1:-1]).strip(), True
+
+
+def _safe_output_summary(text: str) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "output_characters": len(text),
+        "output_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "parsed_json_object": False,
+    }
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        return summary
+    if not isinstance(value, Mapping):
+        return summary
+    summary["parsed_json_object"] = True
+    summary["top_level_keys"] = sorted(str(key) for key in value)
+    work_items = value.get("work_items")
+    selected_nodes = value.get("selected_nodes")
+    edges = value.get("edges")
+    recovery = value.get("recovery_selection")
+    if isinstance(work_items, list):
+        summary["work_item_ids"] = [
+            str(row.get("id") or "")
+            for row in work_items
+            if isinstance(row, Mapping)
+        ]
+    if isinstance(selected_nodes, list):
+        summary["selected_node_ids"] = [
+            str(row.get("node_id") or "")
+            for row in selected_nodes
+            if isinstance(row, Mapping)
+        ]
+    if isinstance(edges, list):
+        summary["edge_pairs"] = [
+            {
+                "from_node_id": str(row.get("from_node_id") or ""),
+                "to_node_id": str(row.get("to_node_id") or ""),
+            }
+            for row in edges
+            if isinstance(row, Mapping)
+        ]
+    if isinstance(recovery, list):
+        summary["recovery_node_ids"] = [
+            str(row.get("node_id") or "")
+            for row in recovery
+            if isinstance(row, Mapping)
+        ]
+    return summary
 
 
 class CompatibilityFreeCallBoundary:
@@ -462,6 +529,7 @@ class CompatibilityFreeCallBoundary:
     ) -> None:
         usage = response.get("usage")
         usage = dict(usage) if isinstance(usage, Mapping) else {}
+        text = _content_text(response)
         self.calls.append(
             {
                 "sequence": len(self.calls) + 1,
@@ -471,6 +539,7 @@ class CompatibilityFreeCallBoundary:
                 "actual_cost_usd": float(actual_cost(response)),
                 "response_id": str(response.get("id") or "") or None,
                 "usage": usage,
+                "output_summary": _safe_output_summary(text),
                 "wire_adaptation": dict(adaptation),
             }
         )

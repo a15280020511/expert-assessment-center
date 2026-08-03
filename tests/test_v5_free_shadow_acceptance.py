@@ -282,6 +282,42 @@ class FreeShadowAcceptanceTests(unittest.TestCase):
             receipt["calls"][0]["wire_adaptation"]["json_fence_removed"]
         )
 
+    def test_topology_instruction_forbids_virtual_single_node_edges(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "selected_nodes": {"type": "array"},
+                "edges": {"type": "array"},
+            },
+        }
+        text = shadow_compat._topology_instruction(schema)
+        self.assertIn("edges必须为[]", text)
+        self.assertIn("禁止创建source", text)
+        self.assertIn("只能引用selected_nodes", text)
+
+    def test_safe_output_summary_records_topology_without_raw_text(self) -> None:
+        value = {
+            "work_items": [{"id": "work_1"}],
+            "selected_nodes": [{"node_id": "node_1"}],
+            "edges": [
+                {
+                    "from_node_id": "node_1",
+                    "to_node_id": "ghost_node",
+                }
+            ],
+            "recovery_selection": [],
+        }
+        text = json.dumps(value, ensure_ascii=False)
+        summary = shadow_compat._safe_output_summary(text)
+        self.assertTrue(summary["parsed_json_object"])
+        self.assertEqual(summary["selected_node_ids"], ["node_1"])
+        self.assertEqual(
+            summary["edge_pairs"][0]["to_node_id"],
+            "ghost_node",
+        )
+        self.assertNotIn("raw_output", summary)
+        self.assertEqual(summary["output_characters"], len(text))
+
     def test_shadow_identity_can_never_authorize_production(self) -> None:
         proposal = self.endpoint("google/a:free", "Google")
         red_team = self.endpoint("cohere/b:free", "Cohere", order=2)
