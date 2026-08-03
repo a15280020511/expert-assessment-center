@@ -17,7 +17,7 @@ concurrency:
 jobs:
   generate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 11
     env:
       GH_TOKEN: ${{ github.token }}
       TEMPLATE_REF: acceptance/pr227-final-paid-20260803-r6
