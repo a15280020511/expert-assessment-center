@@ -267,28 +267,33 @@ def harden_runtime(runtime: ProductionRuntime) -> ProductionRuntime:
     return runtime
 
 
+def _soft_recovery_policy() -> RecoveryPolicy:
+    return RecoveryPolicy(
+        replace_categories=(
+            FailureCategory.UNSUPPORTED_PARAMETER,
+            FailureCategory.CONTEXT_OVERFLOW,
+            FailureCategory.PROVIDER_INVALID_RESPONSE,
+            FailureCategory.OUTPUT_TRUNCATED,
+            FailureCategory.PROVIDER_RATE_LIMITED,
+            FailureCategory.PROVIDER_TIMEOUT,
+            FailureCategory.PROVIDER_EMPTY_RESPONSE,
+            FailureCategory.QUALITY_GATE_FAILED,
+        )
+    )
+
+
 def build_runtime(
     config: RuntimeConfig,
     *,
     retry_policy: RetryPolicy,
 ) -> ProductionRuntime:
-    runtime = ProductionRuntime(
-        config,
-        retry_policy=retry_policy,
-        recovery_policy=RecoveryPolicy(
-            replace_categories=(
-                FailureCategory.UNSUPPORTED_PARAMETER,
-                FailureCategory.CONTEXT_OVERFLOW,
-                FailureCategory.PROVIDER_INVALID_RESPONSE,
-                FailureCategory.OUTPUT_TRUNCATED,
-                FailureCategory.PROVIDER_RATE_LIMITED,
-                FailureCategory.PROVIDER_TIMEOUT,
-                FailureCategory.PROVIDER_EMPTY_RESPONSE,
-                FailureCategory.QUALITY_GATE_FAILED,
-            )
-        ),
+    return harden_runtime(
+        ProductionRuntime(
+            config,
+            retry_policy=retry_policy,
+            recovery_policy=_soft_recovery_policy(),
+        )
     )
-    return harden_runtime(runtime)
 
 
 __all__ = [
