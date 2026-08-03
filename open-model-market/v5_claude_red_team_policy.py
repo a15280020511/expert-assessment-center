@@ -15,10 +15,6 @@ from typing import Any, Mapping
 CLAUDE_RED_TEAM_MODEL = "~anthropic/claude-opus-latest"
 CLAUDE_RED_TEAM_PROVIDER = "anthropic"
 CLAUDE_RED_TEAM_REASONING_EFFORT = "low"
-CLAUDE_RED_TEAM_MAX_INPUT_CHARS = 48_000
-CLAUDE_RED_TEAM_MAX_TASK_CHARS = 20_000
-CLAUDE_RED_TEAM_MAX_OUTPUT_CHARS = 4_000
-CLAUDE_RED_TEAM_MAX_OUTPUT_TOKENS = 512
 CLAUDE_RED_TEAM_MAX_ITEMS = 32
 CLAUDE_RED_TEAM_MAX_EDGES = 64
 CLAUDE_RED_TEAM_MAX_SUGGESTIONS = 8
@@ -45,7 +41,6 @@ RED_TEAM_CODES = frozenset(
         "DUPLICATE_COMPANY",
         "CALL_LIMIT_EXCEEDED",
         "RECOVERY_LIMIT_EXCEEDED",
-        "COST_LIMIT_EXCEEDED",
         "PROVIDER_UNLOCKED",
         "TOOL_PERMISSION_PRESENT",
         "GRAPH_INVALID",
@@ -65,18 +60,17 @@ RED_TEAM_CODES = frozenset(
 UNIFIED_RED_TEAM_PROMPT = (
     "你是专家团中心唯一且固定的Claude红队顾问，每个任务只审查一次。审查对象仅限输入payload，"
     "不得补充外部事实、目录外模型或未提供的能力。按以下优先级核对：第一，调用、恢复、费用、"
-    "Provider单锁、禁用工具、初始与恢复专家公司全局不同等硬约束；第二，work覆盖、依赖、边类型、"
+    "Provider单锁、禁用工具、初始与恢复专家公司全局不同等结构与安全约束；费用和Token仅是审计与优化建议，"
     "最终节点和用户交付合同；第三，事实来源、数量、位置、未知项、事实与推断边界。只对真实且尚未"
     "满足的缺陷给出意见；一条suggestion只处理一个缺陷，必须指向明确的task、contract、work_id、"
     "node_id或source->target边，修改动作应最小、可执行且不与其他意见重复或冲突。不得给一般性建议，"
-    "不得重述已满足条件，不得直接改图、选择专家、执行任务、写报告、调用工具、浏览或要求复审。若"
-    "task_truncated为true，或输入不足以安全判断，只返回REVIEW_INPUT_INCOMPLETE意见并禁止猜测缺失内容。"
+    "不得重述已满足条件，不得直接改图、选择专家、执行任务、写报告、调用工具、浏览或要求复审。"
+    "输入不足以安全判断时，只返回REVIEW_INPUT_INCOMPLETE意见并禁止猜测缺失内容。不得因费用或Token建议值"
+    "否决方案、要求降级、删减必要交付或停止执行。"
     "你不是批准者、否决者或门禁，不得输出APPROVE、REJECT、通过、不通过或执行许可。只返回严格JSON；"
     "没有必要修改时返回空suggestions。"
 )
-UNIFIED_RED_TEAM_PROMPT_SHA256 = sha256(
-    UNIFIED_RED_TEAM_PROMPT.encode("utf-8")
-).hexdigest()
+UNIFIED_RED_TEAM_PROMPT_SHA256 = "db8ec1119fa4847e90c918088fc55e8aec5f2e8f6c93647dc64b7a2365c08932"
 
 
 def fixed_prompt() -> str:
@@ -199,18 +193,17 @@ def _validate_payload_header(payload: Mapping[str, Any]) -> tuple[int, int, int]
     task_excerpt = _text(
         payload["task_excerpt"],
         "task_excerpt",
-        CLAUDE_RED_TEAM_MAX_TASK_CHARS,
+        max(1, len(str(payload["task_excerpt"]))),
     )
-    task_characters = _integer(
-        payload["task_characters"],
-        "task_characters",
-        len(task_excerpt),
-        2_000_000,
-    )
-    if not isinstance(payload["task_truncated"], bool):
-        raise ValueError("task_truncated must be boolean")
-    if payload["task_truncated"] != (task_characters > len(task_excerpt)):
-        raise ValueError("task_truncated does not match task length")
+    task_characters = payload["task_characters"]
+    if (
+        isinstance(task_characters, bool)
+        or not isinstance(task_characters, int)
+        or task_characters != len(task_excerpt)
+    ):
+        raise ValueError("task_characters must equal the complete task length")
+    if payload["task_truncated"] is not False:
+        raise ValueError("task_truncated must be false; local task truncation is forbidden")
     constraints = _mapping(payload["task_constraints"], "task_constraints")
     contract = _mapping(
         payload["explicit_delivery_contract"],
@@ -382,8 +375,6 @@ def canonical_review_input(payload: Mapping[str, Any]) -> str:
         separators=(",", ":"),
         allow_nan=False,
     )
-    if len(rendered) > CLAUDE_RED_TEAM_MAX_INPUT_CHARS:
-        raise ValueError("Claude red-team input exceeds hard limit")
     return rendered
 
 
@@ -443,7 +434,6 @@ def build_claude_red_team_request(
             {"role": "user", "content": canonical_review_input(payload)},
         ],
         "temperature": 0,
-        "max_tokens": CLAUDE_RED_TEAM_MAX_OUTPUT_TOKENS,
         "reasoning": {
             "effort": CLAUDE_RED_TEAM_REASONING_EFFORT,
             "exclude": True,
@@ -461,8 +451,6 @@ def build_claude_red_team_request(
 def parse_claude_red_team_advice(text: str) -> dict[str, Any]:
     if not isinstance(text, str) or not text.strip():
         raise ValueError("Claude red-team advice is empty")
-    if len(text) > CLAUDE_RED_TEAM_MAX_OUTPUT_CHARS:
-        raise ValueError("Claude red-team advice exceeds hard limit")
     try:
         value = json.loads(text)
     except json.JSONDecodeError as exc:

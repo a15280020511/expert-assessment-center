@@ -28,14 +28,10 @@ class CompleteCleanupRegressionTests(unittest.TestCase):
         pipeline = (MODULE / "v5_pipeline.py").read_text()
         self.assertNotIn('parser.add_argument("--quality-tier"', pipeline)
 
-    def test_paid_acceptance_is_explicit_and_not_a_green_noop(self) -> None:
-        dead = ROOT / ".github/workflows/v5-one-time-paid-claude-acceptance-20260803.yml"
-        self.assertFalse(dead.exists())
-        paid = (ROOT / ".github/workflows/v5-final-paid-claude-acceptance-20260803.yml").read_text()
-        self.assertIn("workflow_dispatch", paid)
-        self.assertIn("inputs.confirm", paid)
-        self.assertNotIn("hashFiles(", paid)
-        self.assertNotIn("pull_request", paid)
+    def test_obsolete_date_bound_paid_acceptance_is_absent(self) -> None:
+        obsolete = ROOT / ".github/workflows/v5-final-paid-claude-acceptance-20260803.yml"
+        self.assertFalse(obsolete.exists())
+
 
     def test_heading_normalization_has_one_authoritative_implementation(self) -> None:
         self.assertEqual("最终_建议", normalize_heading_key("2. **最终 建议**"))

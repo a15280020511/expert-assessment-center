@@ -7,7 +7,6 @@ and no-tool policy remain outside this module and continue to apply.
 """
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -91,46 +90,7 @@ class SoftResourcePromptPolicy(ConstitutionalPromptPolicy):
 
 
 class SoftResourceBudgetController(BudgetController):
-    """Keep call-safety accounting while making cost thresholds advisory."""
-
-    def __init__(self, config: RuntimeConfig, graph: ExecutionGraph) -> None:
-        self.advisory_cost_usd = config.cost_anomaly_usd
-        self.cost_advisories: list[dict[str, Any]] = []
-        super().__init__(replace(config, cost_anomaly_usd=None), graph)
-
-    def reconcile(self, actual_cost_usd: float) -> bool:
-        super().reconcile(actual_cost_usd)
-        threshold = self.advisory_cost_usd
-        if (
-            threshold is not None
-            and self.actual_cost_usd > float(threshold) + 1e-12
-            and not self.cost_advisories
-        ):
-            self.cost_advisories.append(
-                {
-                    "type": "cost-advisory-threshold-exceeded",
-                    "threshold_usd": round(float(threshold), 8),
-                    "actual_cost_usd": round(self.actual_cost_usd, 8),
-                    "execution_stopped": False,
-                    "result_invalidated": False,
-                }
-            )
-        return False
-
-    def snapshot(self) -> dict[str, Any]:
-        value = super().snapshot()
-        value.update(
-            {
-                "resource_governance_mode": "prompt-led-soft-governance",
-                "cost_limit_enforced": False,
-                "cost_advisory_usd": self.advisory_cost_usd,
-                "cost_advisory_exceeded": bool(self.cost_advisories),
-                "cost_advisories": list(self.cost_advisories),
-                "token_limit_enforced_by_runtime": False,
-            }
-        )
-        return value
-
+    """Semantic alias for the constitutionally soft base controller."""
 
 class SoftResourceExecutionEngine(ConstitutionalExecutionEngine):
     """Run the constitutional engine without token or cost rejection gates."""

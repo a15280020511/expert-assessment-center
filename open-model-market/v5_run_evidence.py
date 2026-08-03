@@ -169,12 +169,14 @@ def _validated_actual_cost(inputs: EvidenceInputs, approved: ApprovedRun) -> flo
     actual_cost = float(inputs.execution_summary.get("actual_cost_usd") or 0.0)
     if not math.isfinite(actual_cost) or actual_cost < 0:
         raise RuntimeError("actual total cost is invalid")
-    if (
-        approved.cost_anomaly_usd is not None
-        and actual_cost > approved.cost_anomaly_usd + 1e-12
-    ):
-        raise RuntimeError("approved cost anomaly guard exceeded")
     return actual_cost
+
+
+def _cost_advisory_exceeded(actual_cost: float, approved: ApprovedRun) -> bool:
+    return bool(
+        approved.cost_anomaly_usd is not None
+        and actual_cost > float(approved.cost_anomaly_usd) + 1e-12
+    )
 
 
 def _validated_nodes(
@@ -331,6 +333,11 @@ def _ledger_document(
             "provider_actual_cost_usd": round(prepared.actual_cost, 8),
             "conservative_cost_usd": round(prepared.actual_cost, 8),
             "cost_anomaly_usd": approved.cost_anomaly_usd,
+            "cost_advisory_usd": approved.cost_anomaly_usd,
+            "cost_advisory_exceeded": _cost_advisory_exceeded(
+                prepared.actual_cost, approved
+            ),
+            "cost_threshold_can_invalidate_result": False,
             "substantive_providers": list(prepared.providers),
             "substantive_provider_count": len(prepared.providers),
             "replacement_calls": int(
@@ -388,12 +395,26 @@ def _execution_summary_document(
     prepared: PreparedEvidence,
 ) -> dict[str, Any]:
     inputs = builder.inputs
+    resource = dict(inputs.execution_summary.get("resource_governance") or {})
+    resource.update(
+        {
+            "mode": "prompt-led-soft-governance",
+            "cost_advisory_usd": builder.approved.cost_anomaly_usd,
+            "cost_advisory_exceeded": _cost_advisory_exceeded(
+                prepared.actual_cost, builder.approved
+            ),
+            "cost_threshold_can_invalidate_result": False,
+            "cost_threshold_can_trigger_degradation": False,
+            "local_token_ceiling_enforced": False,
+        }
+    )
     return {
         **dict(inputs.execution_summary),
         "runtime_version": RUNTIME_VERSION,
         "approved_budget": builder.approved.to_dict(),
         "catalog_snapshot_id": inputs.catalog_snapshot.get("catalog_snapshot_id"),
         "evidence_input_sha256": builder.input_sha256(),
+        "resource_governance": resource,
     }
 
 
@@ -415,6 +436,16 @@ def _result_document(
         "quality_integrity": inputs.execution_summary.get("quality_integrity"),
         "final_answer": prepared.answer,
         "actual_cost_usd": round(prepared.actual_cost, 8),
+        "resource_governance": {
+            "mode": "prompt-led-soft-governance",
+            "cost_advisory_usd": builder.approved.cost_anomaly_usd,
+            "cost_advisory_exceeded": _cost_advisory_exceeded(
+                prepared.actual_cost, builder.approved
+            ),
+            "cost_threshold_can_invalidate_result": False,
+            "cost_threshold_can_trigger_degradation": False,
+            "local_token_ceiling_enforced": False,
+        },
         "executor": inputs.execution_summary.get("executor"),
         "work_coverage": inputs.execution_summary.get("work_coverage"),
         "degradation": inputs.execution_summary.get("degradation"),
@@ -450,6 +481,13 @@ def _runtime_document(approved: ApprovedRun) -> dict[str, Any]:
         "fallback_policy": "fail-closed-no-alternate-runtime",
         "legacy_runtime_present": False,
         "cross_task_history_used": False,
+        "resource_governance": {
+            "mode": "prompt-led-soft-governance",
+            "cost_advisory_usd": approved.cost_anomaly_usd,
+            "cost_threshold_can_stop_execution": False,
+            "cost_threshold_can_invalidate_result": False,
+            "local_token_ceiling_enforced": False,
+        },
     }
 
 

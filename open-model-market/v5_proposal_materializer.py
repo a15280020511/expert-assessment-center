@@ -16,7 +16,6 @@ import networkx as nx
 from execution_graph import ExecutionGraph, GraphLimits, SelectedEdge, SelectedNode
 from execution_graph_validator import derive_execution_stages, validate_execution_graph
 from v5_catalog_view import GOVERNANCE_COMPANIES, catalog_index
-from v5_claude_red_team_policy import CLAUDE_RED_TEAM_MAX_TASK_CHARS
 from v5_model_company import canonical_model_company
 from v5_task_envelope import work_output_contract
 
@@ -116,7 +115,6 @@ def _estimated_cost(
 def _request_config(
     endpoint: Mapping[str, Any],
     effort: str,
-    max_output_tokens: int,
 ) -> dict[str, Any]:
     supported = {
         str(value).casefold()
@@ -132,10 +130,6 @@ def _request_config(
     }
     if "reasoning" in supported:
         result["reasoning"] = {"effort": effort, "exclude": True}
-    if "max_completion_tokens" in supported:
-        result["max_completion_tokens"] = int(max_output_tokens)
-    elif "max_tokens" in supported:
-        result["max_tokens"] = int(max_output_tokens)
     return result
 
 
@@ -152,8 +146,10 @@ def _selected_node(
     effort = str(raw.get("reasoning_effort") or "medium")
     max_output = int(raw.get("max_output_tokens") or 0)
     endpoint_maximum = int(endpoint.get("max_completion_tokens") or 0)
-    if not 256 <= max_output <= endpoint_maximum:
-        raise ProposalValidationError("node output allowance exceeds endpoint")
+    if max_output <= 0:
+        raise ProposalValidationError("node output advisory must be positive")
+    if endpoint_maximum > 0 and max_output > endpoint_maximum:
+        raise ProposalValidationError("node output advisory exceeds provider-native capacity")
     required_context = int(task_envelope.get("required_context_tokens") or 0)
     if int(endpoint.get("context_length") or 0) < required_context:
         raise ProposalValidationError("node endpoint lacks required context capacity")
@@ -200,7 +196,7 @@ def _selected_node(
             max_output,
         ),
         failure_probability=0.0,
-        request_config=_request_config(endpoint, effort, max_output),
+        request_config=_request_config(endpoint, effort),
         independence_group=None,
     )
 
@@ -218,7 +214,7 @@ def _recovery_row(
         )
     )
     if maximum > int(endpoint.get("max_completion_tokens") or 0):
-        raise ProposalValidationError("recovery output allowance exceeds endpoint")
+        raise ProposalValidationError("recovery output advisory exceeds provider-native capacity")
     if int(endpoint.get("context_length") or 0) < int(
         task_envelope.get("required_context_tokens") or 0
     ):
@@ -256,7 +252,6 @@ def _recovery_row(
         "request_config": _request_config(
             endpoint,
             str(selected.reasoning_profile.get("effort") or "medium"),
-            maximum,
         ),
     }
 
@@ -502,7 +497,7 @@ def _proposal_limits(
         max_model_calls=maximum_initial,
         max_retries=0,
         max_replacements=int(approved_recovery_calls),
-        max_budget_usd=cost_anomaly_usd,
+        max_budget_usd=None,
         min_required_work_coverage=1.0,
         min_successful_content_nodes=1,
         allow_degraded_success=False,
@@ -534,8 +529,6 @@ def _risk_adjusted_cost(
         for rows in recovery_pool.values()
         for row in rows
     )
-    if cost_anomaly_usd is not None and total > float(cost_anomaly_usd) + 1e-12:
-        raise ProposalValidationError("proposal exceeds risk-adjusted cost guard")
     return total
 
 
@@ -546,6 +539,7 @@ def _materialization_audit(
     recovery_companies: Sequence[str],
     maximum_initial: int,
     total_risk_cost: float,
+    cost_advisory_usd: float | None,
 ) -> dict[str, Any]:
     return {
         "schema_version": "v5-gpt-proposal-materialization-2",
@@ -556,6 +550,12 @@ def _materialization_audit(
         "recovery_companies": list(recovery_companies),
         "maximum_expert_initial_calls": maximum_initial,
         "risk_adjusted_reserved_cost_usd": round(total_risk_cost, 8),
+        "cost_advisory_usd": cost_advisory_usd,
+        "cost_advisory_exceeded": bool(
+            cost_advisory_usd is not None
+            and total_risk_cost > float(cost_advisory_usd) + 1e-12
+        ),
+        "cost_threshold_can_reject_materialization": False,
         "local_task_classification_used": False,
         "local_atomic_work_generation_used": False,
         "local_resource_matrix_used": False,
@@ -622,6 +622,7 @@ def materialize_proposal(
         recovery_companies,
         maximum_initial,
         risk_cost,
+        cost_anomaly_usd,
     )
 
 
@@ -646,20 +647,8 @@ def deterministic_violations(
 
 
 def _bounded_task_excerpt(task: str) -> tuple[str, bool]:
-    text = str(task or "")
-    maximum = CLAUDE_RED_TEAM_MAX_TASK_CHARS
-    if len(text) <= maximum:
-        return text, False
-    marker = "\n[...task excerpt truncated...]\n"
-    retained = maximum - len(marker)
-    if retained <= 1:
-        raise ProposalValidationError("Claude task excerpt limit is invalid")
-    head = retained // 2
-    tail = retained - head
-    excerpt = text[:head] + marker + text[-tail:]
-    if len(excerpt) != maximum:
-        raise ProposalValidationError("Claude task excerpt bound is inconsistent")
-    return excerpt, True
+    """Preserve the complete task; local task truncation is forbidden."""
+    return str(task or ""), False
 
 
 def _claude_work_items(

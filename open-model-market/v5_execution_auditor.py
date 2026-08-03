@@ -230,7 +230,10 @@ def _audit_entry_contract(
         and expert_total >= 1
         and 0 <= recovery < expert_total
         and initial == expert_total - recovery
-        and ticket.get("cost_policy") == "unbounded_with_anomaly_guard"
+        and ticket.get("cost_policy") in {
+            "prompt_led_soft_governance",
+            "unbounded_with_anomaly_guard",
+        }
     ) if isinstance(ticket, Mapping) else False
     checks.update({
         "runtime_version": (
@@ -485,14 +488,12 @@ def _audit_calls(
         )
     if not math.isfinite(actual_cost) or actual_cost < 0:
         failures.append("V5 actual cost is invalid")
-    if (
+    checks["cost_advisory_usd"] = budget_state.anomaly
+    checks["cost_advisory_exceeded"] = bool(
         budget_state.anomaly is not None
         and actual_cost > budget_state.anomaly + 1e-12
-    ):
-        failures.append(
-            "V5 actual cost exceeded the approved anomaly stop: "
-            f"{actual_cost}/{budget_state.anomaly}"
-        )
+    )
+    checks["cost_threshold_can_fail_audit"] = False
     return CallState(
         expert_calls,
         total_calls,

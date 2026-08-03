@@ -59,8 +59,8 @@
     "evidence (optional)",
     "approved_budget.calls",
     "approved_budget.maximum_recovery_calls",
-    "approved_budget.cost_policy=unbounded_with_anomaly_guard",
-    "approved_budget.cost_anomaly_usd (optional)",
+    "approved_budget.cost_policy=prompt_led_soft_governance (legacy alias accepted)",
+    "approved_budget.cost_anomaly_usd (optional advisory only)",
     "private_output=false (optional)"
   ],
   "outputs": [

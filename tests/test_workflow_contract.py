@@ -4,9 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "execution-ticket.yml"
 PROMOTION = ROOT / ".github" / "workflows" / "promote-v5-production.yml"
-PAID_ACCEPTANCE = (
-    ROOT / ".github" / "workflows" / "v5-final-paid-claude-acceptance-20260803.yml"
-)
+PAID_ACCEPTANCE = ROOT / ".github" / "workflows" / "v5-final-paid-claude-acceptance-20260803.yml"
 LEGACY_PAID_ACCEPTANCE = (
     ROOT / ".github" / "workflows" / "v5-one-time-paid-acceptance.yml"
 )
@@ -23,7 +21,6 @@ class WorkflowContractTests(unittest.TestCase):
     def setUpClass(cls):
         cls.text = WORKFLOW.read_text(encoding="utf-8")
         cls.promotion = PROMOTION.read_text(encoding="utf-8")
-        cls.paid_acceptance = PAID_ACCEPTANCE.read_text(encoding="utf-8")
 
     def test_dynamic_graph_uses_ticket_approved_call_ceiling(self):
         self.assertNotIn('TOTAL_MODEL_CALLS: "16"', self.text)
@@ -165,46 +162,12 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("refs/heads/production", self.promotion)
         self.assertNotIn("OPENROUTER_API_KEY", self.promotion)
 
-    def test_paid_acceptance_is_explicit_bounded_current_and_independent(self):
-        paid = self.paid_acceptance
-        self.assertIn("workflow_dispatch:", paid)
-        self.assertIn('branches:\n      - "acceptance/v5-final-paid-*"', paid)
-        self.assertIn("RUN-EXACTLY-ONCE", paid)
-        self.assertIn("v5-final-paid-acceptance-request-1", paid)
-        self.assertIn("git -C request-source rev-parse HEAD^", paid)
-        self.assertIn("v5_production_ticket.py", paid)
-        self.assertIn('MAXIMUM_TOTAL_CALLS: "4"', paid)
-        self.assertIn('MAXIMUM_RECOVERY_CALLS: "0"', paid)
-        self.assertIn('COST_CAP_USD: "0.25"', paid)
-        self.assertIn('MAX_COMPLETION_TOKENS: "512"', paid)
-        self.assertIn(
-            'GOVERNANCE_MAX_COMPLETION_TOKENS: "4096"',
-            paid,
-        )
-        self.assertIn("--governance-max-completion-tokens", paid)
-        self.assertIn("Complete all zero-call release gates before paid execution", paid)
-        self.assertIn("Run zero-cost free Canary and API-key limit preflight", paid)
-        self.assertIn("https://openrouter.ai/api/v1/key", paid)
-        self.assertIn('"model": "openrouter/free"', paid)
-        self.assertIn("claude_review_count", paid)
-        self.assertIn("gpt_synthesis_count", paid)
-        self.assertIn("claude_is_advisory_only", paid)
-        self.assertIn("claude_gatekeeping_allowed", paid)
-        self.assertIn("old_local_planner_used", paid)
-        self.assertIn("artifact_manifest", paid)
-        self.assertIn("v5_independent_artifact_revalidation.py", paid)
-        self.assertIn("paid-acceptance-attestation.json", paid)
-        self.assertIn("independently_recomputed_from_primitive_evidence", paid)
-        self.assertIn("paid_acceptance_verdict_used_as_source", paid)
-        self.assertIn("formal_model_identity_qualified", paid)
-        self.assertIn("production_ref_moved: false", paid)
-        self.assertNotIn("quality_tier", paid)
-        self.assertNotIn("--quality-tier", paid)
-        self.assertNotIn("git push", paid)
-        self.assertNotIn("refs/heads/production", paid)
+    def test_obsolete_date_bound_paid_acceptance_is_removed(self):
+        self.assertFalse(PAID_ACCEPTANCE.exists())
         self.assertFalse(LEGACY_PAID_ACCEPTANCE.exists())
         self.assertFalse(DETACHED_ATTESTATION.exists())
         self.assertFalse(DETACHED_ATTESTATION_REQUEST.exists())
+
 
 
 if __name__ == "__main__":

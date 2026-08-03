@@ -17,11 +17,7 @@ from v5_runtime import (
     ExecutionEngine,
     ExecutionFailure,
     FailureCategory,
-    ProductionRuntime,
-    RecoveryPolicy,
-    RetryPolicy,
     RuntimeAttempt,
-    RuntimeConfig,
 )
 from v5_task_constraints import (
     TaskConstraints,
@@ -583,52 +579,3 @@ class ConstitutionalExecutionEngine(ExecutionEngine):
             self._fail_constitutional_result(result, root, reason)
         self._write_execution_summary(root, result)
         return result
-
-
-
-def harden_runtime(runtime: ProductionRuntime) -> ProductionRuntime:
-    """Replace owned policies and engine without modifying module globals."""
-    runtime.recovery_policy = RecoveryPolicy(
-        replace_categories=tuple(
-            dict.fromkeys(
-                [
-                    *runtime.recovery_policy.replace_categories,
-                    FailureCategory.QUALITY_GATE_FAILED,
-                ]
-            )
-        )
-    )
-    runtime.prompt_policy = ConstitutionalPromptPolicy()
-    runtime.execution_engine = ConstitutionalExecutionEngine(
-        runtime.config,
-        prompt_policy=runtime.prompt_policy,
-        retry_policy=runtime.retry_policy,
-        recovery_policy=runtime.recovery_policy,
-        quality_policy=runtime.quality_policy,
-        output_policy=runtime.output_policy,
-    )
-    return runtime
-
-
-def build_runtime(
-    config: RuntimeConfig,
-    *,
-    retry_policy: RetryPolicy,
-) -> ProductionRuntime:
-    runtime = ProductionRuntime(
-        config,
-        retry_policy=retry_policy,
-        recovery_policy=RecoveryPolicy(
-            replace_categories=(
-                FailureCategory.UNSUPPORTED_PARAMETER,
-                FailureCategory.CONTEXT_OVERFLOW,
-                FailureCategory.PROVIDER_INVALID_RESPONSE,
-                FailureCategory.OUTPUT_TRUNCATED,
-                FailureCategory.PROVIDER_RATE_LIMITED,
-                FailureCategory.PROVIDER_TIMEOUT,
-                FailureCategory.PROVIDER_EMPTY_RESPONSE,
-                FailureCategory.QUALITY_GATE_FAILED,
-            )
-        ),
-    )
-    return harden_runtime(runtime)

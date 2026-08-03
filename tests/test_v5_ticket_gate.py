@@ -31,9 +31,10 @@ class V5TicketGateTests(unittest.TestCase):
             "approved_budget": {
                 "calls": 5,
                 "maximum_recovery_calls": 1,
-                "cost_policy": "unbounded_with_anomaly_guard",
+                "cost_policy": "prompt_led_soft_governance",
                 "cost_anomaly_usd": 0.25,
             },
+            "cost_threshold_can_stop_execution": False,
             "private_output": False,
         }
         self.status = {
@@ -44,9 +45,9 @@ class V5TicketGateTests(unittest.TestCase):
             "maximum_recovery_calls": 1,
             "maximum_initial_calls": 1,
             "maximum_replacements": 1,
-            "max_cost_usd": 0.25,
-            "cost_anomaly_usd": 0.25,
-            "cost_policy": "unbounded_with_anomaly_guard",
+                        "cost_anomaly_usd": 0.25,
+            "cost_policy": "prompt_led_soft_governance",
+            "cost_threshold_can_stop_execution": False,
             "private_output": False,
             "is_retry": False,
             "retry_id": "",
@@ -132,7 +133,7 @@ class V5TicketGateTests(unittest.TestCase):
             (self.root / "ticket-gate.json").read_text(encoding="utf-8")
         )
         self.assertTrue(
-            any("anomaly guard" in item for item in failure["errors"])
+            any("cost advisory" in item for item in failure["errors"])
         )
 
     def test_task_text_tampering_fails_closed(self) -> None:

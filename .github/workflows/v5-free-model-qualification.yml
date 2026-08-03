@@ -121,7 +121,6 @@ jobs:
                   },
               ],
               "stream": False,
-              "max_tokens": 256,
               "provider": {
                   "data_collection": "allow",
                   "zdr": False,

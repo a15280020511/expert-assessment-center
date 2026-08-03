@@ -82,7 +82,7 @@ class TestV5FullLoadStability(unittest.TestCase):
         self.assertEqual(16, snapshot["calls_reserved"])
         self.assertTrue(snapshot["denials"])
 
-    def test_concurrent_cost_reservations_fail_closed(self) -> None:
+    def test_concurrent_cost_reservations_are_call_bounded_not_cost_bounded(self) -> None:
         budget = _budget(cost=0.01)
         with ThreadPoolExecutor(max_workers=64) as pool:
             results = list(
@@ -95,9 +95,11 @@ class TestV5FullLoadStability(unittest.TestCase):
             )
         snapshot = budget.snapshot()
         accepted = sum(1 for ok, _ in results if ok)
-        self.assertLessEqual(accepted, 8)
-        self.assertLessEqual(snapshot["estimated_cost_reserved_usd"], 0.01)
+        self.assertEqual(14, accepted)
+        self.assertGreater(snapshot["estimated_cost_reserved_usd"], 0.01)
+        self.assertTrue(snapshot["cost_advisory_exceeded"])
         self.assertTrue(snapshot["denials"])
+        self.assertTrue(all(row["reason"] == "initial-call-cap-reserved-for-recovery" for row in snapshot["denials"]))
 
     def test_concurrent_reconciliation_has_no_lost_updates(self) -> None:
         budget = _budget(cost=None)

@@ -320,6 +320,7 @@ class BudgetController:
         self.actual_cost_usd = 0.0
         self.pending_risk_costs: list[float] = []
         self.denials: list[dict[str, Any]] = []
+        self.cost_advisories: list[dict[str, Any]] = []
         self.endpoint_failures: dict[str, int] = {}
         self.endpoint_failure_reasons: dict[str, list[str]] = {}
         self._lock = Lock()
@@ -356,11 +357,24 @@ class BudgetController:
             else:
                 protected = sum(self.protected_final_cost.values()) - self.protected_final_cost.get(node_id, 0.0)
                 projected = self.actual_cost_usd + sum(self.pending_risk_costs) + risk + protected
+                threshold = self.config.cost_anomaly_usd
                 if (
-                    self.config.cost_anomaly_usd is not None
-                    and projected > self.config.cost_anomaly_usd + 1e-12
+                    threshold is not None
+                    and projected > float(threshold) + 1e-12
+                    and not any(
+                        row.get("type") == "estimated-cost-advisory-threshold-exceeded"
+                        for row in self.cost_advisories
+                    )
                 ):
-                    reason = "risk-adjusted-cost-anomaly-limit-exhausted"
+                    self.cost_advisories.append(
+                        {
+                            "type": "estimated-cost-advisory-threshold-exceeded",
+                            "threshold_usd": round(float(threshold), 8),
+                            "projected_risk_adjusted_cost_usd": round(projected, 8),
+                            "execution_stopped": False,
+                            "result_invalidated": False,
+                        }
+                    )
             if reason:
                 self.denials.append(
                     {
@@ -391,10 +405,25 @@ class BudgetController:
             if self.pending_risk_costs:
                 self.pending_risk_costs.pop(0)
             self.actual_cost_usd += max(0.0, float(actual_cost_usd))
-            return bool(
-                self.config.cost_anomaly_usd is not None
-                and self.actual_cost_usd > self.config.cost_anomaly_usd + 1e-12
-            )
+            threshold = self.config.cost_anomaly_usd
+            if (
+                threshold is not None
+                and self.actual_cost_usd > float(threshold) + 1e-12
+                and not any(
+                    row.get("type") == "actual-cost-advisory-threshold-exceeded"
+                    for row in self.cost_advisories
+                )
+            ):
+                self.cost_advisories.append(
+                    {
+                        "type": "actual-cost-advisory-threshold-exceeded",
+                        "threshold_usd": round(float(threshold), 8),
+                        "actual_cost_usd": round(self.actual_cost_usd, 8),
+                        "execution_stopped": False,
+                        "result_invalidated": False,
+                    }
+                )
+            return False
 
     def endpoint_available(self, endpoint: str) -> bool:
         with self._lock:
@@ -420,6 +449,12 @@ class BudgetController:
                 "estimated_cost_reserved_usd": round(sum(self.pending_risk_costs), 8),
                 "protected_final_cost_usd": round(sum(self.protected_final_cost.values()), 8),
                 "denials": list(self.denials),
+                "resource_governance_mode": "prompt-led-soft-governance",
+                "cost_limit_enforced": False,
+                "cost_advisory_usd": self.config.cost_anomaly_usd,
+                "cost_advisory_exceeded": bool(self.cost_advisories),
+                "cost_advisories": list(self.cost_advisories),
+                "token_limit_enforced_by_runtime": False,
                 "provider_circuit": {
                     "scope": "current-run-only",
                     "max_failures": self.config.max_provider_failures,
@@ -834,16 +869,7 @@ class ExecutionEngine:
         passed: bool,
         reasons: Sequence[str],
         finish_reason: str,
-        budget_exceeded: bool,
     ) -> ExecutionFailure | None:
-        if budget_exceeded:
-            return ExecutionFailure(
-                category=FailureCategory.BUDGET_INSUFFICIENT, retryable=False,
-                model=node.model, provider_endpoint=node.provider_endpoint,
-                request_sent=True, response_received=True, usage_received=bool(usage),
-                actual_cost_usd=actual_cost,
-                message="actual cost exceeded the approved anomaly guard",
-            )
         if finish_reason in {"length", "max_tokens"}:
             return ExecutionFailure(
                 category=FailureCategory.OUTPUT_TRUNCATED, retryable=False,
@@ -872,17 +898,14 @@ class ExecutionEngine:
         answer: str,
         usage: Mapping[str, Any],
         actual_cost: float,
-        budget_exceeded: bool,
     ) -> RuntimeAttempt:
         passed, quality, evaluated_reasons = self.quality_policy.evaluate(node, response, answer)
         reasons = list(evaluated_reasons)
-        if budget_exceeded:
-            reasons.append("actual-budget-exceeded")
         failure = self._response_failure(
             node, response, usage, actual_cost, passed, reasons,
-            extract_finish_reason(response).casefold(), budget_exceeded,
+            extract_finish_reason(response).casefold(),
         )
-        status = "passed" if passed and not budget_exceeded else "quality_gate_failed"
+        status = "passed" if passed else "quality_gate_failed"
         return RuntimeAttempt(
             attempt_index, kind, node.node_id, node.model, node.provider_endpoint,
             payload, status, answer, quality, reasons, round(float(latency), 6),
@@ -942,14 +965,14 @@ class ExecutionEngine:
             answer = cost_hardening.robust_extract_answer(response)
             usage = dict(response.get("usage") or {}) if isinstance(response.get("usage"), Mapping) else {}
             actual_cost = extract_actual_cost(response)
-            budget_exceeded = budget.reconcile(actual_cost)
+            budget.reconcile(actual_cost)
             if not answer:
                 return self._empty_response_attempt(
                     node, kind, attempt_index, payload, response, latency, usage, actual_cost
                 )
             return self._response_attempt(
                 node, kind, attempt_index, payload, response, latency, answer, usage,
-                actual_cost, budget_exceeded,
+                actual_cost,
             )
         except Exception as exc:  # noqa: BLE001 - converted into structured evidence
             return self._exception_attempt(
@@ -1309,16 +1332,17 @@ class ExecutionEngine:
         )
         if len(planned_content_node_ids) < minimum_content_nodes:
             blockers.append("planned-content-nodes-below-delivery-minimum")
-        if (
+        cost_advisory_exceeded = bool(
             self.config.cost_anomaly_usd is not None
-            and risk_cost > self.config.cost_anomaly_usd + 1e-12
-        ):
-            blockers.append("preflight-risk-adjusted-cost-above-anomaly-limit")
+            and risk_cost > float(self.config.cost_anomaly_usd) + 1e-12
+        )
         return {
             "status": "rejected" if blockers else "pass",
             "estimated_initial_cost_usd": graph.estimated_total_cost,
             "risk_adjusted_cost_upper_usd": round(risk_cost, 8),
             "cost_anomaly_usd": self.config.cost_anomaly_usd,
+            "cost_advisory_exceeded": cost_advisory_exceeded,
+            "cost_threshold_can_reject_preflight": False,
             "provider_counts": providers,
             "delivery_feasibility": {
                 "planned_content_node_ids": planned_content_node_ids,
@@ -1466,7 +1490,7 @@ class ExecutionEngine:
         budget: BudgetController,
     ) -> list[RuntimeNodeResult]:
         configured = max(1, int(getattr(run, "parallel_workers", len(stage) or 1)))
-        workers = 1 if self.config.cost_anomaly_usd is not None else min(configured, len(stage))
+        workers = min(configured, len(stage))
         futures = {}
         with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
             for node_id in stage:
