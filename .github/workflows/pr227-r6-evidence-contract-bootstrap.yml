@@ -7,14 +7,14 @@ on:
       - .github/workflows/pr227-r6-evidence-contract-bootstrap.yml
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: pr227-r6-evidence-contract-bootstrap
   cancel-in-progress: false
 
 jobs:
-  validate-and-package:
+  validate-package-and-push-non-workflow:
     if: >-
       github.event.pull_request.number == 227 &&
       github.event.pull_request.head.ref == 'fix/v5-claude-unified-red-team-cleanup-20260803'
@@ -26,7 +26,7 @@ jobs:
         with:
           ref: fix/v5-claude-unified-red-team-cleanup-20260803
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Extract and apply staged remediation
         shell: bash
@@ -268,3 +268,22 @@ jobs:
           path: /tmp/pr227-r6-evidence-contract/
           if-no-files-found: error
           retention-days: 30
+
+      - name: Commit and push validated non-workflow changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git restore --source=HEAD -- \
+            .github/workflows/execution-ticket.yml \
+            .github/workflows/pr227-r6-evidence-contract-bootstrap.yml \
+            .github/workflows/pr227-r6-evidence-contract-remediation.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          if git diff --cached --name-only -- .github/workflows | grep -q .; then
+            echo 'workflow change unexpectedly staged' >&2
+            exit 1
+          fi
+          git diff --cached --check
+          git commit -m "fix: align R6 evidence contracts outside workflows"
+          git push origin HEAD:fix/v5-claude-unified-red-team-cleanup-20260803
