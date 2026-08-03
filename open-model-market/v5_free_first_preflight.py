@@ -119,6 +119,10 @@ def _check_shadow(value: Any) -> list[str]:
     return reasons
 
 
+def _category_passed(reasons: list[str], prefix: str) -> bool:
+    return not any(reason.startswith(prefix) for reason in reasons)
+
+
 def evaluate_free_first_preflight(
     receipt: Mapping[str, Any],
     *,
@@ -174,8 +178,14 @@ def evaluate_free_first_preflight(
         "status": "PASS" if authorized else "FAIL",
         "target_sha": target_sha,
         "receipt_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
-        "zero_call_simulation_passed": "simulation-not-pass" not in reasons,
-        "zero_cost_free_canary_passed": "free-canary-not-pass" not in reasons,
+        "zero_call_simulation_passed": _category_passed(
+            reasons,
+            "simulation-",
+        ),
+        "zero_cost_free_canary_passed": _category_passed(
+            reasons,
+            "free-canary-",
+        ),
         "shadow_governance_required": bool(require_shadow),
         "paid_acceptance_allowed": authorized,
         "formal_model_identity_qualified": False,
