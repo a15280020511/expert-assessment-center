@@ -1,0 +1,17 @@
+{
+  "schema_version": "pr227-free-shadow-governance-5",
+  "authorization": "RUN-FREE-SHADOW-ONCE",
+  "purpose": "zero-cost-proposal-red-team-synthesis-contract-test",
+  "target_sha": "0383d2ef80f1890306bc0bc5f7b37836cb2579ca",
+  "model": "openrouter/free",
+  "provider_data_collection": "allow",
+  "provider_zdr": false,
+  "maximum_model_requests": 3,
+  "maximum_paid_model_calls": 0,
+  "max_completion_tokens": 1024,
+  "stages": [
+    "proposal",
+    "red_team_advice",
+    "synthesis"
+  ]
+}
