@@ -1,0 +1,110 @@
+name: Observe Final Paid Acceptance
+
+on:
+  push:
+    branches:
+      - "monitor/final-paid-9467cdc0-20260803-r1"
+    paths:
+      - ".github/paid-monitor-request.json"
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: observe-final-paid-9467cdc0-20260803-r1
+  cancel-in-progress: false
+
+jobs:
+  observe:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 80
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out monitor branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Resolve exact paid run and wait for completion
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=.github/paid-monitor-request.json
+          auth_sha=$(jq -er '.authorization_commit_sha' "$request")
+          auth_branch=$(jq -er '.authorization_branch' "$request")
+          target_sha=$(jq -er '.target_sha' "$request")
+          workflow=v5-final-paid-claude-acceptance-20260803.yml
+          run_id=""
+          for _ in $(seq 1 120); do
+            gh api --method GET \
+              "/repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs" \
+              -f branch="$auth_branch" -f per_page=100 > /tmp/runs.json
+            run_id=$(jq -r --arg sha "$auth_sha" '
+              [.workflow_runs[] | select(.head_sha == $sha and .event == "push")]
+              | if length == 1 then .[0].id else empty end
+            ' /tmp/runs.json)
+            if [[ -n "$run_id" ]]; then break; fi
+            sleep 5
+          done
+          test -n "$run_id"
+          set +e
+          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status
+          watch_exit=$?
+          set -e
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > /tmp/run.json
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" > /tmp/jobs.json
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" > /tmp/artifacts.json
+          mkdir -p .github/paid-monitor-result
+          jq -n \
+            --argjson run "$(cat /tmp/run.json)" \
+            --argjson jobs "$(cat /tmp/jobs.json)" \
+            --argjson artifacts "$(cat /tmp/artifacts.json)" \
+            --arg authorization_commit_sha "$auth_sha" \
+            --arg authorization_branch "$auth_branch" \
+            --arg target_sha "$target_sha" \
+            --argjson watch_exit "$watch_exit" \
+            '{
+              schema_version: "v5-final-paid-monitor-1",
+              authorization_commit_sha: $authorization_commit_sha,
+              authorization_branch: $authorization_branch,
+              target_sha: $target_sha,
+              workflow_run: {
+                id: $run.id,
+                status: $run.status,
+                conclusion: $run.conclusion,
+                event: $run.event,
+                head_sha: $run.head_sha,
+                head_branch: $run.head_branch,
+                run_attempt: $run.run_attempt,
+                created_at: $run.created_at,
+                updated_at: $run.updated_at,
+                html_url: $run.html_url
+              },
+              watch_exit: $watch_exit,
+              jobs: [$jobs.jobs[] | {
+                id, name, status, conclusion, started_at, completed_at
+              }],
+              artifacts: [$artifacts.artifacts[] | {
+                id, name, size_in_bytes, digest, expired, created_at
+              }]
+            }' > .github/paid-monitor-result/run-result.json
+
+          attestation_id=$(jq -r --arg name "v5-final-paid-acceptance-attestation-$run_id" '
+            [.artifacts[] | select(.name == $name and .expired == false)]
+            | if length == 1 then .[0].id else empty end
+          ' /tmp/artifacts.json)
+          if [[ -n "$attestation_id" ]]; then
+            gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$attestation_id/zip" > /tmp/attestation.zip
+            unzip -q -o /tmp/attestation.zip -d .github/paid-monitor-result/attestation
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/paid-monitor-result
+          git diff --cached --check
+          git commit -m "audit: record final paid acceptance run $run_id"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
