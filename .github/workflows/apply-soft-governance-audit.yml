@@ -36,7 +36,18 @@ jobs:
         run: |
           set -euo pipefail
           test "$(find .audit-payload -maxdepth 1 -name 'part-*.b64' | wc -l)" -eq 6
-          cat .audit-payload/part-*.b64 | tr -d '\n' | base64 --decode | gzip --decompress > /tmp/soft-governance-audit.patch
+          wc -c .audit-payload/part-*.b64
+          sha256sum .audit-payload/part-*.b64
+          cat > /tmp/expected.sha256 <<'EOF'
+          2f5f808774541382a35850894ffca1149706339f79fe8c2f823db3054e36ff0a  .audit-payload/part-001.b64
+          d0726187100b300866a2c781600cc99a2d312ceab516110a1736ce2445fba816  .audit-payload/part-002.b64
+          26ace4f308297b5b462c4f0328bbe64f2a87bee604c8ce3a664a88ed9478bae7  .audit-payload/part-003.b64
+          f74355c28fc66c1bea3792ca64fbcd3faeb7447efc1fd238a92fec5b9629f706  .audit-payload/part-004.b64
+          046e87339f25cf1a10ca4fec1ffea8fa3b8b01c1d17ef082a2ecb32fde85148a  .audit-payload/part-005.b64
+          7924d62770e896dd1ea775956d28fff88add0acee21ecf778c31289fc4dea085  .audit-payload/part-006.b64
+          EOF
+          sha256sum --check /tmp/expected.sha256
+          cat .audit-payload/part-*.b64 | base64 --decode | gzip --decompress > /tmp/soft-governance-audit.patch
           git apply --check --binary /tmp/soft-governance-audit.patch
           git apply --binary /tmp/soft-governance-audit.patch
           rm -rf .audit-payload
