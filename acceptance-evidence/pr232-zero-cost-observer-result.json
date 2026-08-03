@@ -1,0 +1,33 @@
+{
+  "schema_version": "pr232-zero-cost-observer-result-1",
+  "status": "FAIL",
+  "request_id": "pr232-zero-cost-r2-observer",
+  "target_run_head_sha": "f7dc8960102b812cb3efadf9c9137b502915ed54",
+  "run": {
+    "id": 30794988446,
+    "status": "completed",
+    "conclusion": "failure",
+    "html_url": "https://github.com/a15280020511/expert-assessment-center/actions/runs/30794988446"
+  },
+  "jobs": [
+    {
+      "id": 91626416892,
+      "name": "validate",
+      "status": "completed",
+      "conclusion": "failure",
+      "failed_steps": [
+        {
+          "number": 3,
+          "name": "Resolve exact target"
+        },
+        {
+          "number": 8,
+          "name": "Persist validation evidence"
+        }
+      ]
+    }
+  ],
+  "artifacts": [],
+  "model_calls_triggered_by_observer": 0,
+  "production_ref_moved": false
+}
