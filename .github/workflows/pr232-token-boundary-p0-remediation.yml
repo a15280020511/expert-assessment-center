@@ -1,0 +1,218 @@
+name: PR232 Token Boundary P0 Remediation
+
+on:
+  push:
+    branches:
+      - "remediation/pr232-token-boundary-p0-*"
+    paths:
+      - ".github/pr232-token-boundary-p0-request.json"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr232-token-boundary-p0-remediation
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out immutable remediation request
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          path: request-source
+
+      - name: Validate exact remediation authorization
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=request-source/.github/pr232-token-boundary-p0-request.json
+          jq -e '
+            type == "object" and
+            (keys | sort) == [
+              "authorization",
+              "patch_id",
+              "request_id",
+              "schema_version",
+              "target_branch",
+              "target_sha"
+            ] and
+            .schema_version == "pr232-token-boundary-p0-request-1" and
+            .authorization == "EXACT-ZERO-CALL-SOURCE-PATCH" and
+            .patch_id == "materializer-runtime-token-boundary" and
+            .target_branch == "fix/v5-free-shadow-production-qualification-20260803" and
+            (.request_id | test("^[a-z0-9][a-z0-9._-]{0,63}$")) and
+            (.target_sha | test("^[0-9a-f]{40}$"))
+          ' "$request" >/dev/null
+          test "$(git -C request-source diff --name-only HEAD^ HEAD)" = ".github/pr232-token-boundary-p0-request.json"
+          target="$(jq -er '.target_sha' "$request")"
+          git -C request-source merge-base --is-ancestor "$target" HEAD^
+          {
+            echo "target_branch=$(jq -er '.target_branch' "$request")"
+            echo "target_sha=$target"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact PR branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ steps.request.outputs.target_branch }}
+          fetch-depth: 0
+          persist-credentials: true
+          path: target-source
+
+      - name: Apply exact production token-boundary patch
+        working-directory: target-source
+        env:
+          TARGET_SHA: ${{ steps.request.outputs.target_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("open-model-market/v5_proposal_materializer.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''    if "reasoning" in supported:
+                  result["reasoning"] = {"effort": effort, "exclude": True}
+              if "max_completion_tokens" in supported:
+                  result["max_completion_tokens"] = int(max_output_tokens)
+              elif "max_tokens" in supported:
+                  result["max_tokens"] = int(max_output_tokens)
+              return result
+          '''
+          new = '''    if "reasoning" in supported:
+                  result["reasoning"] = {"effort": effort, "exclude": True}
+              # The materializer records the model-authored allowance in
+              # parameter_profile only. The runtime is the sole authority that
+              # injects the endpoint-compatible output-limit field after the
+              # base payload passes the no-artificial-ceiling invariant.
+              return result
+          '''
+          if text.count(old) != 1:
+              raise SystemExit("expected exactly one materializer token block")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+
+          test = Path("tests/test_v5_materialized_token_boundary.py")
+          test.write_text('''from __future__ import annotations
+
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+MARKET = ROOT / "open-model-market"
+if str(MARKET) not in sys.path:
+    sys.path.insert(0, str(MARKET))
+
+import v5_cost_reliability_hardening as hardening  # noqa: E402
+import v5_execution_primitives as primitives  # noqa: E402
+import v5_proposal_materializer as materializer  # noqa: E402
+
+
+class MaterializedTokenBoundaryTests(unittest.TestCase):
+    def node(self):
+        raw = {
+            "node_id": "N-1",
+            "role": "expert",
+            "functions": ["structured_delivery"],
+            "model": "vendor/model:free",
+            "provider": "provider-a",
+            "reasoning_effort": "low",
+            "max_output_tokens": 1024,
+            "recovery": [],
+            "work_ids": ["W-1"],
+        }
+        endpoint = {
+            "provider": "provider-a",
+            "provider_endpoint": "vendor/model:free@provider-a",
+            "context_length": 32768,
+            "max_completion_tokens": 4096,
+            "prompt_price_per_million": 0.0,
+            "completion_price_per_million": 0.0,
+            "supported_parameters": ["max_tokens", "reasoning"],
+        }
+        work_map = {
+            "W-1": {
+                "work_id": "W-1",
+                "objective": "deliver",
+                "dependencies": [],
+                "required_outputs": ["最终结果"],
+            }
+        }
+        envelope = {
+            "task_characters": 20,
+            "required_context_tokens": 16384,
+        }
+        return materializer._selected_node(
+            raw,
+            endpoint,
+            work_map,
+            "给出最终结果",
+            envelope,
+            final_node=True,
+        )
+
+    def test_materializer_keeps_allowance_as_metadata_only(self) -> None:
+        node = self.node()
+        self.assertEqual(
+            node.parameter_profile["recommended_output_allowance_tokens"],
+            1024,
+        )
+        self.assertNotIn("max_tokens", node.request_config)
+        self.assertNotIn("max_completion_tokens", node.request_config)
+        self.assertIn("reasoning", node.request_config)
+
+    def test_runtime_is_single_authority_for_output_limit(self) -> None:
+        node = self.node()
+        payload = hardening.hardened_build_node_payload(
+            node,
+            "给出最终结果",
+            [],
+        )
+        self.assertEqual(payload["max_tokens"], 1024)
+        self.assertNotIn("max_completion_tokens", payload)
+        self.assertNotIn("reasoning", payload)
+
+    def test_base_payload_still_rejects_manual_ceiling(self) -> None:
+        node = self.node()
+        object.__setattr__(
+            node,
+            "request_config",
+            {**dict(node.request_config), "max_tokens": 1024},
+        )
+        with self.assertRaisesRegex(
+            primitives.V5ExecutionPrimitiveError,
+            "Artificial output token ceilings",
+        ):
+            primitives.build_node_payload(node, "给出最终结果", [])
+
+
+if __name__ == "__main__":
+    unittest.main()
+''', encoding="utf-8")
+          PY
+          python -m compileall -q open-model-market tests
+          test "$(git diff --name-only | sort)" = "$(printf '%s\n' \
+            open-model-market/v5_proposal_materializer.py \
+            tests/test_v5_materialized_token_boundary.py | sort)"
+
+      - name: Commit exact P0 remediation to PR branch
+        working-directory: target-source
+        env:
+          TARGET_BRANCH: ${{ steps.request.outputs.target_branch }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            open-model-market/v5_proposal_materializer.py \
+            tests/test_v5_materialized_token_boundary.py
+          git commit -m "fix: make runtime sole output-token authority"
+          git push origin "HEAD:$TARGET_BRANCH"
