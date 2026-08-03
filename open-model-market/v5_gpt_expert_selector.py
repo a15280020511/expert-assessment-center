@@ -9,6 +9,7 @@ from typing import Any, Mapping
 GPT_SELECTOR_MODEL = "~openai/gpt-latest"
 GPT_SELECTOR_PROVIDER = "openai"
 GPT_MAX_INPUT_CHARS = 360_000
+GPT_PROMPT_CATALOG_MAX_CHARS = 80_000
 GPT_MAX_OUTPUT_CHARS = 64_000
 GPT_MAX_OUTPUT_TOKENS = 10_000
 GPT_MAX_WORK_ITEMS = 32
@@ -38,7 +39,8 @@ PROPOSAL_PROMPT = (
     "自行生成最小充分的work_items、依赖关系和专家执行图；不存在本地预先生成的原子工作、"
     "复杂度评分、领域标签、能力权重或固定职业。不得使用固定席位、固定权重、评分公式、贪心、"
     "Pareto、CP-SAT或任何预设组合。只能选择目录中存在的model+provider。专家公司必须彼此不同，"
-    "且不得选择OpenAI或Anthropic，因为它们已用于治理链。每项工作必须恰好分配一次，依赖必须"
+    "且不得选择OpenAI或Anthropic，因为它们已用于治理链。目录可能采用columns定义加数组行的无损压缩表示，"
+    "必须严格按columns解读全部模型与Provider，不得把压缩格式当作排序或筛选。每项工作必须恰好分配一次，依赖必须"
     "由显式边表达，最终节点必须完成用户明确的交付合同。Provider必须单锁且禁止fallback，专家"
     "禁止工具。只输出严格JSON，不解释，不写报告。"
 )
@@ -46,15 +48,12 @@ SYNTHESIS_PROMPT = (
     "你是专家团中心的一次性综合器。你必须根据原始任务、初始GPT任务拆解与专家组合、Claude一次"
     "红队给出的结构化修改意见和同一精确模型端点目录，形成最终work_items与专家执行图。Claude意见"
     "是咨询意见，不是批准、否决或门禁；你应逐条综合，可在硬约束下采纳、调整或不采纳。不得再次"
-    "调用或请求Claude，不得循环，不得添加目录外模型，不得绕过硬约束，不得依赖本地评分或预设角色。"
+    "调用或请求Claude，不得循环，不得添加目录外模型，不得绕过硬约束，不得依赖本地评分或预设角色。目录可能采用"
+    "columns定义加数组行的无损压缩表示，必须严格按columns解读全部模型与Provider。"
     "只输出一份最终严格JSON提案，不解释，不写报告。"
 )
-PROPOSAL_PROMPT_SHA256 = (
-    "490e5cdfaa8b5b7091e9233f5913a21357b77f28e4b1b048218fccf8e815209e"
-)
-SYNTHESIS_PROMPT_SHA256 = (
-    "a703315dd9ab52537d1d5166733b2961ed8804b0f04b01d896dd45b65ba9e03c"
-)
+PROPOSAL_PROMPT_SHA256 = "1729b23ce30ab0ef9a263f6c593316356640613a80eb32f68c7346964b907fe8"
+SYNTHESIS_PROMPT_SHA256 = "1d113d2f66a5e822d92dac009683649ef5de66930d5ad0143d23a8f18cfd755d"
 
 
 class GPTSelectorError(RuntimeError):
@@ -235,8 +234,8 @@ def _schema(name: str) -> dict[str, Any]:
     }
 
 
-def _content(value: Mapping[str, Any]) -> str:
-    rendered = json.dumps(
+def _canonical_json(value: Any) -> str:
+    return json.dumps(
         value,
         ensure_ascii=False,
         sort_keys=True,
@@ -244,6 +243,189 @@ def _content(value: Mapping[str, Any]) -> str:
         allow_nan=False,
         default=str,
     )
+
+
+def _parameter_flags(values: Any) -> str:
+    supported = {
+        str(value).casefold()
+        for value in values
+    } if isinstance(values, list) else set()
+    output = (
+        "c"
+        if "max_completion_tokens" in supported
+        else "t" if "max_tokens" in supported else "-"
+    )
+    return "".join(
+        (
+            output,
+            "r" if "reasoning" in supported else "-",
+            "e" if "reasoning_effort" in supported else "-",
+            "T" if "temperature" in supported else "-",
+            (
+                "S"
+                if {"structured_outputs", "response_format"}.intersection(
+                    supported
+                )
+                else "-"
+            ),
+        )
+    )
+
+
+def _catalog_endpoint_identity(
+    row: Any,
+) -> tuple[str, str, str, int]:
+    if not isinstance(row, Mapping):
+        raise GPTSelectorError("GPT selector catalog endpoint is invalid")
+    model = str(row.get("model") or "")
+    company = str(row.get("company") or "")
+    provider = str(row.get("provider") or "")
+    rank = int(row.get("official_intelligence_rank") or 0)
+    if not model or not company or not provider or rank <= 0:
+        raise GPTSelectorError("GPT selector catalog identity is invalid")
+    return model, company, provider, rank
+
+
+def _prompt_provider_row(
+    row: Mapping[str, Any],
+    provider: str,
+) -> list[Any]:
+    return [
+        provider,
+        int(row.get("context_length") or 0),
+        int(row.get("max_completion_tokens") or 0),
+        float(row.get("prompt_price_per_million") or 0.0),
+        float(row.get("completion_price_per_million") or 0.0),
+        _parameter_flags(row.get("supported_parameters")),
+        bool(row.get("synthetic_fixture_only")),
+    ]
+
+
+def _group_prompt_catalog_endpoints(
+    endpoints: list[Any],
+) -> tuple[
+    dict[tuple[str, str, int], list[list[Any]]],
+    set[tuple[str, str]],
+]:
+    grouped: dict[tuple[str, str, int], list[list[Any]]] = {}
+    endpoint_pairs: set[tuple[str, str]] = set()
+    for row in endpoints:
+        model, company, provider, rank = _catalog_endpoint_identity(row)
+        pair = (model, provider)
+        if pair in endpoint_pairs:
+            raise GPTSelectorError(
+                "GPT selector catalog contains duplicate endpoint"
+            )
+        endpoint_pairs.add(pair)
+        grouped.setdefault((model, company, rank), []).append(
+            _prompt_provider_row(row, provider)
+        )
+    return grouped, endpoint_pairs
+
+
+def _prompt_catalog_models(
+    grouped: Mapping[tuple[str, str, int], list[list[Any]]],
+) -> list[list[Any]]:
+    return [
+        [
+            model,
+            company,
+            rank,
+            sorted(providers, key=lambda value: str(value[0])),
+        ]
+        for (model, company, rank), providers in sorted(
+            grouped.items(),
+            key=lambda item: (item[0][2], item[0][0]),
+        )
+    ]
+
+
+def _prompt_catalog_source(
+    catalog: Mapping[str, Any],
+    endpoints: list[Any],
+) -> dict[str, Any]:
+    return {
+        "required_context_tokens": int(
+            catalog.get("required_context_tokens") or 0
+        ),
+        "minimum_completion_tokens": int(
+            catalog.get("minimum_completion_tokens") or 0
+        ),
+        "endpoints": sorted(
+            [dict(row) for row in endpoints],
+            key=lambda row: (
+                str(row.get("model") or ""),
+                str(row.get("provider") or ""),
+            ),
+        ),
+    }
+
+
+def _prompt_catalog_columns() -> dict[str, Any]:
+    return {
+        "model": ["model", "company", "official_rank", "providers"],
+        "provider": [
+            "provider",
+            "context_tokens",
+            "max_output_tokens",
+            "prompt_price_per_million",
+            "completion_price_per_million",
+            "flags",
+            "synthetic_fixture_only",
+        ],
+        "flags": (
+            "position1 c=max_completion_tokens,t=max_tokens; "
+            "r=reasoning; e=reasoning_effort; T=temperature; "
+            "S=structured_outputs_or_response_format; -=unsupported"
+        ),
+    }
+
+
+def governance_prompt_catalog(
+    catalog: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Project every exact endpoint into a compact, lossless prompt view.
+
+    The full catalog remains the deterministic validation authority. This view
+    removes only repeated descriptive fields; it performs no ranking, scoring,
+    pruning, or candidate selection.
+    """
+    endpoints = catalog.get("endpoints", [])
+    if not isinstance(endpoints, list) or not endpoints:
+        raise GPTSelectorError("GPT selector catalog has no endpoints")
+    grouped, endpoint_pairs = _group_prompt_catalog_endpoints(endpoints)
+    models = _prompt_catalog_models(grouped)
+    normalized_source = _prompt_catalog_source(catalog, endpoints)
+    view = {
+        "schema_version": "v5-gpt-catalog-prompt-view-1",
+        "source_catalog_sha256": sha256(
+            _canonical_json(normalized_source).encode("utf-8")
+        ).hexdigest(),
+        "source_endpoint_count": len(endpoint_pairs),
+        "model_count": len(models),
+        "official_order_only": True,
+        "local_score_computed": False,
+        "optimizer_used": False,
+        "pareto_pruning_used": False,
+        "heuristic_ranking_used": False,
+        "required_context_tokens": int(
+            catalog.get("required_context_tokens") or 0
+        ),
+        "minimum_completion_tokens": int(
+            catalog.get("minimum_completion_tokens") or 0
+        ),
+        "columns": _prompt_catalog_columns(),
+        "models": models,
+    }
+    if len(_canonical_json(view)) > GPT_PROMPT_CATALOG_MAX_CHARS:
+        raise GPTSelectorError(
+            "compressed GPT selector catalog exceeds hard limit"
+        )
+    return view
+
+
+def _content(value: Mapping[str, Any]) -> str:
+    rendered = _canonical_json(value)
     if len(rendered) > GPT_MAX_INPUT_CHARS:
         raise GPTSelectorError("GPT selector input exceeds hard limit")
     return rendered
@@ -255,11 +437,14 @@ def _request(
     name: str,
     user: Mapping[str, Any],
 ) -> dict[str, Any]:
+    user_content = _content(user)
+    catalog = user.get("catalog")
+    catalog = dict(catalog) if isinstance(catalog, Mapping) else {}
     return {
         "model": GPT_SELECTOR_MODEL,
         "messages": [
             {"role": "system", "content": _fixed(prompt, prompt_hash)},
-            {"role": "user", "content": _content(user)},
+            {"role": "user", "content": user_content},
         ],
         "temperature": 0,
         "max_tokens": GPT_MAX_OUTPUT_TOKENS,
@@ -270,6 +455,18 @@ def _request(
             "order": [GPT_SELECTOR_PROVIDER],
             "allow_fallbacks": False,
             "require_parameters": True,
+        },
+        "governance_policy": {
+            "catalog_prompt_schema": catalog.get("schema_version"),
+            "catalog_source_sha256": catalog.get("source_catalog_sha256"),
+            "catalog_source_endpoint_count": catalog.get(
+                "source_endpoint_count"
+            ),
+            "catalog_model_count": catalog.get("model_count"),
+            "catalog_prompt_characters": len(_canonical_json(catalog)),
+            "user_message_characters": len(user_content),
+            "candidate_pruning_used": False,
+            "local_scoring_used": False,
         },
     }
 
@@ -320,7 +517,7 @@ def build_proposal_request(
         {
             "task": str(task),
             "task_envelope": task_envelope,
-            "catalog": catalog,
+            "catalog": governance_prompt_catalog(catalog),
             "hard_limits": _hard_limits(
                 approved_total_calls=approved_total_calls,
                 governance_calls_reserved=governance_calls_reserved,
@@ -364,7 +561,7 @@ def build_synthesis_request(
                 ),
             },
             "task_envelope": task_envelope,
-            "catalog": catalog,
+            "catalog": governance_prompt_catalog(catalog),
             "hard_limits": hard,
         },
     )

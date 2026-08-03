@@ -193,6 +193,8 @@ def _request_receipt(request: Mapping[str, Any]) -> dict[str, Any]:
     provider = dict(provider) if isinstance(provider, Mapping) else {}
     endpoint = request.get("governance_endpoint")
     endpoint = dict(endpoint) if isinstance(endpoint, Mapping) else {}
+    policy = request.get("governance_policy")
+    policy = dict(policy) if isinstance(policy, Mapping) else {}
     return {
         "logical_model": str(request.get("logical_model") or ""),
         "model": str(request.get("model") or ""),
@@ -205,6 +207,7 @@ def _request_receipt(request: Mapping[str, Any]) -> dict[str, Any]:
         else {},
         "provider": provider,
         "governance_endpoint": endpoint,
+        "governance_policy": policy,
         "response_schema": schema_name,
         "schema_compatibility": schema_compatibility,
         "messages": message_rows,

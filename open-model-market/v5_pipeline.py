@@ -98,12 +98,27 @@ def _merge_request_audit(
         expert = json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         expert = {}
-    expert_requests = (
+    existing_requests = (
         expert.get("requests", [])
         if isinstance(expert, Mapping)
         and isinstance(expert.get("requests"), list)
         else []
     )
+    if (
+        isinstance(expert, Mapping)
+        and expert.get("schema_version") == "v5-complete-request-audit-3"
+        and isinstance(expert.get("expert_request_count"), int)
+    ):
+        expert_count = int(expert["expert_request_count"])
+        if not 0 <= expert_count <= len(existing_requests):
+            raise RuntimeError("existing complete request audit is inconsistent")
+        expert_requests = (
+            existing_requests[-expert_count:]
+            if expert_count
+            else []
+        )
+    else:
+        expert_requests = existing_requests
     governance_calls = [
         row
         for row in governance_ledger.get("calls", [])
@@ -444,6 +459,11 @@ def _run_governance_and_materialize(
         call_fn=governance_call_fn,
     )
     write_governance_artifacts(output, governance, ledger)
+    _merge_request_audit(
+        output,
+        ledger,
+        approved_total_calls=total_calls,
+    )
     governance_cost, remaining = _remaining_cost(args.cost_anomaly_usd, ledger)
     graph, limits, materialization = materialize_proposal(
         governance["final_proposal"],

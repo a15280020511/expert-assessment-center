@@ -11,8 +11,61 @@ MARKET = ROOT / "open-model-market"
 if str(MARKET) not in sys.path:
     sys.path.insert(0, str(MARKET))
 
-from v5_gpt_expert_selector import GPTSelectorError, parse_proposal  # noqa: E402
+from v5_gpt_expert_selector import (  # noqa: E402
+    GPT_PROMPT_CATALOG_MAX_CHARS,
+    GPTSelectorError,
+    build_proposal_request,
+    build_synthesis_request,
+    governance_prompt_catalog,
+    parse_proposal,
+)
 
+
+
+def catalog_fixture(
+    *,
+    model_count: int = 100,
+    providers_per_model: int = 4,
+) -> dict[str, object]:
+    endpoints = []
+    for model_index in range(model_count):
+        model = f"company-{model_index}/model-{model_index}"
+        company = f"company-{model_index}"
+        for provider_index in range(providers_per_model):
+            endpoints.append(
+                {
+                    "model": model,
+                    "company": company,
+                    "official_intelligence_rank": model_index + 1,
+                    "provider": f"provider-{provider_index}",
+                    "provider_endpoint": (
+                        f"{model}@provider-{provider_index}"
+                    ),
+                    "context_length": 131_072 + provider_index,
+                    "max_completion_tokens": 8_192 + provider_index,
+                    "prompt_price_per_million": 1.0 + provider_index,
+                    "completion_price_per_million": (
+                        3.0 + provider_index
+                    ),
+                    "supported_parameters": [
+                        "max_tokens",
+                        "reasoning",
+                        "reasoning_effort",
+                        "temperature",
+                        "response_format",
+                    ],
+                    "input_modalities": ["text"],
+                    "output_modalities": ["text"],
+                    "synthetic_fixture_only": False,
+                }
+            )
+    return {
+        "schema_version": "v5-gpt-catalog-view-2",
+        "required_context_tokens": 16_384,
+        "minimum_completion_tokens": 256,
+        "endpoints": endpoints,
+        "rejected": [],
+    }
 
 def valid_proposal() -> dict[str, object]:
     return {
@@ -82,6 +135,105 @@ class GPTSelectorContractTests(unittest.TestCase):
         proposal["final_nodes"] = ["node-2"]
         with self.assertRaisesRegex(GPTSelectorError, "relation_type"):
             parse_proposal(json.dumps(proposal, ensure_ascii=False))
+
+
+    def test_governance_catalog_projection_preserves_every_exact_endpoint(
+        self,
+    ) -> None:
+        catalog = catalog_fixture()
+        view = governance_prompt_catalog(catalog)
+        projected = {
+            (model_row[0], provider_row[0])
+            for model_row in view["models"]
+            for provider_row in model_row[3]
+        }
+        source = {
+            (row["model"], row["provider"])
+            for row in catalog["endpoints"]
+        }
+        self.assertEqual(source, projected)
+        self.assertEqual(len(source), view["source_endpoint_count"])
+        self.assertFalse(view["local_score_computed"])
+        self.assertFalse(view["optimizer_used"])
+        self.assertFalse(view["pareto_pruning_used"])
+        rendered = json.dumps(
+            view,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        self.assertLessEqual(
+            len(rendered),
+            GPT_PROMPT_CATALOG_MAX_CHARS,
+        )
+
+    def test_governance_catalog_projection_is_order_deterministic(
+        self,
+    ) -> None:
+        catalog = catalog_fixture(model_count=4, providers_per_model=3)
+        reversed_catalog = {
+            **catalog,
+            "endpoints": list(reversed(catalog["endpoints"])),
+        }
+        self.assertEqual(
+            governance_prompt_catalog(catalog),
+            governance_prompt_catalog(reversed_catalog),
+        )
+
+    def test_gpt_requests_use_compact_catalog_without_candidate_loss(
+        self,
+    ) -> None:
+        catalog = catalog_fixture()
+        task_envelope = {
+            "required_context_tokens": 16_384,
+            "task_constraints": {},
+            "explicit_delivery_contract": {},
+        }
+        proposal = build_proposal_request(
+            task="比较两个题面方案并给出唯一建议",
+            task_envelope=task_envelope,
+            catalog=catalog,
+            approved_total_calls=4,
+            governance_calls_reserved=3,
+            approved_recovery_calls=0,
+            cost_anomaly_usd=0.25,
+        )
+        synthesis = build_synthesis_request(
+            task="比较两个题面方案并给出唯一建议",
+            initial_proposal=valid_proposal(),
+            claude_advice={"suggestions": []},
+            task_envelope=task_envelope,
+            catalog=catalog,
+            approved_total_calls=4,
+            governance_calls_reserved=3,
+            approved_recovery_calls=0,
+            cost_anomaly_usd=0.25,
+        )
+        total_input_characters = 0
+        for request in (proposal, synthesis):
+            content = request["messages"][1]["content"]
+            total_input_characters += len(content)
+            policy = request["governance_policy"]
+            self.assertEqual(
+                "v5-gpt-catalog-prompt-view-1",
+                policy["catalog_prompt_schema"],
+            )
+            self.assertEqual(400, policy["catalog_source_endpoint_count"])
+            self.assertFalse(policy["candidate_pruning_used"])
+            self.assertFalse(policy["local_scoring_used"])
+            payload = json.loads(content)
+            prompt_catalog = payload["catalog"]
+            self.assertEqual(
+                "v5-gpt-catalog-prompt-view-1",
+                prompt_catalog["schema_version"],
+            )
+            self.assertEqual(
+                400,
+                prompt_catalog["source_endpoint_count"],
+            )
+            self.assertNotIn("endpoints", prompt_catalog)
+            self.assertLess(len(content), 40_000)
+        self.assertLess(total_input_characters, 70_000)
 
     def test_duplicate_required_outputs_are_rejected_like_schema(self) -> None:
         proposal = valid_proposal()
