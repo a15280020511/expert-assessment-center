@@ -177,6 +177,11 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('MAXIMUM_RECOVERY_CALLS: "0"', paid)
         self.assertIn('COST_CAP_USD: "0.25"', paid)
         self.assertIn('MAX_COMPLETION_TOKENS: "512"', paid)
+        self.assertIn(
+            'GOVERNANCE_MAX_COMPLETION_TOKENS: "4096"',
+            paid,
+        )
+        self.assertIn("--governance-max-completion-tokens", paid)
         self.assertIn("Complete all zero-call release gates before paid execution", paid)
         self.assertIn("Run zero-cost free Canary and API-key limit preflight", paid)
         self.assertIn("https://openrouter.ai/api/v1/key", paid)

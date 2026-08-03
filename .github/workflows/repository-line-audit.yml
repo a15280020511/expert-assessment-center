@@ -2,66 +2,53 @@ name: Full Repository Line Audit
 
 on:
   pull_request:
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: repository-line-audit-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
-  apply-paid-governance-fix:
-    if: github.event.pull_request.head.repo.full_name == github.repository
+  audit:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
-      - name: Checkout exact PR head
+      - name: Checkout pinned source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Set up Python
+      - name: Set up Python 3.12
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: |
-            requirements-runtime.txt
-            requirements-dev.txt
 
-      - name: Restore verified source archive and validate
-        shell: bash
+      - name: Compile deterministic audit scanner
+        run: python -m py_compile tools/repository_audit.py
+
+      - name: Inspect every repository file and source line
         run: |
           set -euo pipefail
-          cat .github/paid-fix-v2/part* > /tmp/paid-fix-files.b64
-          base64 --decode /tmp/paid-fix-files.b64 > /tmp/paid-fix-files.tar.gz
-          test "$(sha256sum /tmp/paid-fix-files.tar.gz | awk '{print $1}')" = "e29ca6409664ba01f723c2fe3c0bc9f7a33e60449a3ab4cc3198f8cdf25776e1"
-          tar -tzf /tmp/paid-fix-files.tar.gz | sort > /tmp/archive-files.txt
-          cat > /tmp/expected-files.txt <<'EOF'
-          .github/workflows/v5-final-paid-claude-acceptance-20260803.yml
-          open-model-market/v5_governance_runtime.py
-          open-model-market/v5_pipeline.py
-          open-model-market/v5_production_ticket.py
-          tests/test_v5_governance_completion_envelope.py
-          tests/test_workflow_contract.py
-          EOF
-          sort -o /tmp/expected-files.txt /tmp/expected-files.txt
-          diff -u /tmp/expected-files.txt /tmp/archive-files.txt
-          tar -xzf /tmp/paid-fix-files.tar.gz -C .
-          git show 9467cdc0c6ce2d67bbf8e39642f4afbdfd7dcb95:.github/workflows/repository-line-audit.yml > .github/workflows/repository-line-audit.yml
-          rm -rf .github/paid-fix .github/paid-fix-v2
-          rm -f .github/workflows/apply-paid-governance-fix-20260803.yml
-          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
-          python -m pip check
-          python -m ruff check .
-          python -m compileall -q open-model-market tests tools
-          python -m unittest discover -s tests -p 'test*.py' -v
-          python tools/repository_audit.py --root . --output-dir /tmp/repository-audit --fail-on info
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --check
-          git commit -m "fix: preserve failed paid ledgers and separate governance output cap"
-          git push origin "HEAD:${GITHUB_HEAD_REF}"
+          python tools/repository_audit.py \
+            --root . \
+            --output-dir audit-artifacts \
+            --fail-on medium
+
+      - name: Freeze reviewed source snapshot
+        run: |
+          set -euo pipefail
+          tar --exclude=.git --exclude=audit-artifacts \
+            -czf audit-artifacts/repository-source-${GITHUB_SHA}.tar.gz .
+          sha256sum audit-artifacts/repository-source-${GITHUB_SHA}.tar.gz \
+            > audit-artifacts/repository-source-${GITHUB_SHA}.sha256
+
+      - name: Upload full audit evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: repository-line-audit-${{ github.run_id }}
+          path: audit-artifacts/
+          if-no-files-found: error
+          retention-days: 30
