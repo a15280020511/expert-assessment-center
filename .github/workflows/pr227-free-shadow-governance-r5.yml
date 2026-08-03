@@ -1,0 +1,368 @@
+name: PR227 Zero-Cost Governance Shadow R5
+
+on:
+  push:
+    branches:
+      - acceptance/pr227-free-shadow-governance-20260803-r5
+    paths:
+      - .github/pr227-free-shadow-governance-r5-request.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr227-free-shadow-governance-r5
+  cancel-in-progress: false
+
+jobs:
+  free-shadow-governance:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
+      OPENROUTER_APP_NAME: expert-center-pr227-free-shadow-governance
+      TARGET_SHA: 0383d2ef80f1890306bc0bc5f7b37836cb2579ca
+      REQUEST_FILE: .github/pr227-free-shadow-governance-r5-request.json
+    steps:
+      - name: Checkout immutable free-only request
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: acceptance/pr227-free-shadow-governance-20260803-r5
+          fetch-depth: 0
+          persist-credentials: true
+          path: request-source
+
+      - name: Validate exact free-shadow request
+        working-directory: request-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '
+            type == "object" and
+            (keys | sort) == [
+              "authorization",
+              "max_completion_tokens",
+              "maximum_model_requests",
+              "maximum_paid_model_calls",
+              "model",
+              "provider_data_collection",
+              "provider_zdr",
+              "purpose",
+              "schema_version",
+              "stages",
+              "target_sha"
+            ] and
+            .schema_version == "pr227-free-shadow-governance-5" and
+            .authorization == "RUN-FREE-SHADOW-ONCE" and
+            .purpose == "zero-cost-proposal-red-team-synthesis-contract-test" and
+            .target_sha == env.TARGET_SHA and
+            .model == "openrouter/free" and
+            .provider_data_collection == "allow" and
+            .provider_zdr == false and
+            .maximum_model_requests == 3 and
+            .maximum_paid_model_calls == 0 and
+            .max_completion_tokens == 1024 and
+            .stages == ["proposal", "red_team_advice", "synthesis"]
+          ' "$REQUEST_FILE" >/dev/null
+          test "$(git diff --name-only HEAD^ HEAD)" = "$REQUEST_FILE"
+          git merge-base --is-ancestor "$TARGET_SHA" HEAD^
+
+      - name: Checkout successful free Canary receipt
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: acceptance/pr227-free-preflight-20260803-r4
+          persist-credentials: false
+          path: prior-free-canary
+
+      - name: Require simulation and free Canary PASS
+        run: |
+          set -euo pipefail
+          jq -e '
+            .status == "PASS" and
+            .prior_zero_call_simulation == "PASS" and
+            .free_canary.status == "PASS" and
+            .free_canary.paid_model_calls == 0 and
+            .free_canary.actual_cost_usd == 0 and
+            .paid_acceptance_triggered == false and
+            .production_ref_moved == false
+          ' prior-free-canary/acceptance-evidence/pr227-free-preflight-r4-result.json >/dev/null
+
+      - name: Checkout exact PR source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: 0383d2ef80f1890306bc0bc5f7b37836cb2579ca
+          persist-credentials: false
+          path: runtime-source
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: runtime-source/requirements-runtime.txt
+
+      - name: Install minimal runtime dependencies
+        working-directory: runtime-source
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
+          python -m pip check
+
+      - name: Execute three-stage free governance shadow
+        id: shadow
+        continue-on-error: true
+        working-directory: runtime-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${OPENROUTER_API_KEY:-}"
+          mkdir -p /tmp/pr227-free-shadow-r5
+          PYTHONPATH=open-model-market python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          from openrouter_api import CHAT_URL, request_json
+          from v5_claude_red_team_policy import (
+              advice_json_schema,
+              parse_claude_red_team_advice,
+          )
+          from v5_execution_primitives import actual_cost, extract_answer, finish_reason
+          from v5_gpt_expert_selector import _schema, parse_proposal
+          from v5_structured_output_compat import normalize_strict_response_format
+
+          output = Path('/tmp/pr227-free-shadow-r5/shadow-result.json')
+          result = {
+              'schema_version': 'pr227-free-shadow-governance-result-5',
+              'status': 'FAIL',
+              'requested_model': 'openrouter/free',
+              'model_requests': 0,
+              'successful_model_calls': 0,
+              'paid_model_calls': 0,
+              'total_cost_usd': 0.0,
+              'provider_data_collection': 'allow',
+              'provider_zdr': False,
+              'raw_prompts_persisted': False,
+              'raw_answers_persisted': False,
+              'stages': [],
+          }
+
+          provider_policy = {
+              'data_collection': 'allow',
+              'zdr': False,
+              'allow_fallbacks': True,
+              'require_parameters': True,
+          }
+
+          def clean_json(text):
+              value = str(text or '').strip()
+              if value.startswith('```') and value.endswith('```'):
+                  lines = value.splitlines()
+                  value = '\n'.join(lines[1:-1]).strip()
+              return value
+
+          def run_stage(name, prompt, schema, parser, max_tokens):
+              normalized_schema, compatibility = normalize_strict_response_format(schema)
+              payload = {
+                  'model': 'openrouter/free',
+                  'messages': [
+                      {
+                          'role': 'system',
+                          'content': 'Return only strict JSON matching the supplied schema. Do not use tools.',
+                      },
+                      {'role': 'user', 'content': prompt},
+                  ],
+                  'stream': False,
+                  'max_tokens': max_tokens,
+                  'response_format': normalized_schema,
+                  'provider': dict(provider_policy),
+              }
+              result['model_requests'] += 1
+              response = request_json(
+                  CHAT_URL,
+                  os.environ['OPENROUTER_API_KEY'],
+                  120,
+                  0,
+                  payload,
+              )
+              result['successful_model_calls'] += 1
+              answer = clean_json(extract_answer(response))
+              parsed = parser(answer)
+              cost = actual_cost(response)
+              result['total_cost_usd'] += cost
+              if cost > 1e-12:
+                  raise RuntimeError(f'{name} free stage returned positive cost: {cost}')
+              receipt = {
+                  'stage': name,
+                  'selected_response_model': str(response.get('model') or ''),
+                  'provider': str(response.get('provider') or ''),
+                  'finish_reason': finish_reason(response),
+                  'cost_usd': cost,
+                  'prompt_characters': len(prompt),
+                  'prompt_sha256': hashlib.sha256(prompt.encode('utf-8')).hexdigest(),
+                  'answer_characters': len(answer),
+                  'answer_sha256': hashlib.sha256(answer.encode('utf-8')).hexdigest(),
+                  'schema_compatibility': compatibility,
+                  'parser': getattr(parser, '__name__', type(parser).__name__),
+              }
+              result['stages'].append(receipt)
+              return parsed
+
+          proposal_prompt = '''Create exactly this minimal expert graph while obeying the schema:
+- work_items: one item with work_id w1, objective Compare plan A and plan B, dependencies empty, required_outputs containing recommendation
+- nodes: one node with node_id n1, work_ids containing w1, role decision_analyst, functions containing comparison, model free/shadow-expert, provider free-shadow, reasoning_effort low, max_output_tokens 256, recovery empty
+- edges: empty
+- final_nodes: containing n1'''
+
+          red_prompt_template = '''Review this already schema-valid shadow proposal. Return an empty suggestions array because this is only a transport and parser test, not a real approval decision. Proposal digest: {digest}.'''
+
+          synthesis_prompt_template = '''Return the same minimal schema-valid proposal after an advisory review with zero suggestions. Proposal digest: {proposal_digest}. Advice digest: {advice_digest}. Use the exact values from the original proposal.'''
+
+          try:
+              proposal = run_stage(
+                  'proposal',
+                  proposal_prompt,
+                  _schema('pr227_free_shadow_proposal'),
+                  parse_proposal,
+                  1024,
+              )
+              proposal_digest = hashlib.sha256(
+                  json.dumps(
+                      proposal,
+                      ensure_ascii=False,
+                      sort_keys=True,
+                      separators=(',', ':'),
+                  ).encode('utf-8')
+              ).hexdigest()
+              red_prompt = red_prompt_template.format(digest=proposal_digest)
+              advice = run_stage(
+                  'red_team_advice',
+                  red_prompt,
+                  advice_json_schema(),
+                  parse_claude_red_team_advice,
+                  512,
+              )
+              if advice.get('suggestions') != []:
+                  raise RuntimeError('free red-team shadow returned non-empty suggestions')
+              advice_digest = hashlib.sha256(
+                  json.dumps(
+                      {'suggestions': advice.get('suggestions')},
+                      ensure_ascii=False,
+                      sort_keys=True,
+                      separators=(',', ':'),
+                  ).encode('utf-8')
+              ).hexdigest()
+              synthesis_prompt = synthesis_prompt_template.format(
+                  proposal_digest=proposal_digest,
+                  advice_digest=advice_digest,
+              )
+              synthesis = run_stage(
+                  'synthesis',
+                  synthesis_prompt,
+                  _schema('pr227_free_shadow_synthesis'),
+                  parse_proposal,
+                  1024,
+              )
+              if synthesis != proposal:
+                  raise RuntimeError('free synthesis shadow changed the exact minimal proposal')
+              if result['model_requests'] != 3 or result['successful_model_calls'] != 3:
+                  raise RuntimeError('free shadow did not execute exactly three successful calls')
+              if result['total_cost_usd'] > 1e-12:
+                  raise RuntimeError('free shadow accumulated positive cost')
+              result['proposal_digest'] = proposal_digest
+              result['advice_digest'] = advice_digest
+              result['synthesis_matches_proposal'] = True
+              result['status'] = 'PASS'
+          except Exception as exc:
+              result['error_type'] = type(exc).__name__
+              result['error_message'] = str(exc)[:1600]
+          finally:
+              output.write_text(
+                  json.dumps(result, ensure_ascii=False, indent=2) + '\n',
+                  encoding='utf-8',
+              )
+              print(json.dumps(result, ensure_ascii=False))
+          if result['status'] != 'PASS':
+              raise SystemExit(1)
+          PY
+
+      - name: Build authoritative shadow receipt
+        if: always()
+        env:
+          SHADOW_OUTCOME: ${{ steps.shadow.outcome }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          mkdir -p /tmp/pr227-free-shadow-r5
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path('/tmp/pr227-free-shadow-r5/shadow-result.json')
+          try:
+              shadow = json.loads(path.read_text(encoding='utf-8'))
+          except (FileNotFoundError, json.JSONDecodeError):
+              shadow = {}
+          passed = (
+              os.environ.get('SHADOW_OUTCOME') == 'success'
+              and shadow.get('status') == 'PASS'
+              and int(shadow.get('model_requests') or 0) == 3
+              and int(shadow.get('successful_model_calls') or 0) == 3
+              and int(shadow.get('paid_model_calls') or 0) == 0
+              and float(shadow.get('total_cost_usd') or 0.0) == 0.0
+          )
+          result = {
+              'schema_version': 'pr227-free-shadow-governance-final-5',
+              'status': 'PASS' if passed else 'FAIL',
+              'run_id': os.environ.get('RUN_ID'),
+              'target_sha': '0383d2ef80f1890306bc0bc5f7b37836cb2579ca',
+              'prior_zero_call_simulation': 'PASS',
+              'prior_free_canary': 'PASS',
+              'shadow_governance': shadow,
+              'maximum_model_requests': 3,
+              'maximum_paid_model_calls': 0,
+              'paid_acceptance_triggered': False,
+              'production_ref_moved': False,
+              'formal_model_identity_qualified': False,
+          }
+          Path('/tmp/pr227-free-shadow-r5/final-result.json').write_text(
+              json.dumps(result, ensure_ascii=False, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          print(json.dumps(result, ensure_ascii=False))
+          PY
+
+      - name: Upload zero-cost shadow evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr227-free-shadow-governance-r5-${{ github.run_id }}
+          path: /tmp/pr227-free-shadow-r5/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Persist shadow result
+        if: always()
+        working-directory: request-source
+        run: |
+          set -euo pipefail
+          mkdir -p acceptance-evidence
+          cp /tmp/pr227-free-shadow-r5/final-result.json \
+            acceptance-evidence/pr227-free-shadow-governance-r5-result.json
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add acceptance-evidence/pr227-free-shadow-governance-r5-result.json
+          git commit -m 'test: persist PR227 zero-cost governance shadow result'
+          git push origin HEAD:acceptance/pr227-free-shadow-governance-20260803-r5
+
+      - name: Enforce zero-cost shadow gate
+        if: always()
+        run: |
+          jq -e '
+            .status == "PASS" and
+            .maximum_paid_model_calls == 0 and
+            .paid_acceptance_triggered == false and
+            .production_ref_moved == false and
+            .formal_model_identity_qualified == false
+          ' /tmp/pr227-free-shadow-r5/final-result.json >/dev/null
