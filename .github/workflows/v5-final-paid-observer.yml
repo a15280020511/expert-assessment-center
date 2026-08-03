@@ -1,0 +1,184 @@
+name: V5 Final Paid Acceptance Observer
+
+on:
+  push:
+    branches:
+      - "acceptance/v5-final-paid-*"
+    paths:
+      - ".github/v5-final-paid-observer-request.json"
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: v5-final-paid-acceptance-observer
+  cancel-in-progress: false
+
+jobs:
+  observe:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      OBSERVER_BRANCH: ${{ github.ref_name }}
+      OBSERVER_REQUEST: .github/v5-final-paid-observer-request.json
+    steps:
+      - name: Check out observer branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Validate observer-only request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '
+            type == "object" and
+            (keys | sort) == [
+              "authorization",
+              "paid_request_sha",
+              "request_id",
+              "schema_version"
+            ] and
+            .schema_version == "v5-final-paid-observer-request-1" and
+            .authorization == "OBSERVE-ONLY" and
+            (.paid_request_sha | test("^[0-9a-f]{40}$")) and
+            (.request_id | test("^[a-z0-9][a-z0-9._-]{0,63}$"))
+          ' "$OBSERVER_REQUEST" >/dev/null
+          test "$(git diff --name-only HEAD^ HEAD)" = "$OBSERVER_REQUEST"
+          echo "paid_request_sha=$(jq -er '.paid_request_sha' "$OBSERVER_REQUEST")" >> "$GITHUB_OUTPUT"
+          echo "request_id=$(jq -er '.request_id' "$OBSERVER_REQUEST")" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for exact paid Run and collect durable status
+        env:
+          PAID_REQUEST_SHA: ${{ steps.request.outputs.paid_request_sha }}
+          REQUEST_ID: ${{ steps.request.outputs.request_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p acceptance-evidence observer-download
+          run=''
+          for attempt in $(seq 1 240); do
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/$REPOSITORY/actions/runs?head_sha=$PAID_REQUEST_SHA&per_page=100" \
+              > observer-runs.json
+            run=$(jq -c '
+              [.workflow_runs[] | select(.name == "V5 Final Paid Claude Acceptance")]
+              | if length == 1 then .[0] elif length == 0 then empty else error("multiple exact paid runs") end
+            ' observer-runs.json)
+            if [[ -n "$run" ]]; then
+              status=$(jq -r '.status' <<<"$run")
+              if [[ "$status" == completed ]]; then
+                break
+              fi
+            fi
+            sleep 15
+          done
+
+          if [[ -z "$run" ]]; then
+            jq -n \
+              --arg request_id "$REQUEST_ID" \
+              --arg paid_request_sha "$PAID_REQUEST_SHA" \
+              '{
+                schema_version: "v5-final-paid-observer-result-1",
+                status: "NOT_FOUND",
+                request_id: $request_id,
+                paid_request_sha: $paid_request_sha,
+                model_calls_triggered_by_observer: 0,
+                production_ref_moved: false
+              }' > "acceptance-evidence/$REQUEST_ID-observed.json"
+          else
+            run_id=$(jq -r '.id' <<<"$run")
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/$REPOSITORY/actions/runs/$run_id/jobs?per_page=100" \
+              > observer-jobs.json
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/$REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" \
+              > observer-artifacts.json
+
+            attestation_name="v5-final-paid-acceptance-attestation-$run_id"
+            attestation_id=$(jq -r --arg name "$attestation_name" '
+              [.artifacts[] | select(.name == $name and .expired == false)]
+              | if length == 1 then .[0].id else empty end
+            ' observer-artifacts.json)
+            attestation='null'
+            if [[ -n "$attestation_id" ]]; then
+              gh api \
+                -H "Accept: application/vnd.github+json" \
+                "/repos/$REPOSITORY/actions/artifacts/$attestation_id/zip" \
+                > observer-download/attestation.zip
+              unzip -q observer-download/attestation.zip -d observer-download/attestation
+              if [[ -s observer-download/attestation/paid-acceptance-attestation.json ]]; then
+                cp observer-download/attestation/paid-acceptance-attestation.json \
+                  "acceptance-evidence/$REQUEST_ID-attestation.json"
+                attestation=$(cat observer-download/attestation/paid-acceptance-attestation.json)
+              fi
+            fi
+
+            jq -n \
+              --arg request_id "$REQUEST_ID" \
+              --arg paid_request_sha "$PAID_REQUEST_SHA" \
+              --argjson run "$run" \
+              --slurpfile jobs observer-jobs.json \
+              --slurpfile artifacts observer-artifacts.json \
+              --argjson attestation "$attestation" \
+              '{
+                schema_version: "v5-final-paid-observer-result-1",
+                status: (if $run.status == "completed" then ($run.conclusion | ascii_upcase) else ($run.status | ascii_upcase) end),
+                request_id: $request_id,
+                paid_request_sha: $paid_request_sha,
+                paid_run: {
+                  id: $run.id,
+                  name: $run.name,
+                  event: $run.event,
+                  status: $run.status,
+                  conclusion: $run.conclusion,
+                  head_branch: $run.head_branch,
+                  head_sha: $run.head_sha,
+                  run_attempt: $run.run_attempt,
+                  created_at: $run.created_at,
+                  updated_at: $run.updated_at,
+                  html_url: $run.html_url
+                },
+                jobs: [
+                  $jobs[0].jobs[] | {
+                    id,
+                    name,
+                    status,
+                    conclusion,
+                    started_at,
+                    completed_at
+                  }
+                ],
+                artifacts: [
+                  $artifacts[0].artifacts[] | {
+                    id,
+                    name,
+                    size_in_bytes,
+                    expired,
+                    digest,
+                    created_at,
+                    expires_at
+                  }
+                ],
+                final_attestation: $attestation,
+                model_calls_triggered_by_observer: 0,
+                production_ref_moved: false
+              }' > "acceptance-evidence/$REQUEST_ID-observed.json"
+          fi
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add acceptance-evidence/
+          git commit -m "audit: persist observed final paid acceptance $REQUEST_ID"
+          git push origin "HEAD:refs/heads/$OBSERVER_BRANCH"
+          cat "acceptance-evidence/$REQUEST_ID-observed.json"
