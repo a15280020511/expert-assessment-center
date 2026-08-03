@@ -8,6 +8,7 @@ fact, not a center-defined budget.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
 import v5_execution_primitives as primitives
@@ -227,6 +228,28 @@ def completion_token_budget(
     }
 
 
+def _request_safe_node(node: SelectedNode) -> SelectedNode:
+    """Remove legacy local Token fields before the base request constructor."""
+    request = dict(node.request_config)
+    request.pop("max_tokens", None)
+    request.pop("max_completion_tokens", None)
+    reasoning = request.get("reasoning")
+    if isinstance(reasoning, Mapping):
+        cleaned = dict(reasoning)
+        for key in (
+            "max_tokens",
+            "max_completion_tokens",
+            "budget_tokens",
+            "token_budget",
+        ):
+            cleaned.pop(key, None)
+        if cleaned:
+            request["reasoning"] = cleaned
+        else:
+            request.pop("reasoning", None)
+    return replace(node, request_config=request)
+
+
 def hardened_build_node_payload(
     node: SelectedNode,
     original_task: str,
@@ -248,13 +271,12 @@ def hardened_build_node_payload(
         compacted.append({**dict(row), "answer": clipped})
         remaining -= len(clipped)
 
+    safe_node = _request_safe_node(node)
     payload = primitives.build_node_payload(
-        node,
+        safe_node,
         original_task,
         compacted,
     )
-    payload.pop("max_tokens", None)
-    payload.pop("max_completion_tokens", None)
 
     reasoning = payload.get("reasoning")
     if isinstance(reasoning, Mapping):
