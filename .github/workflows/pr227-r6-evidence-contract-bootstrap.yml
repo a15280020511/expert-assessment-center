@@ -7,14 +7,14 @@ on:
       - .github/workflows/pr227-r6-evidence-contract-bootstrap.yml
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: pr227-r6-evidence-contract-bootstrap
   cancel-in-progress: false
 
 jobs:
-  validate-and-commit:
+  validate-and-package:
     if: >-
       github.event.pull_request.number == 227 &&
       github.event.pull_request.head.ref == 'fix/v5-claude-unified-red-team-cleanup-20260803'
@@ -26,7 +26,7 @@ jobs:
         with:
           ref: fix/v5-claude-unified-red-team-cleanup-20260803
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Extract and apply staged remediation
         shell: bash
@@ -183,22 +183,88 @@ jobs:
               raise SystemExit(1)
           PY
 
-      - name: Upload zero-call validation evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: pr227-r6-evidence-contract-${{ github.run_id }}
-          path: /tmp/pr227-r6-evidence-contract/
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Commit validated repair and remove staging workflows
+      - name: Prepare exact validated source bundle
+        shell: bash
         run: |
           set -euo pipefail
           rm .github/workflows/pr227-r6-evidence-contract-remediation.yml
           rm .github/workflows/pr227-r6-evidence-contract-bootstrap.yml
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git diff --cached --check
-          git commit -m "fix: align R6 evidence phase contracts"
-          git push origin HEAD:fix/v5-claude-unified-red-team-cleanup-20260803
+          bundle=/tmp/pr227-r6-evidence-contract/validated-source
+          mkdir -p "$bundle/files"
+          git diff --binary --full-index HEAD > "$bundle/validated.patch"
+          git diff --name-status HEAD > "$bundle/name-status.txt"
+          python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import shutil
+          import subprocess
+          from pathlib import Path
+
+          root = Path.cwd()
+          bundle = Path('/tmp/pr227-r6-evidence-contract/validated-source')
+          raw = subprocess.check_output(
+              ['git', 'diff', '--name-status', '-z', 'HEAD']
+          )
+          fields = raw.decode('utf-8').split('\0')
+          entries = []
+          index = 0
+          while index < len(fields) and fields[index]:
+              status = fields[index]
+              index += 1
+              if status.startswith(('R', 'C')):
+                  old_path = fields[index]
+                  new_path = fields[index + 1]
+                  index += 2
+                  path = new_path
+              else:
+                  old_path = None
+                  path = fields[index]
+                  index += 1
+              item = {
+                  'status': status,
+                  'path': path,
+                  'old_path': old_path,
+                  'sha256': None,
+                  'size_bytes': None,
+              }
+              if not status.startswith('D'):
+                  source = root / path
+                  target = bundle / 'files' / path
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copy2(source, target)
+                  data = source.read_bytes()
+                  item['sha256'] = hashlib.sha256(data).hexdigest()
+                  item['size_bytes'] = len(data)
+              entries.append(item)
+          manifest = {
+              'schema_version': 'pr227-r6-validated-source-bundle-1',
+              'base_sha': subprocess.check_output(
+                  ['git', 'rev-parse', 'HEAD'], text=True
+              ).strip(),
+              'status': 'PASS',
+              'chat_model_calls': 0,
+              'paid_model_calls': 0,
+              'entries': entries,
+          }
+          (bundle / 'manifest.json').write_text(
+              json.dumps(manifest, ensure_ascii=False, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          if not entries:
+              raise SystemExit('validated source bundle has no changes')
+          print(json.dumps(manifest, ensure_ascii=False))
+          PY
+          tar -C "$bundle" -cf /tmp/pr227-r6-evidence-contract/validated-source.tar \
+            manifest.json name-status.txt validated.patch files
+          sha256sum /tmp/pr227-r6-evidence-contract/validated-source.tar \
+            > /tmp/pr227-r6-evidence-contract/validated-source.tar.sha256
+
+      - name: Upload zero-call validation and exact source evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr227-r6-validated-source-${{ github.run_id }}
+          path: /tmp/pr227-r6-evidence-contract/
+          if-no-files-found: error
+          retention-days: 30
