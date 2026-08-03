@@ -15,5 +15,5 @@
   "maximum_cost_usd": 0.25,
   "chat_model_calls": 0,
   "paid_model_calls": 0,
-  "generator_commit_sha": "b051030d8ef32746c25eead99b5da341d92e8366"
+  "generator_commit_sha": "96d3c59a632a23d1dfdcc2006435e6da22a74873"
 }
