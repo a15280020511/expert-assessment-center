@@ -1,0 +1,11 @@
+{
+  "schema_version": "v5-final-paid-acceptance-request-1",
+  "authorization": "RUN-EXACTLY-ONCE",
+  "purpose": "final-exact-gpt-claude-production-qualification",
+  "request_id": "final-9467cdc0-20260803-1729",
+  "target_sha": "9467cdc0c6ce2d67bbf8e39642f4afbdfd7dcb95",
+  "maximum_total_calls": 4,
+  "maximum_recovery_calls": 0,
+  "cost_cap_usd": 0.25,
+  "max_completion_tokens": 512
+}
