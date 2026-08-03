@@ -1,0 +1,48 @@
+{
+  "schema_version": "pr227-production-paid-r6-receipt-1",
+  "status": "FAIL",
+  "run_id": "30773433119",
+  "target_sha": "9360c9f05892e02c42c84d28f1cf10dc2461ebcb",
+  "step_outcomes": {
+    "execute": "failure",
+    "primary_build": "skipped",
+    "primary": "success",
+    "prove": "skipped",
+    "proof": "success"
+  },
+  "expert_error": {
+    "version": 5,
+    "runtime_version": "v5-gpt-claude-runtime-1",
+    "error_code": "V5_PRODUCTION_EXECUTION_FAILED",
+    "stage": "v5-gpt-claude-production-runtime",
+    "message": "governance calls exhausted the approved cost guard",
+    "traceback": "Traceback (most recent call last):\n  File \"/home/runner/work/expert-assessment-center/expert-assessment-center/runtime-source/open-model-market/v5_production_ticket.py\", line 187, in main\n    v5_pipeline.main(\n  File \"/home/runner/work/expert-assessment-center/expert-assessment-center/runtime-source/open-model-market/v5_pipeline.py\", line 601, in main\n    _, ledger, graph, limits, governance_cost, remaining = _run_governance_and_materialize(\n                                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/expert-assessment-center/expert-assessment-center/runtime-source/open-model-market/v5_pipeline.py\", line 447, in _run_governance_and_materialize\n    governance_cost, remaining = _remaining_cost(args.cost_anomaly_usd, ledger)\n                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/expert-assessment-center/expert-assessment-center/runtime-source/open-model-market/v5_pipeline.py\", line 391, in _remaining_cost\n    raise RuntimeError(\"governance calls exhausted the approved cost guard\")\nRuntimeError: governance calls exhausted the approved cost guard\n",
+    "normalization_error": "complete request audit and call ledger disagree: requests=0, ledger=3",
+    "fallback_used": false,
+    "local_planner_present": false,
+    "optimizer_present": false,
+    "claude_red_team_calls": 1,
+    "claude_is_advisory_only": true,
+    "claude_gatekeeping_allowed": false,
+    "gpt_synthesis_calls": 1,
+    "model_loop_allowed": false,
+    "cross_task_history_used": false
+  },
+  "execution_audit": {},
+  "total_model_calls": null,
+  "governance_model_calls": null,
+  "expert_model_calls": null,
+  "actual_cost_usd": null,
+  "primary_artifact": {
+    "id": "8841289651",
+    "digest": "5844ef3453010f335d847680a04fe2d966fbdf7e319d848c8520856352314a86"
+  },
+  "proof_artifact": {
+    "id": "",
+    "digest": ""
+  },
+  "independent_revalidation": {},
+  "final_status": {},
+  "final_attestation": {},
+  "production_ref_moved": false
+}
