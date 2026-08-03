@@ -60,6 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     parser.add_argument("--cost-anomaly-usd", type=float)
+    parser.add_argument("--max-completion-tokens", type=int)
     parser.add_argument("--require-live-catalog", action="store_true")
     return parser
 
@@ -85,6 +86,11 @@ def _pipeline_args(
         values.extend([
             "--cost-anomaly-usd",
             str(args.cost_anomaly_usd),
+        ])
+    if args.max_completion_tokens is not None:
+        values.extend([
+            "--max-completion-tokens",
+            str(args.max_completion_tokens),
         ])
     if args.require_live_catalog:
         values.append("--require-live-catalog")
@@ -123,6 +129,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "recovery reserve must leave an expert call after "
             "three governance calls"
         )
+    if (
+        args.max_completion_tokens is not None
+        and args.max_completion_tokens <= 0
+    ):
+        raise ValueError("max-completion-tokens must be positive")
     task, source = _canonical_user_task(root, args.task)
     if not task:
         raise ValueError("canonical user task is empty")
@@ -168,6 +179,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.maximum_recovery_calls
             ),
             "cost_anomaly_usd": args.cost_anomaly_usd,
+            "max_completion_tokens": args.max_completion_tokens,
             "claude_is_advisory_only": True,
             "claude_gatekeeping_allowed": False,
             "deterministic_validator_is_only_hard_gate": True,
@@ -202,6 +214,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "actual_cost_usd": result["actual_cost_usd"],
             "node_count": result["node_count"],
             "approved_total_calls": args.maximum_total_calls,
+            "max_completion_tokens": args.max_completion_tokens,
             "selection_authority": "gpt-latest",
             "claude_red_team_calls": 1,
             "claude_is_advisory_only": True,
@@ -231,6 +244,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "fallback_used": False,
                 "local_planner_present": False,
                 "optimizer_present": False,
+                "max_completion_tokens": args.max_completion_tokens,
                 "claude_red_team_calls": 1,
                 "claude_is_advisory_only": True,
                 "claude_gatekeeping_allowed": False,
