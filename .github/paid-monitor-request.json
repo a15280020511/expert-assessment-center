@@ -1,0 +1,6 @@
+{
+  "schema_version": "v5-final-paid-monitor-request-1",
+  "authorization_commit_sha": "5d4edd01e26e6affbc8a43a955e71057d49a1c5e",
+  "authorization_branch": "acceptance/v5-final-paid-9467cdc0-20260803-r1",
+  "target_sha": "9467cdc0c6ce2d67bbf8e39642f4afbdfd7dcb95"
+}
