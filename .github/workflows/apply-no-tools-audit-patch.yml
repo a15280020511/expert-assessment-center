@@ -6,12 +6,19 @@ on:
       - codex/no-tools-network-granular-audit-20260804
     paths:
       - .github/audit_no_tools_patch.py
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize]
+    paths:
+      - .github/audit_no_tools_patch.py
 
 permissions:
   contents: write
 
 jobs:
   apply:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
