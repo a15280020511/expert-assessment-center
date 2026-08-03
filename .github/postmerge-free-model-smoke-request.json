@@ -1,0 +1,8 @@
+{
+  "schema_version": "postmerge-free-model-smoke-request-1",
+  "authorization": "FREE-ONLY-NO-PAID-FALLBACK",
+  "request_id": "postmerge-pr227-free-r1",
+  "target_sha": "682b0cbf8b780d79ff6d1840924a16bb91924394",
+  "maximum_model_calls": 1,
+  "maximum_paid_model_calls": 0
+}
