@@ -1,0 +1,31 @@
+{
+  "schema_version": "pr227-production-paid-r7-receipt-1",
+  "status": "FAIL",
+  "run_id": "30782328225",
+  "target_sha": "2a0d1b5d2d8bc77b52a7af5a4d257843675c662e",
+  "step_outcomes": {
+    "execute": "skipped",
+    "primary_build": "skipped",
+    "primary": "failure",
+    "prove": "skipped",
+    "proof": "success"
+  },
+  "expert_error": {},
+  "execution_audit": {},
+  "total_model_calls": null,
+  "governance_model_calls": null,
+  "expert_model_calls": null,
+  "actual_cost_usd": null,
+  "primary_artifact": {
+    "id": "",
+    "digest": ""
+  },
+  "proof_artifact": {
+    "id": "",
+    "digest": ""
+  },
+  "independent_revalidation": {},
+  "final_status": {},
+  "final_attestation": {},
+  "production_ref_moved": false
+}
