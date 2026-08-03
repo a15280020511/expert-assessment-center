@@ -84,6 +84,18 @@ class NoToolsNetworkPolicyTests(unittest.TestCase):
                     assert_request_has_no_tools({"model": model, "messages": []})
         assert_request_has_no_tools({"model": "vendor/exact-model", "messages": []})
 
+    def test_free_canary_uses_exact_model_without_router_bypass(self) -> None:
+        workflow = (
+            ROOT / ".github" / "workflows" / "v5-free-model-qualification.yml"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn('"model": "openrouter/free"', workflow)
+        self.assertIn("MODELS_URL", workflow)
+        self.assertIn('model_id.endswith(":free")', workflow)
+        self.assertIn('"requested_model": selected_model', workflow)
+        self.assertIn('"exact_model_required": True', workflow)
+        self.assertIn('zero_price(pricing.get("prompt"))', workflow)
+        self.assertIn('zero_price(pricing.get("completion"))', workflow)
+
     def test_response_side_tool_and_network_evidence_is_rejected(self) -> None:
         responses = (
             {
