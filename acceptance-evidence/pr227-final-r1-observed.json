@@ -1,0 +1,51 @@
+{
+  "schema_version": "v5-final-paid-observer-result-1",
+  "status": "FAILURE",
+  "request_id": "pr227-final-r1",
+  "paid_request_sha": "c8953ebbf608c2ae2eda972b1d1f3439637ad9a7",
+  "paid_run": {
+    "id": 30790692577,
+    "name": "V5 Final Paid Claude Acceptance",
+    "event": "push",
+    "status": "completed",
+    "conclusion": "failure",
+    "head_branch": "acceptance/v5-final-paid-pr227-20260803-r1",
+    "head_sha": "c8953ebbf608c2ae2eda972b1d1f3439637ad9a7",
+    "run_attempt": 1,
+    "created_at": "2026-08-03T06:35:18Z",
+    "updated_at": "2026-08-03T06:36:09Z",
+    "html_url": "https://github.com/a15280020511/expert-assessment-center/actions/runs/30790692577"
+  },
+  "jobs": [
+    {
+      "id": 91613370331,
+      "name": "paid-acceptance",
+      "status": "completed",
+      "conclusion": "failure",
+      "started_at": "2026-08-03T06:35:38Z",
+      "completed_at": "2026-08-03T06:36:08Z"
+    },
+    {
+      "id": 91613508551,
+      "name": "independently-recompute-paid-artifact",
+      "status": "completed",
+      "conclusion": "skipped",
+      "started_at": "2026-08-03T06:36:09Z",
+      "completed_at": "2026-08-03T06:36:09Z"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": 8846923256,
+      "name": "v5-final-paid-claude-acceptance-30790692577",
+      "size_in_bytes": 35684,
+      "expired": false,
+      "digest": "sha256:85462a1504ebc269c84ed8f715ba069e9a59e9c252e6465cda880671577dd406",
+      "created_at": "2026-08-03T06:36:05Z",
+      "expires_at": "2026-09-02T06:36:04Z"
+    }
+  ],
+  "final_attestation": null,
+  "model_calls_triggered_by_observer": 0,
+  "production_ref_moved": false
+}
