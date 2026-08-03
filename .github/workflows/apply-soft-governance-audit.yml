@@ -31,7 +31,7 @@ jobs:
           ref: codex/soft-governance-granular-audit-20260804
           fetch-depth: 0
 
-      - name: Verify and apply frozen patch
+      - name: Verify and apply frozen non-workflow patch
         shell: bash
         run: |
           set -euo pipefail
@@ -41,8 +41,10 @@ jobs:
           path = Path('.audit-payload/part-006a.b64')
           content = path.read_text(encoding='utf-8')
           assert content.count('F2Six5conroww') == 1
-          content = content.replace('F2Six5conroww', 'F2Six5conCroww')
-          path.write_text(content, encoding='utf-8')
+          path.write_text(
+              content.replace('F2Six5conroww', 'F2Six5conCroww'),
+              encoding='utf-8',
+          )
           PY
           cat > /tmp/expected.sha256 <<'EOF'
           2f5f808774541382a35850894ffca1149706339f79fe8c2f823db3054e36ff0a  .audit-payload/part-001.b64
@@ -67,11 +69,11 @@ jobs:
             > /tmp/soft-governance-audit.patch
           git apply --check --binary /tmp/soft-governance-audit.patch
           git apply --binary /tmp/soft-governance-audit.patch
+          git restore --source=HEAD -- .github/workflows
           rm -rf .audit-payload
-          rm -f .github/workflows/apply-soft-governance-audit.yml
           git diff --check
 
-      - name: Commit audited source
+      - name: Commit audited non-workflow source
         shell: bash
         run: |
           set -euo pipefail
