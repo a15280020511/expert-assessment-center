@@ -1,0 +1,32 @@
+name: PR227 R7 Persistent Generator
+
+on:
+  push:
+    branches:
+      - acceptance/pr227-final-paid-20260803-r7
+    paths:
+      - .github/workflows/pr227-r7-generator-v2.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr227-r7-persistent-generator
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout generator source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: acceptance/pr227-final-paid-20260803-r7
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Generate workflow blob and persist receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/scripts/pr227_r7_workflow_generator.py
