@@ -116,7 +116,6 @@ def _estimated_cost(
 def _request_config(
     endpoint: Mapping[str, Any],
     effort: str,
-    max_output_tokens: int,
 ) -> dict[str, Any]:
     supported = {
         str(value).casefold()
@@ -132,10 +131,6 @@ def _request_config(
     }
     if "reasoning" in supported:
         result["reasoning"] = {"effort": effort, "exclude": True}
-    if "max_completion_tokens" in supported:
-        result["max_completion_tokens"] = int(max_output_tokens)
-    elif "max_tokens" in supported:
-        result["max_tokens"] = int(max_output_tokens)
     return result
 
 
@@ -200,7 +195,7 @@ def _selected_node(
             max_output,
         ),
         failure_probability=0.0,
-        request_config=_request_config(endpoint, effort, max_output),
+        request_config=_request_config(endpoint, effort),
         independence_group=None,
     )
 
@@ -256,7 +251,6 @@ def _recovery_row(
         "request_config": _request_config(
             endpoint,
             str(selected.reasoning_profile.get("effort") or "medium"),
-            maximum,
         ),
     }
 
