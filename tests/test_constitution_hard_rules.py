@@ -29,7 +29,7 @@ class ConstitutionHardRuleTests(unittest.TestCase):
 
     def test_readme_explicitly_binds_to_constitution(self) -> None:
         text = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("[CONSTITUTION.md](CONSTITUTION.md)", text)
+        self.assertIn("[`CONSTITUTION.md`](CONSTITUTION.md)", text)
         self.assertIn("免费路径失败时必须失败关闭", text)
         self.assertIn("同一任务内所有初始专家和恢复专家必须来自不同模型公司", text)
 
