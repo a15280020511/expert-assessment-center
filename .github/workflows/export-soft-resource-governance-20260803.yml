@@ -1,0 +1,120 @@
+name: Export Soft Resource Governance 2026-08-03
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/export-soft-resource-governance-20260803.yml"
+      - ".github/workflows/apply-soft-resource-governance-20260803.yml"
+      - ".github/soft-resource-patch/**"
+      - "CONSTITUTION.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: export-soft-resource-governance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  export-validated-tree:
+    if: >-
+      github.actor == github.repository_owner &&
+      github.event.pull_request.head.ref == 'fix/v5-soft-resource-governance-20260803'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact PR head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-runtime.txt
+            requirements-dev.txt
+
+      - name: Reuse exact verified transform
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/apply-soft-resource-governance-20260803.yml')
+          lines = workflow.read_text(encoding='utf-8').splitlines()
+          target = '      - name: Apply exact soft-resource governance transform'
+          start = lines.index(target)
+          run_line = next(i for i in range(start + 1, len(lines)) if lines[i] == '        run: |')
+          body = []
+          for line in lines[run_line + 1:]:
+              if line.startswith('      - name: '):
+                  break
+              if line.startswith('          '):
+                  body.append(line[10:])
+              elif not line.strip():
+                  body.append('')
+              else:
+                  raise SystemExit(f'unexpected transform indentation: {line!r}')
+          if not body or body[0] != 'set -euo pipefail':
+              raise SystemExit('transform extraction failed')
+          Path('/tmp/apply-exact-transform.sh').write_text('\n'.join(body) + '\n', encoding='utf-8')
+          PY
+          bash /tmp/apply-exact-transform.sh
+
+      - name: Re-run complete zero-cost validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+          python -m ruff check .
+          python -m compileall -q open-model-market tests tools
+          python -m unittest discover -s tests -p 'test*.py' -v
+          python tools/repository_audit.py --root . --output-dir /tmp/repository-audit --fail-on info
+
+      - name: Package exact validated files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p validated-soft-resource-source
+          cat > /tmp/expected-files.txt <<'EOF'
+          .github/workflows/v5-final-paid-claude-acceptance-20260803.yml
+          open-model-market/config.json
+          open-model-market/model_market.py
+          open-model-market/v5_claude_red_team_policy.py
+          open-model-market/v5_execution_primitives.py
+          open-model-market/v5_governance_runtime.py
+          open-model-market/v5_gpt_expert_selector.py
+          open-model-market/v5_independent_artifact_revalidation.py
+          open-model-market/v5_pipeline.py
+          open-model-market/v5_production_ticket.py
+          open-model-market/v5_proposal_materializer.py
+          open-model-market/v5_run_evidence.py
+          open-model-market/v5_task_envelope.py
+          tests/test_v5_governance_completion_envelope.py
+          EOF
+          git diff --name-only --diff-filter=ACMRTUXB > /tmp/actual-files.txt
+          sort -o /tmp/expected-files.txt /tmp/expected-files.txt
+          sort -o /tmp/actual-files.txt /tmp/actual-files.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
+          tar -czf validated-soft-resource-source/files.tar.gz -T /tmp/expected-files.txt
+          sha256sum validated-soft-resource-source/files.tar.gz > validated-soft-resource-source/archive.sha256
+          while IFS= read -r file; do sha256sum "$file"; done < /tmp/expected-files.txt > validated-soft-resource-source/files.sha256
+          cp /tmp/expected-files.txt validated-soft-resource-source/files.txt
+          git rev-parse HEAD > validated-soft-resource-source/source-pr-head.txt
+          printf '%s\n' 'ea8ac003a5f32279ef460facfd7439f81a73f7db' > validated-soft-resource-source/base-main-sha.txt
+          printf '%s\n' '349/349 PASS; repository audit critical/high/medium/low/info=0' > validated-soft-resource-source/validation.txt
+
+      - name: Upload immutable validated source
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0 # v7.0.1
+        with:
+          name: validated-soft-resource-source-${{ github.run_id }}
+          path: validated-soft-resource-source/
+          if-no-files-found: error
+          retention-days: 30
