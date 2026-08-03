@@ -1,0 +1,6 @@
+{
+  "schema_version": "v5-final-paid-observer-request-1",
+  "authorization": "OBSERVE-ONLY",
+  "request_id": "pr227-final-r1",
+  "paid_request_sha": "c8953ebbf608c2ae2eda972b1d1f3439637ad9a7"
+}
