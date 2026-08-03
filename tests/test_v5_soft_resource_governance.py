@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT / "open-model-market"))
 import model_market  # noqa: E402
 import v5_pipeline  # noqa: E402
 from execution_graph import ExecutionGraph, SelectedNode  # noqa: E402
+from v5_gpt_expert_selector import _schema, parse_proposal  # noqa: E402
 from v5_runtime import RetryPolicy, RuntimeConfig  # noqa: E402
 from v5_soft_resource_governance import (  # noqa: E402
     SOFT_RESOURCE_INSTRUCTION,
@@ -201,6 +202,41 @@ class SoftResourceGovernanceTests(unittest.TestCase):
         )
         self.assertFalse(high["completion_advisory_affects_eligibility"])
         self.assertFalse(high["local_token_ceiling_enforced"])
+
+    def test_gpt_plan_schema_and_parser_have_no_local_maximum(self):
+        token_schema = (
+            _schema("soft_resource_fixture")["json_schema"]["schema"]
+            ["properties"]["nodes"]["items"]["properties"]
+            ["max_output_tokens"]
+        )
+        self.assertNotIn("maximum", token_schema)
+        proposal = {
+            "work_items": [
+                {
+                    "work_id": "w1",
+                    "objective": "complete the task",
+                    "dependencies": [],
+                    "required_outputs": ["answer"],
+                }
+            ],
+            "nodes": [
+                {
+                    "node_id": "n1",
+                    "work_ids": ["w1"],
+                    "role": "expert",
+                    "functions": ["synthesis"],
+                    "model": "company/model",
+                    "provider": "provider",
+                    "reasoning_effort": "high",
+                    "max_output_tokens": 100_000,
+                    "recovery": [],
+                }
+            ],
+            "edges": [],
+            "final_nodes": ["n1"],
+        }
+        parsed = parse_proposal(json.dumps(proposal))
+        self.assertEqual(parsed["nodes"][0]["max_output_tokens"], 100_000)
 
 
 if __name__ == "__main__":
