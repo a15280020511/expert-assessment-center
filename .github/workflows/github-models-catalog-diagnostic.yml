@@ -123,12 +123,25 @@ jobs:
           eligible_publishers = sorted({
               str(row.get("publisher") or "unknown") for row in eligible
           })
+          error = None
+          if status != 200:
+              if isinstance(payload, dict):
+                  error = {
+                      key: payload.get(key)
+                      for key in ("message", "documentation_url", "status")
+                      if payload.get(key) is not None
+                  }
+                  if not error and payload.get("body_excerpt"):
+                      error = {"body_excerpt": payload["body_excerpt"]}
+              else:
+                  error = {"type": type(payload).__name__}
           result = {
               "schema_version": "github-models-catalog-diagnostic-1",
               "status": "PASS" if status == 200 else "FAIL",
               "request_id": os.environ["REQUEST_ID"],
               "target_sha": os.environ["TARGET_SHA"],
               "http_status": status,
+              "error": error,
               "catalog_model_count": len(models),
               "publisher_counts": dict(sorted(publisher_counts.items())),
               "eligible_model_count": len(eligible),
@@ -145,12 +158,11 @@ jobs:
           )
           print(json.dumps({
               "status": result["status"],
+              "http_status": status,
               "eligible_model_count": len(eligible),
               "eligible_publisher_count": len(eligible_publishers),
               "inference_calls": 0,
           }, ensure_ascii=False))
-          if result["status"] != "PASS":
-              raise SystemExit(1)
           PY
 
       - name: Persist zero-call GitHub Models catalog evidence
@@ -164,3 +176,8 @@ jobs:
           git add acceptance-evidence/github-models-catalog-diagnostic.json
           git commit -m "audit: persist zero-call GitHub Models catalog diagnostic"
           git push origin "HEAD:${GITHUB_REF}"
+
+      - name: Enforce catalog diagnostic status after persistence
+        run: |
+          set -euo pipefail
+          test "$(jq -r '.status' github-models-catalog-diagnostic.json)" = "PASS"
