@@ -1,0 +1,12 @@
+{
+  "schema_version": "pr227-final-free-first-request-6",
+  "authorization": "RUN-ZERO-COST-PREFLIGHT-ONCE",
+  "purpose": "final-zero-call-simulation-and-free-canary",
+  "target_sha": "607bbb2eb224de7c32fe5029d8e6d48265d7a340",
+  "model": "openrouter/free",
+  "provider_data_collection": "allow",
+  "provider_zdr": false,
+  "maximum_free_model_requests": 1,
+  "maximum_paid_model_calls": 0,
+  "max_completion_tokens": 256
+}
