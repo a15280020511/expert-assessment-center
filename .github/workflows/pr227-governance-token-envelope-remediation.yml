@@ -83,7 +83,7 @@ jobs:
               "claude_effective_limit": 512,
               "gpt_synthesis_protocol_limit": 10000,
               "gpt_synthesis_effective_limit": 8000,
-              "default_behavior_unchanged_when_omitted": true,
+              "default_behavior_unchanged_when_omitted": True,
               "random_seeds": [0, 1, 7, 42, 31337, 65535, 99991, 104729],
           }
           root = Path('/tmp/pr227-governance-token-envelope')
