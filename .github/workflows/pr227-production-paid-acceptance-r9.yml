@@ -1,0 +1,488 @@
+name: PR227 Production Paid Acceptance R9
+
+on:
+  push:
+    branches:
+      - acceptance/pr227-final-paid-20260803-r9
+    paths:
+      - .github/v5-paid-production-request-r9.json
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: pr227-production-paid-acceptance-r9
+  cancel-in-progress: false
+
+jobs:
+  production-acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
+      MODEL_MAX_RETRIES: "0"
+      MODEL_TIMEOUT_SECONDS: "240"
+      PARALLEL_WORKERS: "1"
+      OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
+      OPENROUTER_APP_NAME: expert-center-pr227-production-paid-r9
+      RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      TARGET_SHA: 2a0d1b5d2d8bc77b52a7af5a4d257843675c662e
+      ACCEPTANCE_BRANCH: acceptance/pr227-final-paid-20260803-r9
+      MAXIMUM_TOTAL_CALLS: "4"
+      MAXIMUM_RECOVERY_CALLS: "0"
+      MAXIMUM_COST_USD: "0.25"
+      MAX_COMPLETION_TOKENS: "8000"
+    steps:
+      - name: Checkout immutable authorization request
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          path: request-source
+
+      - name: Validate exact one-time authorization
+        id: request
+        working-directory: request-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=.github/v5-paid-production-request-r9.json
+          jq -e '
+            type == "object" and
+            (keys | sort) == [
+              "authorization",
+              "cost_cap_usd",
+              "max_completion_tokens",
+              "maximum_recovery_calls",
+              "maximum_total_calls",
+              "purpose",
+              "schema_version",
+              "target_sha",
+              "task"
+            ] and
+            .schema_version == "pr227-production-paid-acceptance-9" and
+            .authorization == "RUN-EXACTLY-ONCE" and
+            .purpose == "final-pr227-authoritative-production-qualification-with-explicit-token-envelope" and
+            .target_sha == "2a0d1b5d2d8bc77b52a7af5a4d257843675c662e" and
+            .maximum_total_calls == 4 and
+            .maximum_recovery_calls == 0 and
+            .cost_cap_usd == 0.25 and
+            .max_completion_tokens == 8000 and
+            (.task | type == "object") and
+            (.task.question | type == "string" and length > 0) and
+            (.task.requirements | type == "array" and length > 0) and
+            .task.language == "zh-CN"
+          ' "$request" >/dev/null
+          test "$(git diff --name-only HEAD^ HEAD)" = "$request"
+          git merge-base --is-ancestor "$TARGET_SHA" HEAD^
+          echo "target_sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact qualified source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ steps.request.outputs.target_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: runtime-source
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: runtime-source/requirements-runtime.txt
+
+      - name: Install exact runtime and materialize admitted ticket
+        working-directory: runtime-source
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test -z "$(git status --porcelain)"
+          python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
+          python -m pip check
+          python -m compileall -q open-model-market
+          test -n "${OPENROUTER_API_KEY:-}"
+          test "${#OPENROUTER_API_KEY}" -ge 20
+          rm -rf ticket-artifacts
+          mkdir -p ticket-artifacts
+          cp ../request-source/.github/v5-paid-production-request-r9.json paid-request.json
+          python - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, "open-model-market")
+          from v5_ticket_identity import task_fingerprint
+
+          request = json.loads(Path("paid-request.json").read_text(encoding="utf-8"))
+          task_id = "pr227-production-paid-r9-20260803"
+          task = request["task"]
+          ticket = {
+              "task_id": task_id,
+              "route": "expert-team",
+              "task": task,
+              "approved_budget": {
+                  "calls": request["maximum_total_calls"],
+                  "maximum_recovery_calls": request["maximum_recovery_calls"],
+                  "cost_policy": "unbounded_with_anomaly_guard",
+                  "cost_anomaly_usd": request["cost_cap_usd"],
+              },
+              "private_output": False,
+          }
+          status = {
+              "accepted": True,
+              "task_id": task_id,
+              "task_fingerprint": task_fingerprint(ticket),
+              "calls": request["maximum_total_calls"],
+              "maximum_recovery_calls": request["maximum_recovery_calls"],
+              "maximum_replacements": request["maximum_recovery_calls"],
+              "maximum_initial_calls": request["maximum_total_calls"] - 3,
+              "max_cost_usd": request["cost_cap_usd"],
+              "cost_anomaly_usd": request["cost_cap_usd"],
+              "cost_policy": "unbounded_with_anomaly_guard",
+              "private_output": False,
+              "is_retry": False,
+              "retry_id": "",
+              "trigger_mode": "run",
+              "execution_id": task_id,
+              "analysis_owner": "github-v5-gpt-claude-expert-graph",
+              "authoritative_trigger": "issue_comment.created",
+              "runtime_version": "v5-native-runtime-1",
+              "fallback_policy": "disabled-fail-closed",
+              "legacy_runtime_present": False,
+              "cross_task_history_used": False,
+              "call_policy": "approved-total-includes-gpt-claude-governance-experts-and-recovery",
+          }
+          requirements = [
+              str(value).strip()
+              for value in task.get("requirements", [])
+              if str(value).strip()
+          ]
+          sections = [task["question"].strip()]
+          if requirements:
+              sections.append("执行要求：\n" + "\n".join(f"- {value}" for value in requirements))
+          sections.append(f"输出语言：{task.get('language', 'zh-CN')}")
+          root = Path("ticket-artifacts")
+          root.joinpath("ticket.json").write_text(
+              json.dumps(ticket, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          root.joinpath("ticket-status.json").write_text(
+              json.dumps(status, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          root.joinpath("task.txt").write_text("\n\n".join(sections) + "\n", encoding="utf-8")
+          PY
+          python open-model-market/v5_ticket_gate.py \
+            --output-dir ticket-artifacts \
+            --expected-calls "$MAXIMUM_TOTAL_CALLS" \
+            --expected-recovery-calls "$MAXIMUM_RECOVERY_CALLS" \
+            --expected-cost-anomaly-usd "$MAXIMUM_COST_USD"
+
+      - name: Execute and verify substantive production result
+        id: execute
+        continue-on-error: true
+        working-directory: runtime-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          task="$(cat ticket-artifacts/task.txt)"
+          python open-model-market/v5_production_ticket.py \
+            --task "$task" \
+            --output-dir ticket-artifacts \
+            --maximum-total-calls "$MAXIMUM_TOTAL_CALLS" \
+            --maximum-recovery-calls "$MAXIMUM_RECOVERY_CALLS" \
+            --cost-anomaly-usd "$MAXIMUM_COST_USD" \
+            --max-completion-tokens "$MAX_COMPLETION_TOKENS" \
+            --require-live-catalog \
+            | tee ticket-artifacts/production-execution.log
+          test ! -f ticket-artifacts/expert-team-error.json
+          for file in \
+            expert-team-result.json \
+            v5-result.json \
+            v5-execution-summary.json \
+            v5-node-results.json \
+            v5-request-audit.json \
+            call-ledger.json \
+            v5-governance-calls.json \
+            v5-final-report.md; do
+            test -s "ticket-artifacts/$file"
+          done
+          jq -e '.status == "success"' ticket-artifacts/expert-team-result.json >/dev/null
+          jq -e '.status == "success"' ticket-artifacts/v5-result.json >/dev/null
+          jq -e '
+            .actual_governance_calls == 3 and
+            .claude_red_team_calls == 1 and
+            .gpt_synthesis_calls == 1 and
+            [.calls[].kind] == ["gpt_proposal","claude_red_team","gpt_synthesis"] and
+            .claude_is_advisory_only == true and
+            .claude_gatekeeping_allowed == false and
+            .second_claude_review_allowed == false and
+            .model_loop_allowed == false
+          ' ticket-artifacts/v5-governance-calls.json >/dev/null
+          jq -e '
+            .request_count == 4 and
+            .governance_request_count == 3 and
+            .expert_request_count == 1 and
+            (.requests | length) == 4 and
+            .external_tools_allowed == false and
+            .provider_fallback_allowed == false
+          ' ticket-artifacts/v5-request-audit.json >/dev/null
+          jq -e '
+            .summary.call_count == 4 and
+            .summary.governance_calls == 3 and
+            .summary.expert_calls == 1 and
+            (.summary.provider_actual_cost_usd | tonumber) <= 0.25
+          ' ticket-artifacts/call-ledger.json >/dev/null
+          echo "status=PASS" >> "$GITHUB_OUTPUT"
+
+      - name: Build and audit frozen primary evidence
+        id: primary_build
+        if: always() && steps.execute.outcome == 'success'
+        continue-on-error: true
+        working-directory: runtime-source
+        run: |
+          set -euo pipefail
+          python open-model-market/publish_report.py \
+            --output-dir ticket-artifacts \
+            --comments-dir ticket-artifacts/report-comments \
+            --run-url "$RUN_URL"
+          python open-model-market/v5_execution_auditor_integrity.py \
+            --output-dir ticket-artifacts \
+            --execute-outcome success \
+            --publish-outcome success
+          test "$(jq -r '.status // "FAIL"' ticket-artifacts/execution-audit.json)" = "PASS"
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, "open-model-market")
+          from artifact_manifest import write_manifest
+          write_manifest(Path("ticket-artifacts"))
+          PY
+          test -s ticket-artifacts/artifact-manifest.json
+          echo "status=PASS" >> "$GITHUB_OUTPUT"
+
+      - name: Upload primary production Artifact
+        id: primary
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr227-production-primary-r9-${{ github.run_id }}
+          path: runtime-source/ticket-artifacts/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Independently revalidate and generate final proof
+        id: prove
+        if: always() && steps.primary_build.outcome == 'success' && steps.primary.outcome == 'success'
+        continue-on-error: true
+        env:
+          PRIMARY_ARTIFACT_ID: ${{ steps.primary.outputs.artifact-id }}
+          PRIMARY_ARTIFACT_URL: ${{ steps.primary.outputs.artifact-url }}
+          PRIMARY_ARTIFACT_DIGEST: ${{ steps.primary.outputs.artifact-digest }}
+        working-directory: runtime-source
+        run: |
+          set -euo pipefail
+          gh api -H "Accept: application/vnd.github+json" \
+            "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${PRIMARY_ARTIFACT_ID}/zip" \
+            > uploaded-primary-artifact.zip
+          test "$(sha256sum uploaded-primary-artifact.zip | awk '{print "sha256:" $1}')" = "$PRIMARY_ARTIFACT_DIGEST"
+          rm -rf independently-downloaded-primary
+          mkdir independently-downloaded-primary
+          unzip -q uploaded-primary-artifact.zip -d independently-downloaded-primary
+          python open-model-market/v5_independent_artifact_revalidation.py \
+            --artifact-dir independently-downloaded-primary \
+            --expected-sha "$TARGET_SHA" \
+            --expected-run-id "${{ github.run_id }}" \
+            --maximum-calls "$MAXIMUM_TOTAL_CALLS" \
+            --maximum-cost-usd "$MAXIMUM_COST_USD" \
+            --archive uploaded-primary-artifact.zip \
+            --expected-artifact-digest "$PRIMARY_ARTIFACT_DIGEST" \
+            --output independent-revalidation.json
+          jq -e '
+            .status == "PASS" and
+            (.total_model_calls // .model_calls) == 4 and
+            .governance_model_calls == 3 and
+            .expert_model_calls == 1 and
+            (.actual_cost_usd | tonumber) <= 0.25 and
+            .recomputed_from_primitive_evidence == true and
+            .paid_acceptance_verdict_used_as_source == false
+          ' independent-revalidation.json >/dev/null
+          python open-model-market/v5_final_status.py \
+            --output-dir ticket-artifacts \
+            --run-url "$RUN_URL" \
+            --ticket-upload-outcome success \
+            --audit-outcome success \
+            --manifest-outcome success \
+            --artifact-id "$PRIMARY_ARTIFACT_ID" \
+            --artifact-url "$PRIMARY_ARTIFACT_URL" \
+            --artifact-digest "$PRIMARY_ARTIFACT_DIGEST" \
+            --independent-revalidation-file independent-revalidation.json \
+            | tee final-status.md
+          test "$(jq -r '.status // "FAIL"' ticket-artifacts/final-status.json)" = "PASS"
+          python open-model-market/v5_final_attestation.py \
+            --output-dir ticket-artifacts \
+            --primary-artifact-id "$PRIMARY_ARTIFACT_ID" \
+            --primary-artifact-digest "$PRIMARY_ARTIFACT_DIGEST" \
+            --primary-artifact-url "$PRIMARY_ARTIFACT_URL" \
+            --audit-status PASS \
+            --run-id "${{ github.run_id }}" \
+            --commit-sha "$TARGET_SHA" \
+            --final-status-file final-status.md \
+            --independent-revalidation-file independent-revalidation.json \
+            --output final-attestation.json
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          independent_path = Path("independent-revalidation.json")
+          independent = json.loads(independent_path.read_text(encoding="utf-8"))
+          attestation_path = Path("final-attestation.json")
+          attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
+          attestation["independent_artifact_revalidation"] = {
+              **independent,
+              "evidence_sha256": hashlib.sha256(independent_path.read_bytes()).hexdigest(),
+          }
+          attestation["evidence_chain"] = (
+              "frozen-business-evidence -> primary-artifact -> "
+              "independent-artifact-revalidation -> final-status -> final-attestation-artifact"
+          )
+          attestation_path.write_text(
+              json.dumps(attestation, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          jq -e --arg sha "$TARGET_SHA" '
+            .status == "PASS" and
+            .audit_status == "PASS" and
+            .diagnosis_status == "PASS" and
+            .business_evidence_frozen_before_upload == true and
+            .report_present == true and
+            .event_context_commit_matched_checkout == true and
+            .commit_sha == $sha and
+            .event_context_commit_sha == $sha and
+            .independent_artifact_revalidation.status == "PASS"
+          ' final-attestation.json >/dev/null
+          echo "status=PASS" >> "$GITHUB_OUTPUT"
+
+      - name: Upload final proof Artifact
+        id: proof
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr227-production-attestation-r9-${{ github.run_id }}
+          path: |
+            runtime-source/final-attestation.json
+            runtime-source/final-status.md
+            runtime-source/ticket-artifacts/final-status.json
+            runtime-source/independent-revalidation.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Persist exact acceptance receipt
+        if: always()
+        env:
+          EXECUTE_OUTCOME: ${{ steps.execute.outcome }}
+          PRIMARY_BUILD_OUTCOME: ${{ steps.primary_build.outcome }}
+          PRIMARY_OUTCOME: ${{ steps.primary.outcome }}
+          PRIMARY_ARTIFACT_ID: ${{ steps.primary.outputs.artifact-id }}
+          PRIMARY_ARTIFACT_DIGEST: ${{ steps.primary.outputs.artifact-digest }}
+          PROVE_OUTCOME: ${{ steps.prove.outcome }}
+          PROVE_STATUS: ${{ steps.prove.outputs.status }}
+          PROOF_OUTCOME: ${{ steps.proof.outcome }}
+          PROOF_ARTIFACT_ID: ${{ steps.proof.outputs.artifact-id }}
+          PROOF_ARTIFACT_DIGEST: ${{ steps.proof.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          runtime = Path("runtime-source")
+          output = runtime / "ticket-artifacts"
+          def load(path: Path):
+              if not path.is_file():
+                  return {}
+              try:
+                  value = json.loads(path.read_text(encoding="utf-8"))
+              except Exception:
+                  return {}
+              return value if isinstance(value, dict) else {}
+
+          error = load(output / "expert-team-error.json")
+          audit = load(output / "execution-audit.json")
+          independent = load(runtime / "independent-revalidation.json")
+          final_status = load(output / "final-status.json")
+          attestation = load(runtime / "final-attestation.json")
+          outcomes = {
+              "execute": os.environ.get("EXECUTE_OUTCOME", ""),
+              "primary_build": os.environ.get("PRIMARY_BUILD_OUTCOME", ""),
+              "primary": os.environ.get("PRIMARY_OUTCOME", ""),
+              "prove": os.environ.get("PROVE_OUTCOME", ""),
+              "proof": os.environ.get("PROOF_OUTCOME", ""),
+          }
+          passed = (
+              all(value == "success" for value in outcomes.values())
+              and os.environ.get("PROVE_STATUS") == "PASS"
+              and not error
+              and audit.get("status") == "PASS"
+              and independent.get("status") == "PASS"
+              and final_status.get("status") == "PASS"
+              and attestation.get("status") == "PASS"
+              and attestation.get("audit_status") == "PASS"
+              and attestation.get("diagnosis_status") == "PASS"
+              and attestation.get("event_context_commit_matched_checkout") is True
+              and attestation.get("commit_sha") == os.environ["TARGET_SHA"]
+          )
+          receipt = {
+              "schema_version": "pr227-production-paid-r9-receipt-1",
+              "status": "PASS" if passed else "FAIL",
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "target_sha": os.environ["TARGET_SHA"],
+              "step_outcomes": outcomes,
+              "expert_error": error,
+              "execution_audit": audit,
+              "total_model_calls": independent.get("total_model_calls", independent.get("model_calls")),
+              "governance_model_calls": independent.get("governance_model_calls"),
+              "expert_model_calls": independent.get("expert_model_calls"),
+              "actual_cost_usd": independent.get("actual_cost_usd"),
+              "max_completion_tokens": 8000,
+              "primary_artifact": {
+                  "id": os.environ.get("PRIMARY_ARTIFACT_ID"),
+                  "digest": os.environ.get("PRIMARY_ARTIFACT_DIGEST"),
+              },
+              "proof_artifact": {
+                  "id": os.environ.get("PROOF_ARTIFACT_ID"),
+                  "digest": os.environ.get("PROOF_ARTIFACT_DIGEST"),
+              },
+              "independent_revalidation": independent,
+              "final_status": final_status,
+              "final_attestation": attestation,
+              "production_ref_moved": False,
+          }
+          destination = Path("request-source/acceptance-evidence/pr227-production-paid-r9-result.json")
+          destination.parent.mkdir(parents=True, exist_ok=True)
+          destination.write_text(
+              json.dumps(receipt, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          cd request-source
+          git fetch origin "$ACCEPTANCE_BRANCH"
+          git rebase "origin/$ACCEPTANCE_BRANCH"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add acceptance-evidence/pr227-production-paid-r9-result.json
+          git diff --cached --check
+          git commit -m "test: persist PR227 production paid R9 result"
+          git push origin HEAD:"$ACCEPTANCE_BRANCH"
+
+      - name: Enforce authoritative qualification result
+        if: always()
+        run: |
+          set -euo pipefail
+          test "$(jq -r '.status' request-source/acceptance-evidence/pr227-production-paid-r9-result.json)" = "PASS"
