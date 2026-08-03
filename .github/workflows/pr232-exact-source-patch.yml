@@ -1,0 +1,98 @@
+name: PR232 Exact Source Patch
+
+on:
+  push:
+    branches:
+      - "remediation/pr232-source-patch-*"
+    paths:
+      - ".github/pr232-source-patch-request.json"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr232-exact-source-patch
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out immutable patch request
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+          path: request-source
+
+      - name: Validate exact patch authorization
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=request-source/.github/pr232-source-patch-request.json
+          jq -e '
+            type == "object" and
+            (keys | sort) == [
+              "authorization",
+              "patch_id",
+              "request_id",
+              "schema_version",
+              "target_branch",
+              "target_sha"
+            ] and
+            .schema_version == "pr232-source-patch-request-1" and
+            .authorization == "EXACT-ZERO-CALL-SOURCE-PATCH" and
+            .patch_id == "remove-unused-sequence-import" and
+            .target_branch == "fix/v5-free-shadow-production-qualification-20260803" and
+            (.request_id | test("^[a-z0-9][a-z0-9._-]{0,63}$")) and
+            (.target_sha | test("^[0-9a-f]{40}$"))
+          ' "$request" >/dev/null
+          test "$(git -C request-source diff --name-only HEAD^ HEAD)" = ".github/pr232-source-patch-request.json"
+          {
+            echo "target_branch=$(jq -er '.target_branch' "$request")"
+            echo "target_sha=$(jq -er '.target_sha' "$request")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact PR branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ steps.request.outputs.target_branch }}
+          fetch-depth: 0
+          persist-credentials: true
+          path: target-source
+
+      - name: Apply one exact replacement
+        working-directory: target-source
+        env:
+          TARGET_SHA: ${{ steps.request.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("open-model-market/v5_free_shadow_compat.py")
+          text = path.read_text(encoding="utf-8")
+          old = "from typing import Any, Mapping, Sequence\n"
+          new = "from typing import Any, Mapping\n"
+          if text.count(old) != 1:
+              raise SystemExit("expected exactly one unused Sequence import")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
+          test "$(git diff --name-only)" = "open-model-market/v5_free_shadow_compat.py"
+          python -m compileall -q open-model-market/v5_free_shadow_compat.py
+
+      - name: Commit exact patch to PR branch
+        working-directory: target-source
+        env:
+          TARGET_BRANCH: ${{ steps.request.outputs.target_branch }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add open-model-market/v5_free_shadow_compat.py
+          git commit -m "fix: remove unused compatibility typing import"
+          git push origin "HEAD:$TARGET_BRANCH"
