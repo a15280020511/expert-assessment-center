@@ -120,16 +120,19 @@ def materialize_proposal(
     approved_recovery_calls: int,
     cost_anomaly_usd: float | None,
 ) -> tuple[ExecutionGraph, GraphLimits, dict[str, Any]]:
-    graph, limits, audit = structural.materialize_proposal(
-        proposal,
-        task,
-        task_envelope,
-        catalog,
-        approved_total_calls=approved_total_calls,
-        governance_calls_reserved=governance_calls_reserved,
-        approved_recovery_calls=approved_recovery_calls,
-        cost_anomaly_usd=None,
-    )
+    try:
+        graph, limits, audit = structural.materialize_proposal(
+            proposal,
+            task,
+            task_envelope,
+            catalog,
+            approved_total_calls=approved_total_calls,
+            governance_calls_reserved=governance_calls_reserved,
+            approved_recovery_calls=approved_recovery_calls,
+            cost_anomaly_usd=None,
+        )
+    except structural.MaterializationError:
+        raise
     softened_graph = _soft_graph(graph)
     softened_limits = _soft_limits(limits)
     telemetry = dict(audit)
