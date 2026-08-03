@@ -1,6 +1,6 @@
 {
   "schema_version": "github-models-catalog-request-1",
   "authorization": "CATALOG-ONLY-ZERO-INFERENCE",
-  "request_id": "pr232-github-models-catalog-r1",
+  "request_id": "pr232-github-models-catalog-r2",
   "target_sha": "5e1f95240a709fa11a70058e8c2a9cd3ae71b1d0"
 }
