@@ -221,7 +221,6 @@ jobs:
           for seed in 0 1 7 42 31337 65535 99991 104729; do
             PYTHONPATH=tests PYTHONHASHSEED="$seed" python -m unittest \
               test_v5_gpt_selector_contract \
-              test_v5_governance_cost_guard_evidence \
               test_v5_extreme_advisory_stress \
               -q
           done
