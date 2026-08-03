@@ -1,0 +1,166 @@
+name: GitHub Models Catalog Diagnostic
+
+on:
+  push:
+    branches:
+      - "diagnostic/github-models-catalog-*"
+    paths:
+      - ".github/github-models-catalog-request.json"
+
+permissions:
+  contents: write
+  models: read
+
+concurrency:
+  group: github-models-catalog-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out immutable diagnostic request
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 2
+          persist-credentials: true
+
+      - name: Validate catalog-only authorization
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=.github/github-models-catalog-request.json
+          jq -e '
+            type == "object" and
+            (keys | sort) == [
+              "authorization",
+              "request_id",
+              "schema_version",
+              "target_sha"
+            ] and
+            .schema_version == "github-models-catalog-request-1" and
+            .authorization == "CATALOG-ONLY-ZERO-INFERENCE" and
+            (.request_id | test("^[a-z0-9][a-z0-9._-]{0,63}$")) and
+            (.target_sha | test("^[0-9a-f]{40}$"))
+          ' "$request" >/dev/null
+          test "$(git diff --name-only HEAD^ HEAD)" = "$request"
+          {
+            echo "request_id=$(jq -er '.request_id' "$request")"
+            echo "target_sha=$(jq -er '.target_sha' "$request")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Query GitHub Models catalog without inference
+        env:
+          GH_MODELS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REQUEST_ID: ${{ steps.request.outputs.request_id }}
+          TARGET_SHA: ${{ steps.request.outputs.target_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+          from collections import Counter
+          from pathlib import Path
+
+          token = os.environ["GH_MODELS_TOKEN"]
+          request = urllib.request.Request(
+              "https://models.github.ai/catalog/models",
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2026-03-10",
+              },
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  status = response.status
+                  payload = json.loads(response.read().decode("utf-8"))
+          except urllib.error.HTTPError as exc:
+              body = exc.read().decode("utf-8", errors="replace")
+              try:
+                  payload = json.loads(body)
+              except json.JSONDecodeError:
+                  payload = {"body_excerpt": body[:500]}
+              status = exc.code
+
+          rows = payload if isinstance(payload, list) else []
+          models = []
+          for row in rows:
+              if not isinstance(row, dict):
+                  continue
+              limits = row.get("limits") if isinstance(row.get("limits"), dict) else {}
+              modalities_in = row.get("supported_input_modalities") or []
+              modalities_out = row.get("supported_output_modalities") or []
+              if "text" not in modalities_in or "text" not in modalities_out:
+                  continue
+              models.append({
+                  "id": row.get("id"),
+                  "publisher": row.get("publisher"),
+                  "registry": row.get("registry"),
+                  "capabilities": row.get("capabilities") or [],
+                  "max_input_tokens": limits.get("max_input_tokens"),
+                  "max_output_tokens": limits.get("max_output_tokens"),
+                  "rate_limit_tier": row.get("rate_limit_tier"),
+                  "supported_input_modalities": modalities_in,
+                  "supported_output_modalities": modalities_out,
+                  "tags": row.get("tags") or [],
+              })
+
+          publisher_counts = Counter(
+              str(row.get("publisher") or "unknown") for row in models
+          )
+          eligible = [
+              row for row in models
+              if int(row.get("max_input_tokens") or 0) >= 16384
+              and int(row.get("max_output_tokens") or 0) >= 2048
+          ]
+          eligible_publishers = sorted({
+              str(row.get("publisher") or "unknown") for row in eligible
+          })
+          result = {
+              "schema_version": "github-models-catalog-diagnostic-1",
+              "status": "PASS" if status == 200 else "FAIL",
+              "request_id": os.environ["REQUEST_ID"],
+              "target_sha": os.environ["TARGET_SHA"],
+              "http_status": status,
+              "catalog_model_count": len(models),
+              "publisher_counts": dict(sorted(publisher_counts.items())),
+              "eligible_model_count": len(eligible),
+              "eligible_publishers": eligible_publishers,
+              "eligible_publisher_count": len(eligible_publishers),
+              "eligible_models": eligible,
+              "inference_calls": 0,
+              "paid_inference_calls": 0,
+              "production_ref_moved": False,
+          }
+          Path("github-models-catalog-diagnostic.json").write_text(
+              json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps({
+              "status": result["status"],
+              "eligible_model_count": len(eligible),
+              "eligible_publisher_count": len(eligible_publishers),
+              "inference_calls": 0,
+          }, ensure_ascii=False))
+          if result["status"] != "PASS":
+              raise SystemExit(1)
+          PY
+
+      - name: Persist zero-call GitHub Models catalog evidence
+        run: |
+          set -euo pipefail
+          mkdir -p acceptance-evidence
+          cp github-models-catalog-diagnostic.json \
+            acceptance-evidence/github-models-catalog-diagnostic.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add acceptance-evidence/github-models-catalog-diagnostic.json
+          git commit -m "audit: persist zero-call GitHub Models catalog diagnostic"
+          git push origin "HEAD:${GITHUB_REF}"
