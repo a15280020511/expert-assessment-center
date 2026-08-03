@@ -1,0 +1,12 @@
+{
+  "schema_version": "pr227-request-level-free-preflight-4",
+  "authorization": "RUN-FREE-ONLY-ONCE",
+  "purpose": "request-level-data-policy-free-canary-after-simulation-pass",
+  "target_sha": "0383d2ef80f1890306bc0bc5f7b37836cb2579ca",
+  "model": "openrouter/free",
+  "provider_data_collection": "allow",
+  "provider_zdr": false,
+  "maximum_model_requests": 1,
+  "maximum_paid_model_calls": 0,
+  "max_completion_tokens": 256
+}
