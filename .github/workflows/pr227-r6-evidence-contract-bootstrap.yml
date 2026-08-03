@@ -40,11 +40,19 @@ jobs:
           marker = "          python - <<'PY'\n"
           start = text.index(marker) + len(marker)
           end = text.index("\n          PY\n", start)
-          raw_lines = text[start:end].splitlines()
-          script = '\n'.join(
-              line[10:] if line.startswith('          ') else line
-              for line in raw_lines
-          )
+          normalized = []
+          in_triple = False
+          for line in text[start:end].splitlines():
+              if in_triple:
+                  normalized.append(line)
+                  if "'''" in line:
+                      in_triple = False
+                  continue
+              current = line[10:] if line.startswith('          ') else line
+              normalized.append(current)
+              if current.count("'''") % 2 == 1:
+                  in_triple = True
+          script = '\n'.join(normalized)
           exec(compile(script, str(source) + ':embedded-python', 'exec'))
           PY
           git diff --check
