@@ -16,7 +16,6 @@ from v5_free_shadow_support import (
     FreeCallBoundary,
     FreeEndpoint,
     FreeShadowError,
-    canonical_model_company,
     choose_shadow_roles,
     discover_free_endpoints,
     expert_catalog,
