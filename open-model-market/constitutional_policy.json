@@ -1,5 +1,5 @@
 {
-  "schema_version": "v5-constitutional-policy-1",
+  "schema_version": "v5-constitutional-policy-2",
   "authority": "CONSTITUTION.md",
   "fail_closed": true,
   "free_first_testing": {
@@ -29,6 +29,40 @@
     "pre_execution_validation_required": true,
     "post_execution_actual_success_audit_required": true,
     "duplicate_company_action": "fail_closed"
+  },
+  "resource_governance": {
+    "mode": "prompt_led_soft_governance",
+    "applies_to": [
+      "gpt_proposal",
+      "claude_red_team",
+      "gpt_synthesis",
+      "expert_execution",
+      "expert_recovery"
+    ],
+    "local_token_ceiling_allowed": false,
+    "local_reasoning_token_ceiling_allowed": false,
+    "estimated_cost_can_reject_or_stop": false,
+    "actual_cost_can_invalidate_valid_output": false,
+    "provider_native_capacity_is_compatibility_boundary": true,
+    "cost_and_token_usage_must_be_audited": true,
+    "soft_prompt_requirements": [
+      "complete_the_task_contract_first",
+      "conclusion_first",
+      "evidence_first",
+      "high_information_density",
+      "remove_repetition",
+      "avoid_irrelevant_expansion",
+      "never_omit_required_content_to_save_tokens"
+    ],
+    "operational_safety_limits_preserved": [
+      "single_task_discipline",
+      "fixed_governance_chain",
+      "finite_retry",
+      "timeout",
+      "no_model_loop",
+      "no_tools",
+      "provider_lock"
+    ]
   },
   "production_promotion": {
     "requires_zero_cost_ci": true,

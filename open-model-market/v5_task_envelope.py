@@ -2,7 +2,9 @@
 
 This module does not classify domains, score complexity, invent atomic work,
 assign capabilities, or choose models. It preserves only hard user contracts
-and conservative capacity facts needed before GPT performs task decomposition.
+and conservative native-capacity facts needed before GPT performs task
+decomposition. Local Token preferences remain advisory metadata and never
+become eligibility or rejection gates.
 """
 from __future__ import annotations
 
@@ -20,13 +22,11 @@ def _required_context_tokens(
     task: str,
     *,
     minimum_context_length: int,
-    maximum_completion_tokens: int,
 ) -> int:
-    """Return a conservative capacity floor, not a task-complexity score."""
+    """Return a conservative native context floor independent of Token advice."""
     task_tokens_upper_bound = max(1, len(str(task or "")))
     fixed_protocol_reserve = 8_192
-    requested_output = max(256, int(maximum_completion_tokens))
-    required = task_tokens_upper_bound + fixed_protocol_reserve + requested_output
+    required = task_tokens_upper_bound + fixed_protocol_reserve
     return max(int(minimum_context_length), required)
 
 
@@ -63,6 +63,7 @@ def build_task_envelope(
     if not text:
         raise ValueError("task is empty")
     constraints = compile_task_constraints(text)
+    completion_advisory = max(1, int(maximum_completion_tokens))
     return {
         "schema_version": TASK_ENVELOPE_VERSION,
         "task_sha256": sha256(text.encode("utf-8")).hexdigest(),
@@ -70,8 +71,10 @@ def build_task_envelope(
         "required_context_tokens": _required_context_tokens(
             text,
             minimum_context_length=minimum_context_length,
-            maximum_completion_tokens=maximum_completion_tokens,
         ),
+        "completion_capacity_advisory_tokens": completion_advisory,
+        "completion_advisory_affects_eligibility": False,
+        "local_token_ceiling_enforced": False,
         "explicit_delivery_contract": explicit_delivery_contract(text),
         "task_constraints": constraints.to_dict(),
         "decomposition_authority": "~openai/gpt-latest",

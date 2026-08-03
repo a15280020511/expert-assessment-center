@@ -15,8 +15,6 @@ def _node(
     effort="high",
     allowance=10_000,
     fields=None,
-    explicit_sections=0,
-    long_form=False,
 ):
     required_fields = fields or [
         "findings",
@@ -43,8 +41,6 @@ def _node(
         output_contract={
             "required_fields": required_fields,
             "machine_readable_required": False,
-            "task_explicit_delivery_section_count": explicit_sections,
-            "task_explicit_long_form_required": long_form,
         },
         estimated_quality=0.82,
         quality_uncertainty=0.08,
@@ -52,6 +48,7 @@ def _node(
         failure_probability=0.05,
         request_config={
             "reasoning": {"effort": effort, "exclude": True},
+            "max_tokens": allowance,
             "provider": {
                 "order": ["provider-a"],
                 "only": ["provider-a"],
@@ -63,78 +60,56 @@ def _node(
 
 
 class TestReasoningVisibleOutputBudget(unittest.TestCase):
-    def test_high_reasoning_red_team_reserves_visible_delivery_tokens(self):
+    def test_high_reasoning_request_uses_effort_not_token_budget(self):
         node = _node()
-        budget = hardening.completion_token_budget(node)
+        telemetry = hardening.completion_token_budget(node)
         payload = hardening.hardened_build_node_payload(node, "审计任务", [])
 
-        self.assertEqual(payload["max_tokens"], 10_000)
-        self.assertEqual(
-            payload["reasoning"]["max_tokens"],
-            budget["reasoning_max_tokens"],
-        )
+        self.assertNotIn("max_tokens", payload)
+        self.assertNotIn("max_completion_tokens", payload)
+        self.assertEqual(payload["reasoning"]["effort"], "high")
         self.assertTrue(payload["reasoning"]["exclude"])
-        self.assertNotIn("effort", payload["reasoning"])
-        self.assertLess(
-            payload["reasoning"]["max_tokens"],
-            payload["max_tokens"],
-        )
-        self.assertGreaterEqual(
-            payload["max_tokens"] - payload["reasoning"]["max_tokens"],
-            budget["visible_output_reserve_tokens"],
-        )
-        self.assertGreaterEqual(
-            budget["visible_output_reserve_tokens"],
-            2_048,
-        )
+        self.assertNotIn("max_tokens", payload["reasoning"])
+        self.assertIsNone(telemetry["reasoning_max_tokens"])
+        self.assertIsNone(telemetry["visible_output_reserve_tokens"])
+        self.assertFalse(telemetry["local_token_ceiling_enforced"])
+        self.assertFalse(telemetry["reasoning_token_budget_enforced"])
 
-    def test_long_form_synthesis_gets_larger_protected_visible_reserve(self):
+    def test_large_advisory_is_preserved_as_telemetry_without_cap(self):
         node = _node(
             functions=("synthesis",),
-            allowance=15_992,
+            allowance=100_000,
             fields=[f"section_{index}" for index in range(12)],
-            explicit_sections=12,
-            long_form=True,
         )
-        budget = hardening.completion_token_budget(node)
-        payload = hardening.hardened_build_node_payload(node, "综合裁决任务", [])
+        telemetry = hardening.completion_token_budget(node)
+        payload = hardening.hardened_build_node_payload(
+            node,
+            "综合裁决任务",
+            [],
+        )
 
-        self.assertEqual(payload["max_tokens"], 15_992)
-        self.assertGreaterEqual(
-            budget["visible_output_reserve_tokens"],
-            4_096,
+        self.assertEqual(
+            telemetry["total_completion_advisory_tokens"],
+            100_000,
         )
         self.assertEqual(
-            payload["max_tokens"] - payload["reasoning"]["max_tokens"],
-            budget["visible_output_reserve_tokens"],
+            telemetry["total_completion_allowance_tokens"],
+            100_000,
         )
+        self.assertNotIn("max_tokens", payload)
+        self.assertNotIn("max_completion_tokens", payload)
 
-    def test_regression_reasoning_heavy_empty_body_signature_is_prevented(self):
-        node = _node(allowance=10_000)
-        budget = hardening.completion_token_budget(node)
+    def test_native_endpoint_capacity_only_bounds_cost_estimate(self):
+        work = {
+            "context_requirements": {
+                "expected_output_tokens": 20_000,
+                "expected_reasoning_tokens": 10_000,
+            }
+        }
+        self.assertEqual(hardening.completion_envelope(work, 8_192), 8_192)
+        self.assertGreater(hardening.completion_envelope(work, 0), 8_192)
 
-        observed_completion_tokens = 8_948
-        observed_reasoning_tokens = 8_872
-        observed_visible_tokens = (
-            observed_completion_tokens - observed_reasoning_tokens
-        )
-
-        self.assertEqual(observed_visible_tokens, 76)
-        self.assertGreater(
-            observed_reasoning_tokens,
-            budget["reasoning_max_tokens"],
-        )
-        self.assertGreaterEqual(
-            budget["total_completion_allowance_tokens"]
-            - budget["reasoning_max_tokens"],
-            budget["visible_output_reserve_tokens"],
-        )
-        self.assertGreater(
-            budget["visible_output_reserve_tokens"],
-            observed_visible_tokens,
-        )
-
-    def test_non_reasoning_node_keeps_entire_allowance_for_visible_output(self):
+    def test_non_reasoning_node_has_no_reasoning_or_output_cap(self):
         node = _node(functions=("analysis",), effort="low", allowance=2_048)
         node = SelectedNode(**{
             **node.to_dict(),
@@ -145,16 +120,17 @@ class TestReasoningVisibleOutputBudget(unittest.TestCase):
                 "effort": "low",
             },
             "request_config": {
+                "max_tokens": 2_048,
                 "provider": dict(node.request_config["provider"]),
             },
         })
-        budget = hardening.completion_token_budget(node)
+        telemetry = hardening.completion_token_budget(node)
         payload = hardening.hardened_build_node_payload(node, "普通任务", [])
 
-        self.assertEqual(budget["reasoning_max_tokens"], 0)
-        self.assertEqual(budget["visible_output_reserve_tokens"], 2_048)
+        self.assertFalse(telemetry["local_token_ceiling_enforced"])
         self.assertNotIn("reasoning", payload)
-        self.assertEqual(payload["max_tokens"], 2_048)
+        self.assertNotIn("max_tokens", payload)
+        self.assertNotIn("max_completion_tokens", payload)
 
 
 if __name__ == "__main__":

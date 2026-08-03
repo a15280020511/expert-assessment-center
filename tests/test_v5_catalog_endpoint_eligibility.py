@@ -82,6 +82,8 @@ class CatalogEndpointEligibilityTests(unittest.TestCase):
         self.assertEqual("moonshotai/kimi-k3", endpoint["model"])
         self.assertEqual("morph", endpoint["provider"])
         self.assertEqual(262_144, endpoint["max_completion_tokens"])
+        self.assertFalse(endpoint["local_token_ceiling_parameter_required"])
+        self.assertTrue(endpoint["native_completion_capacity_checked"])
 
     def test_identical_exact_endpoint_rows_are_deduplicated(self) -> None:
         model = self.model(model_maximum=262_144)
@@ -128,7 +130,7 @@ class CatalogEndpointEligibilityTests(unittest.TestCase):
             **first,
             "context_length": 131_072,
             "max_completion_tokens": 8_192,
-            "supported_parameters": ["max_tokens"],
+            "supported_parameters": ["temperature"],
             "pricing": {
                 "prompt": "0.000002",
                 "completion": "0.000004",
@@ -149,7 +151,7 @@ class CatalogEndpointEligibilityTests(unittest.TestCase):
         row = catalog["endpoints"][0]
         self.assertEqual(131_072, row["context_length"])
         self.assertEqual(8_192, row["max_completion_tokens"])
-        self.assertEqual(["max_tokens"], row["supported_parameters"])
+        self.assertEqual(["temperature"], row["supported_parameters"])
         self.assertEqual(2.0, row["prompt_price_per_million"])
         self.assertEqual(4.0, row["completion_price_per_million"])
 
@@ -218,31 +220,35 @@ class CatalogEndpointEligibilityTests(unittest.TestCase):
                 required_context_tokens=16_384,
             )
 
-    def test_endpoint_without_output_limit_parameter_is_rejected(self) -> None:
+    def test_endpoint_without_output_limit_parameter_is_eligible(self) -> None:
         model = self.model(model_maximum=262_144)
-        with self.assertRaises(CatalogViewError):
-            compact_endpoint_catalog(
-                [model],
-                {
-                    model.id: {
-                        "data": {
-                            "endpoints": [
-                                {
-                                    "tag": "unsafe-provider",
-                                    "context_length": 1_048_576,
-                                    "max_completion_tokens": 262_144,
-                                    "supported_parameters": ["temperature"],
-                                    "pricing": {
-                                        "prompt": "0.000001",
-                                        "completion": "0.000003",
-                                    },
-                                }
-                            ]
-                        }
+        catalog = compact_endpoint_catalog(
+            [model],
+            {
+                model.id: {
+                    "data": {
+                        "endpoints": [
+                            {
+                                "tag": "soft-provider",
+                                "context_length": 1_048_576,
+                                "max_completion_tokens": 262_144,
+                                "supported_parameters": ["temperature"],
+                                "pricing": {
+                                    "prompt": "0.000001",
+                                    "completion": "0.000003",
+                                },
+                            }
+                        ]
                     }
-                },
-                required_context_tokens=16_384,
-            )
+                }
+            },
+            required_context_tokens=16_384,
+        )
+        endpoint = catalog["endpoints"][0]
+        self.assertEqual("soft-provider", endpoint["provider"])
+        self.assertEqual(["temperature"], endpoint["supported_parameters"])
+        self.assertFalse(catalog["local_token_ceiling_parameter_required"])
+        self.assertFalse(endpoint["local_token_ceiling_parameter_required"])
 
     def test_explicit_zero_recovery_is_preserved(self) -> None:
         args = argparse.Namespace(

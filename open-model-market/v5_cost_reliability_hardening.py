@@ -1,12 +1,14 @@
-"""Execution-only request, token and response hardening.
+"""Execution-only request, context and response hardening.
 
-No candidate scoring, planning, optimizer, or recovery ranking exists here.
+Token and cost values in this module are advisory telemetry. The module never
+emits a local output-token ceiling or a reasoning-token budget. Native provider
+capacity may still bound an estimate because that is an objective compatibility
+fact, not a center-defined budget.
 """
 from __future__ import annotations
 
 import json
-import math
-import os
+from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
 import v5_execution_primitives as primitives
@@ -15,29 +17,6 @@ from execution_graph import SelectedNode
 COST_UNCERTAINTY_MULTIPLIER = 1.18
 MAX_UPSTREAM_CHARS_PER_NODE = 6_000
 MAX_UPSTREAM_CHARS_TOTAL = 24_000
-MAX_OUTPUT_ALLOWANCE_TOKENS = 32_768
-MIN_VISIBLE_OUTPUT_RESERVE_TOKENS = 1_024
-MIN_REASONING_BUDGET_TOKENS = 1_024
-_HIGH_REASONING_FUNCTIONS = {
-    "synthesis",
-    "quantitative_modeling",
-    "implementation",
-    "adversarial_reasoning",
-    "counterfactual_analysis",
-}
-_REASONING_SHARE_BY_EFFORT = {
-    "minimal": 0.10,
-    "low": 0.20,
-    "medium": 0.50,
-    "high": 0.68,
-}
-_VISIBLE_FLOOR_BY_FUNCTION = {
-    "synthesis": 3_072,
-    "adversarial_reasoning": 2_048,
-    "quantitative_modeling": 2_048,
-    "implementation": 1_536,
-    "counterfactual_analysis": 1_536,
-}
 
 
 def _integer(value: Any, default: int = 0) -> int:
@@ -51,18 +30,23 @@ def completion_envelope(
     work: Mapping[str, Any],
     endpoint_max: int,
 ) -> int:
+    """Estimate completion demand without a local ceiling.
+
+    The exact endpoint's native maximum may cap the estimate because a request
+    cannot exceed an upstream service's actual capacity.
+    """
     context = work.get("context_requirements", {})
     output = _integer(context.get("expected_output_tokens"), 1_024)
     reasoning = _integer(context.get("expected_reasoning_tokens"), 0)
-    envelope = max(
+    advisory = max(
         output + reasoning,
         int(output * 1.7 + reasoning * 1.2),
+        1_024,
     )
-    maximum = min(
-        MAX_OUTPUT_ALLOWANCE_TOKENS,
-        endpoint_max or MAX_OUTPUT_ALLOWANCE_TOKENS,
-    )
-    return max(1_024, min(envelope, maximum))
+    native_maximum = _integer(endpoint_max)
+    if native_maximum > 0:
+        return min(advisory, native_maximum)
+    return advisory
 
 
 def conservative_estimated_cost(
@@ -70,6 +54,7 @@ def conservative_estimated_cost(
     works: Sequence[Mapping[str, Any]],
     bundle_discount: float = 1.0,
 ) -> float:
+    """Return auditable cost telemetry; callers must not use it as a stop gate."""
     prompt_tokens = 0
     completion_tokens = 0
     endpoint_max = _integer(endpoint.get("max_completion_tokens"))
@@ -193,39 +178,15 @@ def _compact_answer(answer: str, limit: int) -> str:
     return answer[:head] + marker + answer[-tail:]
 
 
-def _output_allowance(node: SelectedNode) -> tuple[str | None, int]:
-    supported = {
-        str(value).casefold()
-        for value in node.parameter_profile.get(
-            "supported_parameters",
-            [],
-        )
-    }
-    maximum = min(
-        MAX_OUTPUT_ALLOWANCE_TOKENS,
-        max(
-            1_024,
-            _integer(
-                os.getenv(
-                    "V5_MAX_OUTPUT_ALLOWANCE_TOKENS",
-                    str(MAX_OUTPUT_ALLOWANCE_TOKENS),
-                ),
-                MAX_OUTPUT_ALLOWANCE_TOKENS,
-            ),
-        ),
-    )
+def _output_allowance(node: SelectedNode) -> tuple[None, int]:
+    """Return advisory demand only; no provider request field is selected."""
     recommended = _integer(
         node.parameter_profile.get(
             "recommended_output_allowance_tokens"
         ),
         2_048,
     )
-    allowance = min(maximum, max(1_024, recommended))
-    if "max_completion_tokens" in supported:
-        return "max_completion_tokens", allowance
-    if "max_tokens" in supported:
-        return "max_tokens", allowance
-    return None, allowance
+    return None, max(1, recommended)
 
 
 def _reasoning_effort(node: SelectedNode) -> str:
@@ -243,6 +204,7 @@ def completion_token_budget(
     total_allowance: int | None = None,
     reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
+    """Expose advisory telemetry without creating enforceable Token budgets."""
     total = max(
         1,
         int(
@@ -254,65 +216,38 @@ def completion_token_budget(
     effort = str(
         reasoning_effort or _reasoning_effort(node) or "medium"
     ).casefold()
-    supported = {
-        str(value).casefold()
-        for value in node.parameter_profile.get(
-            "supported_parameters",
-            [],
-        )
-    }
-    reasoning_enabled = bool(
-        node.reasoning_profile.get("reasoning_enabled", True)
-    )
-    reasoning_supported = (
-        "reasoning" in supported
-        or isinstance(node.request_config.get("reasoning"), Mapping)
-    )
-    fields = [
-        str(value)
-        for value in node.output_contract.get("required_fields", [])
-    ]
-    functions = {
-        str(value).casefold() for value in node.functions
-    }
-    function_floor = max(
-        (
-            _VISIBLE_FLOOR_BY_FUNCTION.get(name, 0)
-            for name in functions
-        ),
-        default=0,
-    )
-    contract_floor = max(len(fields) * 192, 1_024)
-    share = _REASONING_SHARE_BY_EFFORT.get(effort, 0.50)
-    visible = max(
-        MIN_VISIBLE_OUTPUT_RESERVE_TOKENS,
-        function_floor,
-        contract_floor,
-        int(math.ceil(total * (1.0 - share))),
-    )
-    if not reasoning_enabled or not reasoning_supported:
-        reasoning_max = 0
-        visible = total
-    else:
-        reasoning_max = min(
-            max(0, total - visible),
-            int(math.floor(total * share)),
-        )
-        if reasoning_max < MIN_REASONING_BUDGET_TOKENS:
-            reasoning_max = 0
-            visible = total
     return {
-        "policy": "task-contract-visible-output-reserve",
+        "policy": "prompt-led-soft-governance",
+        "total_completion_advisory_tokens": total,
         "total_completion_allowance_tokens": total,
-        "reasoning_max_tokens": reasoning_max,
-        "visible_output_reserve_tokens": max(
-            1,
-            min(total, visible),
-        ),
         "reasoning_effort_source": effort,
-        "reasoning_supported": reasoning_supported,
-        "reasoning_enabled": reasoning_enabled,
+        "reasoning_max_tokens": None,
+        "visible_output_reserve_tokens": None,
+        "local_token_ceiling_enforced": False,
+        "reasoning_token_budget_enforced": False,
     }
+
+
+def _request_safe_node(node: SelectedNode) -> SelectedNode:
+    """Remove legacy local Token fields before the base request constructor."""
+    request = dict(node.request_config)
+    request.pop("max_tokens", None)
+    request.pop("max_completion_tokens", None)
+    reasoning = request.get("reasoning")
+    if isinstance(reasoning, Mapping):
+        cleaned = dict(reasoning)
+        for key in (
+            "max_tokens",
+            "max_completion_tokens",
+            "budget_tokens",
+            "token_budget",
+        ):
+            cleaned.pop(key, None)
+        if cleaned:
+            request["reasoning"] = cleaned
+        else:
+            request.pop("reasoning", None)
+    return replace(node, request_config=request)
 
 
 def hardened_build_node_payload(
@@ -320,6 +255,7 @@ def hardened_build_node_payload(
     original_task: str,
     upstream: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
+    """Build a provider-locked payload without local Token ceilings."""
     compacted: list[dict[str, Any]] = []
     remaining = MAX_UPSTREAM_CHARS_TOTAL
     for row in upstream:
@@ -335,37 +271,24 @@ def hardened_build_node_payload(
         compacted.append({**dict(row), "answer": clipped})
         remaining -= len(clipped)
 
+    safe_node = _request_safe_node(node)
     payload = primitives.build_node_payload(
-        node,
+        safe_node,
         original_task,
         compacted,
     )
-    schema = _strict_json_schema(node)
-    if schema is not None:
-        payload["response_format"] = schema
-    field, allowance = _output_allowance(node)
-    if field:
-        payload.pop("max_tokens", None)
-        payload.pop("max_completion_tokens", None)
-        payload[field] = allowance
 
     reasoning = payload.get("reasoning")
     if isinstance(reasoning, Mapping):
-        budget = completion_token_budget(
-            node,
-            total_allowance=allowance,
-            reasoning_effort=str(
-                reasoning.get("effort")
-                or _reasoning_effort(node)
-            ),
-        )
-        if budget["reasoning_max_tokens"]:
-            payload["reasoning"] = {
-                "max_tokens": budget["reasoning_max_tokens"],
-                "exclude": True,
-            }
-        else:
-            payload.pop("reasoning", None)
+        effort = str(reasoning.get("effort") or _reasoning_effort(node))
+        payload["reasoning"] = {
+            "effort": effort,
+            "exclude": bool(reasoning.get("exclude", True)),
+        }
+
+    schema = _strict_json_schema(node)
+    if schema is not None:
+        payload["response_format"] = schema
     provider = dict(payload.get("provider") or {})
     provider["require_parameters"] = True
     payload["provider"] = provider

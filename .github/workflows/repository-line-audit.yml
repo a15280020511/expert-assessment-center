@@ -31,21 +31,29 @@ jobs:
 
       - name: Inspect every repository file and source line
         run: |
-          set -euo pipefail
+          set +e
           python tools/repository_audit.py \
             --root . \
             --output-dir audit-artifacts \
             --fail-on medium
+          status=$?
+          if [[ -f audit-artifacts/repository-audit.json ]]; then
+            cat audit-artifacts/repository-audit.json
+          fi
+          exit "$status"
 
       - name: Freeze reviewed source snapshot
+        if: always()
         run: |
           set -euo pipefail
+          mkdir -p audit-artifacts
           tar --exclude=.git --exclude=audit-artifacts \
             -czf audit-artifacts/repository-source-${GITHUB_SHA}.tar.gz .
           sha256sum audit-artifacts/repository-source-${GITHUB_SHA}.tar.gz \
             > audit-artifacts/repository-source-${GITHUB_SHA}.sha256
 
       - name: Upload full audit evidence
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: repository-line-audit-${{ github.run_id }}

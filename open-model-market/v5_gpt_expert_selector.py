@@ -11,7 +11,6 @@ GPT_SELECTOR_PROVIDER = "openai"
 GPT_MAX_INPUT_CHARS = 360_000
 GPT_PROMPT_CATALOG_MAX_CHARS = 80_000
 GPT_MAX_OUTPUT_CHARS = 64_000
-GPT_MAX_OUTPUT_TOKENS = 10_000
 GPT_MAX_WORK_ITEMS = 32
 GPT_MAX_NODES = 13
 GPT_MAX_EDGES = 64
@@ -156,7 +155,10 @@ def _schema(name: str) -> dict[str, Any]:
             "max_output_tokens": {
                 "type": "integer",
                 "minimum": 256,
-                "maximum": 32768,
+                "description": (
+                    "Advisory output-capacity estimate only; no local maximum "
+                    "is enforced and the value is never sent as a provider cap."
+                ),
             },
             "recovery": {
                 "type": "array",
@@ -447,7 +449,6 @@ def _request(
             {"role": "user", "content": user_content},
         ],
         "temperature": 0,
-        "max_tokens": GPT_MAX_OUTPUT_TOKENS,
         "reasoning": {"effort": "high", "exclude": True},
         "response_format": _schema(name),
         "provider": {
@@ -467,6 +468,7 @@ def _request(
             "user_message_characters": len(user_content),
             "candidate_pruning_used": False,
             "local_scoring_used": False,
+            "local_token_ceiling_enforced": False,
         },
     }
 
@@ -497,6 +499,8 @@ def _hard_limits(
         ],
         "tools_allowed": False,
         "provider_fallback_allowed": False,
+        "local_token_ceiling_enforced": False,
+        "cost_threshold_can_reject_plan": False,
     }
 
 
@@ -677,8 +681,10 @@ def _validate_node(node: Any, index: int, known_work: set[str]) -> str:
     maximum = node["max_output_tokens"]
     if isinstance(maximum, bool) or not isinstance(maximum, int):
         raise GPTSelectorError("node max_output_tokens must be an integer")
-    if not 256 <= maximum <= 32768:
-        raise GPTSelectorError("node max_output_tokens is outside hard limits")
+    if maximum < 256:
+        raise GPTSelectorError(
+            "node max_output_tokens advisory must be at least 256"
+        )
     _validate_recovery_rows(node["recovery"])
     return node_id
 

@@ -97,16 +97,17 @@ class V5ReasoningSaturationRecoveryTests(unittest.TestCase):
         def call_fn(_run, payload):
             requests.append(dict(payload))
             if len(requests) == 1:
-                requested = payload["reasoning"]["max_tokens"]
+                self.assertEqual("high", payload["reasoning"]["effort"])
+                self.assertNotIn("max_tokens", payload["reasoning"])
                 return ({
                     "id": "empty-reasoning",
                     "model": "qwen/test",
                     "provider": "provider-a",
                     "choices": [{"message": {"content": ""}, "finish_reason": "stop"}],
                     "usage": {
-                        "completion_tokens": requested + 100,
+                        "completion_tokens": 1_100,
                         "completion_tokens_details": {
-                            "reasoning_tokens": requested + 100,
+                            "reasoning_tokens": 1_100,
                         },
                         "cost": 0.001,
                     },
@@ -152,6 +153,7 @@ class V5ReasoningSaturationRecoveryTests(unittest.TestCase):
         self.assertEqual("success_recovered", result.status)
         self.assertEqual(2, len(result.attempts))
         self.assertIn("reasoning", requests[0])
+        self.assertNotIn("max_tokens", requests[0]["reasoning"])
         self.assertNotIn("reasoning", requests[1])
         self.assertIn(
             "reasoning-saturated-empty-output",
@@ -169,9 +171,10 @@ class V5ReasoningSaturationRecoveryTests(unittest.TestCase):
         }
         evidence = ExecutionEngine._reasoning_saturation_evidence(
             usage,
-            {"reasoning": {"max_tokens": 1000}},
+            {"reasoning": {"effort": "high"}},
         )
         self.assertFalse(evidence["reasoning_saturated_empty_output"])
+        self.assertEqual(0, evidence["requested_reasoning_max_tokens"])
 
 
 if __name__ == "__main__":

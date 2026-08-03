@@ -189,7 +189,7 @@ class ExecutionGraphValidatorTests(unittest.TestCase):
         self.assertEqual(len(company_issues), 1)
         self.assertIn("vendor-a", company_issues[0].message)
 
-    def test_required_work_and_budget_are_hard_limits(self):
+    def test_required_work_is_hard_but_cost_threshold_is_advisory(self):
         graph = replace(
             self.valid_graph(),
             required_work=self.valid_graph().required_work + ("missing",),
@@ -200,7 +200,7 @@ class ExecutionGraphValidatorTests(unittest.TestCase):
         )
         codes = {issue.code for issue in issues}
         self.assertIn("work_coverage", codes)
-        self.assertIn("budget_limit", codes)
+        self.assertNotIn("budget_limit", codes)
 
     def test_topological_stages_are_deterministic(self):
         self.assertEqual(

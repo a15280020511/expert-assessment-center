@@ -30,13 +30,13 @@ from v5_governance_runtime import (
 )
 from v5_gpt_expert_selector import build_proposal_request
 from v5_json_io import write_json
-from v5_proposal_materializer import materialize_proposal
 from v5_provider_lock import canonical_provider_lock
 from v5_recovery_runtime import build_production_runtime
 from v5_runtime import RuntimeConfig
+from v5_soft_proposal_materializer import materialize_proposal
 from v5_task_envelope import build_task_envelope
 
-RUNTIME_VERSION = "v5-gpt-claude-runtime-3"
+RUNTIME_VERSION = "v5-gpt-claude-runtime-4-soft-resources"
 
 
 def _load(path: str | Path) -> Mapping[str, Any]:
@@ -105,7 +105,6 @@ def _validate_budget(args: argparse.Namespace) -> tuple[int, int, int]:
             "governance_max_completion_tokens must be positive"
         )
     return total, recovery, expert_total
-
 
 
 _FORBIDDEN_REQUEST_FIELDS = frozenset(
@@ -205,6 +204,9 @@ def _merge_request_audit(
             "claude_covers_external_information": True,
             "second_claude_review_allowed": False,
             "model_loop_allowed": False,
+            "resource_governance_mode": "prompt-led-soft-governance",
+            "local_token_ceiling_enforced": False,
+            "cost_threshold_can_stop_execution": False,
         },
     )
     if status != "PASS":
@@ -348,13 +350,21 @@ def _runtime_config_payload(
         "expert_total_call_limit": expert_total_calls,
         "expert_recovery_call_limit": recovery_calls,
         "expert_initial_call_limit": expert_total_calls - recovery_calls,
-        "cost_anomaly_usd": args.cost_anomaly_usd,
-        "max_completion_tokens": args.max_completion_tokens,
-        "governance_max_completion_tokens": getattr(
+        "cost_advisory_usd": args.cost_anomaly_usd,
+        "completion_capacity_advisory_tokens": args.max_completion_tokens,
+        "governance_completion_advisory_tokens": getattr(
             args,
             "governance_max_completion_tokens",
             None,
         ),
+        "resource_governance": {
+            "mode": "prompt-led-soft-governance",
+            "local_token_ceiling_enforced": False,
+            "cost_threshold_can_reject_plan": False,
+            "cost_threshold_can_stop_execution": False,
+            "cost_threshold_can_invalidate_result": False,
+            "provider_native_capacity_is_compatibility_boundary": True,
+        },
         "selection_authority": "gpt-latest",
         "selection_model": governance_models["gpt"]["resolved_model"],
         "selection_provider": governance_models["gpt"]["provider"],
@@ -406,19 +416,27 @@ def _write_dry_run(
             approved_total_calls=total_calls,
             governance_calls_reserved=CLAUDE_RED_TEAM_GOVERNANCE_CALLS,
             approved_recovery_calls=recovery_calls,
-            cost_anomaly_usd=cost_anomaly_usd,
+            cost_anomaly_usd=None,
         ),
         max_completion_tokens,
     )
     write_json(
         output / "v5-dry-run.json",
         {
-            "schema_version": "v5-gpt-claude-advisory-dry-run-3",
+            "schema_version": "v5-gpt-claude-advisory-dry-run-4",
             "status": "validated-not-executed",
             "model_calls": 0,
             "task_envelope": task_envelope,
             "proposal_request": proposal_request,
             "governance_model_resolution": governance_models,
+            "resource_governance": {
+                "mode": "prompt-led-soft-governance",
+                "cost_advisory_usd": cost_anomaly_usd,
+                "completion_advisory_tokens": max_completion_tokens,
+                "local_token_ceiling_enforced": False,
+                "cost_threshold_can_reject_plan": False,
+                "cost_threshold_can_stop_execution": False,
+            },
             "claude_model": "~anthropic/claude-opus-latest",
             "claude_calls_per_task": 1,
             "claude_is_advisory_only": True,
@@ -441,11 +459,15 @@ def _remaining_cost(
     approved: float | None,
     governance_ledger: Mapping[str, Any],
 ) -> tuple[float, float | None]:
+    """Return actual governance cost and the unchanged advisory threshold.
+
+    The former implementation subtracted governance cost from a hard budget and
+    rejected the task when the remainder was non-positive. The constitutional
+    policy now keeps the value solely as audit/advisory telemetry.
+    """
     governance_cost = float(governance_ledger.get("actual_cost_usd") or 0.0)
-    remaining = None if approved is None else float(approved) - governance_cost
-    if remaining is not None and remaining <= 0:
-        raise RuntimeError("governance calls exhausted the approved cost guard")
-    return governance_cost, remaining
+    advisory = None if approved is None else float(approved)
+    return governance_cost, advisory
 
 
 def _selection_payload(
@@ -454,7 +476,7 @@ def _selection_payload(
     materialization: Mapping[str, Any],
 ) -> dict[str, Any]:
     return {
-        "schema_version": "v5-gpt-direct-selection-3",
+        "schema_version": "v5-gpt-direct-selection-4",
         "status": "PASS",
         "proposal": governance["final_proposal"],
         "claude_advice": governance["claude_advice"],
@@ -464,6 +486,9 @@ def _selection_payload(
         "task_decomposition_authority": "gpt-latest",
         "claude_is_advisory_only": True,
         "claude_gatekeeping_allowed": False,
+        "resource_governance_mode": "prompt-led-soft-governance",
+        "cost_threshold_can_reject_plan": False,
+        "local_token_ceiling_enforced": False,
         "local_task_classification_used": False,
         "local_atomic_work_generation_used": False,
         "local_resource_matrix_used": False,
@@ -511,7 +536,9 @@ def _run_governance_and_materialize(
         ledger,
         approved_total_calls=total_calls,
     )
-    governance_cost, remaining = _remaining_cost(args.cost_anomaly_usd, ledger)
+    governance_cost, cost_advisory = _remaining_cost(
+        args.cost_anomaly_usd, ledger
+    )
     graph, limits, materialization = materialize_proposal(
         governance["final_proposal"],
         task,
@@ -520,13 +547,31 @@ def _run_governance_and_materialize(
         approved_total_calls=total_calls,
         governance_calls_reserved=CLAUDE_RED_TEAM_GOVERNANCE_CALLS,
         approved_recovery_calls=recovery_calls,
-        cost_anomaly_usd=remaining,
+        cost_anomaly_usd=cost_advisory,
     )
     governance["materialization_after_governance_cost"] = materialization
+    governance["resource_governance"] = {
+        **dict(governance.get("resource_governance") or {}),
+        "mode": "prompt-led-soft-governance",
+        "cost_advisory_usd": cost_advisory,
+        "governance_actual_cost_usd": governance_cost,
+        "cost_threshold_can_reject_materialization": False,
+        "cost_threshold_can_stop_execution": False,
+    }
     write_json(output / "v5-governance-result.json", governance)
-    write_json(output / "v5-selection.json", _selection_payload(governance, governance_models, materialization))
+    write_json(
+        output / "v5-selection.json",
+        _selection_payload(governance, governance_models, materialization),
+    )
     write_json(output / "v5-execution-graph.json", graph.to_dict())
-    return governance, ledger, graph, limits, governance_cost, remaining
+    return (
+        governance,
+        ledger,
+        graph,
+        limits,
+        governance_cost,
+        cost_advisory,
+    )
 
 
 def _governance_result_payload(
@@ -549,6 +594,9 @@ def _governance_result_payload(
         "claude_covers_internal_selection": True,
         "claude_covers_external_information": True,
         "second_claude_review_allowed": False,
+        "resource_governance_mode": "prompt-led-soft-governance",
+        "local_token_ceiling_enforced": False,
+        "cost_threshold_can_stop_governance": False,
     }
 
 
@@ -562,7 +610,9 @@ def _finalize_result(
     governance_cost: float,
 ) -> None:
     expert_cost = float(result.get("actual_cost_usd") or 0.0)
-    expert_calls = int(result.get("execution_budget", {}).get("calls_reserved", 0))
+    expert_calls = int(
+        result.get("execution_budget", {}).get("calls_reserved", 0)
+    )
     governance = _governance_result_payload(
         governance_ledger,
         governance_models,
@@ -575,8 +625,28 @@ def _finalize_result(
     result["actual_cost_usd"] = round(governance_cost + expert_cost, 8)
     if result["total_model_calls"] > total_calls:
         raise RuntimeError("overall model-call ceiling exceeded")
-    if args.cost_anomaly_usd is not None and result["actual_cost_usd"] > float(args.cost_anomaly_usd) + 1e-12:
-        raise RuntimeError("overall cost guard exceeded")
+    advisory = (
+        None
+        if args.cost_anomaly_usd is None
+        else float(args.cost_anomaly_usd)
+    )
+    exceeded = bool(
+        advisory is not None
+        and result["actual_cost_usd"] > advisory + 1e-12
+    )
+    resource = dict(result.get("resource_governance") or {})
+    resource.update(
+        {
+            "mode": "prompt-led-soft-governance",
+            "cost_advisory_usd": advisory,
+            "cost_advisory_exceeded": exceeded,
+            "cost_threshold_can_stop_execution": False,
+            "cost_threshold_can_invalidate_result": False,
+            "local_token_ceiling_enforced": False,
+            "cost_and_token_usage_audited": True,
+        }
+    )
+    result["resource_governance"] = resource
 
 
 def _execute_experts(
@@ -622,7 +692,11 @@ def _write_final_artifacts(
         output / "v5-execution-summary.json",
         {key: value for key, value in result.items() if key != "node_results"},
     )
-    _merge_request_audit(output, governance_ledger, approved_total_calls=total_calls)
+    _merge_request_audit(
+        output,
+        governance_ledger,
+        approved_total_calls=total_calls,
+    )
     write_manifest(output)
 
 
@@ -638,8 +712,10 @@ def main(
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
     task, task_digest, task_envelope = _prepare_task(args, run, output)
-    catalog, governance_models, catalog_source, endpoint_source = _build_catalog_state(
-        args, run, output, task_envelope, governance_call_fn
+    catalog, governance_models, catalog_source, endpoint_source = (
+        _build_catalog_state(
+            args, run, output, task_envelope, governance_call_fn
+        )
     )
     _write_catalog_artifacts(
         output,
@@ -670,18 +746,20 @@ def main(
             ),
         )
         return 0
-    _, ledger, graph, limits, governance_cost, remaining = _run_governance_and_materialize(
-        args=args,
-        run=run,
-        output=output,
-        task=task,
-        task_digest=task_digest,
-        task_envelope=task_envelope,
-        catalog=catalog,
-        governance_models=governance_models,
-        total_calls=total_calls,
-        recovery_calls=recovery_calls,
-        governance_call_fn=governance_call_fn,
+    _, ledger, graph, limits, governance_cost, cost_advisory = (
+        _run_governance_and_materialize(
+            args=args,
+            run=run,
+            output=output,
+            task=task,
+            task_digest=task_digest,
+            task_envelope=task_envelope,
+            catalog=catalog,
+            governance_models=governance_models,
+            total_calls=total_calls,
+            recovery_calls=recovery_calls,
+            governance_call_fn=governance_call_fn,
+        )
     )
     result = _execute_experts(
         args=args,
@@ -692,7 +770,7 @@ def main(
         graph_limits=limits,
         expert_total_calls=expert_total_calls,
         recovery_calls=recovery_calls,
-        remaining_cost=remaining,
+        remaining_cost=cost_advisory,
         expert_call_fn=expert_call_fn,
     )
     _finalize_result(

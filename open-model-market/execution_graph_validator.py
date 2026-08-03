@@ -114,21 +114,57 @@ def _graph_shape_issues(
 ) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     if not graph.nodes:
-        issues.append(ValidationIssue("empty_graph", "At least one node is required.", "nodes"))
+        issues.append(
+            ValidationIssue(
+                "empty_graph",
+                "At least one node is required.",
+                "nodes",
+            )
+        )
     for node_id, count in Counter(node_ids).items():
         if not node_id:
-            issues.append(ValidationIssue("empty_node_id", "Node IDs must be non-empty.", "nodes"))
+            issues.append(
+                ValidationIssue(
+                    "empty_node_id",
+                    "Node IDs must be non-empty.",
+                    "nodes",
+                )
+            )
         elif count > 1:
-            issues.append(ValidationIssue("duplicate_node_id", f"Duplicate node ID {node_id!r}.", "nodes"))
+            issues.append(
+                ValidationIssue(
+                    "duplicate_node_id",
+                    f"Duplicate node ID {node_id!r}.",
+                    "nodes",
+                )
+            )
     limits_to_check = (
         (len(graph.nodes), limits.max_nodes, "node_limit", "Node count", "nodes"),
         (len(graph.edges), limits.max_edges, "edge_limit", "Edge count", "edges"),
-        (len(graph.nodes), limits.max_model_calls, "call_limit", "Planned model calls", "nodes"),
-        (len(graph.execution_stages), limits.max_stages, "stage_limit", "Execution stages", "execution_stages"),
+        (
+            len(graph.nodes),
+            limits.max_model_calls,
+            "call_limit",
+            "Planned model calls",
+            "nodes",
+        ),
+        (
+            len(graph.execution_stages),
+            limits.max_stages,
+            "stage_limit",
+            "Execution stages",
+            "execution_stages",
+        ),
     )
     for actual, maximum, code, label, path in limits_to_check:
         if actual > maximum:
-            issues.append(ValidationIssue(code, f"{label} exceeds {maximum}.", path))
+            issues.append(
+                ValidationIssue(
+                    code,
+                    f"{label} exceeds {maximum}.",
+                    path,
+                )
+            )
     return issues
 
 
@@ -136,35 +172,84 @@ def _graph_score_issues(
     graph: ExecutionGraph,
     limits: GraphLimits,
 ) -> list[ValidationIssue]:
+    del limits
     issues: list[ValidationIssue] = []
-    if not all(_finite(x) for x in (graph.estimated_quality, graph.quality_floor, graph.estimated_total_cost)):
-        issues.append(ValidationIssue("non_finite_graph_score", "Graph scores and cost must be finite."))
+    if not all(
+        _finite(value)
+        for value in (
+            graph.estimated_quality,
+            graph.quality_floor,
+            graph.estimated_total_cost,
+        )
+    ):
+        issues.append(
+            ValidationIssue(
+                "non_finite_graph_score",
+                "Graph scores and cost must be finite.",
+            )
+        )
     if graph.estimated_quality < 0 or graph.quality_floor < 0:
-        issues.append(ValidationIssue("negative_quality", "Quality values cannot be negative."))
+        issues.append(
+            ValidationIssue(
+                "negative_quality",
+                "Quality values cannot be negative.",
+            )
+        )
     if graph.quality_floor > graph.estimated_quality + 1e-12:
-        issues.append(ValidationIssue("quality_floor", "Quality floor exceeds estimated quality."))
+        issues.append(
+            ValidationIssue(
+                "quality_floor",
+                "Quality floor exceeds estimated quality.",
+            )
+        )
     if graph.estimated_total_cost < 0:
-        issues.append(ValidationIssue("negative_cost", "Estimated total cost cannot be negative."))
-    if limits.max_budget_usd is not None and graph.estimated_total_cost > limits.max_budget_usd + 1e-12:
-        issues.append(ValidationIssue(
-            "budget_limit",
-            f"Estimated cost exceeds hard budget {limits.max_budget_usd:.6f} USD.",
-            "estimated_total_cost",
-        ))
+        issues.append(
+            ValidationIssue(
+                "negative_cost",
+                "Estimated total cost cannot be negative.",
+            )
+        )
     return issues
 
 
 def _node_endpoint_issues(node: Any, path: str) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     if not node.assigned_work:
-        issues.append(ValidationIssue("unassigned_node", "Every node must own work.", path))
+        issues.append(
+            ValidationIssue(
+                "unassigned_node",
+                "Every node must own work.",
+                path,
+            )
+        )
     if not node.model or not node.provider_endpoint:
-        issues.append(ValidationIssue("missing_endpoint", "Model and provider endpoint are required.", path))
+        issues.append(
+            ValidationIssue(
+                "missing_endpoint",
+                "Model and provider endpoint are required.",
+                path,
+            )
+        )
     if any(term in node.model.casefold() for term in _FORBIDDEN_MODEL_TERMS):
-        issues.append(ValidationIssue("router_model", f"Forbidden routed model {node.model!r}.", f"{path}.model"))
-    for key, key_path in _walk_keys(node.request_config, f"{path}.request_config"):
+        issues.append(
+            ValidationIssue(
+                "router_model",
+                f"Forbidden routed model {node.model!r}.",
+                f"{path}.model",
+            )
+        )
+    for key, key_path in _walk_keys(
+        node.request_config,
+        f"{path}.request_config",
+    ):
         if key in _FORBIDDEN_REQUEST_KEYS:
-            issues.append(ValidationIssue("tool_field", f"Forbidden request field {key!r}.", key_path))
+            issues.append(
+                ValidationIssue(
+                    "tool_field",
+                    f"Forbidden request field {key!r}.",
+                    key_path,
+                )
+            )
     return issues
 
 
@@ -178,23 +263,52 @@ def _node_score_issues(node: Any, path: str) -> list[ValidationIssue]:
     )
     for name, value in values:
         if not _finite(value):
-            issues.append(ValidationIssue("non_finite_node_score", f"{name} must be finite.", f"{path}.{name}"))
+            issues.append(
+                ValidationIssue(
+                    "non_finite_node_score",
+                    f"{name} must be finite.",
+                    f"{path}.{name}",
+                )
+            )
     ranges = (
-        (node.estimated_quality, "node_quality_range", "Estimated quality must be in [0, 1]."),
-        (node.quality_uncertainty, "uncertainty_range", "Quality uncertainty must be in [0, 1]."),
-        (node.failure_probability, "failure_range", "Failure probability must be in [0, 1]."),
+        (
+            node.estimated_quality,
+            "node_quality_range",
+            "Estimated quality must be in [0, 1].",
+        ),
+        (
+            node.quality_uncertainty,
+            "uncertainty_range",
+            "Quality uncertainty must be in [0, 1].",
+        ),
+        (
+            node.failure_probability,
+            "failure_range",
+            "Failure probability must be in [0, 1].",
+        ),
     )
     for value, code, message in ranges:
         if value < 0 or value > 1:
             issues.append(ValidationIssue(code, message, path))
     if node.estimated_cost < 0:
-        issues.append(ValidationIssue("node_negative_cost", "Node cost cannot be negative.", path))
+        issues.append(
+            ValidationIssue(
+                "node_negative_cost",
+                "Node cost cannot be negative.",
+                path,
+            )
+        )
     return issues
 
 
 def _validate_nodes(
     graph: ExecutionGraph,
-) -> tuple[list[ValidationIssue], set[str], dict[str, list[Any]], dict[str, list[str]]]:
+) -> tuple[
+    list[ValidationIssue],
+    set[str],
+    dict[str, list[Any]],
+    dict[str, list[str]],
+]:
     issues: list[ValidationIssue] = []
     covered_work: set[str] = set()
     independence_groups: dict[str, list[Any]] = defaultdict(list)
@@ -218,14 +332,25 @@ def _coverage_issues(
     issues: list[ValidationIssue] = []
     for company, company_node_ids in sorted(companies_by_name.items()):
         if len(company_node_ids) > 1:
-            issues.append(ValidationIssue(
-                "model_company_reuse",
-                f"Model company {company!r} is reused by nodes {sorted(company_node_ids)}.",
-                "nodes",
-            ))
+            issues.append(
+                ValidationIssue(
+                    "model_company_reuse",
+                    (
+                        f"Model company {company!r} is reused by nodes "
+                        f"{sorted(company_node_ids)}."
+                    ),
+                    "nodes",
+                )
+            )
     missing_work = sorted(set(graph.required_work) - covered_work)
     if missing_work:
-        issues.append(ValidationIssue("work_coverage", f"Uncovered required work: {missing_work}.", "required_work"))
+        issues.append(
+            ValidationIssue(
+                "work_coverage",
+                f"Uncovered required work: {missing_work}.",
+                "required_work",
+            )
+        )
     return issues
 
 
@@ -240,19 +365,54 @@ def _edge_issues(
     for index, edge in enumerate(graph.edges):
         path = f"edges[{index}]"
         if edge.source not in node_set or edge.target not in node_set:
-            issues.append(ValidationIssue("unknown_edge_node", "Edge references an unknown node.", path))
+            issues.append(
+                ValidationIssue(
+                    "unknown_edge_node",
+                    "Edge references an unknown node.",
+                    path,
+                )
+            )
             continue
         if edge.source == edge.target:
-            issues.append(ValidationIssue("self_edge", "Self edges are forbidden.", path))
+            issues.append(
+                ValidationIssue(
+                    "self_edge",
+                    "Self edges are forbidden.",
+                    path,
+                )
+            )
         if edge.relation_type not in _ALLOWED_RELATIONS:
-            issues.append(ValidationIssue("relation_type", f"Unsupported relation {edge.relation_type!r}.", path))
-        identity = (edge.source, edge.target, edge.relation_type, edge.payload_type)
+            issues.append(
+                ValidationIssue(
+                    "relation_type",
+                    f"Unsupported relation {edge.relation_type!r}.",
+                    path,
+                )
+            )
+        identity = (
+            edge.source,
+            edge.target,
+            edge.relation_type,
+            edge.payload_type,
+        )
         if identity in edge_pairs:
-            issues.append(ValidationIssue("duplicate_edge", f"Duplicate edge {identity!r}.", path))
+            issues.append(
+                ValidationIssue(
+                    "duplicate_edge",
+                    f"Duplicate edge {identity!r}.",
+                    path,
+                )
+            )
         edge_pairs.add(identity)
         dag.add_edge(edge.source, edge.target)
     if not nx.is_directed_acyclic_graph(dag):
-        issues.append(ValidationIssue("cycle", "Execution graph must be a directed acyclic graph.", "edges"))
+        issues.append(
+            ValidationIssue(
+                "cycle",
+                "Execution graph must be a directed acyclic graph.",
+                "edges",
+            )
+        )
     return issues, dag
 
 
@@ -264,18 +424,32 @@ def _stage_validation_issues(
     if set(stage_index) != node_set:
         missing = sorted(node_set - set(stage_index))
         unknown = sorted(set(stage_index) - node_set)
-        issues.append(ValidationIssue(
-            "stage_coverage",
-            f"Stage membership mismatch; missing={missing}, unknown={unknown}.",
-            "execution_stages",
-        ))
-    for edge in graph.edges:
-        if edge.source in stage_index and edge.target in stage_index and stage_index[edge.target] <= stage_index[edge.source]:
-            issues.append(ValidationIssue(
-                "stage_order",
-                f"Edge {edge.source}->{edge.target} does not advance execution stage.",
+        issues.append(
+            ValidationIssue(
+                "stage_coverage",
+                (
+                    "Stage membership mismatch; "
+                    f"missing={missing}, unknown={unknown}."
+                ),
                 "execution_stages",
-            ))
+            )
+        )
+    for edge in graph.edges:
+        if (
+            edge.source in stage_index
+            and edge.target in stage_index
+            and stage_index[edge.target] <= stage_index[edge.source]
+        ):
+            issues.append(
+                ValidationIssue(
+                    "stage_order",
+                    (
+                        f"Edge {edge.source}->{edge.target} does not advance "
+                        "execution stage."
+                    ),
+                    "execution_stages",
+                )
+            )
     return issues
 
 
@@ -285,12 +459,28 @@ def _terminal_node_issues(
     dag: nx.DiGraph,
 ) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
-    expected_entries = {node for node in node_set if dag.in_degree(node) == 0}
-    expected_finals = {node for node in node_set if dag.out_degree(node) == 0}
+    expected_entries = {
+        node for node in node_set if dag.in_degree(node) == 0
+    }
+    expected_finals = {
+        node for node in node_set if dag.out_degree(node) == 0
+    }
     if set(graph.entry_nodes) != expected_entries:
-        issues.append(ValidationIssue("entry_nodes", "Entry nodes do not match graph indegree.", "entry_nodes"))
+        issues.append(
+            ValidationIssue(
+                "entry_nodes",
+                "Entry nodes do not match graph indegree.",
+                "entry_nodes",
+            )
+        )
     if set(graph.final_nodes) != expected_finals:
-        issues.append(ValidationIssue("final_nodes", "Final nodes do not match graph outdegree.", "final_nodes"))
+        issues.append(
+            ValidationIssue(
+                "final_nodes",
+                "Final nodes do not match graph outdegree.",
+                "final_nodes",
+            )
+        )
     return issues
 
 
@@ -305,30 +495,47 @@ def _independence_issues(
         ids = {node.node_id for node in members}
         models = [node.model for node in members]
         if len(models) != len(set(models)):
-            issues.append(ValidationIssue(
-                "independent_same_model",
-                f"Independence group {group_name!r} reuses a model.",
-                "nodes",
-            ))
+            issues.append(
+                ValidationIssue(
+                    "independent_same_model",
+                    f"Independence group {group_name!r} reuses a model.",
+                    "nodes",
+                )
+            )
         for edge in graph.edges:
             if edge.source in ids and edge.target in ids:
-                issues.append(ValidationIssue(
-                    "independent_visibility",
-                    f"Independent nodes {edge.source!r} and {edge.target!r} cannot exchange results.",
-                    "edges",
-                ))
+                issues.append(
+                    ValidationIssue(
+                        "independent_visibility",
+                        (
+                            f"Independent nodes {edge.source!r} and "
+                            f"{edge.target!r} cannot exchange results."
+                        ),
+                        "edges",
+                    )
+                )
     return issues
 
 
-def _cost_reconciliation_issues(graph: ExecutionGraph) -> list[ValidationIssue]:
+def _cost_reconciliation_issues(
+    graph: ExecutionGraph,
+) -> list[ValidationIssue]:
     node_cost = sum(node.estimated_cost for node in graph.nodes)
-    if abs(node_cost - graph.estimated_total_cost) <= max(1e-9, node_cost * 1e-6):
+    if abs(node_cost - graph.estimated_total_cost) <= max(
+        1e-9,
+        node_cost * 1e-6,
+    ):
         return []
-    return [ValidationIssue(
-        "cost_reconciliation",
-        f"Graph cost {graph.estimated_total_cost:.12f} does not reconcile with node cost {node_cost:.12f}.",
-        "estimated_total_cost",
-    )]
+    return [
+        ValidationIssue(
+            "cost_reconciliation",
+            (
+                f"Graph cost {graph.estimated_total_cost:.12f} does not "
+                f"reconcile with node cost {node_cost:.12f}."
+            ),
+            "estimated_total_cost",
+        )
+    ]
 
 
 def validate_execution_graph(
@@ -337,7 +544,7 @@ def validate_execution_graph(
     *,
     raise_on_error: bool = False,
 ) -> tuple[ValidationIssue, ...]:
-    """Validate fixed V5 safety rules without changing or repairing the graph."""
+    """Validate fixed safety rules without Token or cost rejection gates."""
     active_limits = limits or GraphLimits()
     node_ids = [node.node_id for node in graph.nodes]
     node_set = set(node_ids)
