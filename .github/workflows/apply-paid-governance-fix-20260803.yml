@@ -30,7 +30,7 @@ jobs:
         run: |
           set -euo pipefail
           payload=.github/paid-fix/fix.patch.b64
-          test "$(sha256sum "$payload" | awk '{print $1}')" = "3931052332bff7062cf9fc8fd819d198c29f15fc7fa3b007bc824a44e23e3f38"
+          test "$(sha256sum "$payload" | awk '{print $1}')" = "b9813d11f32575cc572ba22072059dc486a9f23b90e2612aaea2f8d08e677aef"
           base64 --decode "$payload" | gzip --decompress > /tmp/fix.patch
           test "$(sha256sum /tmp/fix.patch | awk '{print $1}')" = "6312fc0ed45dbd92347fee8793dd33ad28129b1bc8fab41600d60b0d730dc47e"
           git apply --check /tmp/fix.patch
