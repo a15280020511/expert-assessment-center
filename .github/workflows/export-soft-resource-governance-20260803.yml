@@ -112,7 +112,7 @@ jobs:
           printf '%s\n' '349/349 PASS; repository audit critical/high/medium/low/info=0' > validated-soft-resource-source/validation.txt
 
       - name: Upload immutable validated source
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0 # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: validated-soft-resource-source-${{ github.run_id }}
           path: validated-soft-resource-source/
