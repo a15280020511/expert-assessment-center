@@ -1,5 +1,5 @@
 {
-  "schema_version": "v5-constitutional-policy-2",
+  "schema_version": "v5-constitutional-policy-3",
   "authority": "CONSTITUTION.md",
   "fail_closed": true,
   "free_first_testing": {
@@ -29,6 +29,62 @@
     "pre_execution_validation_required": true,
     "post_execution_actual_success_audit_required": true,
     "duplicate_company_action": "fail_closed"
+  },
+  "dynamic_task_matching": {
+    "required": true,
+    "planner": "gpt_latest_single_pass",
+    "recomputed_from_current_task": true,
+    "cross_task_history_allowed": false,
+    "dynamically_determined": [
+      "work_items",
+      "dependency_graph",
+      "expert_count",
+      "expert_roles",
+      "expert_functions",
+      "execution_stages",
+      "final_nodes",
+      "model",
+      "provider",
+      "reasoning_effort",
+      "output_capacity_advisory",
+      "recovery_candidates"
+    ],
+    "live_complete_endpoint_catalog_required": true,
+    "fixed_expert_slots_allowed": false,
+    "fixed_expert_count_allowed": false,
+    "fixed_roles_allowed": false,
+    "fixed_model_combinations_allowed": false,
+    "fixed_provider_routes_allowed": false,
+    "fixed_parameter_tiers_allowed": false,
+    "keyword_routing_allowed": false,
+    "domain_hardcoding_allowed": false,
+    "local_scoring_or_optimizer_selection_allowed": false,
+    "deterministic_validator_can_redesign_team": false,
+    "invalid_dynamic_plan_action": "fail_closed"
+  },
+  "tool_prohibition": {
+    "scope": [
+      "gpt_proposal",
+      "claude_red_team",
+      "gpt_synthesis",
+      "expert_execution",
+      "expert_recovery"
+    ],
+    "external_tools_allowed": false,
+    "web_browsing_allowed": false,
+    "mcp_or_plugin_allowed": false,
+    "code_or_shell_execution_allowed": false,
+    "database_or_file_lookup_allowed": false,
+    "connector_or_external_api_allowed": false,
+    "request_tool_fields_allowed": false,
+    "allowed_inputs": [
+      "current_task_ticket",
+      "provided_evidence_bundle",
+      "current_model_endpoint_catalog",
+      "legal_prior_outputs_within_same_task"
+    ],
+    "external_fact_collection_allowed": false,
+    "violation_action": "fail_closed"
   },
   "resource_governance": {
     "mode": "prompt_led_soft_governance",
