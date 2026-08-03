@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
+import sys
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
-
-import sys
-from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MARKET = ROOT / "open-model-market"
@@ -13,6 +14,7 @@ if str(MARKET) not in sys.path:
     sys.path.insert(0, str(MARKET))
 
 import v5_free_shadow_acceptance as shadow
+import v5_free_shadow_support as shadow_support
 
 
 class FreeShadowAcceptanceTests(unittest.TestCase):
@@ -58,7 +60,7 @@ class FreeShadowAcceptanceTests(unittest.TestCase):
         rows = [
             self.endpoint("google/a:free", "Google"),
             self.endpoint("google/b:free", "Google", order=2),
-            self.endpoint("qwen/c:free", "Alibaba", order=3),
+            self.endpoint("qwen/c:free", "Alibaba", reasoning=False, order=3),
         ]
         with self.assertRaisesRegex(
             shadow.FreeShadowError,
@@ -73,10 +75,13 @@ class FreeShadowAcceptanceTests(unittest.TestCase):
                 "Google",
                 structured=False,
             ),
-            self.endpoint("cohere/b:free", "Cohere", order=2),
-            self.endpoint("qwen/c:free", "Alibaba", order=3),
+            self.endpoint("cohere/b:free", "Cohere", reasoning=False, order=2),
+            self.endpoint("qwen/c:free", "Alibaba", structured=False, order=3),
         ]
-        with self.assertRaises(shadow.FreeShadowError):
+        with self.assertRaisesRegex(
+            shadow.FreeShadowError,
+            "governance JSON protocol",
+        ):
             shadow.choose_shadow_roles(rows)
 
     def test_catalog_is_zero_price_and_explicit_endpoint(self) -> None:
@@ -91,7 +96,7 @@ class FreeShadowAcceptanceTests(unittest.TestCase):
         self.assertEqual(row["provider_endpoint"], "qwen/c:free@Alibaba")
         self.assertFalse(row["synthetic_fixture_only"])
 
-    @patch.object(shadow, "request_json")
+    @patch.object(shadow_support, "request_json")
     def test_boundary_accepts_exact_free_zero_cost_response(self, request) -> None:
         request.return_value = {
             "id": "free-1",
@@ -119,7 +124,7 @@ class FreeShadowAcceptanceTests(unittest.TestCase):
         self.assertEqual(payload["provider"]["data_collection"], "allow")
         self.assertIs(payload["provider"]["zdr"], False)
 
-    @patch.object(shadow, "request_json")
+    @patch.object(shadow_support, "request_json")
     def test_boundary_rejects_paid_model_response(self, request) -> None:
         request.return_value = {
             "id": "paid-1",
@@ -142,7 +147,7 @@ class FreeShadowAcceptanceTests(unittest.TestCase):
                 },
             )
 
-    @patch.object(shadow, "request_json")
+    @patch.object(shadow_support, "request_json")
     def test_boundary_rejects_positive_cost(self, request) -> None:
         request.return_value = {
             "id": "free-2",
@@ -165,7 +170,7 @@ class FreeShadowAcceptanceTests(unittest.TestCase):
                 },
             )
 
-    @patch.object(shadow, "request_json")
+    @patch.object(shadow_support, "request_json")
     def test_boundary_rejects_provider_mismatch(self, request) -> None:
         request.return_value = {
             "id": "free-3",
@@ -192,9 +197,6 @@ class FreeShadowAcceptanceTests(unittest.TestCase):
         proposal = self.endpoint("google/a:free", "Google")
         red_team = self.endpoint("cohere/b:free", "Cohere", order=2)
         expert = self.endpoint("qwen/c:free", "Alibaba", order=3)
-        from tempfile import TemporaryDirectory
-        import json
-
         with TemporaryDirectory() as directory:
             root = Path(directory)
             shadow._write_shadow_identity(root, proposal, red_team, [expert])
