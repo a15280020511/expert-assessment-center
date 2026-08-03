@@ -1,4 +1,4 @@
-name: PR227 R6 Evidence Contract Bootstrap
+name: PR227 R6 Validated Workflow Blob
 
 on:
   pull_request:
@@ -7,283 +7,156 @@ on:
       - .github/workflows/pr227-r6-evidence-contract-bootstrap.yml
 
 permissions:
+  actions: read
   contents: write
 
 concurrency:
-  group: pr227-r6-evidence-contract-bootstrap
+  group: pr227-r6-validated-workflow-blob
   cancel-in-progress: false
 
 jobs:
-  validate-package-and-push-non-workflow:
+  create-validated-workflow-blob:
     if: >-
       github.event.pull_request.number == 227 &&
       github.event.pull_request.head.ref == 'fix/v5-claude-unified-red-team-cleanup-20260803'
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 10
     steps:
-      - name: Checkout exact PR branch
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: fix/v5-claude-unified-red-team-cleanup-20260803
-          fetch-depth: 0
-          persist-credentials: true
-
-      - name: Extract and apply staged remediation
+      - name: Rehydrate verified execution workflow and create Git blob
+        id: blob
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_ARTIFACT_ID: "8843793702"
+          EXPECTED_ARTIFACT_DIGEST: "sha256:ad337c7451e0f4a78b6dd7604535ff862cf18a6aba3407124c9aaa376429d313"
+          EXPECTED_SOURCE_SHA256: "37fdc93373bfd73189dd8e8da9b356cae681e1403790757dee120670dd78a95e"
+          EXPECTED_SOURCE_SIZE: "19809"
+          EXPECTED_BUNDLE_BASE_SHA: "1450cab4495a911b70312a990b38b9f11a022389"
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-
-          source = Path('.github/workflows/pr227-r6-evidence-contract-remediation.yml')
-          text = source.read_text(encoding='utf-8')
-          marker = "          python - <<'PY'\n"
-          start = text.index(marker) + len(marker)
-          end = text.index("\n          PY\n", start)
-          normalized = []
-          in_triple = False
-          for line in text[start:end].splitlines():
-              if in_triple:
-                  normalized.append(line)
-                  if "'''" in line:
-                      in_triple = False
-                  continue
-              current = line[10:] if line.startswith('          ') else line
-              normalized.append(current)
-              if current.count("'''") % 2 == 1:
-                  in_triple = True
-          script = '\n'.join(normalized)
-          script = script.replace(
-              "    if count != 1:\n"
-              "        raise SystemExit(f'{path}: expected one replacement, found {count}')",
-              "    if count < 1:\n"
-              "        raise SystemExit(f'{path}: replacement source not found')",
-              1,
-          )
-          exec(compile(script, str(source) + ':embedded-python', 'exec'))
-
-          fixture = Path('tests/test_v5_independent_artifact_revalidation.py')
-          fixture_text = fixture.read_text(encoding='utf-8')
-          old = (
-              '                    "output_contract": {\n'
-              '                        "required_fields": ["facts", "conclusion"],\n'
-              '                        "machine_readable_required": False,\n'
-              '                    },\n'
-              '                    "parameter_profile": {},\n'
-          )
-          new = (
-              '                    "output_contract": {\n'
-              '                        "required_fields": ["facts", "conclusion"],\n'
-              '                        "machine_readable_required": False,\n'
-              '                        "final_delivery_node": True,\n'
-              '                    },\n'
-              '                    "parameter_profile": {},\n'
-          )
-          if fixture_text.count(old) != 1:
-              raise SystemExit('direct final-contract fixture source not found exactly once')
-          fixture.write_text(
-              fixture_text.replace(old, new, 1),
-              encoding='utf-8',
-          )
-          PY
-          scripts=(
-            tools/pr227_r6_refactor_pipeline.py
-            tools/pr227_r6_refactor_auditors.py
-            tools/pr227_r6_refactor_evidence_bundle.py
-          )
-          for script in "${scripts[@]}"; do
-            test -s "$script"
-            python -m py_compile "$script"
-            python "$script"
-          done
-          rm -f tools/.pr227-r6-complexity-refactor.py.gz.b64
-          rm -f "${scripts[@]}"
-          git diff --check
-
-      - name: Set up pinned Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: |
-            requirements-runtime.txt
-            requirements-dev.txt
-
-      - name: Install locked dependencies
-        run: |
-          set -euo pipefail
-          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
-          python -m pip check
-
-      - name: Run static and complete regression gates
-        run: |
-          set -euo pipefail
-          python -m ruff check .
-          python -m compileall -q open-model-market tests tools
-          python -m unittest discover -s tests -p 'test*.py' -v
-
-      - name: Run focused R6 phase-contract stress
-        run: |
-          set -euo pipefail
-          mkdir -p /tmp/pr227-r6-evidence-contract
-          for seed in 0 1 7 42 31337 65535 99991 104729; do
-            PYTHONPATH=tests PYTHONHASHSEED="$seed" python -m unittest \
-              test_v5_native_audit_contract \
-              test_v5_independent_artifact_revalidation \
-              test_v5_evidence_bundle \
-              test_v5_failure_evidence_chain \
-              -q
-          done
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          result = {
-              "schema_version": "pr227-r6-evidence-contract-remediation-1",
-              "status": "PASS",
-              "chat_model_calls": 0,
-              "paid_model_calls": 0,
-              "provider_order_legacy_dependency": False,
-              "canonical_provider_contract": "provider.only/order-exact-single-endpoint",
-              "final_delivery_node_explicit": True,
-              "report_preparation_receipt": True,
-              "preupload_independent_status": "PENDING_POST_UPLOAD",
-              "final_status_requires_independent_pass": True,
-              "attestation_requires_independent_pass": True,
-              "cross_task_history_used": False,
-              "random_seeds": [0, 1, 7, 42, 31337, 65535, 99991, 104729],
-          }
-          Path('/tmp/pr227-r6-evidence-contract/result.json').write_text(
-              json.dumps(result, ensure_ascii=False, indent=2) + '\n',
-              encoding='utf-8',
-          )
-          print(json.dumps(result, ensure_ascii=False))
-          PY
-
-      - name: Run medium-blocking granular audit
-        run: |
-          set -euo pipefail
-          python tools/repository_audit.py \
-            --root . \
-            --output-dir /tmp/pr227-r6-evidence-contract/repository-audit \
-            --fail-on none
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          path = Path('/tmp/pr227-r6-evidence-contract/repository-audit/repository-audit.json')
-          report = json.loads(path.read_text(encoding='utf-8'))
-          blockers = [
-              item
-              for item in report.get('findings', [])
-              if item.get('severity') in {'critical', 'high', 'medium'}
-          ]
-          print(json.dumps({'blocking_findings': blockers}, ensure_ascii=False, indent=2))
-          if blockers:
-              raise SystemExit(1)
-          PY
-
-      - name: Prepare exact validated source bundle
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm .github/workflows/pr227-r6-evidence-contract-remediation.yml
-          rm .github/workflows/pr227-r6-evidence-contract-bootstrap.yml
-          bundle=/tmp/pr227-r6-evidence-contract/validated-source
-          mkdir -p "$bundle/files"
-          git diff --binary --full-index HEAD > "$bundle/validated.patch"
-          git diff --name-status HEAD > "$bundle/name-status.txt"
           python - <<'PY'
           from __future__ import annotations
 
+          import base64
           import hashlib
+          import io
           import json
-          import shutil
-          import subprocess
+          import os
+          import tarfile
+          import urllib.request
+          import zipfile
           from pathlib import Path
 
-          root = Path.cwd()
-          bundle = Path('/tmp/pr227-r6-evidence-contract/validated-source')
-          raw = subprocess.check_output(
-              ['git', 'diff', '--name-status', '-z', 'HEAD']
-          )
-          fields = raw.decode('utf-8').split('\0')
-          entries = []
-          index = 0
-          while index < len(fields) and fields[index]:
-              status = fields[index]
-              index += 1
-              if status.startswith(('R', 'C')):
-                  old_path = fields[index]
-                  new_path = fields[index + 1]
-                  index += 2
-                  path = new_path
-              else:
-                  old_path = None
-                  path = fields[index]
-                  index += 1
-              item = {
-                  'status': status,
-                  'path': path,
-                  'old_path': old_path,
-                  'sha256': None,
-                  'size_bytes': None,
-              }
-              if not status.startswith('D'):
-                  source = root / path
-                  target = bundle / 'files' / path
-                  target.parent.mkdir(parents=True, exist_ok=True)
-                  shutil.copy2(source, target)
-                  data = source.read_bytes()
-                  item['sha256'] = hashlib.sha256(data).hexdigest()
-                  item['size_bytes'] = len(data)
-              entries.append(item)
-          manifest = {
-              'schema_version': 'pr227-r6-validated-source-bundle-1',
-              'base_sha': subprocess.check_output(
-                  ['git', 'rev-parse', 'HEAD'], text=True
-              ).strip(),
-              'status': 'PASS',
-              'chat_model_calls': 0,
-              'paid_model_calls': 0,
-              'entries': entries,
-          }
-          (bundle / 'manifest.json').write_text(
-              json.dumps(manifest, ensure_ascii=False, indent=2) + '\n',
-              encoding='utf-8',
-          )
-          if not entries:
-              raise SystemExit('validated source bundle has no changes')
-          print(json.dumps(manifest, ensure_ascii=False))
-          PY
-          tar -C "$bundle" -cf /tmp/pr227-r6-evidence-contract/validated-source.tar \
-            manifest.json name-status.txt validated.patch files
-          sha256sum /tmp/pr227-r6-evidence-contract/validated-source.tar \
-            > /tmp/pr227-r6-evidence-contract/validated-source.tar.sha256
+          repository = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GH_TOKEN"]
+          artifact_id = os.environ["SOURCE_ARTIFACT_ID"]
+          expected_sha256 = os.environ["EXPECTED_SOURCE_SHA256"]
+          expected_size = int(os.environ["EXPECTED_SOURCE_SIZE"])
+          expected_base = os.environ["EXPECTED_BUNDLE_BASE_SHA"]
 
-      - name: Upload zero-call validation and exact source evidence
+          def request(url: str, *, method: str = "GET", payload: dict | None = None):
+              data = None
+              headers = {
+                  "Authorization": f"Bearer {token}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "User-Agent": "pr227-r6-validated-workflow-blob",
+              }
+              if payload is not None:
+                  data = json.dumps(payload).encode("utf-8")
+                  headers["Content-Type"] = "application/json"
+              req = urllib.request.Request(url, data=data, headers=headers, method=method)
+              with urllib.request.urlopen(req, timeout=120) as response:
+                  return response.read(), dict(response.headers)
+
+          archive_url = (
+              f"https://api.github.com/repos/{repository}/actions/artifacts/"
+              f"{artifact_id}/zip"
+          )
+          archive_bytes, _ = request(archive_url)
+          with zipfile.ZipFile(io.BytesIO(archive_bytes)) as outer:
+              tar_bytes = outer.read("validated-source.tar")
+              tar_receipt = outer.read("validated-source.tar.sha256").decode("utf-8")
+          expected_tar_sha = tar_receipt.split()[0]
+          actual_tar_sha = hashlib.sha256(tar_bytes).hexdigest()
+          if actual_tar_sha != expected_tar_sha:
+              raise SystemExit(
+                  f"validated source tar digest mismatch: {actual_tar_sha} != {expected_tar_sha}"
+              )
+
+          with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:") as bundle:
+              manifest_member = bundle.extractfile("manifest.json")
+              source_member = bundle.extractfile(
+                  "files/.github/workflows/execution-ticket.yml"
+              )
+              if manifest_member is None or source_member is None:
+                  raise SystemExit("validated source tar is missing required members")
+              manifest = json.loads(manifest_member.read().decode("utf-8"))
+              source = source_member.read()
+
+          if manifest.get("status") != "PASS":
+              raise SystemExit("validated source manifest is not PASS")
+          if manifest.get("base_sha") != expected_base:
+              raise SystemExit("validated source manifest base SHA changed")
+          entry = next(
+              (
+                  row
+                  for row in manifest.get("entries", [])
+                  if row.get("path") == ".github/workflows/execution-ticket.yml"
+              ),
+              None,
+          )
+          if not isinstance(entry, dict):
+              raise SystemExit("execution-ticket entry missing from manifest")
+          actual_sha256 = hashlib.sha256(source).hexdigest()
+          if actual_sha256 != expected_sha256 or entry.get("sha256") != expected_sha256:
+              raise SystemExit("execution-ticket SHA-256 does not match validated manifest")
+          if len(source) != expected_size or entry.get("size_bytes") != expected_size:
+              raise SystemExit("execution-ticket size does not match validated manifest")
+
+          blob_payload = {
+              "content": base64.b64encode(source).decode("ascii"),
+              "encoding": "base64",
+          }
+          blob_bytes, _ = request(
+              f"https://api.github.com/repos/{repository}/git/blobs",
+              method="POST",
+              payload=blob_payload,
+          )
+          blob = json.loads(blob_bytes.decode("utf-8"))
+          blob_sha = str(blob.get("sha") or "")
+          if not blob_sha:
+              raise SystemExit("GitHub did not return a blob SHA")
+
+          receipt = {
+              "schema_version": "pr227-r6-validated-workflow-blob-1",
+              "status": "PASS",
+              "repository": repository,
+              "source_artifact_id": int(artifact_id),
+              "source_artifact_digest": os.environ["EXPECTED_ARTIFACT_DIGEST"],
+              "source_bundle_base_sha": expected_base,
+              "source_tar_sha256": actual_tar_sha,
+              "path": ".github/workflows/execution-ticket.yml",
+              "content_sha256": actual_sha256,
+              "size_bytes": len(source),
+              "git_blob_sha": blob_sha,
+              "chat_model_calls": 0,
+              "paid_model_calls": 0,
+          }
+          Path("validated-workflow-blob.json").write_text(
+              json.dumps(receipt, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"blob_sha={blob_sha}\n")
+              output.write(f"content_sha256={actual_sha256}\n")
+          print(json.dumps(receipt, ensure_ascii=False))
+          PY
+
+      - name: Upload validated workflow blob receipt
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: pr227-r6-validated-source-${{ github.run_id }}
-          path: /tmp/pr227-r6-evidence-contract/
+          name: pr227-r6-validated-workflow-blob-${{ github.run_id }}
+          path: validated-workflow-blob.json
           if-no-files-found: error
           retention-days: 30
-
-      - name: Commit and push validated non-workflow changes
-        shell: bash
-        run: |
-          set -euo pipefail
-          git restore --source=HEAD -- \
-            .github/workflows/execution-ticket.yml \
-            .github/workflows/pr227-r6-evidence-contract-bootstrap.yml \
-            .github/workflows/pr227-r6-evidence-contract-remediation.yml
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          if git diff --cached --name-only -- .github/workflows | grep -q .; then
-            echo 'workflow change unexpectedly staged' >&2
-            exit 1
-          fi
-          git diff --cached --check
-          git commit -m "fix: align R6 evidence contracts outside workflows"
-          git push origin HEAD:fix/v5-claude-unified-red-team-cleanup-20260803
