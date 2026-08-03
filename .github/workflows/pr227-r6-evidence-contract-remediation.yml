@@ -1,0 +1,1251 @@
+name: PR227 R6 Evidence Contract Remediation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/pr227-r6-evidence-contract-remediation.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr227-r6-evidence-contract-remediation
+  cancel-in-progress: false
+
+jobs:
+  validate-and-commit:
+    if: >-
+      github.event.pull_request.number == 227 &&
+      github.event.pull_request.head.ref == 'fix/v5-claude-unified-red-team-cleanup-20260803'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout exact PR branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: fix/v5-claude-unified-red-team-cleanup-20260803
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply R6 evidence phase-contract repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          from pathlib import Path
+
+          ROOT = Path('.')
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = ROOT / path
+              text = target.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one replacement, found {count}')
+              target.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          # 1. Proposal materialization must explicitly preserve final-node identity.
+          replace_once(
+              'open-model-market/v5_task_envelope.py',
+              '''    result = delivery_contract.apply_explicit_contract(task, operations, base)
+    if not final_node:
+        result["required_fields"] = fields
+    return dict(result)
+''',
+              '''    result = delivery_contract.apply_explicit_contract(task, operations, base)
+    result["final_delivery_node"] = bool(final_node)
+    if not final_node:
+        result["required_fields"] = fields
+    return dict(result)
+''',
+          )
+
+          # 2. Complete request audit validates the canonical provider.only/order object.
+          replace_once(
+              'open-model-market/v5_pipeline.py',
+              '''def _merge_request_audit(
+''',
+              '''def _canonical_provider_lock(request: Mapping[str, Any]) -> bool:
+    provider = request.get("provider")
+    if not isinstance(provider, Mapping):
+        return False
+    only = provider.get("only")
+    order = provider.get("order")
+    if not isinstance(only, list) or len(only) != 1:
+        return False
+    if not isinstance(order, list):
+        return False
+    normalized_only = [str(value).strip() for value in only]
+    normalized_order = [str(value).strip() for value in order]
+    return (
+        bool(normalized_only[0])
+        and normalized_order == normalized_only
+        and provider.get("allow_fallbacks") is False
+    )
+
+
+def _merge_request_audit(
+''',
+          )
+          replace_once(
+              'open-model-market/v5_pipeline.py',
+              '''    status = (
+        "PASS"
+        if len(requests) <= approved_total_calls
+        and all(not forbidden_fields(row) for row in requests)
+        else "FAIL"
+    )
+''',
+              '''    status = (
+        "PASS"
+        if len(requests) <= approved_total_calls
+        and all(not forbidden_fields(row) for row in requests)
+        and all(_canonical_provider_lock(row) for row in requests)
+        else "FAIL"
+    )
+''',
+          )
+          replace_once(
+              'open-model-market/v5_pipeline.py',
+              '''            "requests": requests,
+            "external_tools_allowed": False,
+''',
+              '''            "requests": requests,
+            "provider_lock_contract": "provider.only/order-exact-single-endpoint",
+            "provider_locks_valid": all(
+                _canonical_provider_lock(row) for row in requests
+            ),
+            "legacy_provider_order_required": False,
+            "external_tools_allowed": False,
+''',
+          )
+
+          # 3. Frozen evidence builder independently rechecks provider locks and history isolation.
+          replace_once(
+              'open-model-market/v5_run_evidence.py',
+              '''def _request_audit_document(
+''',
+              '''def _canonical_provider_lock(request: Mapping[str, Any]) -> bool:
+    provider = request.get("provider")
+    if not isinstance(provider, Mapping):
+        return False
+    only = provider.get("only")
+    order = provider.get("order")
+    if not isinstance(only, list) or len(only) != 1:
+        return False
+    if not isinstance(order, list):
+        return False
+    normalized_only = [str(value).strip() for value in only]
+    normalized_order = [str(value).strip() for value in order]
+    return (
+        bool(normalized_only[0])
+        and normalized_order == normalized_only
+        and provider.get("allow_fallbacks") is False
+    )
+
+
+def _request_audit_document(
+''',
+          )
+          replace_once(
+              'open-model-market/v5_run_evidence.py',
+              '''def _request_audit_document(
+    inputs: EvidenceInputs,
+    approved: ApprovedRun,
+    prepared: PreparedEvidence,
+) -> dict[str, Any]:
+    document = {
+        **dict(inputs.request_audit),
+        "runtime_version": RUNTIME_VERSION,
+        "status": (
+            "PASS"
+            if inputs.request_audit.get("status") == "PASS"
+            and prepared.request_count == prepared.call_count
+            else "FAIL"
+        ),
+        "approved_total_call_ceiling": approved.total_calls,
+        "governance_call_count": prepared.governance_calls,
+        "expert_call_count": prepared.expert_calls,
+    }
+    if document["status"] != "PASS":
+        raise RuntimeError("complete request audit did not pass")
+    return document
+''',
+              '''def _request_audit_document(
+    inputs: EvidenceInputs,
+    approved: ApprovedRun,
+    prepared: PreparedEvidence,
+) -> dict[str, Any]:
+    raw_requests = inputs.request_audit.get("requests", [])
+    requests = raw_requests if isinstance(raw_requests, list) else []
+    provider_locks_valid = (
+        len(requests) == prepared.request_count
+        and all(
+            isinstance(row, Mapping) and _canonical_provider_lock(row)
+            for row in requests
+        )
+    )
+    document = {
+        **dict(inputs.request_audit),
+        "runtime_version": RUNTIME_VERSION,
+        "status": (
+            "PASS"
+            if inputs.request_audit.get("status") == "PASS"
+            and prepared.request_count == prepared.call_count
+            and provider_locks_valid
+            else "FAIL"
+        ),
+        "approved_total_call_ceiling": approved.total_calls,
+        "governance_call_count": prepared.governance_calls,
+        "expert_call_count": prepared.expert_calls,
+        "provider_lock_contract": "provider.only/order-exact-single-endpoint",
+        "provider_locks_valid": provider_locks_valid,
+        "legacy_provider_order_required": False,
+    }
+    if document["status"] != "PASS":
+        raise RuntimeError("complete request audit did not pass")
+    return document
+''',
+          )
+          replace_once(
+              'open-model-market/v5_run_evidence.py',
+              '''        "legacy_runtime_present": False,
+        "ticket_task_id": inputs.ticket.get("task_id"),
+''',
+              '''        "legacy_runtime_present": False,
+        "cross_task_history_used": False,
+        "ticket_task_id": inputs.ticket.get("task_id"),
+''',
+          )
+
+          # 4. Report preparation emits a deterministic receipt independent of Issue context.
+          replace_once(
+              'open-model-market/publish_report.py',
+              '''        "files": files,
+        "publication_gate": "strict-full-success-only",
+    }
+''',
+              '''        "files": files,
+        "publication_gate": "strict-full-success-only",
+        "report_comment_preparation_status": "PASS",
+        "report_comment_preparation_mode": "deterministic-files",
+        "issue_context_required": False,
+    }
+''',
+          )
+          replace_once(
+              'open-model-market/publish_report.py',
+              '''        "files": [],
+        "publication_gate": "strict-full-success-only",
+        "publication_blockers": blockers,
+''',
+              '''        "files": [],
+        "publication_gate": "strict-full-success-only",
+        "report_comment_preparation_status": "NOT_APPLICABLE",
+        "report_comment_preparation_mode": "deterministic-files",
+        "issue_context_required": False,
+        "publication_blockers": blockers,
+''',
+          )
+
+          # 5. Native pre-upload audit validates only evidence available before upload.
+          replace_once(
+              'open-model-market/v5_execution_auditor_integrity.py',
+              '''def _quality_evidence_updates(
+''',
+              '''def _canonical_provider_lock(request: Mapping[str, Any]) -> bool:
+    provider = request.get("provider")
+    if not isinstance(provider, Mapping):
+        return False
+    only = provider.get("only")
+    order = provider.get("order")
+    if not isinstance(only, list) or len(only) != 1:
+        return False
+    if not isinstance(order, list):
+        return False
+    normalized_only = [str(value).strip() for value in only]
+    normalized_order = [str(value).strip() for value in order]
+    return (
+        bool(normalized_only[0])
+        and normalized_order == normalized_only
+        and provider.get("allow_fallbacks") is False
+    )
+
+
+def _native_phase_contract_evidence(root: Path) -> dict[str, Any]:
+    result = load_json_or_default(root / "expert-team-result.json", {})
+    result = result if isinstance(result, Mapping) else {}
+    graph = load_json_or_default(root / "v5-execution-graph.json", {})
+    graph = graph if isinstance(graph, Mapping) else {}
+    request_audit = load_json_or_default(root / "request-audit.json", {})
+    request_audit = request_audit if isinstance(request_audit, Mapping) else {}
+    report_manifest = load_json_or_default(
+        root / "report-comments" / "report-comments-manifest.json",
+        {},
+    )
+    report_manifest = report_manifest if isinstance(report_manifest, Mapping) else {}
+
+    failures: list[str] = []
+    history_disabled = result.get("cross_task_history_used") is False
+    if not history_disabled:
+        failures.append(
+            "expert-team-result does not prove cross_task_history_used=false"
+        )
+
+    final_ids = {
+        str(value)
+        for value in graph.get("final_nodes", [])
+        if str(value)
+    }
+    raw_nodes = graph.get("nodes", [])
+    nodes = raw_nodes if isinstance(raw_nodes, list) else []
+    node_contract_rows: list[dict[str, Any]] = []
+    for node in nodes:
+        if not isinstance(node, Mapping):
+            failures.append("execution graph contains a non-object node")
+            continue
+        node_id = str(node.get("node_id") or "")
+        expected = node_id in final_ids
+        contract = node.get("output_contract")
+        observed = (
+            contract.get("final_delivery_node")
+            if isinstance(contract, Mapping)
+            else None
+        )
+        node_contract_rows.append(
+            {
+                "node_id": node_id,
+                "expected_final_delivery_node": expected,
+                "observed_final_delivery_node": observed,
+            }
+        )
+        if observed is not expected:
+            failures.append(
+                "graph output_contract final_delivery_node mismatch: "
+                + (node_id or "missing-node-id")
+            )
+
+    raw_requests = request_audit.get("requests", [])
+    requests = raw_requests if isinstance(raw_requests, list) else []
+    request_lock_rows: list[bool] = []
+    for index, request in enumerate(requests, 1):
+        valid = isinstance(request, Mapping) and _canonical_provider_lock(request)
+        request_lock_rows.append(valid)
+        if not valid:
+            failures.append(
+                f"request {index} provider.only/order lock is missing or inconsistent"
+            )
+
+    report_preparation_status = str(
+        report_manifest.get("report_comment_preparation_status") or ""
+    )
+    report_preparation_mode = str(
+        report_manifest.get("report_comment_preparation_mode") or ""
+    )
+    issue_context_required = report_manifest.get("issue_context_required")
+    if (
+        report_preparation_status != "PASS"
+        or report_preparation_mode != "deterministic-files"
+        or issue_context_required is not False
+    ):
+        failures.append(
+            "deterministic report-comment preparation receipt is missing"
+        )
+
+    return {
+        "failures": failures,
+        "checks": {
+            "cross_task_history_used": result.get("cross_task_history_used"),
+            "cross_task_history_disabled": history_disabled,
+            "final_delivery_node_contracts": node_contract_rows,
+            "provider_lock_contract": "provider.only/order-exact-single-endpoint",
+            "provider_lock_rows_valid": request_lock_rows,
+            "legacy_provider_order_required": False,
+            "report_comment_preparation_status": report_preparation_status,
+            "report_comment_preparation_mode": report_preparation_mode,
+            "issue_context_required": issue_context_required,
+            "independent_artifact_revalidation_status": "PENDING_POST_UPLOAD",
+        },
+    }
+
+
+def _quality_evidence_updates(
+''',
+          )
+          replace_once(
+              'open-model-market/v5_execution_auditor_integrity.py',
+              '''    node_evidence = _node_quality(root)
+    constitutional = _constitutional_evidence(root)
+    failures = [
+''',
+              '''    node_evidence = _node_quality(root)
+    constitutional = _constitutional_evidence(root)
+    phase_contract = _native_phase_contract_evidence(root)
+    failures = [
+''',
+          )
+          replace_once(
+              'open-model-market/v5_execution_auditor_integrity.py',
+              '''    failures.extend(constitutional["failures"])
+    degradations = list(result.get("degradations") or [])
+''',
+              '''    failures.extend(constitutional["failures"])
+    failures.extend(phase_contract["failures"])
+    degradations = list(result.get("degradations") or [])
+''',
+          )
+          replace_once(
+              'open-model-market/v5_execution_auditor_integrity.py',
+              '''    checks.update(constitutional["checks"])
+    checks.update(_quality_checks(quality_status, integrity, node_evidence))
+    result["checks"] = checks
+    return _finalize_audit_result(result, failures, degradations)
+''',
+              '''    checks.update(constitutional["checks"])
+    checks.update(phase_contract["checks"])
+    checks.update(_quality_checks(quality_status, integrity, node_evidence))
+    result["checks"] = checks
+    stage_status = dict(result.get("stage_status") or {})
+    stage_status["independent_artifact_revalidation"] = "PENDING_POST_UPLOAD"
+    result["stage_status"] = stage_status
+    return _finalize_audit_result(result, failures, degradations)
+''',
+          )
+
+          # 6. Independent artifact recomputation validates canonical requests, graph flags, and history isolation.
+          replace_once(
+              'open-model-market/v5_independent_artifact_revalidation.py',
+              '''    violations: list[str] = []
+    task_contract = _recompiled_task_contract(task)
+''',
+              '''    violations: list[str] = []
+    for node in nodes:
+        if not isinstance(node, Mapping):
+            continue
+        node_id = str(node.get("node_id") or "")
+        expected_final = node_id in final_ids
+        contract = node.get("output_contract")
+        observed_final = (
+            contract.get("final_delivery_node")
+            if isinstance(contract, Mapping)
+            else None
+        )
+        if observed_final is not expected_final:
+            violations.append(
+                "node final_delivery_node flag is missing or inconsistent: "
+                + (node_id or "missing-node-id")
+            )
+
+    task_contract = _recompiled_task_contract(task)
+''',
+          )
+          replace_once(
+              'open-model-market/v5_independent_artifact_revalidation.py',
+              '''    if not isinstance(only, list) or len(only) != 1:
+        failures.append(f"request {index} provider.only is not singular")
+    if provider.get("allow_fallbacks") is not False:
+''',
+              '''    if not isinstance(only, list) or len(only) != 1:
+        failures.append(f"request {index} provider.only is not singular")
+    order = provider.get("order")
+    if not isinstance(order, list) or order != only:
+        failures.append(
+            f"request {index} provider.order does not match provider.only"
+        )
+    if provider.get("allow_fallbacks") is not False:
+''',
+          )
+          replace_once(
+              'open-model-market/v5_independent_artifact_revalidation.py',
+              '''    if str(summary.get("final_answer") or "").strip() != report.strip():
+        failures.append("execution summary final answer differs from final report")
+    return failures
+''',
+              '''    if str(summary.get("final_answer") or "").strip() != report.strip():
+        failures.append("execution summary final answer differs from final report")
+    if result.get("cross_task_history_used") is not False:
+        failures.append(
+            "expert-team-result does not prove cross_task_history_used=false"
+        )
+    return failures
+''',
+          )
+
+          # 7. Core final status and attestation enforce post-upload independent PASS.
+          replace_once(
+              'open-model-market/v5_evidence_bundle.py',
+              '''    artifact_url: str,
+    artifact_digest: str,
+) -> dict[str, Any]:
+    audit = inputs.diagnosis
+''',
+              '''    artifact_url: str,
+    artifact_digest: str,
+    independent_revalidation: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    audit = inputs.diagnosis
+''',
+          )
+          replace_once(
+              'open-model-market/v5_evidence_bundle.py',
+              '''    status = str(audit.get("status") or "FAIL")
+    if audit_outcome != "success":
+''',
+              '''    status = str(audit.get("status") or "FAIL")
+    independent = (
+        dict(independent_revalidation)
+        if isinstance(independent_revalidation, Mapping)
+        else {}
+    )
+    independent_status = str(independent.get("status") or "MISSING").upper()
+    if audit_outcome != "success":
+''',
+          )
+          replace_once(
+              'open-model-market/v5_evidence_bundle.py',
+              '''    if ticket_upload_outcome != "success":
+        status = "FAIL"
+        failures.append(f"primary ticket artifact upload outcome is {ticket_upload_outcome}")
+    summary = inputs.ledger.get("summary")
+''',
+              '''    if ticket_upload_outcome != "success":
+        status = "FAIL"
+        failures.append(f"primary ticket artifact upload outcome is {ticket_upload_outcome}")
+    if status in {"PASS", "DEGRADED"} and independent_status != "PASS":
+        status = "FAIL"
+        failures.append(
+            "independent artifact revalidation is not PASS: "
+            f"{independent_status}"
+        )
+    summary = inputs.ledger.get("summary")
+''',
+          )
+          replace_once(
+              'open-model-market/v5_evidence_bundle.py',
+              '''        "substantive_provider_count": summary.get("substantive_provider_count", 0),
+        "legacy_runtime_present": inputs.runtime.get("legacy_runtime_present"),
+''',
+              '''        "substantive_provider_count": summary.get("substantive_provider_count", 0),
+        "independent_artifact_revalidation_status": independent_status,
+        "independent_artifact_revalidation_schema": independent.get("schema_version"),
+        "independent_recomputed_from_primitive_evidence": bool(
+            independent.get("recomputed_from_primitive_evidence")
+        ),
+        "legacy_runtime_present": inputs.runtime.get("legacy_runtime_present"),
+''',
+          )
+          replace_once(
+              'open-model-market/v5_evidence_bundle.py',
+              '''    commit_sha: str,
+    final_status_file: Path,
+) -> dict[str, Any]:
+    report = root / "expert-team-report.md"
+''',
+              '''    commit_sha: str,
+    final_status_file: Path,
+    independent_revalidation_file: Path | None = None,
+) -> dict[str, Any]:
+    report = root / "expert-team-report.md"
+''',
+          )
+          replace_once(
+              'open-model-market/v5_evidence_bundle.py',
+              '''    normalized_audit_status = str(audit_status or "FAIL").upper()
+    report_required = normalized_audit_status in {"PASS", "DEGRADED"}
+''',
+              '''    normalized_audit_status = str(audit_status or "FAIL").upper()
+    independent_path = independent_revalidation_file
+    independent = (
+        load_json_or_default(independent_path, {})
+        if independent_path is not None
+        else {}
+    )
+    independent = independent if isinstance(independent, Mapping) else {}
+    independent_valid = (
+        independent.get("schema_version")
+        == "v5-independent-artifact-revalidation-3"
+        and independent.get("status") == "PASS"
+        and independent.get("recomputed_from_primitive_evidence") is True
+        and independent.get("paid_acceptance_verdict_used_as_source") is False
+    )
+    report_required = normalized_audit_status in {"PASS", "DEGRADED"}
+''',
+          )
+          replace_once(
+              'open-model-market/v5_evidence_bundle.py',
+              '''        and diagnosis_status == normalized_audit_status
+        and report_present
+        and evidence_frozen
+        else "FAIL"
+''',
+              '''        and diagnosis_status == normalized_audit_status
+        and report_present
+        and evidence_frozen
+        and independent_valid
+        else "FAIL"
+''',
+          )
+          replace_once(
+              'open-model-market/v5_evidence_bundle.py',
+              '''        "business_evidence_frozen_before_upload": evidence_frozen,
+        "report_required": report_required,
+''',
+              '''        "business_evidence_frozen_before_upload": evidence_frozen,
+        "independent_artifact_revalidation": dict(independent),
+        "independent_artifact_revalidation_valid": independent_valid,
+        "independent_artifact_revalidation_sha256": (
+            sha256_file(independent_path)
+            if independent_path is not None and independent_path.is_file()
+            else None
+        ),
+        "report_required": report_required,
+''',
+          )
+          replace_once(
+              'open-model-market/v5_evidence_bundle.py',
+              '''        "evidence_chain": "frozen-business-evidence -> primary-artifact -> final-status -> final-attestation-artifact",
+''',
+              '''        "evidence_chain": (
+            "frozen-business-evidence -> primary-artifact -> "
+            "independent-artifact-revalidation -> final-status -> "
+            "final-attestation-artifact"
+        ),
+''',
+          )
+
+          # 8. Wire post-upload evidence into both core CLIs and the production workflow.
+          replace_once(
+              'open-model-market/v5_final_status.py',
+              '''    parser.add_argument("--artifact-digest", default="")
+    parser.add_argument("--json-output", default="")
+''',
+              '''    parser.add_argument("--artifact-digest", default="")
+    parser.add_argument("--independent-revalidation-file", default="")
+    parser.add_argument("--json-output", default="")
+''',
+          )
+          replace_once(
+              'open-model-market/v5_final_status.py',
+              '''    root = Path(args.output_dir)
+    inputs = FinalStatusInputs.from_directory(root)
+    record = build_final_status_record(
+''',
+              '''    root = Path(args.output_dir)
+    inputs = FinalStatusInputs.from_directory(root)
+    independent: dict[str, Any] = {}
+    if args.independent_revalidation_file:
+        try:
+            raw_independent = json.loads(
+                Path(args.independent_revalidation_file).read_text(
+                    encoding="utf-8"
+                )
+            )
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            raw_independent = {}
+        if isinstance(raw_independent, dict):
+            independent = raw_independent
+    record = build_final_status_record(
+''',
+          )
+          replace_once(
+              'open-model-market/v5_final_status.py',
+              '''        artifact_url=args.artifact_url,
+        artifact_digest=args.artifact_digest,
+    )
+''',
+              '''        artifact_url=args.artifact_url,
+        artifact_digest=args.artifact_digest,
+        independent_revalidation=independent,
+    )
+''',
+          )
+          replace_once(
+              'open-model-market/v5_final_attestation.py',
+              '''    parser.add_argument("--final-status-file", required=True)
+    parser.add_argument("--output", default="final-attestation.json")
+''',
+              '''    parser.add_argument("--final-status-file", required=True)
+    parser.add_argument("--independent-revalidation-file", default="")
+    parser.add_argument("--output", default="final-attestation.json")
+''',
+          )
+          replace_once(
+              'open-model-market/v5_final_attestation.py',
+              '''            commit_sha=execution_commit_sha,
+            final_status_file=Path(args.final_status_file),
+        )
+''',
+              '''            commit_sha=execution_commit_sha,
+            final_status_file=Path(args.final_status_file),
+            independent_revalidation_file=(
+                Path(args.independent_revalidation_file)
+                if args.independent_revalidation_file
+                else None
+            ),
+        )
+''',
+          )
+          replace_once(
+              '.github/workflows/execution-ticket.yml',
+              '''            --artifact-url "$PRIMARY_ARTIFACT_URL" \\
+            --artifact-digest "$PRIMARY_ARTIFACT_DIGEST" \\
+            | tee final-status.md
+''',
+              '''            --artifact-url "$PRIMARY_ARTIFACT_URL" \\
+            --artifact-digest "$PRIMARY_ARTIFACT_DIGEST" \\
+            --independent-revalidation-file independent-revalidation.json \\
+            | tee final-status.md
+''',
+          )
+          replace_once(
+              '.github/workflows/execution-ticket.yml',
+              '''            --commit-sha "$AUTHORITATIVE_EXECUTION_SHA" \\
+            --final-status-file final-status.md \\
+            --output final-attestation.json
+''',
+              '''            --commit-sha "$AUTHORITATIVE_EXECUTION_SHA" \\
+            --final-status-file final-status.md \\
+            --independent-revalidation-file independent-revalidation.json \\
+            --output final-attestation.json
+''',
+          )
+
+          # 9. Update native audit fixtures to the current explicit evidence contract.
+          replace_once(
+              'tests/test_v5_native_audit_contract.py',
+              '''                "fallback_used": False,
+                "legacy_runtime_present": False,
+            },
+''',
+              '''                "fallback_used": False,
+                "legacy_runtime_present": False,
+                "cross_task_history_used": False,
+            },
+''',
+          )
+          replace_once(
+              'tests/test_v5_native_audit_contract.py',
+              '''                "nodes": [
+                    {"node_id": "node-a"},
+                    {"node_id": "node-b"},
+                    {"node_id": "node-final"},
+                ],
+''',
+              '''                "nodes": [
+                    {
+                        "node_id": "node-a",
+                        "output_contract": {"final_delivery_node": False},
+                    },
+                    {
+                        "node_id": "node-b",
+                        "output_contract": {"final_delivery_node": False},
+                    },
+                    {
+                        "node_id": "node-final",
+                        "output_contract": {"final_delivery_node": True},
+                    },
+                ],
+''',
+          )
+          replace_once(
+              'tests/test_v5_native_audit_contract.py',
+              '''                "requests": [{} for _ in range(7)],
+''',
+              '''                "requests": [
+                    {
+                        "model": f"vendor/model-{index}",
+                        "provider": {
+                            "only": [f"provider-{index}"],
+                            "order": [f"provider-{index}"],
+                            "allow_fallbacks": False,
+                        },
+                    }
+                    for index in range(7)
+                ],
+''',
+          )
+          replace_once(
+              'tests/test_v5_native_audit_contract.py',
+              '''                "version": 2,
+                "report_sha256": hashlib.sha256(answer.encode("utf-8")).hexdigest(),
+''',
+              '''                "version": 3,
+                "report_sha256": hashlib.sha256(answer.encode("utf-8")).hexdigest(),
+''',
+          )
+          replace_once(
+              'tests/test_v5_native_audit_contract.py',
+              '''                "files": ["report-comment-001.md"],
+            },
+''',
+              '''                "files": ["report-comment-001.md"],
+                "report_comment_preparation_status": "PASS",
+                "report_comment_preparation_mode": "deterministic-files",
+                "issue_context_required": False,
+            },
+''',
+          )
+          replace_once(
+              'tests/test_v5_native_audit_contract.py',
+              '''            self.assertAlmostEqual(
+                0.09615135,
+                result["checks"]["actual_cost_usd"],
+            )
+
+    def test_missing_report_run_identity_fails_closed(self) -> None:
+''',
+              '''            self.assertAlmostEqual(
+                0.09615135,
+                result["checks"]["actual_cost_usd"],
+            )
+            self.assertFalse(result["checks"]["legacy_provider_order_required"])
+            self.assertEqual(
+                "PENDING_POST_UPLOAD",
+                result["stage_status"]["independent_artifact_revalidation"],
+            )
+
+    def test_missing_report_run_identity_fails_closed(self) -> None:
+''',
+          )
+          replace_once(
+              'tests/test_v5_native_audit_contract.py',
+              '''    def test_incomplete_node_contract_cannot_pass_as_full_success(self) -> None:
+''',
+              '''    def test_missing_result_history_isolation_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._fixture(root)
+            path = root / "expert-team-result.json"
+            value = json.loads(path.read_text(encoding="utf-8"))
+            value.pop("cross_task_history_used")
+            path.write_text(json.dumps(value), encoding="utf-8")
+            result = auditor.audit(
+                root,
+                execute_outcome="success",
+                publish_outcome="success",
+            )
+            self.assertEqual("FAIL", result["status"])
+            self.assertIn(
+                "expert-team-result does not prove cross_task_history_used=false",
+                result["failures"],
+            )
+
+    def test_missing_provider_order_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._fixture(root)
+            path = root / "request-audit.json"
+            value = json.loads(path.read_text(encoding="utf-8"))
+            value["requests"][0]["provider"].pop("order")
+            path.write_text(json.dumps(value), encoding="utf-8")
+            result = auditor.audit(
+                root,
+                execute_outcome="success",
+                publish_outcome="success",
+            )
+            self.assertEqual("FAIL", result["status"])
+            self.assertTrue(
+                any("provider.only/order" in row for row in result["failures"])
+            )
+
+    def test_missing_final_delivery_flag_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._fixture(root)
+            path = root / "v5-execution-graph.json"
+            value = json.loads(path.read_text(encoding="utf-8"))
+            value["nodes"][0]["output_contract"].pop("final_delivery_node")
+            path.write_text(json.dumps(value), encoding="utf-8")
+            result = auditor.audit(
+                root,
+                execute_outcome="success",
+                publish_outcome="success",
+            )
+            self.assertEqual("FAIL", result["status"])
+            self.assertTrue(
+                any("final_delivery_node" in row for row in result["failures"])
+            )
+
+    def test_missing_report_preparation_receipt_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._fixture(root)
+            path = root / "report-comments/report-comments-manifest.json"
+            value = json.loads(path.read_text(encoding="utf-8"))
+            value.pop("report_comment_preparation_status")
+            path.write_text(json.dumps(value), encoding="utf-8")
+            result = auditor.audit(
+                root,
+                execute_outcome="success",
+                publish_outcome="success",
+            )
+            self.assertEqual("FAIL", result["status"])
+            self.assertTrue(
+                any("preparation receipt" in row for row in result["failures"])
+            )
+
+    def test_incomplete_node_contract_cannot_pass_as_full_success(self) -> None:
+''',
+          )
+
+          # 10. Update independent revalidation fixtures and add fail-closed regressions.
+          replace_once(
+              'tests/test_v5_independent_artifact_revalidation.py',
+              '''                        "required_fields": ["facts", "conclusion"],
+                        "machine_readable_required": False,
+''',
+              '''                        "required_fields": ["facts", "conclusion"],
+                        "machine_readable_required": False,
+                        "final_delivery_node": True,
+''',
+          )
+          replace_once(
+              'tests/test_v5_independent_artifact_revalidation.py',
+              '''            "execution_budget": {"calls_reserved": 1},
+        }
+''',
+              '''            "execution_budget": {"calls_reserved": 1},
+            "cross_task_history_used": False,
+        }
+''',
+          )
+          replace_once(
+              'tests/test_v5_independent_artifact_revalidation.py',
+              '''    def test_invalid_governance_sequence_fails_closed(self) -> None:
+''',
+              '''    def test_provider_order_is_recomputed_from_canonical_request(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sha, run_id = self._fixture(root)
+            audit = json.loads(
+                (root / "v5-request-audit.json").read_text(encoding="utf-8")
+            )
+            audit["requests"][0]["provider"].pop("order")
+            self._write(root, "v5-request-audit.json", audit)
+            self._manifest(root, sha=sha, run_id=run_id)
+            result = recompute(
+                root,
+                expected_sha=sha,
+                expected_run_id=run_id,
+                maximum_calls=4,
+                maximum_cost_usd=0.03,
+            )
+            self.assertEqual(result["status"], "FAIL")
+            self.assertTrue(
+                any("provider.order" in value for value in result["failures"])
+            )
+
+    def test_final_delivery_flag_is_recomputed_from_graph(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sha, run_id = self._fixture(root)
+            graph = json.loads(
+                (root / "v5-execution-graph.json").read_text(encoding="utf-8")
+            )
+            graph["nodes"][0]["output_contract"].pop("final_delivery_node")
+            self._write(root, "v5-execution-graph.json", graph)
+            self._manifest(root, sha=sha, run_id=run_id)
+            result = recompute(
+                root,
+                expected_sha=sha,
+                expected_run_id=run_id,
+                maximum_calls=4,
+                maximum_cost_usd=0.03,
+            )
+            self.assertEqual(result["status"], "FAIL")
+            self.assertTrue(
+                any("final_delivery_node" in value for value in result["failures"])
+            )
+
+    def test_result_history_isolation_is_recomputed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sha, run_id = self._fixture(root)
+            result_path = root / "expert-team-result.json"
+            value = json.loads(result_path.read_text(encoding="utf-8"))
+            value.pop("cross_task_history_used")
+            self._write(root, "expert-team-result.json", value)
+            self._manifest(root, sha=sha, run_id=run_id)
+            result = recompute(
+                root,
+                expected_sha=sha,
+                expected_run_id=run_id,
+                maximum_calls=4,
+                maximum_cost_usd=0.03,
+            )
+            self.assertEqual(result["status"], "FAIL")
+            self.assertTrue(
+                any("cross_task_history_used" in value for value in result["failures"])
+            )
+
+    def test_invalid_governance_sequence_fails_closed(self) -> None:
+''',
+          )
+
+          # 11. Update frozen evidence and positive post-upload tests.
+          replace_once(
+              'tests/test_v5_evidence_bundle.py',
+              '''class V5EvidenceBundleTests(unittest.TestCase):
+    def seed(self, root: Path) -> None:
+''',
+              '''class V5EvidenceBundleTests(unittest.TestCase):
+    @staticmethod
+    def independent_revalidation() -> dict[str, object]:
+        return {
+            "schema_version": "v5-independent-artifact-revalidation-3",
+            "status": "PASS",
+            "recomputed_from_primitive_evidence": True,
+            "paid_acceptance_verdict_used_as_source": False,
+            "actual_cost_usd": 0.002,
+        }
+
+    def seed(self, root: Path) -> None:
+''',
+          )
+          replace_once(
+              'tests/test_v5_evidence_bundle.py',
+              '''            "provider": {"only": ["openai"], "allow_fallbacks": False},
+''',
+              '''            "provider": {
+                "only": ["openai"],
+                "order": ["openai"],
+                "allow_fallbacks": False,
+            },
+''',
+          )
+          replace_once(
+              'tests/test_v5_evidence_bundle.py',
+              '''            "v5-execution-graph.json": {
+                "nodes": [node],
+''',
+              '''            "v5-execution-graph.json": {
+                "nodes": [
+                    {
+                        **node,
+                        "output_contract": {"final_delivery_node": True},
+                    }
+                ],
+''',
+          )
+          replace_once(
+              'tests/test_v5_evidence_bundle.py',
+              '''            self.assertFalse(selection["optimizer_used"])
+            self.assertTrue((root / "artifact-manifest.json").is_file())
+''',
+              '''            self.assertFalse(selection["optimizer_used"])
+            self.assertFalse(result["cross_task_history_used"])
+            self.assertTrue((root / "artifact-manifest.json").is_file())
+''',
+          )
+          replace_once(
+              'tests/test_v5_evidence_bundle.py',
+              '''            status = build_final_status_record(
+                FinalStatusInputs.from_directory(root),
+''',
+              '''            independent_path = root / "independent-revalidation.json"
+            independent_path.write_text(
+                json.dumps(self.independent_revalidation()),
+                encoding="utf-8",
+            )
+            status = build_final_status_record(
+                FinalStatusInputs.from_directory(root),
+''',
+          )
+          replace_once(
+              'tests/test_v5_evidence_bundle.py',
+              '''                artifact_url="https://example.invalid/artifact/123",
+                artifact_digest="sha256:test",
+            )
+''',
+              '''                artifact_url="https://example.invalid/artifact/123",
+                artifact_digest="sha256:test",
+                independent_revalidation=self.independent_revalidation(),
+            )
+''',
+          )
+          replace_once(
+              'tests/test_v5_evidence_bundle.py',
+              '''                commit_sha="a" * 40,
+                final_status_file=status_md,
+            )
+''',
+              '''                commit_sha="a" * 40,
+                final_status_file=status_md,
+                independent_revalidation_file=independent_path,
+            )
+''',
+          )
+          replace_once(
+              'tests/test_v5_evidence_bundle.py',
+              '''            status_md = root / "final-status.md"
+            status_md.write_text("## EXECUTION_COMPLETED\\n", encoding="utf-8")
+            write_manifest(root)
+            attestation = build_final_attestation_record(
+''',
+              '''            independent_path = root / "independent-revalidation.json"
+            independent_path.write_text(
+                json.dumps(self.independent_revalidation()),
+                encoding="utf-8",
+            )
+            status_md = root / "final-status.md"
+            status_md.write_text("## EXECUTION_COMPLETED\\n", encoding="utf-8")
+            write_manifest(root)
+            attestation = build_final_attestation_record(
+''',
+          )
+          # The second attestation call has the same tail; replace remaining occurrence.
+          replace_once(
+              'tests/test_v5_evidence_bundle.py',
+              '''                commit_sha="a" * 40,
+                final_status_file=status_md,
+            )
+''',
+              '''                commit_sha="a" * 40,
+                final_status_file=status_md,
+                independent_revalidation_file=independent_path,
+            )
+''',
+          )
+          replace_once(
+              'tests/test_v5_evidence_bundle.py',
+              '''    def test_attestation_fails_closed_when_audit_and_diagnosis_disagree(self):
+''',
+              '''    def test_positive_final_status_requires_independent_revalidation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.seed(root)
+            EvidenceBundleBuilder(
+                EvidenceInputs.from_directory(root),
+                ApprovedRun(
+                    total_calls=5,
+                    recovery_calls=1,
+                    cost_anomaly_usd=0.20,
+                ),
+            ).write(root, require_report=True)
+            status = build_final_status_record(
+                FinalStatusInputs.from_directory(root),
+                run_url="https://example.invalid/run/1",
+                ticket_upload_outcome="success",
+                audit_outcome="success",
+                manifest_outcome="success",
+                artifact_id="123",
+                artifact_url="https://example.invalid/artifact/123",
+                artifact_digest="sha256:test",
+            )
+            self.assertEqual(status["status"], "FAIL")
+            self.assertEqual(
+                status["independent_artifact_revalidation_status"],
+                "MISSING",
+            )
+
+    def test_attestation_fails_closed_when_audit_and_diagnosis_disagree(self):
+''',
+          )
+
+          # 12. Failure publication receipt remains deterministic and explicitly non-applicable.
+          replace_once(
+              'tests/test_v5_failure_evidence_chain.py',
+              '''            self.assertEqual(manifest["comment_count"], 0)
+            self.assertIsNone(manifest["report_sha256"])
+''',
+              '''            self.assertEqual(manifest["comment_count"], 0)
+            self.assertEqual(
+                manifest["report_comment_preparation_status"],
+                "NOT_APPLICABLE",
+            )
+            self.assertFalse(manifest["issue_context_required"])
+            self.assertIsNone(manifest["report_sha256"])
+''',
+          )
+          PY
+          git diff --check
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-runtime.txt
+            requirements-dev.txt
+
+      - name: Install locked dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+
+      - name: Run static and complete regression gates
+        run: |
+          set -euo pipefail
+          python -m ruff check .
+          python -m compileall -q open-model-market tests tools
+          python -m unittest discover -s tests -p 'test*.py' -v
+
+      - name: Run focused R6 phase-contract stress
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/pr227-r6-evidence-contract
+          for seed in 0 1 7 42 31337 65535 99991 104729; do
+            PYTHONPATH=tests PYTHONHASHSEED="$seed" python -m unittest \
+              test_v5_native_audit_contract \
+              test_v5_independent_artifact_revalidation \
+              test_v5_evidence_bundle \
+              test_v5_failure_evidence_chain \
+              -q
+          done
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          result = {
+              "schema_version": "pr227-r6-evidence-contract-remediation-1",
+              "status": "PASS",
+              "chat_model_calls": 0,
+              "paid_model_calls": 0,
+              "provider_order_legacy_dependency": False,
+              "canonical_provider_contract": "provider.only/order-exact-single-endpoint",
+              "final_delivery_node_explicit": True,
+              "report_preparation_receipt": True,
+              "preupload_independent_status": "PENDING_POST_UPLOAD",
+              "final_status_requires_independent_pass": True,
+              "attestation_requires_independent_pass": True,
+              "cross_task_history_used": False,
+              "random_seeds": [0, 1, 7, 42, 31337, 65535, 99991, 104729],
+          }
+          Path('/tmp/pr227-r6-evidence-contract/result.json').write_text(
+              json.dumps(result, ensure_ascii=False, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          print(json.dumps(result, ensure_ascii=False))
+          PY
+
+      - name: Run medium-blocking granular audit
+        run: |
+          set -euo pipefail
+          python tools/repository_audit.py \
+            --root . \
+            --output-dir /tmp/pr227-r6-evidence-contract/repository-audit \
+            --fail-on medium
+
+      - name: Upload zero-call validation evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr227-r6-evidence-contract-${{ github.run_id }}
+          path: /tmp/pr227-r6-evidence-contract/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Commit validated repair and remove staging workflow
+        run: |
+          set -euo pipefail
+          rm .github/workflows/pr227-r6-evidence-contract-remediation.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: align R6 evidence phase contracts"
+          git push origin HEAD:fix/v5-claude-unified-red-team-cleanup-20260803
