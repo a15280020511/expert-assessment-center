@@ -10,9 +10,6 @@ GPT_LOGICAL_MODEL = "~openai/gpt-latest"
 CLAUDE_LOGICAL_MODEL = "~anthropic/claude-opus-latest"
 GOVERNANCE_MINIMUM_COMPLETION_TOKENS = 512
 GOVERNANCE_CANDIDATES_PER_COMPANY = 6
-OUTPUT_LIMIT_PARAMETERS = frozenset(
-    {"max_tokens", "max_completion_tokens"}
-)
 STRUCTURED_OUTPUT_PARAMETERS = frozenset(
     {"response_format", "structured_outputs"}
 )
@@ -87,9 +84,9 @@ def governance_candidate_models(
 
 
 def _supports_required_parameters(supported: set[str]) -> bool:
+    """Require protocol features, not a local output-truncation parameter."""
     return bool(
-        OUTPUT_LIMIT_PARAMETERS.intersection(supported)
-        and STRUCTURED_OUTPUT_PARAMETERS.intersection(supported)
+        STRUCTURED_OUTPUT_PARAMETERS.intersection(supported)
         and REASONING_PARAMETERS.intersection(supported)
     )
 
@@ -134,9 +131,9 @@ def _resolve_one(
             if context_length < required_context_tokens:
                 reasons.append("insufficient-context")
             if maximum_output < minimum_completion_tokens:
-                reasons.append("insufficient-completion-limit")
+                reasons.append("insufficient-native-completion-capacity")
             if not _supports_required_parameters(supported):
-                reasons.append("missing-required-parameter-family")
+                reasons.append("missing-required-protocol-parameter-family")
             inspected.append(
                 {
                     "model": model_id,
@@ -156,6 +153,8 @@ def _resolve_one(
                 "max_completion_tokens": maximum_output,
                 "supported_parameters": sorted(supported),
                 "temperature_supported": "temperature" in supported,
+                "local_token_ceiling_parameter_required": False,
+                "native_completion_capacity_checked": True,
                 "provider_fallback_allowed": False,
                 "synthetic_fixture_only": False,
                 "inspected_endpoint_count": len(inspected),
@@ -196,11 +195,12 @@ def resolve_live_governance_models(
         minimum_completion_tokens=completion_floor,
     )
     return {
-        "schema_version": "v5-governance-model-resolution-1",
+        "schema_version": "v5-governance-model-resolution-2",
         "status": "PASS",
         "selection_basis": "official-intelligence-rank-first-exact-direct-endpoint",
         "required_context_tokens": context_floor,
-        "minimum_completion_tokens": completion_floor,
+        "minimum_native_completion_capacity_tokens": completion_floor,
+        "local_token_ceiling_parameter_required": False,
         "provider_fallback_allowed": False,
         "gpt": gpt,
         "claude": claude,
@@ -210,17 +210,19 @@ def resolve_live_governance_models(
 def synthetic_governance_models() -> dict[str, Any]:
     """Deterministic no-call fixture used only by unit tests and dry-runs."""
     supported = [
-        "max_tokens",
         "reasoning",
         "response_format",
         "structured_outputs",
     ]
     return {
-        "schema_version": "v5-governance-model-resolution-1",
+        "schema_version": "v5-governance-model-resolution-2",
         "status": "PASS",
         "selection_basis": "synthetic-no-call-fixture",
         "required_context_tokens": 1,
-        "minimum_completion_tokens": GOVERNANCE_MINIMUM_COMPLETION_TOKENS,
+        "minimum_native_completion_capacity_tokens": (
+            GOVERNANCE_MINIMUM_COMPLETION_TOKENS
+        ),
+        "local_token_ceiling_parameter_required": False,
         "provider_fallback_allowed": False,
         "gpt": {
             "logical_model": GPT_LOGICAL_MODEL,
@@ -232,6 +234,8 @@ def synthetic_governance_models() -> dict[str, Any]:
             "max_completion_tokens": 128_000,
             "supported_parameters": supported,
             "temperature_supported": False,
+            "local_token_ceiling_parameter_required": False,
+            "native_completion_capacity_checked": True,
             "provider_fallback_allowed": False,
             "synthetic_fixture_only": True,
         },
@@ -245,6 +249,8 @@ def synthetic_governance_models() -> dict[str, Any]:
             "max_completion_tokens": 128_000,
             "supported_parameters": supported,
             "temperature_supported": False,
+            "local_token_ceiling_parameter_required": False,
+            "native_completion_capacity_checked": True,
             "provider_fallback_allowed": False,
             "synthetic_fixture_only": True,
         },
