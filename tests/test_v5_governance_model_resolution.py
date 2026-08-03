@@ -189,6 +189,35 @@ class GovernanceModelResolutionTests(unittest.TestCase):
             ["properties"]["value"],
         )
 
+    def test_resolution_accepts_endpoint_without_output_limit_parameter(self) -> None:
+        models, endpoints = self.fixture()
+        for payload in endpoints.values():
+            endpoint = payload["data"]["endpoints"][0]
+            endpoint["supported_parameters"] = [
+                value
+                for value in endpoint["supported_parameters"]
+                if value not in {"max_tokens", "max_completion_tokens"}
+            ]
+        resolved = resolve_live_governance_models(
+            models,
+            endpoints,
+            required_context_tokens=16_384,
+        )
+        self.assertFalse(
+            resolved["local_token_ceiling_parameter_required"]
+        )
+        self.assertFalse(
+            resolved["gpt"]["local_token_ceiling_parameter_required"]
+        )
+        self.assertNotIn(
+            "max_tokens",
+            resolved["gpt"]["supported_parameters"],
+        )
+        self.assertEqual(
+            resolved["minimum_completion_tokens"],
+            resolved["minimum_native_completion_capacity_tokens"],
+        )
+
     def test_missing_direct_structured_endpoint_fails_closed(self) -> None:
         models, endpoints = self.fixture()
         endpoints["anthropic/claude-opus-5"] = self.endpoint(
