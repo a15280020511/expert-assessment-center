@@ -41,18 +41,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sha256sum .github/soft-resource-patch/part*
-          test "$(sha256sum .github/soft-resource-patch/part00 | awk '{print $1}')" = "d131fdac2b0f49bfde689c5dcb7c21d157d1e26dca602cedd3c13bced3dc00ba"
-          test "$(sha256sum .github/soft-resource-patch/part01 | awk '{print $1}')" = "cff07298d5cc03a881f74d236963ddbfef836a9d74376eacc736c4e40755bcca"
-          test "$(sha256sum .github/soft-resource-patch/part02 | awk '{print $1}')" = "78f37ca6be4d48307131fbd76967c5bb75bc3d22c5f5b518ecaabf9828b31462"
-          test "$(sha256sum .github/soft-resource-patch/part03 | awk '{print $1}')" = "8a5ee0b359482788dfdda56be0328672336cc4d904091e69f6d3b11746f4a8c2"
-          test "$(sha256sum .github/soft-resource-patch/part04 | awk '{print $1}')" = "5af06fc487c0024e0a43d3c6eb652f744f58a60906b33e3f8f0c8fd166920fdd"
-          test "$(sha256sum .github/soft-resource-patch/part05 | awk '{print $1}')" = "cf530d4e15413e20397e66ba939f743e29749a1e6fe04d9f99350672b9f9dda0"
-          cat .github/soft-resource-patch/part* > /tmp/soft-resource-transform.b64
-          sha256sum /tmp/soft-resource-transform.b64
+          mkdir -p /tmp/soft-resource-parts
+          for part in .github/soft-resource-patch/part*; do
+            tr -d '[:space:]' < "$part" > "/tmp/soft-resource-parts/$(basename "$part")"
+          done
+          sha256sum /tmp/soft-resource-parts/part*
+          test "$(sha256sum /tmp/soft-resource-parts/part00 | awk '{print $1}')" = "d131fdac2b0f49bfde689c5dcb7c21d157d1e26dca602cedd3c13bced3dc00ba"
+          test "$(sha256sum /tmp/soft-resource-parts/part01 | awk '{print $1}')" = "cff07298d5cc03a881f74d236963ddbfef836a9d74376eacc736c4e40755bcca"
+          test "$(sha256sum /tmp/soft-resource-parts/part02 | awk '{print $1}')" = "78f37ca6be4d48307131fbd76967c5bb75bc3d22c5f5b518ecaabf9828b31462"
+          test "$(sha256sum /tmp/soft-resource-parts/part03 | awk '{print $1}')" = "8a5ee0b359482788dfdda56be0328672336cc4d904091e69f6d3b11746f4a8c2"
+          test "$(sha256sum /tmp/soft-resource-parts/part04 | awk '{print $1}')" = "5af06fc487c0024e0a43d3c6eb652f744f58a60906b33e3f8f0c8fd166920fdd"
+          test "$(sha256sum /tmp/soft-resource-parts/part05 | awk '{print $1}')" = "cf530d4e15413e20397e66ba939f743e29749a1e6fe04d9f99350672b9f9dda0"
+          cat /tmp/soft-resource-parts/part* > /tmp/soft-resource-transform.b64
           test "$(sha256sum /tmp/soft-resource-transform.b64 | awk '{print $1}')" = "8b21f43982f42fb519d41c7152668210798ef90de96d82fbbbcf4e132f65e06a"
           base64 --decode /tmp/soft-resource-transform.b64 > tools/apply_soft_resource_governance.py
-          sha256sum tools/apply_soft_resource_governance.py
           test "$(sha256sum tools/apply_soft_resource_governance.py | awk '{print $1}')" = "146d233cb36dd4411dd605448f456c2759518d86d1dedc4005718d824823457f"
           python -m py_compile tools/apply_soft_resource_governance.py
           python tools/apply_soft_resource_governance.py
