@@ -1,0 +1,50 @@
+{
+  "schema_version": "pr227-production-paid-r11-receipt-1",
+  "status": "FAIL",
+  "run_id": "30783412365",
+  "target_sha": "0383d2ef80f1890306bc0bc5f7b37836cb2579ca",
+  "step_outcomes": {
+    "execute": "failure",
+    "primary_build": "skipped",
+    "primary": "success",
+    "prove": "skipped",
+    "proof": "success"
+  },
+  "expert_error": {
+    "version": 5,
+    "runtime_version": "v5-gpt-claude-runtime-1",
+    "error_code": "V5_PRODUCTION_EXECUTION_FAILED",
+    "stage": "v5-gpt-claude-production-runtime",
+    "message": "HTTP 402 from OpenRouter after attempt 1/1: {\"error\":{\"message\":\"This request requires more credits, or fewer max_tokens. You requested up to 8000 tokens, but can only afford 1146. To increase, visit https://openrouter.ai/settings/credits and add more credits\",\"code\":402,\"metadata\":{\"limit_source\":\"openrouter_credits\",\"remedy_hint\":\"Add credits at https://openrouter.ai/settings/credits, or lower max_tokens / prompt size to fit your remaining balance.\",\"provider_name\":null}},\"user_id\":\"user_3Bc9VoAnegc2tKJBZ4zfG3f6RkQ\"}",
+    "traceback": "Traceback (most recent call last):\n  File \"/home/runner/work/expert-assessment-center/expert-assessment-center/runtime-source/open-model-market/openrouter_api.py\", line 481, in request_json\n    return _request_with_hard_deadline(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/expert-assessment-center/expert-assessment-center/runtime-source/open-model-market/openrouter_api.py\", line 463, in _request_with_hard_deadline\n    raise value\n  File \"/home/runner/work/expert-assessment-center/expert-assessment-center/runtime-source/open-model-market/openrouter_api.py\", line 432, in worker\n    with urllib.request.urlopen(request, timeout=timeout) as response:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/urllib/request.py\", line 215, in urlopen\n    return opener.open(url, data, timeout)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/urllib/request.py\", line 521, in open\n    response = meth(req, response)\n               ^^^^^^^^^^^^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/urllib/request.py\", line 630, in http_response\n    response = self.parent.error(\n               ^^^^^^^^^^^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/urllib/request.py\", line 559, in error\n    return self._call_chain(*args)\n           ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/urllib/request.py\", line 492, in _call_chain\n    result = func(*args)\n             ^^^^^^^^^^^\n  File \"/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/urllib/request.py\", line 639, in http_error_default\n    raise HTTPError(req.full_url, code, msg, hdrs, fp)\nurllib.error.HTTPError: HTTP Error 402: Payment Required\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/home/runner/work/expert-assessment-center/expert-assessment-center/runtime-source/open-model-market/v5_production_ticket.py\", line 199, in main\n    v5_pipeline.main(\n  File \"/home/runner/work/expert-assessment-center/expert-assessment-center/runtime-source/open-model-market/v5_pipeline.py\", line 663, in main\n    _, ledger, graph, limits, governance_cost, remaining = _run_governance_and_materialize(\n                                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/expert-assessment-center/expert-assessment-center/runtime-source/open-model-market/v5_pipeline.py\", line 488, in _run_governance_and_materialize\n    _, _, governance, ledger = run_single_pass_governance(\n                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/expert-assessment-center/expert-assessment-center/runtime-source/open-model-market/v5_governance_runtime.py\", line 517, in run_single_pass_governance\n    _call_and_parse(\n  File \"/home/runner/work/expert-assessment-center/expert-assessment-center/runtime-source/open-model-market/v5_governance_runtime.py\", line 391, in _call_and_parse\n    response, latency = call_fn(run, api_request)\n                        ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/expert-assessment-center/expert-assessment-center/runtime-source/open-model-market/v5_governance_runtime.py\", line 368, in _default_call\n    response = request_json(\n               ^^^^^^^^^^^^^\n  File \"/home/runner/work/expert-assessment-center/expert-assessment-center/runtime-source/open-model-market/openrouter_api.py\", line 500, in request_json\n    raise last_error\nopenrouter_api.OpenRouterRequestError: HTTP 402 from OpenRouter after attempt 1/1: {\"error\":{\"message\":\"This request requires more credits, or fewer max_tokens. You requested up to 8000 tokens, but can only afford 1146. To increase, visit https://openrouter.ai/settings/credits and add more credits\",\"code\":402,\"metadata\":{\"limit_source\":\"openrouter_credits\",\"remedy_hint\":\"Add credits at https://openrouter.ai/settings/credits, or lower max_tokens / prompt size to fit your remaining balance.\",\"provider_name\":null}},\"user_id\":\"user_3Bc9VoAnegc2tKJBZ4zfG3f6RkQ\"}\n",
+    "normalization_error": "governance must use exactly GPT proposal, Claude once, and GPT synthesis",
+    "fallback_used": false,
+    "local_planner_present": false,
+    "optimizer_present": false,
+    "max_completion_tokens": 8000,
+    "claude_red_team_calls": 1,
+    "claude_is_advisory_only": true,
+    "claude_gatekeeping_allowed": false,
+    "gpt_synthesis_calls": 1,
+    "model_loop_allowed": false,
+    "cross_task_history_used": false
+  },
+  "execution_audit": {},
+  "total_model_calls": null,
+  "governance_model_calls": null,
+  "expert_model_calls": null,
+  "actual_cost_usd": null,
+  "max_completion_tokens": 8000,
+  "primary_artifact": {
+    "id": "8844427668",
+    "digest": "8792593a4057764b336a7b46c3d4978db6373317c0d37535211b782b0c6217d9"
+  },
+  "proof_artifact": {
+    "id": "",
+    "digest": ""
+  },
+  "independent_revalidation": {},
+  "final_status": {},
+  "final_attestation": {},
+  "production_ref_moved": false
+}
