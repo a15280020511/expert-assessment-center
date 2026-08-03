@@ -26,11 +26,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          payload=.github/paid-fix/fix.patch.b64
-          base64 --decode "$payload" | gzip --decompress > /tmp/fix.patch
-          test "$(sha256sum /tmp/fix.patch | awk '{print $1}')" = "6312fc0ed45dbd92347fee8793dd33ad28129b1bc8fab41600d60b0d730dc47e"
-          git apply --check /tmp/fix.patch
-          git apply /tmp/fix.patch
+          patch=.github/paid-fix/fix.patch
+          test "$(sha256sum "$patch" | awk '{print $1}')" = "6312fc0ed45dbd92347fee8793dd33ad28129b1bc8fab41600d60b0d730dc47e"
+          git apply --check "$patch"
+          git apply "$patch"
           git show 9467cdc0c6ce2d67bbf8e39642f4afbdfd7dcb95:.github/workflows/repository-line-audit.yml > .github/workflows/repository-line-audit.yml
           rm -rf .github/paid-fix
           rm -f .github/workflows/apply-paid-governance-fix-20260803.yml
