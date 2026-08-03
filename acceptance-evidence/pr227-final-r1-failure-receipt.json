@@ -1,0 +1,63 @@
+{
+  "schema_version": "v5-final-paid-acceptance-failure-receipt-1",
+  "status": "FAIL",
+  "request_id": "pr227-final-r1",
+  "target_sha": "a18685657313305315f533f9e045798d64b0219c",
+  "paid_request_sha": "c8953ebbf608c2ae2eda972b1d1f3439637ad9a7",
+  "paid_workflow_run_id": "30790692577",
+  "paid_job_id": "91613370331",
+  "failure_stage": "gpt_proposal",
+  "request_attempts": 1,
+  "successful_paid_model_calls": 0,
+  "claude_red_team_calls_completed": 0,
+  "gpt_synthesis_calls_completed": 0,
+  "expert_calls_completed": 0,
+  "openrouter_error": {
+    "http_status": 402,
+    "code": 402,
+    "limit_source": "openrouter_credits",
+    "message": "Prompt tokens limit exceeded: 7751 > 6159.",
+    "prompt_tokens_requested": 7751,
+    "prompt_token_limit_affordable": 6159,
+    "provider_name": null
+  },
+  "preflight": {
+    "zero_call_release_gates": "PASS",
+    "full_unit_tests_passed": 332,
+    "focused_tests_passed": 29,
+    "free_canary_status": "PASS",
+    "free_canary_model": "google/gemma-4-26b-a4b-it:free",
+    "free_canary_provider": "Darkbloom",
+    "free_canary_cost_usd": 0.0,
+    "key_is_free_tier": false,
+    "key_limit": null,
+    "key_limit_remaining": null,
+    "key_is_management_key": false
+  },
+  "resolved_production_models": {
+    "gpt_logical_model": "~openai/gpt-latest",
+    "gpt_resolved_model": "openai/gpt-5.6-sol",
+    "gpt_provider": "openai",
+    "claude_logical_model": "~anthropic/claude-opus-latest",
+    "claude_resolved_model": "anthropic/claude-opus-5",
+    "claude_provider": "anthropic",
+    "provider_fallback_allowed": false
+  },
+  "charged_cost_usd": null,
+  "provider_cost_receipt_available": false,
+  "call_ledger_available": false,
+  "governance_ledger_available": false,
+  "independent_revalidation_status": "SKIPPED",
+  "final_attestation_status": "NOT_CREATED",
+  "primary_artifact": {
+    "id": 8846923256,
+    "name": "v5-final-paid-claude-acceptance-30790692577",
+    "digest": "sha256:85462a1504ebc269c84ed8f715ba069e9a59e9c252e6465cda880671577dd406",
+    "size_in_bytes": 35684
+  },
+  "retry_performed": false,
+  "additional_paid_test_authorized": false,
+  "merge_performed": false,
+  "production_ref_moved": false,
+  "formal_production_qualification": "BLOCKED"
+}
