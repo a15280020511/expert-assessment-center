@@ -34,6 +34,12 @@ jobs:
           EXPECTED_BUNDLE_BASE_SHA: "1450cab4495a911b70312a990b38b9f11a022389"
         run: |
           set -euo pipefail
+          curl --fail --silent --show-error --location \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$SOURCE_ARTIFACT_ID/zip" \
+            --output validated-source.zip
           python - <<'PY'
           from __future__ import annotations
 
@@ -54,26 +60,25 @@ jobs:
           expected_size = int(os.environ["EXPECTED_SOURCE_SIZE"])
           expected_base = os.environ["EXPECTED_BUNDLE_BASE_SHA"]
 
-          def request(url: str, *, method: str = "GET", payload: dict | None = None):
-              data = None
+          def post_json(url: str, payload: dict):
+              data = json.dumps(payload).encode("utf-8")
               headers = {
                   "Authorization": f"Bearer {token}",
                   "Accept": "application/vnd.github+json",
                   "X-GitHub-Api-Version": "2022-11-28",
                   "User-Agent": "pr227-r6-validated-workflow-blob",
+                  "Content-Type": "application/json",
               }
-              if payload is not None:
-                  data = json.dumps(payload).encode("utf-8")
-                  headers["Content-Type"] = "application/json"
-              req = urllib.request.Request(url, data=data, headers=headers, method=method)
+              req = urllib.request.Request(
+                  url,
+                  data=data,
+                  headers=headers,
+                  method="POST",
+              )
               with urllib.request.urlopen(req, timeout=120) as response:
-                  return response.read(), dict(response.headers)
+                  return response.read()
 
-          archive_url = (
-              f"https://api.github.com/repos/{repository}/actions/artifacts/"
-              f"{artifact_id}/zip"
-          )
-          archive_bytes, _ = request(archive_url)
+          archive_bytes = Path("validated-source.zip").read_bytes()
           with zipfile.ZipFile(io.BytesIO(archive_bytes)) as outer:
               tar_bytes = outer.read("validated-source.tar")
               tar_receipt = outer.read("validated-source.tar.sha256").decode("utf-8")
@@ -118,10 +123,9 @@ jobs:
               "content": base64.b64encode(source).decode("ascii"),
               "encoding": "base64",
           }
-          blob_bytes, _ = request(
+          blob_bytes = post_json(
               f"https://api.github.com/repos/{repository}/git/blobs",
-              method="POST",
-              payload=blob_payload,
+              blob_payload,
           )
           blob = json.loads(blob_bytes.decode("utf-8"))
           blob_sha = str(blob.get("sha") or "")
