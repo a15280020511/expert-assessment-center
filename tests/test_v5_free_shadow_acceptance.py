@@ -13,8 +13,8 @@ MARKET = ROOT / "open-model-market"
 if str(MARKET) not in sys.path:
     sys.path.insert(0, str(MARKET))
 
-import v5_free_shadow_acceptance as shadow
-import v5_free_shadow_support as shadow_support
+import v5_free_shadow_acceptance as shadow  # noqa: E402
+import v5_free_shadow_support as shadow_support  # noqa: E402
 
 
 class FreeShadowAcceptanceTests(unittest.TestCase):
@@ -37,7 +37,7 @@ class FreeShadowAcceptanceTests(unittest.TestCase):
             supported.append("max_tokens")
         return shadow.FreeEndpoint(
             model=model,
-            company=shadow.canonical_model_company(model),
+            company=shadow_support.canonical_model_company(model),
             provider=provider,
             context_length=131072,
             max_completion_tokens=8192,
