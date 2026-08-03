@@ -154,7 +154,22 @@ jobs:
           python tools/repository_audit.py \
             --root . \
             --output-dir /tmp/pr227-r6-evidence-contract/repository-audit \
-            --fail-on medium
+            --fail-on none
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path('/tmp/pr227-r6-evidence-contract/repository-audit/repository-audit.json')
+          report = json.loads(path.read_text(encoding='utf-8'))
+          blockers = [
+              item
+              for item in report.get('findings', [])
+              if item.get('severity') in {'critical', 'high', 'medium'}
+          ]
+          print(json.dumps({'blocking_findings': blockers}, ensure_ascii=False, indent=2))
+          if blockers:
+              raise SystemExit(1)
+          PY
 
       - name: Upload zero-call validation evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
