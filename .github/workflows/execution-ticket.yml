@@ -258,15 +258,15 @@ jobs:
           PRIMARY_ARTIFACT_DIGEST: ${{ steps.ticket_artifact.outputs.artifact-digest }}
           AUTHORITATIVE_EXECUTION_SHA: ${{ steps.source.outputs.execution_sha }}
           MAXIMUM_TOTAL_CALLS: ${{ needs.admit-ticket.outputs.calls }}
-          MAXIMUM_COST_USD: ${{ needs.admit-ticket.outputs.cost_anomaly_usd }}
+          COST_ADVISORY_USD: ${{ needs.admit-ticket.outputs.cost_anomaly_usd }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           test -n "$PRIMARY_ARTIFACT_ID"
           test -n "$PRIMARY_ARTIFACT_DIGEST"
-          maximum_cost="$MAXIMUM_COST_USD"
-          if [[ -z "$maximum_cost" ]]; then
-            maximum_cost="1000000000"
+          cost_advisory="$COST_ADVISORY_USD"
+          if [[ -z "$cost_advisory" ]]; then
+            cost_advisory="1000000000"
           fi
           gh api \
             -H "Accept: application/vnd.github+json" \
@@ -281,7 +281,7 @@ jobs:
             --expected-sha "$AUTHORITATIVE_EXECUTION_SHA" \
             --expected-run-id "${{ github.run_id }}" \
             --maximum-calls "$MAXIMUM_TOTAL_CALLS" \
-            --maximum-cost-usd "$maximum_cost" \
+            --cost-advisory-usd "$cost_advisory" \
             --archive uploaded-primary-artifact.zip \
             --expected-artifact-digest "$PRIMARY_ARTIFACT_DIGEST" \
             --output independent-revalidation.json
