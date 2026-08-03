@@ -1,0 +1,46 @@
+name: Apply Final Audit Patch 2026-08-03
+
+on:
+  push:
+    branches:
+      - "fix/v5-final-granular-audit-red-team-hardening-20260803"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-final-audit-patch-20260803
+  cancel-in-progress: false
+
+jobs:
+  apply-patch:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact branch head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Apply verified granular audit patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/audit-patch/part* > /tmp/audit-patch.b64
+          test "$(sha256sum /tmp/audit-patch.b64 | awk '{print $1}')" = "9847c13fb7056f50acc807418b8735dab10f36e1dac244fc3556928080b6fe86"
+          base64 --decode /tmp/audit-patch.b64 | gzip --decompress > /tmp/audit.patch
+          test "$(sha256sum /tmp/audit.patch | awk '{print $1}')" = "1e8bae96b0b1db2855867bc6df1c07d91287c40b31d0266e400ac087517b44f2"
+          git apply --check /tmp/audit.patch
+          git apply /tmp/audit.patch
+          rm -rf .github/audit-patch
+          rm -f .github/workflows/apply-final-audit-patch-20260803.yml
+          python -m compileall -q open-model-market tests tools
+          python tools/repository_audit.py --root . --output-dir /tmp/repository-audit --fail-on info
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: complete granular audit and harden Claude red team"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
