@@ -1,22 +1,27 @@
 name: Apply Soft Governance Audit Patch
 
 on:
-  push:
+  pull_request:
     branches:
-      - codex/soft-governance-granular-audit-20260804
-    paths:
-      - .github/workflows/apply-soft-governance-audit.yml
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
 
 permissions:
   contents: write
 
 concurrency:
-  group: apply-soft-governance-audit-${{ github.ref }}
+  group: apply-soft-governance-audit-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
   apply:
-    if: github.repository == 'a15280020511/expert-assessment-center'
+    if: >-
+      github.repository == 'a15280020511/expert-assessment-center' &&
+      github.event.pull_request.head.ref == 'codex/soft-governance-granular-audit-20260804' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
