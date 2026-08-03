@@ -24,6 +24,7 @@ from v5_governance_catalog import (
     synthetic_governance_models,
 )
 from v5_governance_runtime import (
+    bounded_governance_request,
     run_single_pass_governance,
     write_governance_artifacts,
 )
@@ -84,6 +85,11 @@ def _validate_budget(args: argparse.Namespace) -> tuple[int, int, int]:
         and float(args.cost_anomaly_usd) <= 0
     ):
         raise ValueError("cost_anomaly_usd must be positive")
+    if (
+        args.max_completion_tokens is not None
+        and int(args.max_completion_tokens) <= 0
+    ):
+        raise ValueError("max_completion_tokens must be positive")
     return total, recovery, expert_total
 
 
@@ -347,6 +353,7 @@ def _runtime_config_payload(
         "expert_recovery_call_limit": recovery_calls,
         "expert_initial_call_limit": expert_total_calls - recovery_calls,
         "cost_anomaly_usd": args.cost_anomaly_usd,
+        "max_completion_tokens": args.max_completion_tokens,
         "selection_authority": "gpt-latest",
         "selection_model": governance_models["gpt"]["resolved_model"],
         "selection_provider": governance_models["gpt"]["provider"],
@@ -388,15 +395,19 @@ def _write_dry_run(
     total_calls: int,
     recovery_calls: int,
     cost_anomaly_usd: float | None,
+    max_completion_tokens: int | None,
 ) -> None:
-    proposal_request = build_proposal_request(
-        task=task,
-        task_envelope=task_envelope,
-        catalog=catalog,
-        approved_total_calls=total_calls,
-        governance_calls_reserved=CLAUDE_RED_TEAM_GOVERNANCE_CALLS,
-        approved_recovery_calls=recovery_calls,
-        cost_anomaly_usd=cost_anomaly_usd,
+    proposal_request = bounded_governance_request(
+        build_proposal_request(
+            task=task,
+            task_envelope=task_envelope,
+            catalog=catalog,
+            approved_total_calls=total_calls,
+            governance_calls_reserved=CLAUDE_RED_TEAM_GOVERNANCE_CALLS,
+            approved_recovery_calls=recovery_calls,
+            cost_anomaly_usd=cost_anomaly_usd,
+        ),
+        max_completion_tokens,
     )
     write_json(
         output / "v5-dry-run.json",
@@ -485,6 +496,7 @@ def _run_governance_and_materialize(
         approved_recovery_calls=recovery_calls,
         cost_anomaly_usd=args.cost_anomaly_usd,
         governance_models=governance_models,
+        max_completion_tokens=args.max_completion_tokens,
         call_fn=governance_call_fn,
     )
     write_governance_artifacts(output, governance, ledger)
@@ -645,6 +657,7 @@ def main(
             total_calls=total_calls,
             recovery_calls=recovery_calls,
             cost_anomaly_usd=args.cost_anomaly_usd,
+            max_completion_tokens=args.max_completion_tokens,
         )
         return 0
     _, ledger, graph, limits, governance_cost, remaining = _run_governance_and_materialize(

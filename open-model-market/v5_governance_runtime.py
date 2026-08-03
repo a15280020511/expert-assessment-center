@@ -74,6 +74,47 @@ def _assert_provider_lock(
         )
 
 
+def bounded_governance_request(
+    request: Mapping[str, Any],
+    maximum_completion_tokens: int | None,
+) -> dict[str, Any]:
+    """Apply a task envelope without exceeding a protocol-native limit."""
+    bounded = dict(request)
+    if maximum_completion_tokens is None:
+        return bounded
+    limit = int(maximum_completion_tokens)
+    if limit <= 0:
+        raise GovernanceRuntimeError(
+            "maximum governance completion tokens must be positive"
+        )
+    found = False
+    for key in ("max_tokens", "max_completion_tokens"):
+        if key not in bounded:
+            continue
+        value = bounded[key]
+        if isinstance(value, bool):
+            raise GovernanceRuntimeError(
+                "governance output limit must be a positive integer"
+            )
+        try:
+            protocol_limit = int(value)
+        except (TypeError, ValueError) as exc:
+            raise GovernanceRuntimeError(
+                "governance output limit must be a positive integer"
+            ) from exc
+        if protocol_limit <= 0:
+            raise GovernanceRuntimeError(
+                "governance output limit must be a positive integer"
+            )
+        bounded[key] = min(protocol_limit, limit)
+        found = True
+    if not found:
+        raise GovernanceRuntimeError(
+            "governance request is missing an enforceable output limit"
+        )
+    return bounded
+
+
 def _bind_governance_request(
     request: Mapping[str, Any],
     endpoint: Mapping[str, Any],
@@ -391,6 +432,7 @@ def run_single_pass_governance(
     governance_calls_reserved: int,
     approved_recovery_calls: int,
     cost_anomaly_usd: float | None,
+    max_completion_tokens: int | None = None,
     governance_models: Mapping[str, Any] | None = None,
     call_fn: Callable[
         [Any, Mapping[str, Any]],
@@ -413,11 +455,14 @@ def run_single_pass_governance(
     ledger = GovernanceLedger(maximum_calls=governance_calls_reserved)
 
     proposal_request = _bind_governance_request(
-        build_proposal_request(
-            task=task,
-            task_envelope=task_envelope,
-            catalog=catalog,
-            **limits,
+        bounded_governance_request(
+            build_proposal_request(
+                task=task,
+                task_envelope=task_envelope,
+                catalog=catalog,
+                **limits,
+            ),
+            max_completion_tokens,
         ),
         gpt_endpoint,
     )
@@ -439,7 +484,10 @@ def run_single_pass_governance(
         **limits,
     )
     claude_request = _bind_governance_request(
-        build_claude_red_team_request(claude_input),
+        bounded_governance_request(
+            build_claude_red_team_request(claude_input),
+            max_completion_tokens,
+        ),
         claude_endpoint,
     )
     claude_advice = _call_and_parse(
@@ -452,13 +500,16 @@ def run_single_pass_governance(
     )
 
     synthesis_request = _bind_governance_request(
-        build_synthesis_request(
-            task=task,
-            initial_proposal=initial,
-            claude_advice=claude_advice,
-            task_envelope=task_envelope,
-            catalog=catalog,
-            **limits,
+        bounded_governance_request(
+            build_synthesis_request(
+                task=task,
+                initial_proposal=initial,
+                claude_advice=claude_advice,
+                task_envelope=task_envelope,
+                catalog=catalog,
+                **limits,
+            ),
+            max_completion_tokens,
         ),
         gpt_endpoint,
     )
