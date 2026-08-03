@@ -195,10 +195,11 @@ def resolve_live_governance_models(
         minimum_completion_tokens=completion_floor,
     )
     return {
-        "schema_version": "v5-governance-model-resolution-2",
+        "schema_version": "v5-governance-model-resolution-1",
         "status": "PASS",
         "selection_basis": "official-intelligence-rank-first-exact-direct-endpoint",
         "required_context_tokens": context_floor,
+        "minimum_completion_tokens": completion_floor,
         "minimum_native_completion_capacity_tokens": completion_floor,
         "local_token_ceiling_parameter_required": False,
         "provider_fallback_allowed": False,
@@ -215,10 +216,11 @@ def synthetic_governance_models() -> dict[str, Any]:
         "structured_outputs",
     ]
     return {
-        "schema_version": "v5-governance-model-resolution-2",
+        "schema_version": "v5-governance-model-resolution-1",
         "status": "PASS",
         "selection_basis": "synthetic-no-call-fixture",
         "required_context_tokens": 1,
+        "minimum_completion_tokens": GOVERNANCE_MINIMUM_COMPLETION_TOKENS,
         "minimum_native_completion_capacity_tokens": (
             GOVERNANCE_MINIMUM_COMPLETION_TOKENS
         ),
