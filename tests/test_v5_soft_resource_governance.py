@@ -2,10 +2,12 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
+import v5_pipeline  # noqa: E402
 from execution_graph import ExecutionGraph, SelectedNode  # noqa: E402
 from v5_runtime import RetryPolicy, RuntimeConfig  # noqa: E402
 from v5_soft_resource_governance import (  # noqa: E402
@@ -121,6 +123,45 @@ class SoftResourceGovernanceTests(unittest.TestCase):
         )
         self.assertFalse(preflight["cost_limit_enforced"])
         self.assertFalse(preflight["token_limit_enforced_by_runtime"])
+
+    def test_pipeline_does_not_consume_or_exhaust_cost_advisory(self):
+        governance_cost, advisory = v5_pipeline._remaining_cost(
+            0.01,
+            {"actual_cost_usd": 3.5},
+        )
+        self.assertEqual(governance_cost, 3.5)
+        self.assertEqual(advisory, 0.01)
+
+    def test_pipeline_reports_cost_advisory_without_invalidating_result(self):
+        result = {
+            "actual_cost_usd": 3.0,
+            "execution_budget": {"calls_reserved": 1},
+        }
+        args = SimpleNamespace(cost_anomaly_usd=0.01)
+        governance_models = {
+            "gpt": {"resolved_model": "openai/gpt", "provider": "openai"},
+            "claude": {
+                "resolved_model": "anthropic/claude",
+                "provider": "anthropic",
+            },
+        }
+        v5_pipeline._finalize_result(
+            result,
+            args=args,
+            total_calls=4,
+            governance_models=governance_models,
+            governance_ledger={"actual_governance_calls": 3},
+            governance_cost=2.0,
+        )
+        self.assertEqual(result["actual_cost_usd"], 5.0)
+        self.assertTrue(
+            result["resource_governance"]["cost_advisory_exceeded"]
+        )
+        self.assertFalse(
+            result["resource_governance"][
+                "cost_threshold_can_invalidate_result"
+            ]
+        )
 
 
 if __name__ == "__main__":
