@@ -115,13 +115,13 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
     )
     if not 1 <= ranking <= MAX_CATALOG_MODELS:
         raise ExpertTeamError("ranking_limit must be between 1 and 150")
-    maximum_output = int(
+    completion_advisory = int(
         getattr(args, "max_completion_tokens", None)
         or execution.get("max_completion_tokens", 10_000)
     )
-    if not 256 <= maximum_output <= 32_768:
+    if completion_advisory <= 0:
         raise ExpertTeamError(
-            "max_completion_tokens must be between 256 and 32768"
+            "max_completion_tokens advisory must be positive"
         )
     reasoning = str(
         getattr(args, "reasoning_effort", None)
@@ -158,7 +158,7 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
             )
         ],
         catalog_file=Path(catalog_arg) if catalog_arg else None,
-        max_completion_tokens=maximum_output,
+        max_completion_tokens=completion_advisory,
         reasoning_effort=reasoning,
         temperature=float(execution.get("temperature", 0.0)),
         catalog_timeout_seconds=int(
