@@ -1,0 +1,126 @@
+name: PR232 Immutable Zero-Cost Validation
+
+on:
+  push:
+    branches:
+      - "audit/pr232-zero-cost-*"
+    paths:
+      - ".github/pr232-zero-cost-request.json"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr232-immutable-zero-cost-validation
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out immutable request
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 2
+          persist-credentials: true
+          path: request-source
+
+      - name: Resolve exact target
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=request-source/.github/pr232-zero-cost-request.json
+          jq -e '
+            type == "object" and
+            (keys | sort) == ["authorization", "request_id", "schema_version", "target_sha"] and
+            .schema_version == "pr232-zero-cost-request-1" and
+            .authorization == "ZERO-CALL-VALIDATION-ONLY" and
+            (.request_id | test("^[a-z0-9][a-z0-9._-]{0,63}$")) and
+            (.target_sha | test("^[0-9a-f]{40}$"))
+          ' "$request" >/dev/null
+          test "$(git -C request-source diff --name-only HEAD^ HEAD)" = ".github/pr232-zero-cost-request.json"
+          target="$(jq -er '.target_sha' "$request")"
+          test "$(git -C request-source rev-parse HEAD^)" = "$target"
+          {
+            echo "target_sha=$target"
+            echo "request_id=$(jq -er '.request_id' "$request")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ steps.request.outputs.target_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: runtime-source
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            runtime-source/requirements-runtime.txt
+            runtime-source/requirements-dev.txt
+
+      - name: Install pinned dependencies
+        working-directory: runtime-source
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+
+      - name: Run complete zero-call validation
+        id: validation
+        working-directory: runtime-source
+        env:
+          TARGET_SHA: ${{ steps.request.outputs.target_sha }}
+          REQUEST_ID: ${{ steps.request.outputs.request_id }}
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p zero-cost-evidence
+          status=PASS
+          python -m ruff check . > zero-cost-evidence/ruff.log 2>&1 || status=FAIL
+          python -m compileall -q open-model-market tests tools > zero-cost-evidence/compile.log 2>&1 || status=FAIL
+          python -m unittest discover -s tests -p 'test*.py' -v > zero-cost-evidence/tests.log 2>&1 || status=FAIL
+          python tools/repository_audit.py --root . --output-dir zero-cost-evidence/repository-audit --fail-on high > zero-cost-evidence/repository-audit.log 2>&1 || status=FAIL
+          jq -n \
+            --arg status "$status" \
+            --arg request_id "$REQUEST_ID" \
+            --arg target_sha "$TARGET_SHA" \
+            '{
+              schema_version: "pr232-zero-cost-validation-result-1",
+              status: $status,
+              request_id: $request_id,
+              target_sha: $target_sha,
+              model_calls: 0,
+              paid_model_calls: 0,
+              actual_cost_usd: 0.0,
+              production_ref_moved: false
+            }' > zero-cost-evidence/result.json
+          cat zero-cost-evidence/result.json
+
+      - name: Persist validation evidence
+        if: always()
+        env:
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p request-source/acceptance-evidence/pr232-zero-cost
+          cp -r runtime-source/zero-cost-evidence/. \
+            request-source/acceptance-evidence/pr232-zero-cost/
+          git -C request-source config user.name "github-actions[bot]"
+          git -C request-source config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C request-source add acceptance-evidence/pr232-zero-cost/
+          git -C request-source commit -m "audit: persist PR232 zero-cost validation"
+          git -C request-source push origin "HEAD:$TARGET_BRANCH"
+
+      - name: Enforce result after persistence
+        working-directory: runtime-source
+        run: |
+          set -euo pipefail
+          test "$(jq -r '.status' zero-cost-evidence/result.json)" = "PASS"
