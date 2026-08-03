@@ -112,6 +112,21 @@ jobs:
           python tools/apply_soft_resource_governance.py
           rm tools/apply_soft_resource_governance.py
 
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("open-model-market/v5_gpt_expert_selector.py")
+          text = path.read_text(encoding="utf-8")
+          anchor = 'RESOURCE_GOVERNANCE_MODE = "advisory-only"\n'
+          replacement = (
+              '# Advisory catalog-size reference; never used as a rejection or truncation gate.\n'
+              'GPT_PROMPT_CATALOG_MAX_CHARS = 80_000\n'
+              + anchor
+          )
+          if text.count(anchor) != 1:
+              raise SystemExit("catalog advisory compatibility anchor mismatch")
+          path.write_text(text.replace(anchor, replacement, 1), encoding="utf-8")
+          PY
+
       - name: Run complete zero-cost validation
         shell: bash
         run: |
