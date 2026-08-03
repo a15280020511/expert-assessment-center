@@ -1,0 +1,32 @@
+{
+  "schema_version": "pr227-production-paid-r9-receipt-1",
+  "status": "FAIL",
+  "run_id": "30782638016",
+  "target_sha": "2a0d1b5d2d8bc77b52a7af5a4d257843675c662e",
+  "step_outcomes": {
+    "execute": "failure",
+    "primary_build": "skipped",
+    "primary": "success",
+    "prove": "skipped",
+    "proof": "success"
+  },
+  "expert_error": {},
+  "execution_audit": {},
+  "total_model_calls": null,
+  "governance_model_calls": null,
+  "expert_model_calls": null,
+  "actual_cost_usd": null,
+  "max_completion_tokens": 8000,
+  "primary_artifact": {
+    "id": "8844176082",
+    "digest": "ed28c25decb77d04852cd6790955b7b78752da2b57149042d8d56058bd9eae51"
+  },
+  "proof_artifact": {
+    "id": "",
+    "digest": ""
+  },
+  "independent_revalidation": {},
+  "final_status": {},
+  "final_attestation": {},
+  "production_ref_moved": false
+}
