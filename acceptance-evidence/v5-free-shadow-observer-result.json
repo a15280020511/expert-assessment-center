@@ -1,0 +1,54 @@
+{
+  "schema_version": "v5-free-shadow-observer-result-1",
+  "status": "FAIL",
+  "request_id": "pr232-free-shadow-r1-observer",
+  "target_run_head_sha": "436bf0a2eb756d6f21b1880b5f89c3d508f43d1f",
+  "run": {
+    "id": 30792622358,
+    "name": "V5 Free Shadow Production Qualification",
+    "status": "completed",
+    "conclusion": "failure",
+    "run_attempt": 1,
+    "created_at": "2026-08-03T07:09:50Z",
+    "updated_at": "2026-08-03T07:10:23Z",
+    "html_url": "https://github.com/a15280020511/expert-assessment-center/actions/runs/30792622358"
+  },
+  "jobs": [
+    {
+      "id": 91619195500,
+      "name": "execute-free-shadow",
+      "status": "completed",
+      "conclusion": "failure",
+      "started_at": "2026-08-03T07:09:54Z",
+      "completed_at": "2026-08-03T07:10:22Z",
+      "failed_steps": [
+        {
+          "number": 8,
+          "name": "Execute production protocol with four explicit free calls"
+        }
+      ]
+    },
+    {
+      "id": 91619299077,
+      "name": "independently-recompute-free-shadow",
+      "status": "completed",
+      "conclusion": "skipped",
+      "started_at": "2026-08-03T07:10:22Z",
+      "completed_at": "2026-08-03T07:10:22Z",
+      "failed_steps": []
+    }
+  ],
+  "artifacts": [
+    {
+      "id": 8847618600,
+      "name": "v5-free-shadow-primitive-30792622358",
+      "size_in_bytes": 6627,
+      "expired": false,
+      "digest": "sha256:feac4db978214b51b47e607057b9ceb8fc0e7ff4b3616404cb11a3faa9d6184b",
+      "created_at": "2026-08-03T07:10:19Z",
+      "expires_at": "2026-09-02T07:10:18Z"
+    }
+  ],
+  "model_calls_triggered_by_observer": 0,
+  "production_ref_moved": false
+}
