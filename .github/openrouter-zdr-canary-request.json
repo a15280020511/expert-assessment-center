@@ -1,0 +1,10 @@
+{
+  "schema_version": "openrouter-zdr-canary-request-1",
+  "authorization": "ONE-ZDR-FREE-CALL-NO-PAID-FALLBACK",
+  "request_id": "pr232-openrouter-zdr-canary-r1",
+  "target_sha": "f71217ccc85f6963cfd5d659c87334ee915d75ff",
+  "maximum_model_requests": 1,
+  "maximum_paid_model_calls": 0,
+  "model": "inclusionai/ling-3.0-flash:free",
+  "provider": "novita"
+}
