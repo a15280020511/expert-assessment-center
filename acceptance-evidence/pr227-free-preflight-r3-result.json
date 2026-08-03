@@ -1,0 +1,24 @@
+{
+  "schema_version": "pr227-free-preflight-r3-result-1",
+  "status": "FAIL",
+  "run_id": "30786456968",
+  "target_sha": "0383d2ef80f1890306bc0bc5f7b37836cb2579ca",
+  "prior_zero_call_simulation": "PASS",
+  "free_canary": {
+    "schema_version": "pr227-dynamic-free-canary-3",
+    "status": "FAIL",
+    "catalog_requests": 1,
+    "model_calls": 0,
+    "paid_model_calls": 0,
+    "actual_cost_usd": null,
+    "max_completion_tokens": 256,
+    "raw_prompt_persisted": false,
+    "raw_answer_persisted": false,
+    "error_type": "OpenRouterRequestError",
+    "error_message": "HTTP 404 from OpenRouter after attempt 1/1: {\"error\":{\"message\":\"No endpoints available matching your guardrail restrictions and data policy. Configure: https://openrouter.ai/settings/privacy\",\"code\":404}}"
+  },
+  "maximum_model_calls": 1,
+  "maximum_paid_model_calls": 0,
+  "paid_acceptance_triggered": false,
+  "production_ref_moved": false
+}
