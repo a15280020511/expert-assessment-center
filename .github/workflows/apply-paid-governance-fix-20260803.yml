@@ -6,6 +6,7 @@ on:
       - "fix/v5-paid-governance-output-ledger-20260803"
     paths:
       - ".github/paid-fix/fix.patch.b64"
+      - ".github/workflows/apply-paid-governance-fix-20260803.yml"
 
 permissions:
   contents: write
