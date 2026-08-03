@@ -1,0 +1,223 @@
+name: Post-Merge Free Model Smoke 2026-08-03
+
+on:
+  push:
+    branches:
+      - "acceptance/postmerge-free-smoke-*"
+    paths:
+      - ".github/postmerge-free-model-smoke-request.json"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: postmerge-free-model-smoke
+  cancel-in-progress: false
+
+jobs:
+  free-smoke:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      MODEL_MAX_RETRIES: "0"
+      MODEL_TIMEOUT_SECONDS: "120"
+      OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
+      OPENROUTER_APP_NAME: expert-center-postmerge-free-smoke
+    steps:
+      - name: Checkout immutable request branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 3
+          persist-credentials: true
+          path: request-source
+
+      - name: Validate free-only request
+        id: request
+        working-directory: request-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=.github/postmerge-free-model-smoke-request.json
+          jq -e '
+            type == "object" and
+            (keys | sort) == [
+              "authorization",
+              "maximum_model_calls",
+              "maximum_paid_model_calls",
+              "request_id",
+              "schema_version",
+              "target_sha"
+            ] and
+            .schema_version == "postmerge-free-model-smoke-request-1" and
+            .authorization == "FREE-ONLY-NO-PAID-FALLBACK" and
+            (.request_id | test("^[a-z0-9][a-z0-9._-]{0,63}$")) and
+            (.target_sha | test("^[0-9a-f]{40}$")) and
+            .maximum_model_calls == 1 and
+            .maximum_paid_model_calls == 0
+          ' "$request" >/dev/null
+          test "$(git diff --name-only HEAD^ HEAD)" = "$request"
+          target="$(jq -er '.target_sha' "$request")"
+          test "$(git rev-parse HEAD^^)" = "$target"
+          {
+            echo "target_sha=$target"
+            echo "request_id=$(jq -er '.request_id' "$request")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact merged main source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ steps.request.outputs.target_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: runtime-source
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: runtime-source/requirements-runtime.txt
+
+      - name: Install pinned runtime
+        working-directory: runtime-source
+        run: |
+          set -euo pipefail
+          test -n "${OPENROUTER_API_KEY:-}"
+          test "${#OPENROUTER_API_KEY}" -ge 20
+          python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
+          python -m pip check
+
+      - name: Execute exactly one free-model call
+        working-directory: runtime-source
+        env:
+          TARGET_SHA: ${{ steps.request.outputs.target_sha }}
+          REQUEST_ID: ${{ steps.request.outputs.request_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p postmerge-free-artifacts
+          PYTHONPATH=open-model-market python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from openrouter_api import CHAT_URL, request_json
+          from v5_execution_primitives import actual_cost, extract_answer
+
+          result = {
+              "schema_version": "postmerge-free-model-smoke-result-1",
+              "status": "FAIL",
+              "request_id": os.environ["REQUEST_ID"],
+              "target_sha": os.environ["TARGET_SHA"],
+              "workflow_run_id": os.environ.get("GITHUB_RUN_ID"),
+              "requested_model": "openrouter/free",
+              "maximum_model_calls": 1,
+              "maximum_paid_model_calls": 0,
+              "successful_free_model_calls": 0,
+              "paid_model_calls": 0,
+              "paid_fallback_allowed": False,
+              "actual_cost_usd": None,
+              "production_ref_moved": False,
+          }
+          try:
+              payload = {
+                  "model": "openrouter/free",
+                  "messages": [
+                      {
+                          "role": "system",
+                          "content": "Return only the exact requested final text.",
+                      },
+                      {
+                          "role": "user",
+                          "content": "Reply with exactly POST_MERGE_FREE_PASS and nothing else.",
+                      },
+                  ],
+                  "stream": False,
+                  "max_tokens": 256,
+                  "provider": {
+                      "data_collection": "allow",
+                      "zdr": False,
+                      "require_parameters": True,
+                  },
+              }
+              response = request_json(
+                  CHAT_URL,
+                  os.environ["OPENROUTER_API_KEY"],
+                  120,
+                  0,
+                  payload,
+              )
+              answer = extract_answer(response).strip()
+              cost = float(actual_cost(response))
+              response_model = str(response.get("model") or "")
+              provider = str(response.get("provider") or "")
+              if answer != "POST_MERGE_FREE_PASS":
+                  raise RuntimeError("free model did not return the exact canary answer")
+              if not response_model.endswith(":free"):
+                  raise RuntimeError(
+                      f"response model is not an explicit free variant: {response_model}"
+                  )
+              if abs(cost) > 1e-12:
+                  raise RuntimeError(f"free model returned positive cost: {cost}")
+              result.update(
+                  {
+                      "status": "PASS",
+                      "response_model": response_model,
+                      "provider": provider,
+                      "successful_free_model_calls": 1,
+                      "actual_cost_usd": cost,
+                      "answer_contract": "exact-match",
+                  }
+              )
+          except Exception as exc:  # noqa: BLE001
+              result.update(
+                  {
+                      "error_type": type(exc).__name__,
+                      "error_message": str(exc),
+                  }
+              )
+          output = Path("postmerge-free-artifacts/postmerge-free-result.json")
+          output.write_text(
+              json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(result, ensure_ascii=False))
+          PY
+
+      - name: Upload free-model evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: postmerge-free-model-smoke-${{ github.run_id }}
+          path: runtime-source/postmerge-free-artifacts/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Persist authoritative branch receipt
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          result=runtime-source/postmerge-free-artifacts/postmerge-free-result.json
+          test -s "$result"
+          mkdir -p request-source/acceptance-evidence
+          cp "$result" request-source/acceptance-evidence/postmerge-free-model-smoke-result.json
+          git -C request-source config user.name "github-actions[bot]"
+          git -C request-source config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C request-source add acceptance-evidence/postmerge-free-model-smoke-result.json
+          git -C request-source commit -m "audit: persist post-merge free model smoke result"
+          git -C request-source push origin "HEAD:${GITHUB_REF}"
+
+      - name: Enforce free-model PASS
+        if: always()
+        run: |
+          jq -e '
+            .status == "PASS" and
+            .successful_free_model_calls == 1 and
+            .paid_model_calls == 0 and
+            .paid_fallback_allowed == false and
+            .actual_cost_usd == 0 and
+            .production_ref_moved == false
+          ' runtime-source/postmerge-free-artifacts/postmerge-free-result.json >/dev/null
