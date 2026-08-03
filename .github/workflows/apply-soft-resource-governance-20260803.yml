@@ -63,6 +63,72 @@ jobs:
           test "$(sha256sum /tmp/soft-resource-transform.b64 | awk '{print $1}')" = "8b21f43982f42fb519d41c7152668210798ef90de96d82fbbbcf4e132f65e06a"
           base64 --decode /tmp/soft-resource-transform.b64 > tools/apply_soft_resource_governance.py
           test "$(sha256sum tools/apply_soft_resource_governance.py | awk '{print $1}')" = "146d233cb36dd4411dd605448f456c2759518d86d1dedc4005718d824823457f"
+
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("tools/apply_soft_resource_governance.py")
+          text = path.read_text(encoding="utf-8")
+          helper = '''def write_text(relative: str, content: str) -> None:
+              path = ROOT / relative
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_text(content, encoding="utf-8")
+          '''
+          addition = '''
+
+          def replace_exact_count(
+              relative: str,
+              old: str,
+              new: str,
+              expected_count: int,
+          ) -> None:
+              path = ROOT / relative
+              text = path.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != expected_count:
+                  raise RuntimeError(
+                      f"{relative}: expected {expected_count} matches, found {count}"
+                  )
+              path.write_text(text.replace(old, new), encoding="utf-8")
+          '''
+          if text.count(helper) != 1:
+              raise SystemExit("transform helper anchor mismatch")
+          text = text.replace(helper, helper + addition, 1)
+
+          start_marker = '''replace_once(
+              "open-model-market/v5_production_ticket.py",
+              \'\'\'            "max_completion_tokens": args.max_completion_tokens,
+          '''
+          end_marker = '''
+
+          write_text(
+              "tests/test_v5_governance_completion_envelope.py",
+          '''
+          start = text.find(start_marker, text.find('''"cost_anomaly_usd": args.cost_anomaly_usd'''))
+          end = text.find(end_marker, start)
+          if start < 0 or end < 0:
+              raise SystemExit("production receipt transform anchor mismatch")
+          replacement = '''replace_exact_count(
+              "open-model-market/v5_production_ticket.py",
+              \'\'\'            "max_completion_tokens": args.max_completion_tokens,
+              "governance_max_completion_tokens": (
+                  args.governance_max_completion_tokens
+              ),
+          \'\'\',
+              \'\'\'            "completion_token_guidance": args.max_completion_tokens,
+              "governance_completion_token_guidance": (
+                  args.governance_max_completion_tokens
+              ),
+              "resource_governance_mode": "advisory-only",
+              "token_limit_enforced": False,
+              "cost_limit_enforced": False,
+          \'\'\',
+              expected_count=2,
+          )'''
+          text = text[:start] + replacement + text[end:]
+          path.write_text(text, encoding="utf-8")
+          PY
+          test "$(sha256sum tools/apply_soft_resource_governance.py | awk '{print $1}')" = "3f114395774fed73c7fbe1590ed1137ad6eb545881b12571078e350760d842fb"
           python -m py_compile tools/apply_soft_resource_governance.py
           python tools/apply_soft_resource_governance.py
           rm tools/apply_soft_resource_governance.py
