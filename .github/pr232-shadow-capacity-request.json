@@ -1,0 +1,8 @@
+{
+  "schema_version": "pr232-shadow-capacity-request-1",
+  "authorization": "EXACT-ZERO-CALL-SOURCE-PATCH",
+  "request_id": "pr232-shadow-capacity-r1",
+  "patch_id": "free-shadow-dynamic-capacity-schema",
+  "target_branch": "fix/v5-free-shadow-production-qualification-20260803",
+  "target_sha": "215afc53138b057f57b737ac93a4b54b4c6e6bfb"
+}
