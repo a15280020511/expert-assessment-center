@@ -346,6 +346,7 @@ jobs:
             --artifact-id "$PRIMARY_ARTIFACT_ID" \
             --artifact-url "$PRIMARY_ARTIFACT_URL" \
             --artifact-digest "$PRIMARY_ARTIFACT_DIGEST" \
+            --independent-revalidation-file independent-revalidation.json \
             | tee final-status.md
 
       - name: Generate post-upload final attestation
@@ -366,6 +367,7 @@ jobs:
             --run-id "${{ github.run_id }}" \
             --commit-sha "$AUTHORITATIVE_EXECUTION_SHA" \
             --final-status-file final-status.md \
+            --independent-revalidation-file independent-revalidation.json \
             --output final-attestation.json
           python - <<'PY'
           import hashlib
