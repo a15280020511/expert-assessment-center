@@ -1,0 +1,25 @@
+{
+  "schema_version": "pr227-free-preflight-r2-result-1",
+  "status": "FAIL",
+  "run_id": "30786350315",
+  "target_sha": "0383d2ef80f1890306bc0bc5f7b37836cb2579ca",
+  "prior_zero_call_simulation": "PASS",
+  "free_canary": {
+    "schema_version": "pr227-specific-free-canary-2",
+    "status": "FAIL",
+    "requested_model": "openai/gpt-oss-120b:free",
+    "model_calls": 1,
+    "paid_model_calls": 0,
+    "max_completion_tokens": 256,
+    "actual_cost_usd": null,
+    "prompt_sha256": "e09a9cf6f722a06a0002a921e61175c893e04587a1e6b90d6f7c42e22f9101c0",
+    "raw_prompt_persisted": false,
+    "raw_answer_persisted": false,
+    "error_type": "OpenRouterRequestError",
+    "error_message": "HTTP 404 from OpenRouter after attempt 1/1: {\"error\":{\"message\":\"This model is unavailable for free. The paid version is available now - use this slug instead: openai/gpt-oss-120b\",\"code\":404},\"user_id\":\"user_3Bc9VoAnegc2tKJBZ4zfG3f6RkQ\"}"
+  },
+  "maximum_model_calls": 1,
+  "maximum_paid_model_calls": 0,
+  "paid_acceptance_triggered": false,
+  "production_ref_moved": false
+}
