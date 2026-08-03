@@ -1,0 +1,45 @@
+{
+  "schema_version": "openrouter-zdr-free-canary-result-1",
+  "status": "PASS",
+  "request_id": "pr232-openrouter-zdr-canary-r1",
+  "target_sha": "f71217ccc85f6963cfd5d659c87334ee915d75ff",
+  "requested_model": "inclusionai/ling-3.0-flash:free",
+  "requested_provider": "novita",
+  "response_model": "inclusionai/ling-3.0-flash:free",
+  "response_provider": "Novita",
+  "http_status": 200,
+  "answer_sha256": "2f9acb02faa121bb2a3621951f57b4c690655337edee2e5ac350be2b3be88ea8",
+  "answer_exact_pass": true,
+  "model_requests": 1,
+  "successful_model_calls": 1,
+  "paid_model_calls": 0,
+  "actual_cost_usd": 0.0,
+  "provider_fallback_allowed": false,
+  "zdr_required": true,
+  "reasoning_effort": "none",
+  "usage": {
+    "prompt_tokens": 41,
+    "completion_tokens": 2,
+    "total_tokens": 43,
+    "cost": 0,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 0,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0,
+      "upstream_inference_prompt_cost": 0,
+      "upstream_inference_completions_cost": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "error": null,
+  "production_ref_moved": false
+}
