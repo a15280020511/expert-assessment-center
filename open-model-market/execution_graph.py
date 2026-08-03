@@ -1,7 +1,8 @@
 """V5 execution-graph contracts.
 
-The contracts remain backward compatible with earlier V5 graph JSON. Production
-resilience limits are conservative defaults and are never optimized away.
+The contracts remain backward compatible with earlier V5 graph JSON. Structural
+and operational safety ceilings remain deterministic. Token and cost fields are
+advisory compatibility metadata and must not reject or truncate work.
 """
 from __future__ import annotations
 
@@ -134,7 +135,12 @@ class ExecutionGraph:
 
 @dataclass(frozen=True)
 class GraphLimits:
-    """Deterministic safety and production-resilience ceilings."""
+    """Deterministic structural and operational safety ceilings.
+
+    Cost and output-token values are retained only for backward-compatible
+    telemetry. Validators and runtimes must not use them as rejection,
+    truncation, or invalidation gates.
+    """
 
     max_nodes: int = 16
     max_edges: int = 64
@@ -149,15 +155,15 @@ class GraphLimits:
     min_successful_content_nodes: int = 1
     allow_degraded_success: bool = True
 
-    # Reliability and cost-risk policy.
+    # Reliability telemetry and safety policy.
     max_node_failure_probability: float = 0.18
     cost_risk_multiplier: float = 1.35
     max_provider_share: float = 0.60
     max_provider_failures: int = 1
     tight_budget_headroom_ratio: float = 1.25
 
-    # Context/output controls. 32,768 is a maximum permission, not a target.
-    max_output_allowance_tokens: int = 32_768
+    # Context controls and compatibility telemetry.
+    max_output_allowance_tokens: int | None = None
     max_upstream_chars_per_node: int = 6_000
     max_total_upstream_chars: int = 24_000
 
