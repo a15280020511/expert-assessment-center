@@ -131,6 +131,27 @@
       "provider_lock"
     ]
   },
+  "expert_endpoint_privacy": {
+    "scope": [
+      "expert_execution",
+      "expert_recovery"
+    ],
+    "zdr_required": true,
+    "data_collection": "deny",
+    "live_zdr_endpoint_inventory_required": true,
+    "catalog_and_request_policy_must_match": true,
+    "hardcoded_provider_exclusions_allowed": false,
+    "provider_fallback_allowed": false,
+    "missing_or_empty_inventory_action": "fail_closed_before_expert_calls"
+  },
+  "failure_evidence": {
+    "failed_result_must_be_persisted": true,
+    "governance_and_expert_ledgers_must_be_merged": true,
+    "actual_calls_and_cost_must_survive_failure": true,
+    "primary_artifact_required_on_failure": true,
+    "independent_revalidation_must_fail_semantically_not_by_missing_core_files": true,
+    "authoritative_wrapper_failure_after_artifact_assembly": true
+  },
   "production_promotion": {
     "requires_zero_cost_ci": true,
     "requires_zero_cost_free_canary": true,
