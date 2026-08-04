@@ -1,0 +1,248 @@
+"""Production-only governance contracts for recovery and closed-world work.
+
+GPT remains the sole author of work decomposition, roles, models, providers,
+and recovery candidates. This layer only states and validates structural
+contracts already approved by the ticket: the finite recovery call reserve
+must have an equally sized preselected candidate pool, and closed-world work
+contracts cannot introduce precise quantities absent from the task.
+"""
+from __future__ import annotations
+
+import json
+from typing import Any, Mapping
+
+from v5_gpt_expert_selector import (
+    build_proposal_request as _build_proposal_request,
+    build_synthesis_request as _build_synthesis_request,
+    parse_proposal,
+)
+from v5_proposal_materializer import (
+    ProposalValidationError,
+    claude_unified_review_payload as _claude_unified_review_payload,
+    deterministic_violations as _deterministic_violations,
+    materialize_proposal as _materialize_proposal,
+)
+from v5_task_constraints import normalized_quantities
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+        default=str,
+    )
+
+
+def _amend_request(
+    request: Mapping[str, Any],
+    *,
+    approved_recovery_calls: int,
+) -> dict[str, Any]:
+    amended = dict(request)
+    messages = amended.get("messages")
+    if not isinstance(messages, list) or len(messages) < 2:
+        raise RuntimeError("GPT governance request is missing its user contract")
+    user = messages[1]
+    if not isinstance(user, Mapping):
+        raise RuntimeError("GPT governance user message is invalid")
+    try:
+        payload = json.loads(str(user.get("content") or ""))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("GPT governance user contract is not JSON") from exc
+    if not isinstance(payload, Mapping):
+        raise RuntimeError("GPT governance user contract must be an object")
+    payload = dict(payload)
+    constraints = payload.get("execution_constraints")
+    if not isinstance(constraints, Mapping):
+        raise RuntimeError("GPT governance execution constraints are missing")
+    constraints = dict(constraints)
+    reserve = max(0, int(approved_recovery_calls))
+    constraints.update(
+        {
+            "recovery_candidate_count_required": reserve,
+            "recovery_candidates_are_preselected_not_calls": True,
+            "recovery_distribution_policy": (
+                "when the reserve covers every node, assign at least one "
+                "different-company recovery candidate to every node; otherwise "
+                "allocate the complete reserve to the nodes whose failure would "
+                "most directly prevent required-work or final delivery"
+            ),
+            "closed_world_work_contract_policy": (
+                "required_outputs, roles, and functions must not introduce any "
+                "precise quantity absent from the original task; derived "
+                "comparisons must use qualitative ordering or reuse original "
+                "task quantities unless the task explicitly requires arithmetic"
+            ),
+        }
+    )
+    payload["execution_constraints"] = constraints
+    updated = list(messages)
+    updated[1] = {**dict(user), "content": _canonical_json(payload)}
+    amended["messages"] = updated
+    return amended
+
+
+def build_proposal_request(**kwargs: Any) -> dict[str, Any]:
+    return _amend_request(
+        _build_proposal_request(**kwargs),
+        approved_recovery_calls=int(kwargs.get("approved_recovery_calls") or 0),
+    )
+
+
+def build_synthesis_request(**kwargs: Any) -> dict[str, Any]:
+    return _amend_request(
+        _build_synthesis_request(**kwargs),
+        approved_recovery_calls=int(kwargs.get("approved_recovery_calls") or 0),
+    )
+
+
+def _proposal_policy_violations(
+    proposal: Mapping[str, Any],
+    task: str,
+    task_envelope: Mapping[str, Any],
+    *,
+    approved_recovery_calls: int,
+) -> list[str]:
+    violations: list[str] = []
+    nodes = [
+        row
+        for row in proposal.get("nodes", [])
+        if isinstance(row, Mapping)
+    ]
+    reserve = max(0, int(approved_recovery_calls))
+    recovery_counts = [
+        len(row.get("recovery", []))
+        if isinstance(row.get("recovery"), list)
+        else 0
+        for row in nodes
+    ]
+    candidate_count = sum(recovery_counts)
+    if candidate_count != reserve:
+        violations.append(
+            "recovery candidate count must equal approved recovery call reserve: "
+            f"candidates={candidate_count}, reserve={reserve}"
+        )
+    if reserve and reserve >= len(nodes):
+        uncovered = [
+            str(row.get("node_id") or "unknown")
+            for row, count in zip(nodes, recovery_counts, strict=True)
+            if count < 1
+        ]
+        if uncovered:
+            violations.append(
+                "recovery reserve covers every node but candidates are missing: "
+                + ",".join(uncovered)
+            )
+
+    constraints = task_envelope.get("task_constraints")
+    precise_allowed = True
+    if isinstance(constraints, Mapping):
+        precise_allowed = bool(
+            constraints.get("unsupported_precise_quantities_allowed", True)
+        )
+    if not precise_allowed:
+        allowed = normalized_quantities(task)
+        for work in proposal.get("work_items", []):
+            if not isinstance(work, Mapping):
+                continue
+            work_id = str(work.get("work_id") or "unknown")
+            for output in work.get("required_outputs", []):
+                introduced = normalized_quantities(str(output)) - allowed
+                if introduced:
+                    violations.append(
+                        "closed-world work output introduces unsupported quantity: "
+                        f"{work_id}:{str(output)[:160]}"
+                    )
+    return violations
+
+
+def deterministic_violations(
+    proposal: Mapping[str, Any],
+    task: str,
+    task_envelope: Mapping[str, Any],
+    catalog: Mapping[str, Any],
+    **limits: Any,
+) -> list[str]:
+    policy = _proposal_policy_violations(
+        proposal,
+        task,
+        task_envelope,
+        approved_recovery_calls=int(limits.get("approved_recovery_calls") or 0),
+    )
+    native = _deterministic_violations(
+        proposal,
+        task,
+        task_envelope,
+        catalog,
+        **limits,
+    )
+    return list(dict.fromkeys([*policy, *native]))
+
+
+def materialize_proposal(
+    proposal: Mapping[str, Any],
+    task: str,
+    task_envelope: Mapping[str, Any],
+    catalog: Mapping[str, Any],
+    **limits: Any,
+):
+    violations = _proposal_policy_violations(
+        proposal,
+        task,
+        task_envelope,
+        approved_recovery_calls=int(limits.get("approved_recovery_calls") or 0),
+    )
+    if violations:
+        raise ProposalValidationError("; ".join(violations))
+    graph, graph_limits, audit = _materialize_proposal(
+        proposal,
+        task,
+        task_envelope,
+        catalog,
+        **limits,
+    )
+    audit = dict(audit)
+    recovery_pool = graph.metadata.get("recovery_pool", {})
+    audit.update(
+        {
+            "recovery_candidate_count": sum(
+                len(rows)
+                for rows in recovery_pool.values()
+                if isinstance(recovery_pool, Mapping) and isinstance(rows, list)
+            ),
+            "recovery_candidate_count_required": int(
+                limits.get("approved_recovery_calls") or 0
+            ),
+            "recovery_candidates_are_preselected_not_calls": True,
+            "closed_world_work_contract_checked": True,
+        }
+    )
+    return graph, graph_limits, audit
+
+
+def claude_unified_review_payload(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    payload = dict(_claude_unified_review_payload(*args, **kwargs))
+    reserve = max(0, int(kwargs.get("approved_recovery_calls") or 0))
+    payload["production_recovery_policy"] = {
+        "candidate_count_required": reserve,
+        "candidates_are_preselected_not_calls": True,
+        "one_per_node_when_reserve_covers_all_nodes": True,
+    }
+    payload["closed_world_work_contract_policy"] = {
+        "unsupported_precise_quantities_allowed": False,
+        "derived_comparisons_must_not_be_mislabeled_as_facts": True,
+    }
+    return payload
+
+
+__all__ = [
+    "build_proposal_request",
+    "build_synthesis_request",
+    "parse_proposal",
+    "claude_unified_review_payload",
+    "deterministic_violations",
+    "materialize_proposal",
+]
