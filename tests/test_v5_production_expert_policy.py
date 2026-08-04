@@ -147,6 +147,24 @@ class ProductionExpertPolicyTests(unittest.TestCase):
             runtime.retry_policy.maximum_same_endpoint_retries_per_node,
         )
 
+    def test_machine_policy_requires_matching_catalog_and_failure_evidence(self) -> None:
+        policy = json.loads(
+            (MARKET / "constitutional_policy.json").read_text(encoding="utf-8")
+        )
+        privacy = policy["expert_endpoint_privacy"]
+        self.assertTrue(privacy["zdr_required"])
+        self.assertEqual("deny", privacy["data_collection"])
+        self.assertTrue(privacy["live_zdr_endpoint_inventory_required"])
+        self.assertTrue(privacy["catalog_and_request_policy_must_match"])
+        self.assertFalse(privacy["hardcoded_provider_exclusions_allowed"])
+        self.assertFalse(privacy["provider_fallback_allowed"])
+        evidence = policy["failure_evidence"]
+        self.assertTrue(evidence["failed_result_must_be_persisted"])
+        self.assertTrue(evidence["governance_and_expert_ledgers_must_be_merged"])
+        self.assertTrue(evidence["actual_calls_and_cost_must_survive_failure"])
+        self.assertTrue(evidence["primary_artifact_required_on_failure"])
+        self.assertTrue(evidence["authoritative_wrapper_failure_after_artifact_assembly"])
+
 
 if __name__ == "__main__":
     unittest.main()
