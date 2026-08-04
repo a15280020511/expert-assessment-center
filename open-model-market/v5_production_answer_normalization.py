@@ -5,6 +5,7 @@ import re
 from hashlib import sha256
 from typing import Any
 
+from v5_deterministic_answer_normalization import _cjk_ngrams
 from v5_task_constraints import fact_claim_supported, normalized_quantities
 
 _FACT_LINE_RE = re.compile(
@@ -21,20 +22,8 @@ _DERIVED_MARKER_RE = re.compile(
 )
 
 
-def _ngrams(value: str, size: int = 2) -> set[str]:
-    rendered = re.sub(
-        r"[^0-9A-Za-z\u4e00-\u9fff]+",
-        "",
-        str(value or ""),
-    ).casefold()
-    return {
-        rendered[index : index + size]
-        for index in range(max(0, len(rendered) - size + 1))
-    }
-
-
 def _task_anchored(task: str, body: str) -> bool:
-    return len(_ngrams(task) & _ngrams(body)) >= 4
+    return len(_cjk_ngrams(task, 2) & _cjk_ngrams(body, 2)) >= 4
 
 
 def relabel_task_derived_fact_lines(
