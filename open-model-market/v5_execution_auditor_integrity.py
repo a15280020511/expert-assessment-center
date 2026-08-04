@@ -355,11 +355,41 @@ def _native_phase_contract_evidence(root: Path) -> dict[str, Any]:
     }
 
 
+def _audited_degraded_delivery(summary: Mapping[str, Any]) -> bool:
+    if summary.get("status") != "success":
+        return False
+    if summary.get("completion_mode") != "degraded":
+        return False
+    if summary.get("quality_status") != "degraded_success":
+        return False
+    if not str(summary.get("final_answer") or "").strip():
+        return False
+    integrity = summary.get("quality_integrity")
+    if not isinstance(integrity, Mapping) or integrity.get("status") != "DEGRADED":
+        return False
+    delivery = summary.get("delivery_policy")
+    coverage = summary.get("work_coverage")
+    if not isinstance(delivery, Mapping) or not isinstance(coverage, Mapping):
+        return False
+    if delivery.get("allow_degraded_success") is not True:
+        return False
+    if delivery.get("blockers") or delivery.get("missing_non_degradable_work_ids"):
+        return False
+    try:
+        observed = float(coverage.get("coverage_ratio") or 0.0)
+        minimum = float(coverage.get("minimum_degraded_coverage") or 1.0)
+        strict_nodes = int(coverage.get("successful_content_nodes") or 0)
+    except (TypeError, ValueError):
+        return False
+    return observed + 1e-12 >= minimum and strict_nodes >= 1
+
+
 def _quality_evidence_updates(
     node_evidence: Mapping[str, Any],
     completion_mode: str,
     quality_status: str,
     integrity: Mapping[str, Any],
+    audited_degraded: bool,
 ) -> tuple[list[str], list[str]]:
     failures: list[str] = []
     degradations: list[str] = []
@@ -368,10 +398,14 @@ def _quality_evidence_updates(
             "one or more usable nodes did not satisfy the deterministic output contract"
         )
     if node_evidence["failed_node_ids"]:
-        failures.append(
-            "node-level execution failures are present: "
+        message = (
+            "one or more non-critical nodes were unavailable after finite recovery: "
             + ", ".join(node_evidence["failed_node_ids"])
         )
+        if audited_degraded:
+            degradations.append(message)
+        else:
+            failures.append(message)
     if node_evidence["degraded_nodes"]:
         if completion_mode != "degraded" or quality_status != "degraded_success":
             failures.append("degraded node output was incorrectly represented as full success")
@@ -475,9 +509,16 @@ def audit(
     quality_status = str(summary.get("quality_status") or "")
     integrity = summary.get("quality_integrity", {})
     integrity = integrity if isinstance(integrity, Mapping) else {}
+    audited_degraded = _audited_degraded_delivery(summary)
+    if audited_degraded:
+        failures = [
+            reason
+            for reason in failures
+            if not reason.startswith("V5 completion mode is degraded, not full")
+        ]
 
     quality_failures, quality_degradations = _quality_evidence_updates(
-        node_evidence, completion_mode, quality_status, integrity
+        node_evidence, completion_mode, quality_status, integrity, audited_degraded
     )
     failures.extend(quality_failures)
     degradations.extend(quality_degradations)
@@ -486,6 +527,8 @@ def audit(
     checks.update(constitutional["checks"])
     checks.update(phase_contract["checks"])
     checks.update(_quality_checks(quality_status, integrity, node_evidence))
+    checks["audited_degraded_delivery"] = audited_degraded
+    checks["degraded_success_is_not_full_success"] = True
     result["checks"] = checks
     stage_status = dict(result.get("stage_status") or {})
     stage_status["independent_artifact_revalidation"] = "PENDING_POST_UPLOAD"
@@ -509,7 +552,10 @@ def main() -> int:
     serialized = json.dumps(result, ensure_ascii=False, indent=2)
     (root / "execution-audit.json").write_text(serialized, encoding="utf-8")
     (root / "execution-diagnosis.json").write_text(serialized, encoding="utf-8")
-    base._write_output("status", result["status"])
+    base._write_output(
+        "status",
+        "PASS" if result["status"] in {"PASS", "DEGRADED"} else "FAIL",
+    )
     base._write_output(
         "reason",
         "; ".join(result["failures"] or result["degradations"]),

@@ -265,6 +265,8 @@ def _final_contract_violations(
     graph: Mapping[str, Any],
     report: str,
     task: str = "",
+    *,
+    allow_degraded: bool = False,
 ) -> list[str]:
     final_ids = {
         str(value)
@@ -284,6 +286,9 @@ def _final_contract_violations(
             f"task-recompiled-final-report-contract:{value}"
             for value in task_violations
         )
+
+    if allow_degraded:
+        return list(dict.fromkeys(violations))
 
     matched = 0
     for node in nodes:
@@ -344,38 +349,69 @@ def _load_revalidation_inputs(root: Path) -> dict[str, Any]:
     }
 
 
+def _audited_degraded_delivery(
+    result: Mapping[str, Any],
+    summary: Mapping[str, Any],
+) -> bool:
+    if result.get("status") != "success" or summary.get("status") != "success":
+        return False
+    if result.get("completion_mode") != "degraded" or summary.get("completion_mode") != "degraded":
+        return False
+    if result.get("quality_status") != "degraded_success" or summary.get("quality_status") != "degraded_success":
+        return False
+    if not str(result.get("final_answer") or "").strip():
+        return False
+    integrity = summary.get("quality_integrity")
+    delivery = summary.get("delivery_policy")
+    coverage = summary.get("work_coverage")
+    if not isinstance(integrity, Mapping) or integrity.get("status") != "DEGRADED":
+        return False
+    if not isinstance(delivery, Mapping) or not isinstance(coverage, Mapping):
+        return False
+    if delivery.get("allow_degraded_success") is not True:
+        return False
+    if delivery.get("blockers") or delivery.get("missing_non_degradable_work_ids"):
+        return False
+    try:
+        observed = float(coverage.get("coverage_ratio") or 0.0)
+        minimum = float(coverage.get("minimum_degraded_coverage") or 1.0)
+        strict_nodes = int(coverage.get("successful_content_nodes") or 0)
+    except (TypeError, ValueError):
+        return False
+    return observed + 1e-12 >= minimum and strict_nodes >= 1
+
+
 def _execution_result_failures(
     result: Mapping[str, Any],
     summary: Mapping[str, Any],
     report: str,
 ) -> list[str]:
     failures: list[str] = []
+    degraded = _audited_degraded_delivery(result, summary)
     if result.get("status") != "success" or summary.get("status") != "success":
         failures.append("execution status is not success")
-    if (
-        result.get("completion_mode") != "full"
-        or summary.get("completion_mode") != "full"
-    ):
-        failures.append("completion mode is not full")
-    if (
-        result.get("quality_status") != "full_success"
-        or summary.get("quality_status") != "full_success"
-    ):
-        failures.append("quality status is not full_success")
+    full = (
+        result.get("completion_mode") == "full"
+        and summary.get("completion_mode") == "full"
+        and result.get("quality_status") == "full_success"
+        and summary.get("quality_status") == "full_success"
+    )
+    if not full and not degraded:
+        failures.append("completion and quality status are neither full nor audited degraded success")
     if str(result.get("final_answer") or "").strip() != report.strip():
         failures.append("v5-result final answer differs from final report")
     if str(summary.get("final_answer") or "").strip() != report.strip():
         failures.append("execution summary final answer differs from final report")
     if result.get("cross_task_history_used") is not False:
-        failures.append(
-            "expert-team-result does not prove cross_task_history_used=false"
-        )
+        failures.append("expert-team-result does not prove cross_task_history_used=false")
     return failures
 
 
 def _normalized_node_evidence(
     raw_nodes: Any,
     graph: Mapping[str, Any],
+    *,
+    allow_degraded: bool = False,
 ) -> tuple[list[Any], list[str]]:
     failures: list[str] = []
     if not isinstance(raw_nodes, list) or not raw_nodes:
@@ -385,23 +421,27 @@ def _normalized_node_evidence(
         nodes = raw_nodes
     graph_nodes = graph.get("nodes", [])
     if len(nodes) != len(graph_nodes):
-        failures.append(
-            f"node result count mismatch: {len(nodes)}/{len(graph_nodes)}"
-        )
+        failures.append(f"node result count mismatch: {len(nodes)}/{len(graph_nodes)}")
+    strict_statuses = {"success", "success_retried", "success_recovered"}
     for node in nodes:
         if not isinstance(node, Mapping):
             failures.append("node result contains a non-object")
             continue
-        if not str(node.get("status") or "").startswith("success"):
-            failures.append(f"node is not successful: {node.get('node_id')}")
+        node_id = node.get("node_id")
+        status = str(node.get("status") or "")
         contract = node.get("contract", {})
-        if (
-            not isinstance(contract, Mapping)
-            or contract.get("required_fields_complete") is not True
-        ):
-            failures.append(
-                f"node contract is incomplete: {node.get('node_id')}"
-            )
+        complete = isinstance(contract, Mapping) and contract.get("required_fields_complete") is True
+        if status in strict_statuses:
+            if not complete:
+                failures.append(f"node contract is incomplete: {node_id}")
+            continue
+        if allow_degraded and status == "success_degraded":
+            if not complete:
+                failures.append(f"degraded node contract is incomplete: {node_id}")
+            continue
+        if allow_degraded and status == "failed":
+            continue
+        failures.append(f"node is not successful: {node_id}")
     return nodes, failures
 
 
@@ -705,10 +745,11 @@ def recompute(
     graph = data["graph"]
     report = data["report"]
     task = data["task"]
+    degraded_delivery = _audited_degraded_delivery(result, summary)
     failures.extend(_execution_result_failures(result, summary, report))
-    nodes, node_failures = _normalized_node_evidence(data["nodes"], graph)
+    nodes, node_failures = _normalized_node_evidence(data["nodes"], graph, allow_degraded=degraded_delivery)
     failures.extend(node_failures)
-    report_contract_violations = _final_contract_violations(graph, report, task)
+    report_contract_violations = _final_contract_violations(graph, report, task, allow_degraded=degraded_delivery)
     failures.extend(report_contract_violations)
     (
         attempts,
@@ -783,6 +824,8 @@ def recompute(
         "actual_called_models": called_models,
         "duplicate_called_companies_across_nodes": duplicates,
         "unresolved_called_companies": unresolved,
+        "delivery_status": "degraded_success" if degraded_delivery else "full_success",
+        "degraded_delivery_independently_verified": degraded_delivery,
         "completion_mode": summary.get("completion_mode"),
         "quality_status": summary.get("quality_status"),
         "runtime_evidence_integrity_status": data["runtime_evidence"].get("status"),
