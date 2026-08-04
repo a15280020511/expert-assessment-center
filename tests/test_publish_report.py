@@ -27,7 +27,7 @@ class PublishReportTests(unittest.TestCase):
             comments[0],
         )
         self.assertIn("expert-team-report-run:123:part:001", comments[0])
-        self.assertIn("仅完整通过", comments[0])
+        self.assertIn("FULL_SUCCESS", comments[0])
 
     def test_long_unicode_report_is_split_without_loss(self):
         report = "".join(
@@ -81,8 +81,9 @@ class PublishReportTests(unittest.TestCase):
             )
             self.assertEqual(
                 manifest["publication_status"],
-                "prepared_strict_full_success",
+                "prepared_full_success",
             )
+            self.assertEqual(manifest["delivery_status"], "full_success")
             self.assertTrue(
                 all((output_dir / name).exists() for name in manifest["files"])
             )
@@ -96,27 +97,32 @@ class PublishReportTests(unittest.TestCase):
         integrity_status: str,
         node_status: str = "success",
         contract_complete: bool = True,
+        allow_degraded: bool = False,
+        coverage_ratio: float = 0.0,
+        minimum_coverage: float = 1.0,
+        successful_content_nodes: int = 0,
     ) -> None:
+        summary = {
+            "status": "success",
+            "completion_mode": completion_mode,
+            "quality_status": quality_status,
+            "quality_integrity": {"status": integrity_status},
+            "delivery_policy": {
+                "allow_degraded_success": allow_degraded,
+                "blockers": [],
+                "missing_non_degradable_work_ids": [],
+            },
+            "work_coverage": {
+                "coverage_ratio": coverage_ratio,
+                "minimum_degraded_coverage": minimum_coverage,
+                "successful_content_nodes": successful_content_nodes,
+            },
+        }
         (root / "v5-execution-summary.json").write_text(
-            json.dumps(
-                {
-                    "status": "success",
-                    "completion_mode": completion_mode,
-                    "quality_status": quality_status,
-                    "quality_integrity": {"status": integrity_status},
-                }
-            ),
-            encoding="utf-8",
+            json.dumps(summary), encoding="utf-8"
         )
         (root / "expert-team-result.json").write_text(
-            json.dumps(
-                {
-                    "status": "success",
-                    "completion_mode": completion_mode,
-                    "quality_status": quality_status,
-                }
-            ),
-            encoding="utf-8",
+            json.dumps(summary), encoding="utf-8"
         )
         (root / "v5-node-results.json").write_text(
             json.dumps(
@@ -133,7 +139,7 @@ class PublishReportTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def test_strict_publication_gate_accepts_only_full_integrity(self):
+    def test_publication_gate_accepts_full_integrity(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             self._write_result(
@@ -146,7 +152,25 @@ class PublishReportTests(unittest.TestCase):
             self.assertTrue(allowed)
             self.assertEqual(blockers, [])
 
-    def test_strict_publication_gate_blocks_degraded_result(self):
+    def test_publication_gate_accepts_audited_degraded_result(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self._write_result(
+                root,
+                completion_mode="degraded",
+                quality_status="degraded_success",
+                integrity_status="DEGRADED",
+                node_status="success_recovered",
+                contract_complete=True,
+                allow_degraded=True,
+                coverage_ratio=0.75,
+                minimum_coverage=2 / 3,
+                successful_content_nodes=1,
+            )
+            allowed, blockers = publish_report.strict_publication_gate(root)
+            self.assertTrue(allowed, blockers)
+
+    def test_publication_gate_blocks_unaudited_or_incomplete_degradation(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             self._write_result(
@@ -156,12 +180,19 @@ class PublishReportTests(unittest.TestCase):
                 integrity_status="DEGRADED",
                 node_status="success_recovered",
                 contract_complete=False,
+                allow_degraded=False,
+                coverage_ratio=0.5,
+                minimum_coverage=2 / 3,
+                successful_content_nodes=0,
             )
             allowed, blockers = publish_report.strict_publication_gate(root)
             self.assertFalse(allowed)
-            self.assertIn("completion-mode:degraded", blockers)
-            self.assertIn("quality-status:degraded_success", blockers)
-            self.assertIn("quality-integrity:DEGRADED", blockers)
+            self.assertIn("degraded-delivery:not-authorized", blockers)
+            self.assertIn("degraded-delivery:insufficient-coverage", blockers)
+            self.assertIn(
+                "degraded-delivery:no-strict-successful-content-node",
+                blockers,
+            )
             self.assertIn("node-contract-incomplete:node-1", blockers)
 
     def test_skip_manifest_removes_stale_public_comment_files(self):
@@ -188,14 +219,24 @@ class PublishReportTests(unittest.TestCase):
                 comments,
                 run_url="https://github.com/owner/repo/actions/runs/999",
                 max_chars=5000,
-                publication_status="skipped_non_strict_execution",
-                blockers=["quality-integrity:DEGRADED"],
+                publication_status="skipped_non_audited_execution",
+                blockers=["degraded-delivery:not-authorized"],
             )
             self.assertEqual(manifest["comment_count"], 0)
             self.assertEqual(manifest["files"], [])
             self.assertFalse(
                 (comments / "report-comment-001.md").exists()
             )
+
+    def test_degraded_comment_discloses_status(self):
+        comments = publish_report.render_comments(
+            "usable report",
+            run_url="https://github.com/owner/repo/actions/runs/321",
+            max_chars=5000,
+            delivery_status="degraded_success",
+        )
+        self.assertIn("DEGRADED_SUCCESS", comments[0])
+        self.assertIn("缺失、失败和降级项目", comments[0])
 
     def test_empty_report_is_rejected(self):
         with self.assertRaises(ValueError):
