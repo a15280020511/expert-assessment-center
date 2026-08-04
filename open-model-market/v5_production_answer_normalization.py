@@ -20,10 +20,36 @@ _DERIVED_MARKER_RE = re.compile(
     r"无法推出|单项|权重|约束|阈值|因此|意味着|说明|表明)",
     re.IGNORECASE,
 )
+_OPTION_ID_RE = re.compile(
+    r"(?:方案|选项)\s*([A-Za-z][A-Za-z0-9_-]*|\d+)",
+    re.IGNORECASE,
+)
+
+
+def _task_option_ids(task: str) -> set[str]:
+    return {
+        match.group(1).casefold()
+        for match in _OPTION_ID_RE.finditer(str(task or ""))
+    }
+
+
+def _referenced_option_ids(task: str, body: str) -> set[str]:
+    references: set[str] = set()
+    for identifier in _task_option_ids(task):
+        pattern = re.compile(
+            rf"(?<![A-Za-z0-9_-]){re.escape(identifier)}(?![A-Za-z0-9_-])",
+            re.IGNORECASE,
+        )
+        if pattern.search(str(body or "")):
+            references.add(identifier)
+    return references
 
 
 def _task_anchored(task: str, body: str) -> bool:
-    return len(_cjk_ngrams(task, 2) & _cjk_ngrams(body, 2)) >= 4
+    shared = _cjk_ngrams(task, 2) & _cjk_ngrams(body, 2)
+    if len(shared) >= 4:
+        return True
+    return len(shared) >= 1 and len(_referenced_option_ids(task, body)) >= 2
 
 
 def relabel_task_derived_fact_lines(
