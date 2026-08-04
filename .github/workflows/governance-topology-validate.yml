@@ -76,18 +76,21 @@ jobs:
           ):
               assert marker in topology or marker in security, marker
 
+          expression_open = '$' + '{{'
+          expression_close = '}' + '}'
           violations = []
           for path in (root / '.github/workflows').glob('*.yml'):
               if path.name == 'governance-topology-validate.yml':
                   continue
               text = path.read_text(encoding='utf-8')
-              for pattern in (
-                  'HF_TOKEN: ${{ secrets.HF_TOKEN }}',
-                  'HF_NUMERIC_BASELINE_DATASET_REPO: ${{',
+              forbidden_patterns = (
+                  'HF_TOKEN: ' + expression_open + ' secrets.HF_TOKEN ' + expression_close,
+                  'HF_NUMERIC_BASELINE_DATASET_REPO: ' + expression_open,
                   'repository_dispatch:',
                   'uses: a15280020511/evidence-data-center',
                   'uses: a15280020511/compute-simulation-center',
-              ):
+              )
+              for pattern in forbidden_patterns:
                   if pattern in text:
                       violations.append(f'{path}:{pattern}')
           assert not violations, violations
