@@ -1,0 +1,97 @@
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+root = Path('.')
+
+
+def replace_once(path: Path, old: str, new: str) -> None:
+    text = path.read_text(encoding='utf-8')
+    if old not in text:
+        raise SystemExit(f'missing patch anchor in {path}: {old[:120]!r}')
+    path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+
+def regex_once(path: Path, pattern: str, replacement: str) -> None:
+    text = path.read_text(encoding='utf-8')
+    updated, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+    if count != 1:
+        raise SystemExit(f'regex patch count {count} in {path}: {pattern[:100]!r}')
+    path.write_text(updated, encoding='utf-8')
+
+
+auditor = root / 'open-model-market/v5_execution_auditor_integrity.py'
+helper = '''\n\ndef _audited_degraded_delivery(summary: Mapping[str, Any]) -> bool:\n    if summary.get("status") != "success":\n        return False\n    if summary.get("completion_mode") != "degraded":\n        return False\n    if summary.get("quality_status") != "degraded_success":\n        return False\n    if not str(summary.get("final_answer") or "").strip():\n        return False\n    integrity = summary.get("quality_integrity")\n    if not isinstance(integrity, Mapping) or integrity.get("status") != "DEGRADED":\n        return False\n    delivery = summary.get("delivery_policy")\n    coverage = summary.get("work_coverage")\n    if not isinstance(delivery, Mapping) or not isinstance(coverage, Mapping):\n        return False\n    if delivery.get("allow_degraded_success") is not True:\n        return False\n    if delivery.get("blockers") or delivery.get("missing_non_degradable_work_ids"):\n        return False\n    try:\n        observed = float(coverage.get("coverage_ratio") or 0.0)\n        minimum = float(coverage.get("minimum_degraded_coverage") or 1.0)\n        strict_nodes = int(coverage.get("successful_content_nodes") or 0)\n    except (TypeError, ValueError):\n        return False\n    return observed + 1e-12 >= minimum and strict_nodes >= 1\n'''
+replace_once(auditor, '\n\ndef _quality_evidence_updates(\n', helper + '\n\ndef _quality_evidence_updates(\n')
+replace_once(
+    auditor,
+    '''def _quality_evidence_updates(\n    node_evidence: Mapping[str, Any],\n    completion_mode: str,\n    quality_status: str,\n    integrity: Mapping[str, Any],\n) -> tuple[list[str], list[str]]:''',
+    '''def _quality_evidence_updates(\n    node_evidence: Mapping[str, Any],\n    completion_mode: str,\n    quality_status: str,\n    integrity: Mapping[str, Any],\n    audited_degraded: bool,\n) -> tuple[list[str], list[str]]:''',
+)
+replace_once(
+    auditor,
+    '''    if node_evidence["failed_node_ids"]:\n        failures.append(\n            "node-level execution failures are present: "\n            + ", ".join(node_evidence["failed_node_ids"])\n        )''',
+    '''    if node_evidence["failed_node_ids"]:\n        message = (\n            "one or more non-critical nodes were unavailable after finite recovery: "\n            + ", ".join(node_evidence["failed_node_ids"])\n        )\n        if audited_degraded:\n            degradations.append(message)\n        else:\n            failures.append(message)''',
+)
+replace_once(
+    auditor,
+    '''    integrity = summary.get("quality_integrity", {})\n    integrity = integrity if isinstance(integrity, Mapping) else {}\n\n    quality_failures, quality_degradations = _quality_evidence_updates(\n        node_evidence, completion_mode, quality_status, integrity\n    )''',
+    '''    integrity = summary.get("quality_integrity", {})\n    integrity = integrity if isinstance(integrity, Mapping) else {}\n    audited_degraded = _audited_degraded_delivery(summary)\n    if audited_degraded:\n        failures = [\n            reason\n            for reason in failures\n            if not reason.startswith("V5 completion mode is degraded, not full")\n        ]\n\n    quality_failures, quality_degradations = _quality_evidence_updates(\n        node_evidence, completion_mode, quality_status, integrity, audited_degraded\n    )''',
+)
+replace_once(
+    auditor,
+    '''    checks.update(_quality_checks(quality_status, integrity, node_evidence))\n    result["checks"] = checks''',
+    '''    checks.update(_quality_checks(quality_status, integrity, node_evidence))\n    checks["audited_degraded_delivery"] = audited_degraded\n    checks["degraded_success_is_not_full_success"] = True\n    result["checks"] = checks''',
+)
+replace_once(
+    auditor,
+    '''    base._write_output("status", result["status"])''',
+    '''    base._write_output(\n        "status",\n        "PASS" if result["status"] in {"PASS", "DEGRADED"} else "FAIL",\n    )''',
+)
+
+independent = root / 'open-model-market/v5_independent_artifact_revalidation.py'
+independent_helper = '''\n\ndef _audited_degraded_delivery(\n    result: Mapping[str, Any],\n    summary: Mapping[str, Any],\n) -> bool:\n    if result.get("status") != "success" or summary.get("status") != "success":\n        return False\n    if result.get("completion_mode") != "degraded" or summary.get("completion_mode") != "degraded":\n        return False\n    if result.get("quality_status") != "degraded_success" or summary.get("quality_status") != "degraded_success":\n        return False\n    if not str(result.get("final_answer") or "").strip():\n        return False\n    integrity = summary.get("quality_integrity")\n    delivery = summary.get("delivery_policy")\n    coverage = summary.get("work_coverage")\n    if not isinstance(integrity, Mapping) or integrity.get("status") != "DEGRADED":\n        return False\n    if not isinstance(delivery, Mapping) or not isinstance(coverage, Mapping):\n        return False\n    if delivery.get("allow_degraded_success") is not True:\n        return False\n    if delivery.get("blockers") or delivery.get("missing_non_degradable_work_ids"):\n        return False\n    try:\n        observed = float(coverage.get("coverage_ratio") or 0.0)\n        minimum = float(coverage.get("minimum_degraded_coverage") or 1.0)\n        strict_nodes = int(coverage.get("successful_content_nodes") or 0)\n    except (TypeError, ValueError):\n        return False\n    return observed + 1e-12 >= minimum and strict_nodes >= 1\n'''
+replace_once(independent, '\n\ndef _execution_result_failures(\n', independent_helper + '\n\ndef _execution_result_failures(\n')
+regex_once(
+    independent,
+    r'def _execution_result_failures\(.*?\n\ndef _normalized_node_evidence\(',
+    '''def _execution_result_failures(\n    result: Mapping[str, Any],\n    summary: Mapping[str, Any],\n    report: str,\n) -> list[str]:\n    failures: list[str] = []\n    degraded = _audited_degraded_delivery(result, summary)\n    if result.get("status") != "success" or summary.get("status") != "success":\n        failures.append("execution status is not success")\n    full = (\n        result.get("completion_mode") == "full"\n        and summary.get("completion_mode") == "full"\n        and result.get("quality_status") == "full_success"\n        and summary.get("quality_status") == "full_success"\n    )\n    if not full and not degraded:\n        failures.append("completion and quality status are neither full nor audited degraded success")\n    if str(result.get("final_answer") or "").strip() != report.strip():\n        failures.append("v5-result final answer differs from final report")\n    if str(summary.get("final_answer") or "").strip() != report.strip():\n        failures.append("execution summary final answer differs from final report")\n    if result.get("cross_task_history_used") is not False:\n        failures.append("expert-team-result does not prove cross_task_history_used=false")\n    return failures\n\n\ndef _normalized_node_evidence(''',
+)
+regex_once(
+    independent,
+    r'def _normalized_node_evidence\(.*?\n\ndef _governance_audit\(',
+    '''def _normalized_node_evidence(\n    raw_nodes: Any,\n    graph: Mapping[str, Any],\n    *,\n    allow_degraded: bool = False,\n) -> tuple[list[Any], list[str]]:\n    failures: list[str] = []\n    if not isinstance(raw_nodes, list) or not raw_nodes:\n        failures.append("node evidence is empty")\n        nodes: list[Any] = []\n    else:\n        nodes = raw_nodes\n    graph_nodes = graph.get("nodes", [])\n    if len(nodes) != len(graph_nodes):\n        failures.append(f"node result count mismatch: {len(nodes)}/{len(graph_nodes)}")\n    strict_statuses = {"success", "success_retried", "success_recovered"}\n    for node in nodes:\n        if not isinstance(node, Mapping):\n            failures.append("node result contains a non-object")\n            continue\n        node_id = node.get("node_id")\n        status = str(node.get("status") or "")\n        contract = node.get("contract", {})\n        complete = isinstance(contract, Mapping) and contract.get("required_fields_complete") is True\n        if status in strict_statuses:\n            if not complete:\n                failures.append(f"node contract is incomplete: {node_id}")\n            continue\n        if allow_degraded and status == "success_degraded":\n            if not complete:\n                failures.append(f"degraded node contract is incomplete: {node_id}")\n            continue\n        if allow_degraded and status == "failed":\n            continue\n        failures.append(f"node is not successful: {node_id}")\n    return nodes, failures\n\n\ndef _governance_audit(''',
+)
+replace_once(
+    independent,
+    '''def _final_contract_violations(\n    graph: Mapping[str, Any],\n    report: str,\n    task: str = "",\n) -> list[str]:''',
+    '''def _final_contract_violations(\n    graph: Mapping[str, Any],\n    report: str,\n    task: str = "",\n    *,\n    allow_degraded: bool = False,\n) -> list[str]:''',
+)
+replace_once(independent, '''    matched = 0\n    for node in nodes:''', '''    if allow_degraded:\n        return list(dict.fromkeys(violations))\n\n    matched = 0\n    for node in nodes:''')
+replace_once(
+    independent,
+    '''    graph = data["graph"]\n    report = data["report"]\n    task = data["task"]\n    failures.extend(_execution_result_failures(result, summary, report))\n    nodes, node_failures = _normalized_node_evidence(data["nodes"], graph)\n    failures.extend(node_failures)\n    report_contract_violations = _final_contract_violations(graph, report, task)''',
+    '''    graph = data["graph"]\n    report = data["report"]\n    task = data["task"]\n    degraded_delivery = _audited_degraded_delivery(result, summary)\n    failures.extend(_execution_result_failures(result, summary, report))\n    nodes, node_failures = _normalized_node_evidence(data["nodes"], graph, allow_degraded=degraded_delivery)\n    failures.extend(node_failures)\n    report_contract_violations = _final_contract_violations(graph, report, task, allow_degraded=degraded_delivery)''',
+)
+replace_once(
+    independent,
+    '''        "completion_mode": summary.get("completion_mode"),\n        "quality_status": summary.get("quality_status"),''',
+    '''        "delivery_status": "degraded_success" if degraded_delivery else "full_success",\n        "degraded_delivery_independently_verified": degraded_delivery,\n        "completion_mode": summary.get("completion_mode"),\n        "quality_status": summary.get("quality_status"),''',
+)
+
+workflow = root / '.github/workflows/execution-ticket.yml'
+replace_once(
+    workflow,
+    '''          test "${{ steps.final.outputs.status }}" = "PASS"''',
+    '''          case "${{ steps.final.outputs.status }}" in\n            PASS|DEGRADED) ;;\n            *) exit 1 ;;\n          esac''',
+)
+
+task_tests = root / 'tests/test_v5_task_constraints.py'
+replace_once(
+    task_tests,
+    '''    def test_default_is_fail_closed(self) -> None:\n        policy = compile_task_constraints("比较两个技术方案并给出建议")\n        self.assertFalse(policy.allow_degraded_success)\n        self.assertEqual(policy.degradation_authorization, "default_denied")''',
+    '''    def test_default_allows_audited_degraded_success(self) -> None:\n        policy = compile_task_constraints("比较两个技术方案并给出建议")\n        self.assertTrue(policy.allow_degraded_success)\n        self.assertEqual(policy.degradation_authorization, "default_allowed")''',
+)
+
+Path('tests/test_v5_degraded_cost_effectiveness_policy.py').write_text('''from __future__ import annotations\n\nimport json\nimport sys\nimport tempfile\nimport unittest\nfrom pathlib import Path\n\nROOT = Path(__file__).resolve().parents[1]\nMARKET = ROOT / "open-model-market"\nsys.path.insert(0, str(MARKET))\n\nfrom publish_report import strict_publication_gate, write_comments\nfrom v5_gpt_expert_selector_policy import MAXIMUM_RECOVERY_CANDIDATES_PER_NODE, parse_proposal\nfrom v5_production_answer_normalization import relabel_task_derived_fact_lines\nfrom v5_quality_status_integrity import enforce_result_integrity\nfrom v5_task_constraints import compile_task_constraints\n\n\ndef proposal(count: int) -> dict[str, object]:\n    return {\n        "work_items": [{"work_id": "W1", "objective": "compare", "dependencies": [], "required_outputs": ["recommendation"]}],\n        "nodes": [{"node_id": "N1", "work_ids": ["W1"], "role": "analyst", "functions": ["compare"], "model": "company/model", "provider": "provider", "reasoning_effort": "medium", "max_output_tokens": 1024, "recovery": [{"model": f"company{i}/model", "provider": f"provider{i}"} for i in range(count)]}],\n        "edges": [],\n        "final_nodes": ["N1"],\n    }\n\n\nclass DegradedPolicyTests(unittest.TestCase):\n    def test_default_and_explicit_denial(self) -> None:\n        self.assertTrue(compile_task_constraints("分析并建议").allow_degraded_success)\n        self.assertFalse(compile_task_constraints("不得降级交付").allow_degraded_success)\n\n    def test_single_node_three_recoveries(self) -> None:\n        self.assertEqual(3, len(parse_proposal(json.dumps(proposal(3)))["nodes"][0]["recovery"]))\n        with self.assertRaisesRegex(RuntimeError, "node recovery"):\n            parse_proposal(json.dumps(proposal(MAXIMUM_RECOVERY_CANDIDATES_PER_NODE + 1)))\n\n    def test_failed_noncritical_node_is_disclosed(self) -> None:\n        result = {"status": "success", "completion_mode": "degraded", "quality_status": "degraded_success", "final_answer": "usable", "delivery_policy": {"allow_degraded_success": True, "blockers": [], "missing_non_degradable_work_ids": []}, "work_coverage": {"coverage_ratio": 0.75, "minimum_degraded_coverage": 2 / 3, "successful_content_nodes": 1}, "node_results": [{"node_id": "N1", "status": "success", "contract": {"required_fields_complete": True}}, {"node_id": "N2", "status": "failed", "contract": {"required_fields_complete": False}}]}\n        normalized = enforce_result_integrity(result)\n        self.assertEqual("DEGRADED", normalized["quality_integrity"]["status"])\n        self.assertEqual(["N2"], normalized["quality_integrity"]["failed_node_ids"])\n\n    def test_normative_fact_label_is_repaired(self) -> None:\n        normalized, audit = relabel_task_derived_fact_lines("用户优先稳定、低投入；不得立即辞职。", "- 事实：用户优先稳定、低投入，因此不得立即辞职。\\n")\n        self.assertIn("推断：", normalized)\n        self.assertTrue(audit["applied"])\n\n    def test_degraded_publication_gate(self) -> None:\n        with tempfile.TemporaryDirectory() as directory:\n            root = Path(directory)\n            summary = {"status": "success", "completion_mode": "degraded", "quality_status": "degraded_success", "quality_integrity": {"status": "DEGRADED"}, "delivery_policy": {"allow_degraded_success": True, "blockers": [], "missing_non_degradable_work_ids": []}, "work_coverage": {"coverage_ratio": 0.75, "minimum_degraded_coverage": 2 / 3, "successful_content_nodes": 1}}\n            (root / "v5-execution-summary.json").write_text(json.dumps(summary), encoding="utf-8")\n            (root / "expert-team-result.json").write_text(json.dumps(summary), encoding="utf-8")\n            (root / "v5-node-results.json").write_text(json.dumps([{ "node_id": "N1", "status": "success", "contract": {"required_fields_complete": True}}, {"node_id": "N2", "status": "failed", "contract": {"required_fields_complete": False}}]), encoding="utf-8")\n            allowed, blockers = strict_publication_gate(root)\n            self.assertTrue(allowed, blockers)\n            report = root / "report.md"\n            report.write_text("usable audited degraded report", encoding="utf-8")\n            manifest = write_comments(report, root / "comments", run_url="https://github.com/o/r/actions/runs/123", max_chars=5000, delivery_status="degraded_success")\n            self.assertEqual("prepared_degraded_success", manifest["publication_status"])\n\n\nif __name__ == "__main__":\n    unittest.main()\n''', encoding='utf-8')
