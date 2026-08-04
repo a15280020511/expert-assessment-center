@@ -13,7 +13,7 @@ from typing import Any, Mapping, Sequence
 
 from execution_graph import SelectedNode
 from v5_no_tools_policy import assert_request_has_no_tools
-from v5_runtime import ProductionRuntime
+from v5_runtime import ProductionRuntime, extract_actual_cost
 from v5_soft_resource_governance import (
     SoftResourceExecutionEngine,
     SoftResourcePromptPolicy,
@@ -49,6 +49,18 @@ class ProductionExpertPromptPolicy(SoftResourcePromptPolicy):
 
 class EvidenceCompleteExecutionEngine(SoftResourceExecutionEngine):
     """Return failed results only after complete evidence has been persisted."""
+
+    @staticmethod
+    def _actual_cost(response: Mapping[str, Any]) -> float:
+        """Compatibility bridge for constitutional quality-failure evidence.
+
+        The native runtime's authoritative accounting primitive is
+        ``extract_actual_cost``. The constitutional normalizer historically
+        called ``self._actual_cost`` only on its quality-failure branch. Keeping
+        this bridge in the production engine preserves one accounting function
+        without duplicating any parsing or price logic.
+        """
+        return extract_actual_cost(response)
 
     @staticmethod
     def _raise_failed_result(result: Mapping[str, Any]) -> None:
