@@ -1,0 +1,35 @@
+name: Temporary complexity patch
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/temp_complexity_patch.py
+      - .github/workflows/temp-complexity-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.head_ref == 'fix/v5-degraded-cost-effectiveness-final'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: fix/v5-degraded-cost-effectiveness-final
+          fetch-depth: 0
+
+      - name: Refactor independent degraded verifier
+        run: python .github/temp_complexity_patch.py
+
+      - name: Commit business-code refactor
+        shell: bash
+        run: |
+          rm -f .github/temp_complexity_patch.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add open-model-market/v5_independent_artifact_revalidation.py .github/temp_complexity_patch.py
+          git commit -m "refactor: split degraded revalidation predicates"
+          git push origin HEAD:fix/v5-degraded-cost-effectiveness-final
