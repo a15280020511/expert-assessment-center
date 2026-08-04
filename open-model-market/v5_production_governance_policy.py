@@ -244,18 +244,13 @@ def materialize_proposal(
 
 
 def claude_unified_review_payload(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    payload = dict(_claude_unified_review_payload(*args, **kwargs))
-    reserve = max(0, int(kwargs.get("approved_recovery_calls") or 0))
-    payload["production_recovery_policy"] = {
-        "candidate_count_required": reserve,
-        "candidates_are_preselected_not_calls": True,
-        "one_per_node_when_reserve_covers_all_nodes": True,
-    }
-    payload["closed_world_work_contract_policy"] = {
-        "unsupported_precise_quantities_allowed": False,
-        "derived_comparisons_must_not_be_mislabeled_as_facts": True,
-    }
-    return payload
+    """Preserve the fixed Claude review schema exactly.
+
+    Recovery and closed-world requirements are already embedded in the GPT
+    proposal and synthesis contracts; Claude reviews that proposal through the
+    existing fixed payload without any additional top-level fields.
+    """
+    return dict(_claude_unified_review_payload(*args, **kwargs))
 
 
 __all__ = [
