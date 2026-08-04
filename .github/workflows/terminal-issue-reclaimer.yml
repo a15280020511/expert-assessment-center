@@ -1,0 +1,92 @@
+name: Expert Terminal Issue Reclaimer
+
+on:
+  workflow_run:
+    workflows:
+      - "Execution Ticket Expert Team V5"
+      - "Invalid Expert Ticket Rejection"
+    types: [completed]
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/terminal-issue-reclaimer.yml
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+concurrency:
+  group: expert-terminal-issue-reclaimer
+  cancel-in-progress: false
+
+jobs:
+  reclaim-terminal-issues:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Close only trusted terminal expert Issues
+        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
+        with:
+          script: |
+            const terminals = [
+              { marker: '## EXECUTION_COMPLETED', reason: 'completed' },
+              { marker: '## EXECUTION_FAILED', reason: 'not_planned' },
+              { marker: '## EXECUTION_DEGRADED', reason: 'not_planned' },
+              { marker: '## EXECUTION_REJECTED', reason: 'not_planned' },
+            ];
+            const normalize = body => String(body || '')
+              .replace(/^(?:\s*<!--[\s\S]*?-->\s*)+/, '')
+              .trimStart();
+
+            for (let page = 1; page <= 10; page += 1) {
+              const { data: issues } = await github.rest.issues.listForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                sort: 'created',
+                direction: 'asc',
+                per_page: 100,
+                page,
+              });
+              for (const issue of issues) {
+                if (issue.pull_request || !String(issue.title || '').startsWith('[execution]')) {
+                  continue;
+                }
+                const comments = await github.paginate(
+                  github.rest.issues.listComments,
+                  {
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    per_page: 100,
+                  },
+                );
+                let terminal = null;
+                for (const comment of comments.slice().reverse()) {
+                  if (comment.user?.login !== 'github-actions[bot]') {
+                    continue;
+                  }
+                  const body = normalize(comment.body);
+                  terminal = terminals.find(item => body.startsWith(item.marker)) || null;
+                  if (terminal) {
+                    break;
+                  }
+                }
+                if (!terminal) {
+                  continue;
+                }
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  state: 'closed',
+                  state_reason: terminal.reason,
+                });
+                core.info(`Closed expert Issue #${issue.number} as ${terminal.reason}`);
+              }
+              if (issues.length < 100) {
+                break;
+              }
+            }
