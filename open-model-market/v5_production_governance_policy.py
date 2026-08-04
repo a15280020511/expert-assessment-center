@@ -71,10 +71,11 @@ def _amend_request(
                 "most directly prevent required-work or final delivery"
             ),
             "closed_world_work_contract_policy": (
-                "required_outputs, roles, and functions must not introduce any "
-                "precise quantity absent from the original task; derived "
-                "comparisons must use qualitative ordering or reuse original "
-                "task quantities unless the task explicitly requires arithmetic"
+                "work objectives, required_outputs, roles, and functions must "
+                "not introduce any precise quantity absent from the original "
+                "task; derived comparisons must use qualitative ordering or "
+                "reuse original task quantities unless the task explicitly "
+                "requires arithmetic"
             ),
         }
     )
@@ -97,6 +98,36 @@ def build_synthesis_request(**kwargs: Any) -> dict[str, Any]:
         _build_synthesis_request(**kwargs),
         approved_recovery_calls=int(kwargs.get("approved_recovery_calls") or 0),
     )
+
+
+def _unsupported_quantity_rows(
+    proposal: Mapping[str, Any],
+    allowed: set[tuple[str, str, str]],
+) -> list[str]:
+    violations: list[str] = []
+    for work in proposal.get("work_items", []):
+        if not isinstance(work, Mapping):
+            continue
+        work_id = str(work.get("work_id") or "unknown")
+        texts = [str(work.get("objective") or "")]
+        outputs = work.get("required_outputs")
+        if isinstance(outputs, list):
+            texts.extend(str(value) for value in outputs)
+        for text in texts:
+            if normalized_quantities(text) - allowed:
+                violations.append(f"{work_id}:{text[:160]}")
+    for node in proposal.get("nodes", []):
+        if not isinstance(node, Mapping):
+            continue
+        node_id = str(node.get("node_id") or "unknown")
+        texts = [str(node.get("role") or "")]
+        functions = node.get("functions")
+        if isinstance(functions, list):
+            texts.extend(str(value) for value in functions)
+        for text in texts:
+            if normalized_quantities(text) - allowed:
+                violations.append(f"{node_id}:{text[:160]}")
+    return violations
 
 
 def _proposal_policy_violations(
@@ -144,18 +175,14 @@ def _proposal_policy_violations(
             constraints.get("unsupported_precise_quantities_allowed", True)
         )
     if not precise_allowed:
-        allowed = normalized_quantities(task)
-        for work in proposal.get("work_items", []):
-            if not isinstance(work, Mapping):
-                continue
-            work_id = str(work.get("work_id") or "unknown")
-            for output in work.get("required_outputs", []):
-                introduced = normalized_quantities(str(output)) - allowed
-                if introduced:
-                    violations.append(
-                        "closed-world work output introduces unsupported quantity: "
-                        f"{work_id}:{str(output)[:160]}"
-                    )
+        unsupported = _unsupported_quantity_rows(
+            proposal,
+            normalized_quantities(task),
+        )
+        violations.extend(
+            "closed-world work contract introduces unsupported quantity: " + row
+            for row in unsupported
+        )
     return violations
 
 
@@ -206,12 +233,15 @@ def materialize_proposal(
     )
     audit = dict(audit)
     recovery_pool = graph.metadata.get("recovery_pool", {})
+    pool_rows = (
+        recovery_pool.values()
+        if isinstance(recovery_pool, Mapping)
+        else ()
+    )
     audit.update(
         {
             "recovery_candidate_count": sum(
-                len(rows)
-                for rows in recovery_pool.values()
-                if isinstance(recovery_pool, Mapping) and isinstance(rows, list)
+                len(rows) for rows in pool_rows if isinstance(rows, list)
             ),
             "recovery_candidate_count_required": int(
                 limits.get("approved_recovery_calls") or 0
