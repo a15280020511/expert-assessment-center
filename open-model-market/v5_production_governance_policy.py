@@ -1,17 +1,18 @@
-"""Production-only governance contracts for recovery and closed-world work.
+"""Production governance contracts for recovery, dynamic matching and value.
 
-GPT remains the sole author of work decomposition, roles, models, providers,
-and recovery candidates. This layer only states and validates structural
-contracts already approved by the ticket: the finite recovery call reserve
-must have an equally sized preselected candidate pool, and closed-world work
-contracts cannot introduce precise quantities absent from the task.
+GPT remains the sole author of task decomposition, expert selection, expert
+combination, execution organization, parameters and recovery candidates. This
+layer states and validates only constitutional contracts: finite recovery,
+closed-world evidence, concrete-problem-specific dynamic matching and highest
+cost effectiveness subject to the required delivery contract.
 """
 from __future__ import annotations
 
 import json
 from typing import Any, Mapping
 
-from v5_gpt_expert_selector import (
+from v5_gpt_expert_selector_policy import (
+    MAXIMUM_RECOVERY_CANDIDATES_PER_NODE,
     _canonical_json,
     build_proposal_request as _build_proposal_request,
     build_synthesis_request as _build_synthesis_request,
@@ -24,6 +25,32 @@ from v5_proposal_materializer import (
     materialize_proposal as _materialize_proposal,
 )
 from v5_task_constraints import normalized_quantities
+
+_DYNAMIC_DIMENSIONS = [
+    "problem_structure",
+    "work_items",
+    "work_granularity",
+    "dependency_graph",
+    "execution_stages",
+    "parallel_or_serial_organization",
+    "expert_count",
+    "expert_roles",
+    "expert_functions",
+    "expert_collaboration_and_review_relationships",
+    "final_nodes",
+    "critical_work",
+    "optional_work",
+    "non_degradable_work",
+    "minimum_usable_coverage",
+    "model",
+    "provider",
+    "reasoning_effort",
+    "output_capacity_advisory",
+    "recovery_candidate_count",
+    "recovery_candidate_distribution",
+    "recovery_priority",
+    "recovery_stop_condition",
+]
 
 
 def _amend_request(
@@ -52,20 +79,56 @@ def _amend_request(
     reserve = max(0, int(approved_recovery_calls))
     constraints.update(
         {
+            "concrete_problem_concrete_analysis": True,
+            "concrete_expert_selection": True,
+            "concrete_expert_combination": True,
+            "concrete_execution_organization": True,
+            "concrete_model_provider_parameter_matching": True,
+            "all_dynamically_determinable_variables_must_be_dynamic": True,
+            "required_dynamic_dimensions": list(_DYNAMIC_DIMENSIONS),
+            "selection_objective": (
+                "maximize task-specific cost effectiveness subject to complete "
+                "delivery, evidence, privacy, company-diversity and reliability "
+                "constraints; cost effectiveness is not lowest price alone"
+            ),
+            "cost_effectiveness_factors": [
+                "task_fit",
+                "reasoning_and_output_capability",
+                "endpoint_reliability",
+                "failure_probability",
+                "context_compatibility",
+                "provider_availability",
+                "expected_effective_call_count_including_recovery",
+                "actual_price",
+            ],
+            "avoid_low_price_high_failure_endpoints": True,
+            "avoid_unnecessary_redundant_experts": True,
             "recovery_candidate_count_required": reserve,
+            "maximum_recovery_candidates_per_node": (
+                MAXIMUM_RECOVERY_CANDIDATES_PER_NODE
+            ),
             "recovery_candidates_are_preselected_not_calls": True,
             "recovery_distribution_policy": (
                 "when the reserve covers every node, assign at least one "
                 "different-company recovery candidate to every node; otherwise "
-                "allocate the complete reserve to the nodes whose failure would "
-                "most directly prevent required-work or final delivery"
+                "allocate the complete reserve to nodes whose failure would most "
+                "directly prevent required work or final delivery; one node may "
+                "hold multiple finite candidates and GPT must not create artificial "
+                "expert nodes merely to distribute recovery candidates"
+            ),
+            "degraded_delivery_policy": (
+                "default allowed unless the task explicitly denies it; after the "
+                "minimum usable coverage, at least one strict content success, all "
+                "non-degradable work, evidence integrity, company uniqueness and "
+                "tool prohibition are satisfied, stop rather than add paid calls "
+                "only to convert degraded_success into full_success"
             ),
             "closed_world_work_contract_policy": (
-                "work objectives, required_outputs, roles, and functions must "
-                "not introduce any precise quantity absent from the original "
-                "task; derived comparisons must use qualitative ordering or "
-                "reuse original task quantities unless the task explicitly "
-                "requires arithmetic"
+                "work objectives, required_outputs, roles, and functions must not "
+                "introduce any precise quantity absent from the original task; "
+                "derived comparisons, preferences, policies and action rules must "
+                "be labelled as inference, recommendation or constraint rather "
+                "than user fact unless directly and faithfully quoted"
             ),
         }
     )
@@ -73,6 +136,17 @@ def _amend_request(
     updated = list(messages)
     updated[1] = {**dict(user), "content": _canonical_json(payload)}
     amended["messages"] = updated
+    governance = amended.get("governance_policy")
+    governance = dict(governance) if isinstance(governance, Mapping) else {}
+    governance.update(
+        {
+            "dynamic_matching_principle": "concrete-problem-concrete-matching",
+            "primary_objective": "highest-cost-effectiveness-subject-to-contract",
+            "all_dynamic_dimensions_declared": True,
+            "degraded_success_is_not_full_success": True,
+        }
+    )
+    amended["governance_policy"] = governance
     return amended
 
 
@@ -140,6 +214,10 @@ def _proposal_policy_violations(
         else 0
         for row in nodes
     ]
+    if any(count > MAXIMUM_RECOVERY_CANDIDATES_PER_NODE for count in recovery_counts):
+        violations.append(
+            "node recovery candidate count exceeds finite operational maximum"
+        )
     candidate_count = sum(recovery_counts)
     if candidate_count != reserve:
         violations.append(
@@ -236,20 +314,22 @@ def materialize_proposal(
             "recovery_candidate_count_required": int(
                 limits.get("approved_recovery_calls") or 0
             ),
+            "maximum_recovery_candidates_per_node": (
+                MAXIMUM_RECOVERY_CANDIDATES_PER_NODE
+            ),
             "recovery_candidates_are_preselected_not_calls": True,
             "closed_world_work_contract_checked": True,
+            "dynamic_matching_principle": "concrete-problem-concrete-matching",
+            "primary_objective": "highest-cost-effectiveness-subject-to-contract",
+            "local_cost_scoring_used": False,
+            "local_optimizer_used": False,
         }
     )
     return graph, graph_limits, audit
 
 
 def claude_unified_review_payload(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    """Preserve the fixed Claude review schema exactly.
-
-    Recovery and closed-world requirements are already embedded in the GPT
-    proposal and synthesis contracts; Claude reviews that proposal through the
-    existing fixed payload without any additional top-level fields.
-    """
+    """Preserve the fixed Claude review schema exactly."""
     return dict(_claude_unified_review_payload(*args, **kwargs))
 
 

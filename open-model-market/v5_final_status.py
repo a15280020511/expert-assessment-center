@@ -67,7 +67,14 @@ def main() -> int:
         encoding="utf-8",
     )
     print(render_final_status_markdown(record), end="")
-    _write_output("status", record["status"])
+    authoritative_status = str(record.get("status") or "FAIL").upper()
+    workflow_status = (
+        "PASS"
+        if authoritative_status in {"PASS", "DEGRADED"}
+        else "FAIL"
+    )
+    _write_output("status", workflow_status)
+    _write_output("authoritative_status", authoritative_status)
     _write_output("final_status_json", str(json_path))
     return 0
 

@@ -46,10 +46,10 @@ class TaskConstraintPolarityTests(unittest.TestCase):
                     "explicitly_allowed",
                 )
 
-    def test_default_is_fail_closed(self) -> None:
+    def test_default_allows_audited_degraded_success(self) -> None:
         policy = compile_task_constraints("比较两个技术方案并给出建议")
-        self.assertFalse(policy.allow_degraded_success)
-        self.assertEqual(policy.degradation_authorization, "default_denied")
+        self.assertTrue(policy.allow_degraded_success)
+        self.assertEqual(policy.degradation_authorization, "default_allowed")
 
 
 class ClosedWorldEvidenceTests(unittest.TestCase):

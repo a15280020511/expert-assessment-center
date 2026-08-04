@@ -1,13 +1,14 @@
 """Stable public facade for constitutional task constraints and evidence gates.
 
-The implementation module contains the general fail-closed validators. This
-facade adds quantity-local, spatial-local, sensory-local, and task-anchored
-deictic canonicalization without weakening polarity, object, unit, quantity,
-or explicit location binding.
+The implementation module contains the general validators. This facade adds
+quantity-local, spatial-local, sensory-local and task-anchored canonicalization,
+and applies the production constitutional default that audited degraded success
+is allowed unless the user explicitly denies partial or degraded delivery.
 """
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
@@ -16,6 +17,20 @@ import v5_task_constraints_impl as _impl
 for _export_name in dir(_impl):
     if not _export_name.startswith("__"):
         globals()[_export_name] = getattr(_impl, _export_name)
+
+
+def compile_task_constraints(task: str) -> _impl.TaskConstraints:
+    """Compile explicit user language with default audited degradation allowed."""
+    compiled = _impl.compile_task_constraints(task)
+    if compiled.degradation_authorization != "default_denied":
+        return compiled
+    return replace(
+        compiled,
+        degradation_authorization="default_allowed",
+        allow_degraded_success=True,
+        policy="explicit-deny-overrides-allow-default-audited-degradation",
+    )
+
 
 _QUANTITY_LITERAL_PATTERN = (
     r"\d+(?:\.\d+)?\s*(?:SLA|秒|分钟|小时|天|周|月|年|米|公里|千米|"
@@ -62,7 +77,7 @@ def _decimal_text(value: Decimal) -> str:
 
 
 def _expand_scaled_yuan(value: str) -> str:
-    def replace(match: re.Match[str]) -> str:
+    def replace_scaled(match: re.Match[str]) -> str:
         try:
             number = Decimal(match.group("number"))
         except InvalidOperation:
@@ -74,7 +89,7 @@ def _expand_scaled_yuan(value: str) -> str:
         )
         return _decimal_text(number * factor) + "元"
 
-    return _SCALED_YUAN_RE.sub(replace, str(value or ""))
+    return _SCALED_YUAN_RE.sub(replace_scaled, str(value or ""))
 
 
 def normalized_quantities(text: str) -> set[tuple[str, str, str]]:
@@ -99,7 +114,7 @@ def closed_world_numeric_prompt(
     task: str,
     constraints: _impl.TaskConstraints | Mapping[str, Any] | None = None,
 ) -> str:
-    policy = constraints or _impl.compile_task_constraints(task)
+    policy = constraints or compile_task_constraints(task)
     precise_allowed = (
         bool(policy.get("unsupported_precise_quantities_allowed", True))
         if isinstance(policy, Mapping)
@@ -125,14 +140,14 @@ def _canonicalize_quantity_local_language(value: str) -> str:
     rendered = _REMAINING_QUANTITY_RE.sub("剩余", rendered)
     rendered = _SPATIAL_EXISTENTIAL_RE.sub(r"\g<location>有", rendered)
     rendered = _SENSORY_EXISTENTIAL_RE.sub(r"有\g<odor>", rendered)
-    for pattern, replacement in (
+    for pattern, replacement_value in (
         (r"(?:已经|已)(?=交接)", ""),
         (r"实际\s*可(?=确认)", ""),
         (r"只能(?=确认)", ""),
         (r"能够(?=确认)", ""),
         (r"可(?=确认)", ""),
     ):
-        rendered = re.sub(pattern, replacement, rendered)
+        rendered = re.sub(pattern, replacement_value, rendered)
     return rendered
 
 
@@ -177,7 +192,7 @@ def _canonicalize_task_anchored_onsite(
     """Resolve generic 'onsite' only when source has no explicit spatial anchor."""
     blocked = False
 
-    def replace(match: re.Match[str]) -> str:
+    def replace_onsite(match: re.Match[str]) -> str:
         nonlocal blocked
         subject = match.group("subject").strip()
         source_rows = _onsite_source_matches(task, subject)
@@ -188,7 +203,7 @@ def _canonicalize_task_anchored_onsite(
         blocked = True
         return match.group(0)
 
-    return _GENERIC_ONSITE_RE.sub(replace, claim), blocked
+    return _GENERIC_ONSITE_RE.sub(replace_onsite, claim), blocked
 
 
 def fact_claim_supported(task: str, claim: str) -> bool:
@@ -209,7 +224,7 @@ def validate_answer_evidence(
     answer: str,
     constraints: _impl.TaskConstraints | Mapping[str, Any] | None = None,
 ) -> list[str]:
-    policy = constraints or _impl.compile_task_constraints(task)
+    policy = constraints or compile_task_constraints(task)
     if isinstance(policy, Mapping):
         external_facts_allowed = bool(policy.get("external_facts_allowed", True))
         precise_allowed = bool(
