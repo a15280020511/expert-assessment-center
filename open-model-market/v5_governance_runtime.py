@@ -11,10 +11,10 @@ from typing import Any, Callable, Mapping
 from openrouter_api import CHAT_URL, request_json
 from v5_claude_red_team_policy import (
     CLAUDE_RED_TEAM_GOVERNANCE_CALLS,
-    build_claude_red_team_request,
     parse_claude_red_team_advice,
 )
 from v5_execution_primitives import actual_cost, extract_answer
+from v5_production_claude_request import build_claude_red_team_request
 from v5_governance_catalog import synthetic_governance_models
 from v5_production_governance_policy import (
     build_proposal_request,
