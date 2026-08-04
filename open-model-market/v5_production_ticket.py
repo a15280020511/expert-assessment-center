@@ -267,9 +267,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "local_planner_present": False,
                 "optimizer_present": False,
                 "max_completion_tokens": args.max_completion_tokens,
-            "governance_max_completion_tokens": (
-                args.governance_max_completion_tokens
-            ),
+                "governance_max_completion_tokens": (
+                    args.governance_max_completion_tokens
+                ),
                 "claude_red_team_calls": 1,
                 "claude_is_advisory_only": True,
                 "claude_gatekeeping_allowed": False,

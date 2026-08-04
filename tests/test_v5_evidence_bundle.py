@@ -58,6 +58,13 @@ class V5EvidenceBundleTests(unittest.TestCase):
             "model": "vendor/model-a",
             "provider_endpoint": "vendor/model-a@provider-a",
         }
+        algorithm_absence = {
+            "local_scoring_used": False,
+            "optimizer_used": False,
+            "cp_sat_used": False,
+            "pareto_pruning_used": False,
+            "heuristic_ranking_used": False,
+        }
         documents = {
             "v5-runtime-config.json": {
                 "runtime_version": "v5-native-runtime-1",
@@ -74,6 +81,7 @@ class V5EvidenceBundleTests(unittest.TestCase):
                 ],
                 "required_work": ["work-a"],
                 "final_nodes": ["node-a"],
+                "metadata": algorithm_absence,
             },
             "v5-node-results.json": [
                 {
@@ -105,13 +113,7 @@ class V5EvidenceBundleTests(unittest.TestCase):
             },
             "v5-selection.json": {
                 "optimizer_used": False,
-                "materialization": {
-                    "local_scoring_used": False,
-                    "optimizer_used": False,
-                    "cp_sat_used": False,
-                    "pareto_pruning_used": False,
-                    "heuristic_ranking_used": False,
-                },
+                "materialization": algorithm_absence,
             },
             "v5-governance-result.json": {
                 "status": "PASS",

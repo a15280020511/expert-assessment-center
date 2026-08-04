@@ -16,15 +16,13 @@ from v5_claude_red_team_policy import (
 )
 from v5_execution_primitives import actual_cost, extract_answer
 from v5_governance_catalog import synthetic_governance_models
-from v5_gpt_expert_selector import (
+from v5_production_governance_policy import (
     build_proposal_request,
     build_synthesis_request,
-    parse_proposal,
-)
-from v5_proposal_materializer import (
     claude_unified_review_payload,
     deterministic_violations,
     materialize_proposal,
+    parse_proposal,
 )
 from v5_soft_resource_governance import SOFT_RESOURCE_INSTRUCTION
 from v5_structured_output_compat import normalize_strict_response_format

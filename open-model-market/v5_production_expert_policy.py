@@ -13,11 +13,13 @@ from typing import Any, Mapping, Sequence
 
 from execution_graph import SelectedNode
 from v5_no_tools_policy import assert_request_has_no_tools
-from v5_runtime import ProductionRuntime, extract_actual_cost
+from v5_production_answer_normalization import relabel_task_derived_fact_lines
+from v5_runtime import ProductionRuntime, RuntimeAttempt, extract_actual_cost
 from v5_soft_resource_governance import (
     SoftResourceExecutionEngine,
     SoftResourcePromptPolicy,
 )
+from v5_task_constraints import TaskConstraints
 
 EXPERT_DATA_COLLECTION_POLICY = "deny"
 EXPERT_ZDR_REQUIRED = True
@@ -49,6 +51,34 @@ class ProductionExpertPromptPolicy(SoftResourcePromptPolicy):
 
 class EvidenceCompleteExecutionEngine(SoftResourceExecutionEngine):
     """Return failed results only after complete evidence has been persisted."""
+
+    def _normalize_attempt(
+        self,
+        node: SelectedNode,
+        original_task: str,
+        attempt: RuntimeAttempt,
+        constraints: TaskConstraints,
+    ) -> bool:
+        earliest = attempt.raw_answer or attempt.answer
+        if attempt.answer:
+            repaired, audit = relabel_task_derived_fact_lines(
+                original_task,
+                attempt.answer,
+            )
+            if audit.get("applied"):
+                if attempt.raw_answer is None:
+                    attempt.raw_answer = attempt.answer
+                attempt.answer = repaired
+                attempt.answer_transformations.append(audit)
+        normalized = super()._normalize_attempt(
+            node,
+            original_task,
+            attempt,
+            constraints,
+        )
+        if earliest and attempt.raw_answer != earliest:
+            attempt.raw_answer = earliest
+        return normalized
 
     @staticmethod
     def _actual_cost(response: Mapping[str, Any]) -> float:

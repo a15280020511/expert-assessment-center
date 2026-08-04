@@ -188,7 +188,7 @@ def _validated_nodes(
         raise RuntimeError("GPT proposal exceeds expert initial-call capacity")
     if inputs.selection.get("optimizer_used") is not False:
         raise RuntimeError("selection evidence must prove optimizer absent")
-    materialization = inputs.selection.get("materialization", {})
+
     obsolete_keys = (
         "local_scoring_used",
         "optimizer_used",
@@ -196,11 +196,30 @@ def _validated_nodes(
         "pareto_pruning_used",
         "heuristic_ranking_used",
     )
-    if (
-        isinstance(materialization, Mapping)
-        and any(materialization.get(key) is not False for key in obsolete_keys)
-    ):
-        raise RuntimeError("obsolete selection algorithm evidence detected")
+    metadata = inputs.execution_graph.get("metadata")
+    if not isinstance(metadata, Mapping):
+        raise RuntimeError("execution graph metadata is missing")
+    missing_or_enabled = [
+        key for key in obsolete_keys if metadata.get(key) is not False
+    ]
+    if missing_or_enabled:
+        raise RuntimeError(
+            "execution graph does not prove obsolete algorithms absent: "
+            + ",".join(missing_or_enabled)
+        )
+
+    materialization = inputs.selection.get("materialization")
+    if isinstance(materialization, Mapping):
+        contradictory = [
+            key
+            for key in obsolete_keys
+            if key in materialization and materialization.get(key) is not False
+        ]
+        if contradictory:
+            raise RuntimeError(
+                "obsolete selection algorithm evidence detected: "
+                + ",".join(contradictory)
+            )
     return nodes
 
 
@@ -277,7 +296,6 @@ def _prepare_evidence(
         expert_models=expert_models,
         providers=providers,
     )
-
 
 
 def _request_audit_document(

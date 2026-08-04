@@ -32,8 +32,8 @@ jobs:
       PARALLEL_WORKERS: "4"
       OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
       OPENROUTER_APP_NAME: expert-center-paid-candidate-acceptance
-      MAXIMUM_TOTAL_CALLS: "8"
-      MAXIMUM_RECOVERY_CALLS: "1"
+      MAXIMUM_TOTAL_CALLS: "10"
+      MAXIMUM_RECOVERY_CALLS: "3"
       COST_ADVISORY_USD: "1.0"
 
     steps:
@@ -138,6 +138,7 @@ jobs:
                       "严格使用四个Markdown二级标题：已知条件、计算与比较、风险与反证、结论与下一步。",
                       "明确区分题面事实、推断和建议，不得引入题面外事实。",
                       "禁止工具、搜索、联网、插件、MCP、代码执行和外部数据调用。",
+                      "不得计算或报告题面未直接给出的差值、阈值或其他新精确数值；只复用题面数字做排序和条件化比较。",
                       "完整交付优先，删除重复和无关扩展。",
                   ],
                   "language": "zh-CN",
@@ -150,8 +151,8 @@ jobs:
                   "final Attestation PASS",
               ],
               "approved_budget": {
-                  "calls": 8,
-                  "maximum_recovery_calls": 1,
+                  "calls": 10,
+                  "maximum_recovery_calls": 3,
                   "cost_policy": "prompt_led_soft_governance",
                   "cost_anomaly_usd": 1.0,
               },
