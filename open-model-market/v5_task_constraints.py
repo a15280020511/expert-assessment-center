@@ -83,19 +83,13 @@ def normalized_quantities(text: str) -> set[tuple[str, str, str]]:
 
 
 def original_quantity_tokens(text: str) -> list[str]:
-    """Preserve scaled currency spelling while retaining all native tokens."""
+    """Add scaled currency spellings to the authoritative native token list."""
     rendered = str(text or "")
-    candidates: list[tuple[int, str]] = []
-    scaled_ranges: list[tuple[int, int]] = []
-    for match in _SCALED_YUAN_RE.finditer(rendered):
-        candidates.append((match.start(), re.sub(r"\s+", "", match.group(0))))
-        scaled_ranges.append((match.start(), match.end()))
-    for match in _impl._QUANTITY_RE.finditer(rendered):
-        if any(start <= match.start() < end for start, end in scaled_ranges):
-            continue
-        candidates.append((match.start(), re.sub(r"\s+", "", match.group(0))))
-    values: list[str] = []
-    for _, token in sorted(candidates):
+    values = [
+        re.sub(r"\s+", "", match.group(0))
+        for match in _SCALED_YUAN_RE.finditer(rendered)
+    ]
+    for token in _impl.original_quantity_tokens(rendered):
         if token and token not in values:
             values.append(token)
     return values
