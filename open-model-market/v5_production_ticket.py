@@ -12,11 +12,7 @@ from typing import Any, Mapping, Sequence
 import v5_pipeline
 from v5_claude_red_team_policy import CLAUDE_RED_TEAM_GOVERNANCE_CALLS
 from v5_json_io import load_json_or_default, write_json
-from v5_production_run_evidence import (
-    ApprovedRun,
-    EvidenceBundleBuilder,
-    EvidenceInputs,
-)
+from v5_run_evidence import ApprovedRun, EvidenceBundleBuilder, EvidenceInputs
 from v5_task_constraints import compile_task_constraints
 
 RUNTIME_VERSION = "v5-gpt-claude-runtime-1"
