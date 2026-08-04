@@ -47,6 +47,10 @@ jobs:
             --output-dir invalid-ticket-artifacts \
             --run-url "$RUN_URL" > invalid-ticket-rejection.md
 
+      - name: Give primary admission chain first publication window
+        if: steps.ticket.outcome == 'success' && steps.ticket.outputs.accepted != 'true'
+        run: sleep 45
+
       - name: Publish one trusted zero-call rejection
         if: steps.ticket.outcome == 'success' && steps.ticket.outputs.accepted != 'true'
         uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
