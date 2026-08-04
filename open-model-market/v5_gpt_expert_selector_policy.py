@@ -18,6 +18,11 @@ for _name in dir(_native):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_native, _name)
 
+# Explicit bindings preserve static export validation while keeping the native
+# implementation authoritative.
+proposal_sha256 = _native.proposal_sha256
+governance_prompt_catalog = _native.governance_prompt_catalog
+
 MAXIMUM_RECOVERY_CANDIDATES_PER_NODE = 4
 _NATIVE_RECOVERY_LIMIT = int(_native.GPT_MAX_RECOVERY_PER_NODE)
 
