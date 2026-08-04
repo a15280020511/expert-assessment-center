@@ -18,7 +18,7 @@ class InvalidRejectionTaskBindingTests(unittest.TestCase):
             "- Task ID: \\`${taskId}\\`",
             "comment.body?.includes(taskLine)",
             "## EXECUTION_REJECTED",
-            "Model calls",
+            "模型调用",
         )
         missing = [item for item in required if item not in WORKFLOW]
         self.assertEqual(missing, [])
