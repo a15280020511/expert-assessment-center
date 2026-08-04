@@ -47,7 +47,8 @@ class ConstitutionPolicyTests(unittest.TestCase):
         )
         self.assertTrue(free["free_model_required_before_paid"])
         self.assertEqual(free["free_model_actual_cost_usd"], 0.0)
-        self.assertFalse(free["automatic_paid_retry_allowed"])
+        self.assertFalse(free["automatic_paid_full_task_retry_allowed"])
+        self.assertTrue(free["finite_preapproved_recovery_allowed"])
         self.assertFalse(
             free["free_evidence_can_qualify_formal_model_identity"]
         )
@@ -92,7 +93,7 @@ class ConstitutionPolicyTests(unittest.TestCase):
     def test_dynamic_task_matching_is_required_and_task_local(self) -> None:
         self.assertEqual(
             self.policy["schema_version"],
-            "v5-constitutional-policy-4",
+            "v5-constitutional-policy-5",
         )
         dynamic = self.policy["dynamic_task_matching"]
         self.assertTrue(dynamic["required"])
@@ -100,23 +101,46 @@ class ConstitutionPolicyTests(unittest.TestCase):
         self.assertTrue(dynamic["recomputed_from_current_task"])
         self.assertFalse(dynamic["cross_task_history_allowed"])
         self.assertTrue(dynamic["live_complete_endpoint_catalog_required"])
+        self.assertTrue(
+            dynamic["all_dynamically_determinable_variables_must_be_dynamic"]
+        )
+        self.assertEqual(
+            dynamic["primary_objective"],
+            "highest_cost_effectiveness_subject_to_task_contract",
+        )
+        self.assertTrue(
+            dynamic["lowest_price_alone_is_not_cost_effectiveness"]
+        )
+        self.assertTrue(dynamic["expected_recovery_cost_is_part_of_cost_effectiveness"])
         required_dynamic_fields = {
+            "problem_structure",
             "work_items",
+            "work_granularity",
             "dependency_graph",
+            "execution_stages",
+            "parallel_or_serial_organization",
             "expert_count",
             "expert_roles",
             "expert_functions",
-            "execution_stages",
+            "expert_collaboration_and_review_relationships",
             "final_nodes",
+            "critical_work",
+            "optional_work",
+            "non_degradable_work",
+            "minimum_usable_coverage",
             "model",
             "provider",
             "reasoning_effort",
             "output_capacity_advisory",
-            "recovery_candidates",
+            "recovery_candidate_count",
+            "recovery_candidate_distribution",
+            "recovery_priority",
+            "recovery_stop_condition",
         }
-        self.assertEqual(
-            set(dynamic["dynamically_determined"]),
-            required_dynamic_fields,
+        self.assertTrue(
+            required_dynamic_fields.issubset(
+                set(dynamic["dynamically_determined"])
+            )
         )
         for key in (
             "fixed_expert_slots_allowed",
@@ -165,15 +189,22 @@ class ConstitutionPolicyTests(unittest.TestCase):
         self,
     ) -> None:
         self.assertIn(
-            "## 第六条：依据任务全动态拆解、选模、编组与参数匹配",
+            "## 第六条：具体问题具体分析，全部可动态项动态决定，性价比优先",
             self.constitution,
         )
         self.assertIn(
             "## 第七条：治理链和专家执行全面禁止使用工具",
             self.constitution,
         )
+        self.assertIn("具体问题具体分析", self.constitution)
+        self.assertIn("具体选择专家", self.constitution)
+        self.assertIn("具体组合专家", self.constitution)
+        self.assertIn("具体组织执行", self.constitution)
+        self.assertIn("具体匹配模型与参数", self.constitution)
+        self.assertIn("所有能够根据任务动态决定的变量必须动态决定", self.constitution)
+        self.assertIn("性价比最高", self.constitution)
         self.assertIn("不得沿用跨任务历史编组", self.constitution)
-        self.assertIn("模型参数必须根据任务复杂度", self.constitution)
+        self.assertIn("模型参数必须根据具体任务复杂度", self.constitution)
         self.assertIn("请求体不得向模型暴露 `tools`", self.constitution)
 
     def test_duplicate_expert_companies_fail_graph_validation(self) -> None:
