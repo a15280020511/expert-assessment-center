@@ -78,11 +78,19 @@ class NoToolsNetworkPolicyTests(unittest.TestCase):
                     assert_request_has_no_tools(request)
 
     def test_router_and_online_models_are_rejected(self) -> None:
-        for model in ("openrouter/free", "vendor/model:online", "vendor/model:batch"):
+        for model in (
+            "openrouter/free",
+            "vendor/model:online",
+            "vendor/model:batch",
+        ):
             with self.subTest(model=model):
                 with self.assertRaises(NoToolsPolicyViolation):
-                    assert_request_has_no_tools({"model": model, "messages": []})
-        assert_request_has_no_tools({"model": "vendor/exact-model", "messages": []})
+                    assert_request_has_no_tools(
+                        {"model": model, "messages": []}
+                    )
+        assert_request_has_no_tools(
+            {"model": "vendor/exact-model", "messages": []}
+        )
 
     def test_free_canary_uses_exact_model_without_router_bypass(self) -> None:
         workflow = (
@@ -141,7 +149,14 @@ class NoToolsNetworkPolicyTests(unittest.TestCase):
                 with self.assertRaises(NoToolsPolicyViolation):
                     assert_response_has_no_tools(response)
         assert_response_has_no_tools(
-            {"choices": [{"finish_reason": "stop", "message": {"content": "ok"}}]}
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": "ok"},
+                    }
+                ]
+            }
         )
 
     def test_network_egress_is_exactly_allowlisted(self) -> None:
@@ -152,18 +167,33 @@ class NoToolsNetworkPolicyTests(unittest.TestCase):
             "https://api.github.com/repos/a/b/issues?state=all"
         )
         for fn, url in (
-            (assert_allowed_model_plane_url, "https://example.com/api/v1/models"),
-            (assert_allowed_model_plane_url, "http://openrouter.ai/api/v1/models"),
-            (assert_allowed_model_plane_url, "https://openrouter.ai.evil.test/api/v1/models"),
+            (
+                assert_allowed_model_plane_url,
+                "https://example.com/api/v1/models",
+            ),
+            (
+                assert_allowed_model_plane_url,
+                "http://openrouter.ai/api/v1/models",
+            ),
+            (
+                assert_allowed_model_plane_url,
+                "https://openrouter.ai.evil.test/api/v1/models",
+            ),
             (assert_allowed_control_plane_url, "https://api.github.com/user"),
-            (assert_allowed_control_plane_url, "https://github.com/repos/a/b"),
+            (
+                assert_allowed_control_plane_url,
+                "https://github.com/repos/a/b",
+            ),
         ):
             with self.subTest(url=url):
                 with self.assertRaises(NoToolsPolicyViolation):
                     fn(url)
 
     def test_openrouter_boundary_rejects_tools_before_transport(self) -> None:
-        with mock.patch.object(openrouter_api, "_request_with_hard_deadline") as transport:
+        with mock.patch.object(
+            openrouter_api,
+            "_request_with_hard_deadline",
+        ) as transport:
             with self.assertRaises(NoToolsPolicyViolation):
                 openrouter_api.request_json(
                     openrouter_api.CHAT_URL,
@@ -197,7 +227,9 @@ class NoToolsNetworkPolicyTests(unittest.TestCase):
                     {"model": "vendor/model", "messages": []},
                 )
 
-    def test_tool_violation_is_non_retryable_internal_contract_failure(self) -> None:
+    def test_tool_violation_is_non_retryable_internal_contract_failure(
+        self,
+    ) -> None:
         violation = NoToolsPolicyViolation(
             "tool call",
             category="tool_invocation_forbidden",
@@ -205,9 +237,15 @@ class NoToolsNetworkPolicyTests(unittest.TestCase):
         )
         failure = ExecutionEngine._failure_from_exception(
             violation,
-            mock.Mock(model="vendor/model", provider_endpoint="vendor/model@provider"),
+            mock.Mock(
+                model="vendor/model",
+                provider_endpoint="vendor/model@provider",
+            ),
         )
-        self.assertEqual(FailureCategory.INTERNAL_CONTRACT_VIOLATION, failure.category)
+        self.assertEqual(
+            FailureCategory.INTERNAL_CONTRACT_VIOLATION,
+            failure.category,
+        )
         self.assertFalse(failure.retryable)
 
     def test_long_tasks_are_not_rejected_by_local_character_gate(self) -> None:
@@ -251,7 +289,9 @@ class NoToolsNetworkPolicyTests(unittest.TestCase):
             run = model_market.build_run_config(args)
             self.assertEqual(60000, len(run.task))
 
-    def test_repository_has_one_policy_and_no_unapproved_network_clients(self) -> None:
+    def test_repository_has_one_policy_and_no_unapproved_network_clients(
+        self,
+    ) -> None:
         duplicate_definitions = []
         unapproved_urlopen = []
         disallowed_imports = []
@@ -272,17 +312,25 @@ class NoToolsNetworkPolicyTests(unittest.TestCase):
         for path in MARKET.glob("*.py"):
             text = path.read_text(encoding="utf-8")
             if path.name != "v5_no_tools_policy.py" and re.search(
-                r"^FORBIDDEN_(?:REQUEST_)?FIELDS\s*=", text, re.M
+                r"^FORBIDDEN_(?:REQUEST_)?FIELDS\s*=",
+                text,
+                re.M,
             ):
                 duplicate_definitions.append(path.name)
-            if "urllib.request.urlopen" in text and path.name not in allowed_urlopen:
+            if (
+                "urllib.request.urlopen" in text
+                and path.name not in allowed_urlopen
+            ):
                 unapproved_urlopen.append(path.name)
             if any(fragment in text for fragment in blocked_import_fragments):
                 disallowed_imports.append(path.name)
         self.assertEqual([], duplicate_definitions)
         self.assertEqual([], unapproved_urlopen)
         self.assertEqual([], disallowed_imports)
-        self.assertNotIn("MAX_TASK_CHARS", (MARKET / "model_market.py").read_text())
+        self.assertNotIn(
+            "MAX_TASK_CHARS",
+            (MARKET / "model_market.py").read_text(),
+        )
         for filename in (
             "openrouter_api.py",
             "v5_runtime.py",
@@ -292,17 +340,30 @@ class NoToolsNetworkPolicyTests(unittest.TestCase):
             self.assertIn("assert_request_has_no_tools", text)
             self.assertIn("assert_response_has_no_tools", text)
 
-    def test_machine_constitution_locks_network_and_response_boundaries(self) -> None:
+    def test_machine_constitution_locks_network_and_response_boundaries(
+        self,
+    ) -> None:
         policy = json.loads(
-            (MARKET / "constitutional_policy.json").read_text(encoding="utf-8")
+            (MARKET / "constitutional_policy.json").read_text(
+                encoding="utf-8"
+            )
         )
-        self.assertEqual("v5-constitutional-policy-4", policy["schema_version"])
+        self.assertEqual(
+            "v5-constitutional-policy-5",
+            policy["schema_version"],
+        )
         tool = policy["tool_prohibition"]
         self.assertTrue(tool["request_and_response_boundary_required"])
         self.assertFalse(tool["response_tool_calls_allowed"])
         self.assertFalse(tool["arbitrary_network_egress_allowed"])
-        self.assertEqual(["openrouter.ai"], tool["model_plane_network_allowlist"])
-        self.assertEqual(["api.github.com"], tool["control_plane_network_allowlist"])
+        self.assertEqual(
+            ["openrouter.ai"],
+            tool["model_plane_network_allowlist"],
+        )
+        self.assertEqual(
+            ["api.github.com"],
+            tool["control_plane_network_allowlist"],
+        )
 
 
 if __name__ == "__main__":
