@@ -1,5 +1,5 @@
 {
-  "schema_version": "v5-constitutional-policy-4",
+  "schema_version": "v5-constitutional-policy-5",
   "authority": "CONSTITUTION.md",
   "fail_closed": true,
   "free_first_testing": {
@@ -14,7 +14,8 @@
       "formal_production_execution",
       "explicitly_authorized_final_paid_acceptance"
     ],
-    "automatic_paid_retry_allowed": false,
+    "automatic_paid_full_task_retry_allowed": false,
+    "finite_preapproved_recovery_allowed": true,
     "free_evidence_can_qualify_formal_model_identity": false,
     "free_evidence_can_move_production": false
   },
@@ -27,28 +28,89 @@
       "anthropic"
     ],
     "pre_execution_validation_required": true,
-    "post_execution_actual_success_audit_required": true,
+    "post_execution_all_called_models_audit_required": true,
+    "failed_timeout_rate_limited_and_recovery_calls_included": true,
     "duplicate_company_action": "fail_closed"
+  },
+  "governance_chain": {
+    "sequence": [
+      "gpt_latest_proposal_once",
+      "claude_opus_latest_advice_once",
+      "gpt_latest_synthesis_once",
+      "deterministic_constitutional_validation",
+      "different_company_expert_execution",
+      "audit_artifact_attestation"
+    ],
+    "claude_is_advisory_only": true,
+    "claude_gatekeeping_allowed": false,
+    "second_claude_review_allowed": false,
+    "model_loop_allowed": false
+  },
+  "degraded_delivery": {
+    "default_allowed_unless_explicitly_denied": true,
+    "full_success_label_allowed": false,
+    "status": "degraded_success",
+    "purpose": "avoid_unnecessary_paid_calls_after_minimum_usable_delivery_is_reached",
+    "minimum_required_work_coverage": 0.6666666667,
+    "minimum_strict_successful_content_nodes": 1,
+    "missing_non_degradable_work_allowed": false,
+    "final_report_required": true,
+    "evidence_integrity_required": true,
+    "company_uniqueness_required": true,
+    "tool_prohibition_required": true,
+    "provider_lock_required": true,
+    "request_and_cost_ledgers_required": true,
+    "missing_failed_and_degraded_items_must_be_disclosed": true,
+    "automatic_extra_paid_calls_after_threshold_reached": false,
+    "explicit_user_denial_overrides_default": true,
+    "production_promotion_can_use_degraded_success": false
   },
   "dynamic_task_matching": {
     "required": true,
+    "principle": "concrete_problem_concrete_analysis_concrete_expert_selection_combination_organization_and_matching",
     "planner": "gpt_latest_single_pass",
     "recomputed_from_current_task": true,
     "cross_task_history_allowed": false,
+    "all_dynamically_determinable_variables_must_be_dynamic": true,
     "dynamically_determined": [
+      "problem_structure",
       "work_items",
+      "work_granularity",
       "dependency_graph",
+      "execution_stages",
+      "parallel_or_serial_organization",
       "expert_count",
       "expert_roles",
       "expert_functions",
-      "execution_stages",
+      "expert_collaboration_and_review_relationships",
       "final_nodes",
+      "critical_work",
+      "optional_work",
+      "non_degradable_work",
+      "minimum_usable_coverage",
       "model",
       "provider",
       "reasoning_effort",
       "output_capacity_advisory",
-      "recovery_candidates"
+      "recovery_candidate_count",
+      "recovery_candidate_distribution",
+      "recovery_priority",
+      "recovery_stop_condition"
     ],
+    "primary_objective": "highest_cost_effectiveness_subject_to_task_contract",
+    "cost_effectiveness_definition": [
+      "task_fit",
+      "reasoning_and_output_capability",
+      "endpoint_reliability",
+      "failure_probability",
+      "context_compatibility",
+      "provider_availability",
+      "expected_effective_call_count",
+      "actual_price"
+    ],
+    "lowest_price_alone_is_not_cost_effectiveness": true,
+    "expected_recovery_cost_is_part_of_cost_effectiveness": true,
+    "unnecessary_redundancy_forbidden": true,
     "live_complete_endpoint_catalog_required": true,
     "fixed_expert_slots_allowed": false,
     "fixed_expert_count_allowed": false,
@@ -156,11 +218,14 @@
     "selection_authority": "gpt_latest",
     "candidate_count_must_equal_approved_recovery_call_reserve": true,
     "candidates_are_preselected_not_calls": true,
+    "maximum_candidates_per_node": 4,
     "one_candidate_per_node_when_reserve_covers_all_nodes": true,
+    "when_reserve_is_smaller_prioritize_delivery_critical_nodes": true,
     "actual_recovery_calls_remain_finitely_bounded": true,
     "provider_fallback_allowed": false,
     "recovery_companies_must_be_globally_unique": true,
-    "hardcoded_model_or_provider_blacklist_allowed": false
+    "hardcoded_model_or_provider_blacklist_allowed": false,
+    "stop_when_degraded_success_threshold_is_reached": true
   },
   "closed_world_quantity_normalization": {
     "scaled_chinese_currency_units_supported": [
@@ -169,7 +234,8 @@
     ],
     "magnitude_must_be_preserved": true,
     "unsupported_derived_precise_quantities_allowed": false,
-    "derived_comparison_must_be_labelled_as_inference": true
+    "derived_comparison_must_be_labelled_as_inference": true,
+    "task_anchored_normative_or_preference_statement_must_not_be_mislabeled_as_fact": true
   },
   "production_promotion": {
     "requires_zero_cost_ci": true,
@@ -177,6 +243,7 @@
     "requires_explicit_paid_acceptance": true,
     "requires_independent_artifact_revalidation": true,
     "requires_run_sha_artifact_digest_binding": true,
+    "requires_full_success_not_degraded_success": true,
     "automatic_merge_allowed": false,
     "automatic_production_ref_move_allowed": false
   },
