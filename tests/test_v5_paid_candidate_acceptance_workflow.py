@@ -30,7 +30,8 @@ class PaidCandidateAcceptanceWorkflowTests(unittest.TestCase):
     def test_same_native_production_evidence_chain_is_used(self) -> None:
         text = self.text
         required = (
-            "v5_issue_ticket.py",
+            "import v5_issue_ticket",
+            "v5_issue_ticket.prepare",
             "v5_ticket_gate.py",
             "v5_production_ticket.py",
             "publish_report.py",
