@@ -1,0 +1,103 @@
+name: Validate Governance 4.1 Expert Topology
+
+on:
+  pull_request:
+    paths:
+      - "CONTROL_TOPOLOGY.md"
+      - "SECURITY.md"
+      - "governance-compatibility.json"
+      - ".github/workflows/**"
+  push:
+    branches: [main]
+    paths:
+      - "CONTROL_TOPOLOGY.md"
+      - "SECURITY.md"
+      - "governance-compatibility.json"
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: expert-governance-topology-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout pinned source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Validate governance-only topology
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('.')
+          row = json.loads((root / 'governance-compatibility.json').read_text(encoding='utf-8'))
+          expected = {
+              'schema_version': 'governance-compatibility-v2',
+              'governance_version': '4.1.0',
+              'compatible_governance_versions': '>=4.1.0,<5.0.0',
+              'external_controller': 'a15280020511/decision-system-governance',
+              'gpts_direct_control_allowed': False,
+              'sole_cross_repository_relay': 'a15280020511/decision-system-governance',
+              'direct_center_to_center_calls_allowed': False,
+              'huggingface_direct_access_allowed': False,
+              'hf_token_allowed': False,
+              'compute_baseline_access_allowed': False,
+              'intelligence_artifact_access_allowed': False,
+              'compute_artifact_access_allowed': False,
+              'tools_allowed': False,
+              'network_allowed': False,
+          }
+          bad = [key for key, value in expected.items() if row.get(key) != value]
+          assert not bad, bad
+          assert row['governance_contract_sha256'] == 'a57f5cd754517a40e13bd7d15c45bc088651599dbc69e1113153e0372b73fc63'
+
+          topology = (root / 'CONTROL_TOPOLOGY.md').read_text(encoding='utf-8')
+          security = (root / 'SECURITY.md').read_text(encoding='utf-8')
+          for marker in (
+              '网页 GPTs 不得直接控制本仓库',
+              'a15280020511/decision-system-governance',
+              '不访问计算中心基准库',
+              '禁止工具和网络',
+          ):
+              assert marker in topology or marker in security, marker
+
+          violations = []
+          for path in (root / '.github/workflows').glob('*.yml'):
+              if path.name == 'governance-topology-validate.yml':
+                  continue
+              text = path.read_text(encoding='utf-8')
+              for pattern in (
+                  'HF_TOKEN: ${{ secrets.HF_TOKEN }}',
+                  'HF_NUMERIC_BASELINE_DATASET_REPO: ${{',
+                  'repository_dispatch:',
+                  'uses: a15280020511/evidence-data-center',
+                  'uses: a15280020511/compute-simulation-center',
+              ):
+                  if pattern in text:
+                      violations.append(f'{path}:{pattern}')
+          assert not violations, violations
+          print(json.dumps({
+              'status': 'EXPERT_GOVERNANCE_TOPOLOGY_VALIDATED',
+              'external_controller': row['external_controller'],
+              'gpts_direct_control_allowed': False,
+              'direct_center_to_center_calls_allowed': False,
+              'huggingface_direct_access_allowed': False,
+              'compute_baseline_access_allowed': False,
+              'tools_allowed': False,
+              'network_allowed': False,
+              'secret_values_exposed': False,
+              'model_calls': 0,
+          }, ensure_ascii=False, sort_keys=True))
+          PY
+          git diff --check
