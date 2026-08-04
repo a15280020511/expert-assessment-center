@@ -152,6 +152,25 @@
     "independent_revalidation_must_fail_semantically_not_by_missing_core_files": true,
     "authoritative_wrapper_failure_after_artifact_assembly": true
   },
+  "recovery_planning": {
+    "selection_authority": "gpt_latest",
+    "candidate_count_must_equal_approved_recovery_call_reserve": true,
+    "candidates_are_preselected_not_calls": true,
+    "one_candidate_per_node_when_reserve_covers_all_nodes": true,
+    "actual_recovery_calls_remain_finitely_bounded": true,
+    "provider_fallback_allowed": false,
+    "recovery_companies_must_be_globally_unique": true,
+    "hardcoded_model_or_provider_blacklist_allowed": false
+  },
+  "closed_world_quantity_normalization": {
+    "scaled_chinese_currency_units_supported": [
+      "万元",
+      "亿元"
+    ],
+    "magnitude_must_be_preserved": true,
+    "unsupported_derived_precise_quantities_allowed": false,
+    "derived_comparison_must_be_labelled_as_inference": true
+  },
   "production_promotion": {
     "requires_zero_cost_ci": true,
     "requires_zero_cost_free_canary": true,
