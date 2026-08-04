@@ -70,7 +70,7 @@ def relabel_task_derived_fact_lines(
     task: str,
     answer: str,
 ) -> tuple[str, dict[str, Any]]:
-    """Relabel unsupported task-anchored derivations; never rewrite text."""
+    """Relabel task-anchored derivations and normative claims without rewriting."""
     original = str(answer or "")
     task_quantities = normalized_quantities(task)
     rows: list[str] = []
@@ -81,8 +81,9 @@ def relabel_task_derived_fact_lines(
             rows.append(line)
             continue
         body = match.group("body").strip()
+        normative = bool(_NORMATIVE_RE.search(body))
         can_relabel = (
-            not fact_claim_supported(task, body)
+            (normative or not fact_claim_supported(task, body))
             and bool(_DERIVED_MARKER_RE.search(body))
             and not (normalized_quantities(body) - task_quantities)
             and _task_anchored(task, body)
