@@ -23,12 +23,21 @@ jobs:
           fetch-depth: 0
 
       - name: Apply atomic degraded-delivery patches
-        run: python .github/temp_degraded_patch.py
-
-      - name: Commit patched contracts and remove temporary machinery
         shell: bash
         run: |
-          rm -f .github/workflows/temp-degraded-policy-patch.yml
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/temp_degraded_patch.py')
+          text = path.read_text(encoding='utf-8')
+          start = text.index("workflow = root / '.github/workflows/execution-ticket.yml'")
+          end = text.index("task_tests = root / 'tests/test_v5_task_constraints.py'")
+          path.write_text(text[:start] + text[end:], encoding='utf-8')
+          PY
+          python .github/temp_degraded_patch.py
+
+      - name: Commit patched contracts
+        shell: bash
+        run: |
           rm -f .github/temp-degraded-patch-trigger
           rm -f .github/temp_degraded_patch.py
           git config user.name github-actions[bot]
