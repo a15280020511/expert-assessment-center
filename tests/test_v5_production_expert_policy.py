@@ -22,6 +22,7 @@ from v5_production_expert_policy import (  # noqa: E402
 from v5_runtime import (  # noqa: E402
     ProductionRuntime,
     RetryPolicy,
+    RuntimeAttempt,
     RuntimeConfig,
 )
 from v5_soft_resource_governance import (  # noqa: E402
@@ -31,6 +32,24 @@ from v5_soft_resource_governance import (  # noqa: E402
 
 
 class ProductionExpertPolicyTests(unittest.TestCase):
+    @staticmethod
+    def _installed_runtime() -> ProductionRuntime:
+        config = RuntimeConfig(
+            total_call_limit=5,
+            recovery_call_limit=1,
+            cost_anomaly_usd=1.0,
+            tools_allowed=False,
+            live_catalog_required=True,
+            provider_lock_required=True,
+        )
+        retry = RetryPolicy(
+            retry_same_endpoint_categories=(),
+            maximum_same_endpoint_retries_per_node=0,
+        )
+        return install_production_expert_policy(
+            build_runtime(config, retry_policy=retry)
+        )
+
     def test_expert_request_has_exact_privacy_contract(self) -> None:
         base = {
             "model": "deepseek/model",
@@ -79,6 +98,63 @@ class ProductionExpertPolicyTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "forbidden tool"):
                 policy.build_payload(SimpleNamespace(node_id="N1"), "task", [])
 
+    def test_constitutional_quality_failure_preserves_actual_cost(self) -> None:
+        engine = self._installed_runtime().execution_engine
+        node = SimpleNamespace(
+            node_id="N1",
+            model="vendor/model",
+            provider_endpoint="vendor/model@provider",
+            output_contract={},
+            parameter_profile={},
+        )
+        attempt = RuntimeAttempt(
+            attempt_index=1,
+            attempt_kind="initial",
+            candidate_id="N1",
+            model=node.model,
+            provider_endpoint=node.provider_endpoint,
+            request={"model": node.model},
+            status="passed",
+            answer="raw answer",
+            quality_score=1.0,
+            gate_reasons=[],
+            latency_seconds=0.1,
+            usage={"cost": 0.125},
+            response_id="response-1",
+            response_model=node.model,
+            response_provider="provider",
+        )
+        with (
+            patch(
+                "v5_constitutional_runtime.normalize_answer",
+                return_value=("normalized answer", {"applied": True}),
+            ),
+            patch.object(
+                engine.quality_policy,
+                "evaluate",
+                return_value=(False, 0.25, ["quality-floor-not-met"]),
+            ),
+            patch(
+                "v5_constitutional_runtime.delivery_contract.validate_answer_contract",
+                return_value=[],
+            ),
+            patch(
+                "v5_constitutional_runtime.validate_answer_evidence",
+                return_value=[],
+            ),
+        ):
+            normalized = engine._normalize_attempt(
+                node,
+                "task",
+                attempt,
+                SimpleNamespace(),
+            )
+        self.assertFalse(normalized)
+        self.assertEqual("quality_gate_failed", attempt.status)
+        self.assertEqual("QUALITY_GATE_FAILED", attempt.failure["category"])
+        self.assertAlmostEqual(0.125, attempt.failure["actual_cost_usd"])
+        self.assertEqual("normalized answer", attempt.answer)
+
     def test_failed_result_raise_is_deferred_without_changing_status(self) -> None:
         result = {
             "status": "failed",
@@ -120,21 +196,7 @@ class ProductionExpertPolicyTests(unittest.TestCase):
         self.assertIn("unsupported-evidence-or-quantity", report)
 
     def test_installer_replaces_prompt_and_engine_without_fallback(self) -> None:
-        config = RuntimeConfig(
-            total_call_limit=5,
-            recovery_call_limit=1,
-            cost_anomaly_usd=1.0,
-            tools_allowed=False,
-            live_catalog_required=True,
-            provider_lock_required=True,
-        )
-        retry = RetryPolicy(
-            retry_same_endpoint_categories=(),
-            maximum_same_endpoint_retries_per_node=0,
-        )
-        runtime = build_runtime(config, retry_policy=retry)
-        installed = install_production_expert_policy(runtime)
-        self.assertIs(installed, runtime)
+        runtime = self._installed_runtime()
         self.assertIsInstance(runtime, ProductionRuntime)
         self.assertIsInstance(runtime.prompt_policy, ProductionExpertPromptPolicy)
         self.assertIsInstance(
@@ -146,6 +208,8 @@ class ProductionExpertPolicyTests(unittest.TestCase):
             0,
             runtime.retry_policy.maximum_same_endpoint_retries_per_node,
         )
+        self.assertTrue(callable(runtime.execution_engine._actual_cost))
+        self.assertTrue(callable(runtime.execution_engine._normalize_attempt))
 
     def test_machine_policy_requires_matching_catalog_and_failure_evidence(self) -> None:
         policy = json.loads(
