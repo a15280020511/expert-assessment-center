@@ -1,0 +1,82 @@
+name: Invalid Expert Ticket Rejection
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  reject-invalid-ticket:
+    if: >-
+      github.actor == github.repository_owner &&
+      startsWith(github.event.issue.title, '[execution]') &&
+      (startsWith(github.event.comment.body, '/run-expert-team ') ||
+       startsWith(github.event.comment.body, '/retry-expert-team '))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    concurrency:
+      group: expert-invalid-ticket-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Checkout frozen production validator
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: production
+          persist-credentials: false
+
+      - name: Validate ticket without model access
+        id: ticket
+        continue-on-error: true
+        run: |
+          python open-model-market/v5_issue_ticket.py prepare \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --output-dir invalid-ticket-artifacts
+
+      - name: Render invalid-ticket terminal receipt
+        if: steps.ticket.outcome == 'success' && steps.ticket.outputs.accepted != 'true'
+        run: |
+          python open-model-market/v5_issue_ticket.py render \
+            --phase rejected \
+            --output-dir invalid-ticket-artifacts \
+            --run-url "$RUN_URL" > invalid-ticket-rejection.md
+
+      - name: Publish one trusted zero-call rejection
+        if: steps.ticket.outcome == 'success' && steps.ticket.outputs.accepted != 'true'
+        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
+        env:
+          STATUS_FILE: invalid-ticket-rejection.md
+        with:
+          script: |
+            const fs = require('fs');
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100
+            });
+            const alreadyRejected = comments.some(comment =>
+              comment.user?.login === 'github-actions[bot]' &&
+              comment.body?.trimStart().startsWith('## EXECUTION_REJECTED')
+            );
+            if (!alreadyRejected) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: fs.readFileSync(process.env.STATUS_FILE, 'utf8')
+              });
+            }
+
+      - name: Assert zero-call scope
+        if: always()
+        run: |
+          test -z "${OPENROUTER_API_KEY:-}"
+          test -z "${ANTHROPIC_API_KEY:-}"
+          test -z "${OPENAI_API_KEY:-}"
