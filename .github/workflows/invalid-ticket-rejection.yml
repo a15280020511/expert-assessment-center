@@ -51,7 +51,7 @@ jobs:
         if: steps.ticket.outcome == 'success' && steps.ticket.outputs.accepted != 'true'
         run: sleep 45
 
-      - name: Publish one trusted zero-call rejection
+      - name: Publish one task-bound trusted zero-call rejection
         if: steps.ticket.outcome == 'success' && steps.ticket.outputs.accepted != 'true'
         uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
         env:
@@ -59,22 +59,38 @@ jobs:
         with:
           script: |
             const fs = require('fs');
+            const command = String(context.payload.comment?.body || '').trim();
+            const match = command.match(/^\/(?:run|retry)-expert-team\s+([A-Za-z0-9][A-Za-z0-9._:-]{7,127})$/);
+            if (!match) {
+              throw new Error('unable to derive task identity from expert command');
+            }
+            const taskId = match[1];
+            const raw = fs.readFileSync(process.env.STATUS_FILE, 'utf8');
+            if (!raw.trimStart().startsWith('## EXECUTION_REJECTED')) {
+              throw new Error('unexpected invalid-ticket receipt heading');
+            }
+            const body = raw.replace(
+              /^## EXECUTION_REJECTED\s*/,
+              `## EXECUTION_REJECTED\n\n- Task ID: \`${taskId}\`\n`
+            );
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
               per_page: 100
             });
+            const taskLine = `- Task ID: \`${taskId}\``;
             const alreadyRejected = comments.some(comment =>
               comment.user?.login === 'github-actions[bot]' &&
-              comment.body?.trimStart().startsWith('## EXECUTION_REJECTED')
+              comment.body?.trimStart().startsWith('## EXECUTION_REJECTED') &&
+              comment.body?.includes(taskLine)
             );
             if (!alreadyRejected) {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
-                body: fs.readFileSync(process.env.STATUS_FILE, 'utf8')
+                body
               });
             }
 
