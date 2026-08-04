@@ -12,6 +12,7 @@ import json
 from typing import Any, Mapping
 
 from v5_gpt_expert_selector import (
+    _canonical_json,
     build_proposal_request as _build_proposal_request,
     build_synthesis_request as _build_synthesis_request,
     parse_proposal,
@@ -23,17 +24,6 @@ from v5_proposal_materializer import (
     materialize_proposal as _materialize_proposal,
 )
 from v5_task_constraints import normalized_quantities
-
-
-def _canonical_json(value: Any) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-        default=str,
-    )
 
 
 def _amend_request(
