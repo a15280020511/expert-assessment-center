@@ -52,7 +52,10 @@ jobs:
               'direct_center_to_center_calls_allowed': False,
               'huggingface_direct_access_allowed': False,
               'hf_token_allowed': False,
-              'compute_baseline_access_allowed': False,
+              'compute_baseline_access_allowed': True,
+              'compute_baseline_access_mode': 'governance-task-scoped-evidence-only',
+              'compute_baseline_direct_repository_access_allowed': False,
+              'compute_baseline_full_library_browse_allowed': False,
               'intelligence_artifact_access_allowed': False,
               'compute_artifact_access_allowed': False,
               'tools_allowed': False,
@@ -67,7 +70,8 @@ jobs:
           for marker in (
               '网页 GPTs 不得直接控制本仓库',
               'a15280020511/decision-system-governance',
-              '不访问计算中心基准库',
+              '允许使用治理仓库随任务提供的基准库数值证据',
+              '不得直接访问 Hugging Face',
               '禁止工具和网络',
           ):
               assert marker in topology or marker in security, marker
@@ -93,7 +97,8 @@ jobs:
               'gpts_direct_control_allowed': False,
               'direct_center_to_center_calls_allowed': False,
               'huggingface_direct_access_allowed': False,
-              'compute_baseline_access_allowed': False,
+              'compute_baseline_access_allowed': True,
+              'compute_baseline_access_mode': row['compute_baseline_access_mode'],
               'tools_allowed': False,
               'network_allowed': False,
               'secret_values_exposed': False,
