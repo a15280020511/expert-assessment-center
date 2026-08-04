@@ -14,6 +14,7 @@ from openrouter_api import OpenRouterRequestError, request_json
 from v5_catalog_view import (
     GOVERNANCE_COMPANIES,
     CatalogViewError,
+    _provider_slug as provider_slug,
     endpoint_url,
     stable_model_id,
 )
@@ -24,14 +25,6 @@ MAX_ENDPOINT_FETCH_WORKERS = 16
 ZDR_ENDPOINTS_URL = "https://openrouter.ai/api/v1/endpoints/zdr"
 
 
-def _provider_slug(endpoint: Mapping[str, Any]) -> str:
-    for key in ("tag", "provider_slug", "provider", "name", "provider_name"):
-        value = str(endpoint.get(key) or "").strip()
-        if value:
-            return value
-    return ""
-
-
 def _zdr_endpoint_keys(payload: Mapping[str, Any]) -> frozenset[tuple[str, str]]:
     rows = payload.get("data") if isinstance(payload, Mapping) else None
     if not isinstance(rows, list):
@@ -39,7 +32,7 @@ def _zdr_endpoint_keys(payload: Mapping[str, Any]) -> frozenset[tuple[str, str]]
     keys = {
         (
             str(row.get("model_id") or "").strip(),
-            _provider_slug(row),
+            provider_slug(row),
         )
         for row in rows
         if isinstance(row, Mapping)
@@ -85,7 +78,7 @@ def _filter_model_payload_to_zdr(
         dict(endpoint)
         for endpoint in endpoints
         if isinstance(endpoint, Mapping)
-        and (model_id, _provider_slug(endpoint)) in allowed
+        and (model_id, provider_slug(endpoint)) in allowed
     ]
     result["data"] = normalized_data
     result["zdr_endpoint_filter"] = {
