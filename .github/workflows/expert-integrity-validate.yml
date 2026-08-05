@@ -37,8 +37,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m compileall -q open-model-market tests tools
-          python tests/test_v6_governed_roster.py
-          python tests/test_v6_active_production_contract.py
+          python -m unittest discover -s tests -p 'test_v6_*.py' -v
           python tests/test_workflow_contract.py
           python tests/test_legacy_runtime_removed.py
           python - <<'PY'
