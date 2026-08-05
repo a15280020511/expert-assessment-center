@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Collect, redact, classify and package GitHub Actions diagnostics."""
+"""Analyze locally collected GitHub Actions metadata and redacted log archives.
+
+This module performs no network access. The workflow fetches same-repository
+Actions evidence with GitHub CLI before invoking this analyzer.
+"""
 from __future__ import annotations
 
 import argparse
@@ -10,22 +14,21 @@ import json
 import os
 import re
 import sys
-import urllib.error
-import urllib.request
 import zipfile
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 SCHEMA = "workflow-diagnostics-v2"
-API_VERSION = "2022-11-28"
 FAILURES = {"failure", "cancelled", "timed_out", "action_required", "stale", "startup_failure"}
+MAX_REDACTED_FILE_BYTES = 8 * 1024 * 1024
+MAX_KEY_LINES = 300
 SECRET = re.compile(r"(?i)(authorization|cookie|set-cookie|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|password|passwd|sendkey|sckey|secret|token)\s*[:=]\s*([^\s,;]+)")
 BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}")
 QUERY_SECRET = re.compile(r"(?i)([?&](?:api[_-]?key|access[_-]?token|token|key|secret|sendkey|sckey)=)[^&#\s]+")
 GITHUB_SECRET = re.compile(r"\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{12,}\b")
 ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 KEY_LINE = re.compile(r"(?i)(::error|##\[error\]|error:|exception|traceback|failed|failure|fatal|timed out|timeout|unauthorized|forbidden|rate limit|quota|assertion|warning:|##\[warning\])")
-PATTERNS = (
+PATTERNS: Sequence[tuple[str, Sequence[str]]] = (
     ("secret_or_auth", ("missing or unavailable", "bad credentials", "unauthorized", "forbidden", "permission denied", "resource not accessible by integration", "http 401", "http 403")),
     ("rate_limit_or_quota", ("rate limit", "too many requests", "quota exceeded", "http 429")),
     ("timeout_or_cancellation", ("timed out", "timeout", "cancelled", "canceled", "deadline exceeded")),
@@ -53,6 +56,13 @@ def dump(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(dict(row), ensure_ascii=False, sort_keys=True) + "\n")
+
+
 def redact(text: str) -> str:
     text = ANSI.sub("", text)
     text = BEARER.sub("Bearer [REDACTED]", text)
@@ -61,61 +71,8 @@ def redact(text: str) -> str:
     return GITHUB_SECRET.sub("[REDACTED_GITHUB_TOKEN]", text)
 
 
-class Client:
-    def __init__(self, repository: str, token: str) -> None:
-        self.repository = repository
-        self.token = token
-
-    def get(self, path: str) -> bytes:
-        request = urllib.request.Request(
-            "https://api.github.com" + path,
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {self.token}",
-                "User-Agent": "workflow-diagnostics",
-                "X-GitHub-Api-Version": API_VERSION,
-            },
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=60) as response:
-                data = response.read(100 * 1024 * 1024 + 1)
-        except urllib.error.HTTPError as exc:
-            body = redact(exc.read(2000).decode("utf-8", errors="replace"))
-            raise RuntimeError(f"GitHub API HTTP {exc.code}: {body}") from exc
-        if len(data) > 100 * 1024 * 1024:
-            raise RuntimeError("GitHub API response exceeded safety limit")
-        return data
-
-    def get_json(self, path: str) -> Any:
-        data = self.get(path)
-        return json.loads(data.decode("utf-8")) if data else None
-
-    def recent_runs(self, cutoff: dt.datetime, limit: int) -> list[Mapping[str, Any]]:
-        found: list[Mapping[str, Any]] = []
-        for page in range(1, 11):
-            payload = self.get_json(f"/repos/{self.repository}/actions/runs?per_page=100&page={page}")
-            rows = payload.get("workflow_runs", []) if isinstance(payload, Mapping) else []
-            if not rows:
-                break
-            stop = False
-            for row in rows:
-                if not isinstance(row, Mapping):
-                    continue
-                created = parse_time(str(row.get("created_at") or now()))
-                if created < cutoff:
-                    stop = True
-                    continue
-                found.append(row)
-                if len(found) >= limit:
-                    return found
-            if stop:
-                break
-        return found
-
-    def jobs(self, run_id: int) -> list[Mapping[str, Any]]:
-        payload = self.get_json(f"/repos/{self.repository}/actions/runs/{run_id}/jobs?filter=latest&per_page=100")
-        rows = payload.get("jobs", []) if isinstance(payload, Mapping) else []
-        return [row for row in rows if isinstance(row, Mapping)]
+def read_json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def duration(start: Any, end: Any) -> float | None:
@@ -123,14 +80,53 @@ def duration(start: Any, end: Any) -> float | None:
         return None
     try:
         return round((parse_time(str(end)) - parse_time(str(start))).total_seconds(), 3)
-    except ValueError:
+    except (TypeError, ValueError):
         return None
 
 
-def compact_jobs(jobs: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    output = []
-    for job in jobs:
-        steps = []
+def select_runs(payload: Any, *, lookback_hours: float, max_runs: int, excluded: set[str]) -> list[dict[str, Any]]:
+    rows = payload.get("workflow_runs", []) if isinstance(payload, Mapping) else []
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=lookback_hours)
+    selected: list[dict[str, Any]] = []
+    for raw in rows if isinstance(rows, list) else []:
+        if not isinstance(raw, Mapping):
+            continue
+        created = parse_time(str(raw.get("created_at") or now()))
+        if created < cutoff or str(raw.get("path") or "") in excluded:
+            continue
+        selected.append({
+            "id": int(raw.get("id") or 0), "name": raw.get("name"), "path": raw.get("path"),
+            "event": raw.get("event"), "status": raw.get("status"), "conclusion": raw.get("conclusion"),
+            "run_attempt": raw.get("run_attempt"), "head_branch": raw.get("head_branch"),
+            "head_sha": raw.get("head_sha"), "created_at": raw.get("created_at"),
+            "run_started_at": raw.get("run_started_at"), "updated_at": raw.get("updated_at"),
+            "html_url": raw.get("html_url"),
+        })
+        if len(selected) >= max_runs:
+            break
+    return selected
+
+
+def plan(args: argparse.Namespace) -> int:
+    selected = select_runs(
+        read_json(Path(args.runs_json)), lookback_hours=args.lookback_hours,
+        max_runs=args.max_runs, excluded=set(args.exclude_workflow_path),
+    )
+    dump(Path(args.output), {
+        "schema_version": SCHEMA, "created_at": now(), "repository": args.repository,
+        "runs": selected,
+        "failure_run_ids": [row["id"] for row in selected if str(row.get("conclusion") or "") in FAILURES],
+    })
+    return 0
+
+
+def compact_jobs(payload: Any) -> list[dict[str, Any]]:
+    rows = payload.get("jobs", []) if isinstance(payload, Mapping) else []
+    output: list[dict[str, Any]] = []
+    for job in rows if isinstance(rows, list) else []:
+        if not isinstance(job, Mapping):
+            continue
+        steps: list[dict[str, Any]] = []
         for step in job.get("steps", []) if isinstance(job.get("steps"), list) else []:
             if isinstance(step, Mapping):
                 steps.append({
@@ -151,7 +147,7 @@ def compact_jobs(jobs: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
 
 def classify(lines: list[str], conclusion: str, jobs: list[dict[str, Any]]) -> dict[str, Any]:
     text = "\n".join(lines).lower()
-    candidates = []
+    candidates: list[dict[str, Any]] = []
     for category, signals in PATTERNS:
         hits = [signal for signal in signals if signal in text]
         if hits:
@@ -160,10 +156,11 @@ def classify(lines: list[str], conclusion: str, jobs: list[dict[str, Any]]) -> d
         candidates.insert(0, {"category": "timeout_or_cancellation", "signals": [conclusion]})
     if not candidates:
         candidates = [{"category": "unknown", "signals": ["no known signature matched"]}]
-    primary = candidates[0]["category"]
+    primary = str(candidates[0]["category"])
     failed_steps = [
-        {"job_id": job["id"], "job_name": job["name"], "step_number": step["number"], "step_name": step["name"], "conclusion": step["conclusion"]}
-        for job in jobs for step in job["steps"] if step.get("conclusion") in FAILURES
+        {"job_id": job.get("id"), "job_name": job.get("name"), "step_number": step.get("number"),
+         "step_name": step.get("name"), "conclusion": step.get("conclusion")}
+        for job in jobs for step in job.get("steps", []) if step.get("conclusion") in FAILURES
     ]
     normalized = "\n".join(re.sub(r"\b[0-9a-f]{12,64}\b", "<ID>", line.lower())[:500] for line in lines[:20])
     retryable = primary in {"rate_limit_or_quota", "timeout_or_cancellation", "network_dns_tls", "provider_or_model"}
@@ -175,18 +172,18 @@ def classify(lines: list[str], conclusion: str, jobs: list[dict[str, Any]]) -> d
     }
 
 
-def extract_logs(data: bytes, target: Path) -> tuple[list[Path], list[str]]:
+def extract_logs(zip_path: Path, target: Path) -> tuple[list[Path], list[str]]:
     target.mkdir(parents=True, exist_ok=True)
-    paths, notes = [], []
-    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+    paths: list[Path] = []
+    notes: list[str] = []
+    with zipfile.ZipFile(io.BytesIO(zip_path.read_bytes())) as archive:
         for index, info in enumerate(archive.infolist()):
             if info.is_dir():
                 continue
             name = Path(info.filename).name or f"log-{index}.txt"
-            content = redact(archive.read(info).decode("utf-8", errors="replace"))
-            encoded = content.encode("utf-8")
-            if len(encoded) > 8 * 1024 * 1024:
-                encoded = encoded[:8 * 1024 * 1024] + b"\n[TRUNCATED]\n"
+            encoded = redact(archive.read(info).decode("utf-8", errors="replace")).encode("utf-8")
+            if len(encoded) > MAX_REDACTED_FILE_BYTES:
+                encoded = encoded[:MAX_REDACTED_FILE_BYTES] + b"\n[TRUNCATED]\n"
                 notes.append(f"{name} truncated")
             path = target / f"{index:03d}-{name}"
             path.write_bytes(encoded)
@@ -194,97 +191,132 @@ def extract_logs(data: bytes, target: Path) -> tuple[list[Path], list[str]]:
     return paths, notes
 
 
-def manifest(root: Path) -> None:
+def key_lines(paths: Sequence[Path]) -> list[str]:
+    rows: list[str] = []
+    seen: set[str] = set()
+    for path in paths:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            normalized = re.sub(r"\s+", " ", line).strip().lower()
+            if not KEY_LINE.search(line) or normalized in seen:
+                continue
+            seen.add(normalized)
+            rows.append(line[:2000])
+            if len(rows) >= MAX_KEY_LINES:
+                return rows
+    return rows
+
+
+def build_manifest(root: Path) -> None:
     files = []
     for path in sorted(root.rglob("*")):
         if path.is_file() and path.name != "manifest.json":
             files.append({"path": path.relative_to(root).as_posix(), "bytes": path.stat().st_size,
                           "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
-    dump(root / "manifest.json", {"schema_version": SCHEMA, "created_at": now(), "files": files,
-                                  "security": {"secret_values_included": False, "logs_redacted": True}})
+    dump(root / "manifest.json", {
+        "schema_version": SCHEMA, "created_at": now(), "files": files,
+        "security": {"secret_values_included": False, "logs_redacted": True,
+                     "network_access_performed_by_analyzer": False},
+    })
+
+
+def analyze(args: argparse.Namespace) -> int:
+    input_dir = Path(args.input_dir)
+    plan_data = read_json(input_dir / "plan.json")
+    selected = plan_data.get("runs", []) if isinstance(plan_data, Mapping) else []
+    output = Path(args.output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    index: list[dict[str, Any]] = []
+    for run in selected if isinstance(selected, list) else []:
+        if not isinstance(run, Mapping):
+            continue
+        run_id = int(run.get("id") or 0)
+        run_dir = output / "runs" / str(run_id)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        jobs_path = input_dir / "jobs" / f"{run_id}.json"
+        jobs = compact_jobs(read_json(jobs_path)) if jobs_path.exists() else []
+        record = dict(run)
+        record.update({
+            "duration_seconds": duration(run.get("run_started_at"), run.get("updated_at")),
+            "job_count": len(jobs),
+            "failed_job_count": sum(1 for job in jobs if job.get("conclusion") in FAILURES),
+            "diagnostic_path": run_dir.relative_to(output).as_posix(),
+        })
+        dump(run_dir / "run.json", record)
+        jsonl(run_dir / "jobs.jsonl", jobs)
+        conclusion = str(run.get("conclusion") or "unknown")
+        if conclusion in FAILURES:
+            notes: list[str] = []
+            log_paths: list[Path] = []
+            zip_path = input_dir / "logs" / f"{run_id}.zip"
+            error_path = input_dir / "logs" / f"{run_id}.error.txt"
+            if zip_path.exists() and zip_path.stat().st_size:
+                try:
+                    log_paths, notes = extract_logs(zip_path, run_dir / "redacted-logs")
+                except (zipfile.BadZipFile, OSError) as exc:
+                    notes.append(f"local log archive could not be parsed: {type(exc).__name__}: {exc}")
+            elif error_path.exists():
+                notes.append(redact(error_path.read_text(encoding="utf-8", errors="replace"))[:2000])
+            else:
+                notes.append("log archive was not collected")
+            lines = key_lines(log_paths)
+            jsonl(run_dir / "key-lines.jsonl", ({"line": line} for line in lines))
+            failure = classify(lines, conclusion, jobs)
+            failure.update({
+                "schema_version": SCHEMA, "run_id": run_id, "workflow": run.get("name"),
+                "conclusion": conclusion, "notes": notes,
+                "redacted_log_file_count": len(log_paths), "key_line_count": len(lines),
+            })
+            dump(run_dir / "failure.json", failure)
+        index.append(record)
+    index.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
+    failures = [row for row in index if str(row.get("conclusion") or "") in FAILURES]
+    dump(output / "diagnostic-index.json", {
+        "schema_version": SCHEMA, "created_at": now(), "repository": args.repository,
+        "center": args.center, "run_count": len(index), "runs": index,
+        "collector": {"network_access_performed_by_analyzer": False, "raw_environment_collected": False,
+                      "secret_values_included": False},
+    })
+    summary = [
+        "# Workflow diagnostic sweep", "", f"- Repository: `{args.repository}`",
+        f"- Center: `{args.center}`", f"- Runs inspected: **{len(index)}**",
+        f"- Non-success runs: **{len(failures)}**", "",
+        "Reading order: `diagnostic-index.json` → `runs/<run_id>/failure.json` → `key-lines.jsonl` → `jobs.jsonl` → `redacted-logs/` → `manifest.json`", "",
+        "The Python analyzer performed no network access; GitHub CLI collected same-repository metadata in a separate workflow step.", "",
+    ]
+    (output / "summary.md").write_text("\n".join(summary), encoding="utf-8")
+    build_manifest(output)
+    if os.getenv("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
+            handle.write("\n".join(summary))
+    return 0
+
+
+def parser() -> argparse.ArgumentParser:
+    root = argparse.ArgumentParser()
+    sub = root.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("plan")
+    p.add_argument("--runs-json", required=True)
+    p.add_argument("--repository", required=True)
+    p.add_argument("--output", required=True)
+    p.add_argument("--lookback-hours", type=float, default=2.0)
+    p.add_argument("--max-runs", type=int, default=200)
+    p.add_argument("--exclude-workflow-path", action="append", default=[])
+    a = sub.add_parser("analyze")
+    a.add_argument("--input-dir", required=True)
+    a.add_argument("--repository", required=True)
+    a.add_argument("--center", required=True)
+    a.add_argument("--output-dir", required=True)
+    return root
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--repository", default=os.getenv("GITHUB_REPOSITORY", ""))
-    parser.add_argument("--token", default=os.getenv("GITHUB_TOKEN", ""))
-    parser.add_argument("--center", default=os.getenv("DIAGNOSTIC_CENTER", "unknown"))
-    parser.add_argument("--output-dir", default="diagnostic-bundle")
-    parser.add_argument("--lookback-hours", type=float, default=2.0)
-    parser.add_argument("--max-runs", type=int, default=200)
-    parser.add_argument("--exclude-workflow-path", action="append", default=[])
-    args = parser.parse_args()
-    if not args.repository or not args.token or not (0.1 <= args.lookback_hours <= 168) or not (1 <= args.max_runs <= 1000):
-        print("::error::invalid repository, token, or sweep bounds", file=sys.stderr)
-        return 2
-    root = Path(args.output_dir)
-    root.mkdir(parents=True, exist_ok=True)
-    cutoff_dt = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=args.lookback_hours)
-    client = Client(args.repository, args.token)
-    index = []
-    try:
-        for run in client.recent_runs(cutoff_dt, args.max_runs):
-            if str(run.get("path") or "") in set(args.exclude_workflow_path):
-                continue
-            run_id = int(run.get("id") or 0)
-            run_dir = root / "runs" / str(run_id)
-            run_dir.mkdir(parents=True, exist_ok=True)
-            jobs = compact_jobs(client.jobs(run_id))
-            conclusion = str(run.get("conclusion") or "unknown")
-            record = {
-                "id": run_id, "name": run.get("name"), "path": run.get("path"), "event": run.get("event"),
-                "status": run.get("status"), "conclusion": conclusion, "run_attempt": run.get("run_attempt"),
-                "head_branch": run.get("head_branch"), "head_sha": run.get("head_sha"),
-                "created_at": run.get("created_at"), "run_started_at": run.get("run_started_at"),
-                "updated_at": run.get("updated_at"), "html_url": run.get("html_url"),
-                "duration_seconds": duration(run.get("run_started_at"), run.get("updated_at")),
-                "job_count": len(jobs), "diagnostic_path": run_dir.relative_to(root).as_posix(),
-            }
-            dump(run_dir / "run.json", record)
-            (run_dir / "jobs.jsonl").write_text("".join(json.dumps(job, ensure_ascii=False, sort_keys=True) + "\n" for job in jobs), encoding="utf-8")
-            if conclusion in FAILURES:
-                lines, notes, paths = [], [], []
-                try:
-                    paths, notes = extract_logs(client.get(f"/repos/{args.repository}/actions/runs/{run_id}/logs"), run_dir / "redacted-logs")
-                    seen = set()
-                    for path in paths:
-                        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-                            if KEY_LINE.search(line) and line not in seen:
-                                seen.add(line)
-                                lines.append(line[:2000])
-                                if len(lines) >= 300:
-                                    break
-                except Exception as exc:
-                    notes.append(redact(str(exc)))
-                (run_dir / "key-lines.jsonl").write_text("".join(json.dumps({"line": line}, ensure_ascii=False) + "\n" for line in lines), encoding="utf-8")
-                failure = classify(lines, conclusion, jobs)
-                failure.update({"schema_version": SCHEMA, "run_id": run_id, "workflow": run.get("name"),
-                                "conclusion": conclusion, "notes": notes, "redacted_log_file_count": len(paths)})
-                dump(run_dir / "failure.json", failure)
-            index.append(record)
-        index.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
-        failures = [row for row in index if row["conclusion"] in FAILURES]
-        dump(root / "diagnostic-index.json", {"schema_version": SCHEMA, "created_at": now(),
-                                              "repository": args.repository, "center": args.center,
-                                              "cutoff": cutoff_dt.replace(microsecond=0).isoformat(),
-                                              "run_count": len(index), "runs": index,
-                                              "security": {"secret_values_included": False}})
-        summary = ["# Workflow diagnostic sweep", "", f"- Repository: `{args.repository}`", f"- Center: `{args.center}`",
-                   f"- Runs inspected: **{len(index)}**", f"- Non-success runs: **{len(failures)}**", "",
-                   "Reading order: `diagnostic-index.json` → `runs/<run_id>/failure.json` → `key-lines.jsonl` → `jobs.jsonl` → `redacted-logs/` → `manifest.json`", ""]
-        (root / "summary.md").write_text("\n".join(summary), encoding="utf-8")
-        manifest(root)
-        if os.getenv("GITHUB_STEP_SUMMARY"):
-            with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
-                handle.write("\n".join(summary))
-        return 0
-    except Exception as exc:
-        dump(root / "collector-error.json", {"schema_version": SCHEMA, "created_at": now(),
-                                              "error_type": type(exc).__name__, "message": redact(str(exc)),
-                                              "security": {"secret_values_included": False}})
-        manifest(root)
-        print(f"::error::{redact(str(exc))}", file=sys.stderr)
-        return 1
+    args = parser().parse_args()
+    if args.command == "plan":
+        if not (0.1 <= args.lookback_hours <= 168) or not (1 <= args.max_runs <= 200):
+            print("::error::invalid sweep bounds", file=sys.stderr)
+            return 2
+        return plan(args)
+    return analyze(args)
 
 
 if __name__ == "__main__":
