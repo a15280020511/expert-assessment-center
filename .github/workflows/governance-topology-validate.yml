@@ -1,18 +1,23 @@
-name: Validate Governance 4.1 Expert Topology
+name: Validate Governance Expert Topology V6
 
 on:
   pull_request:
+    branches: [main]
     paths:
       - "CONTROL_TOPOLOGY.md"
       - "SECURITY.md"
+      - "CONSTITUTION.md"
       - "governance-compatibility.json"
+      - "open-model-market/v6_*.py"
       - ".github/workflows/**"
   push:
     branches: [main]
     paths:
       - "CONTROL_TOPOLOGY.md"
       - "SECURITY.md"
+      - "CONSTITUTION.md"
       - "governance-compatibility.json"
+      - "open-model-market/v6_*.py"
       - ".github/workflows/**"
   workflow_dispatch:
 
@@ -20,7 +25,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: expert-governance-topology-${{ github.ref }}
+  group: expert-governance-topology-v6-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -33,7 +38,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Validate governance-only topology
+      - name: Validate governance-only V6 topology
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -62,19 +67,29 @@ jobs:
               'network_allowed': False,
           }
           bad = [key for key, value in expected.items() if row.get(key) != value]
-          assert not bad, bad
-          assert row['governance_contract_sha256'] == 'a57f5cd754517a40e13bd7d15c45bc088651599dbc69e1113153e0372b73fc63'
+          if bad:
+              raise SystemExit(f'governance compatibility mismatch: {bad}')
+          if row['governance_contract_sha256'] != 'a57f5cd754517a40e13bd7d15c45bc088651599dbc69e1113153e0372b73fc63':
+              raise SystemExit('governance contract digest mismatch')
 
           topology = (root / 'CONTROL_TOPOLOGY.md').read_text(encoding='utf-8')
           security = (root / 'SECURITY.md').read_text(encoding='utf-8')
+          constitution = (root / 'CONSTITUTION.md').read_text(encoding='utf-8')
           for marker in (
               '网页 GPTs 不得直接控制本仓库',
               'a15280020511/decision-system-governance',
-              '允许使用治理仓库随任务提供的基准库数值证据',
               '不得直接访问 Hugging Face',
               '禁止工具和网络',
           ):
-              assert marker in topology or marker in security, marker
+              if marker not in topology and marker not in security:
+                  raise SystemExit(f'missing topology marker: {marker}')
+          for marker in (
+              '治理中心（按实际任务预计费用选择并签发模型名单）',
+              'networkx==3.6.1',
+              'Claude 红队机制、GPT 提案机制、GPT 综合机制以及任何其他治理模型链全部取消',
+          ):
+              if marker not in constitution:
+                  raise SystemExit(f'missing V6 constitutional marker: {marker}')
 
           expression_open = '$' + '{{'
           expression_close = '}' + '}'
@@ -89,23 +104,28 @@ jobs:
                   'repository_dispatch:',
                   'uses: a15280020511/evidence-data-center',
                   'uses: a15280020511/compute-simulation-center',
+                  'v5_claude_red_team_policy.py',
+                  'v5_governance_runtime.py',
+                  'v5_gpt_expert_selector.py',
               )
               for pattern in forbidden_patterns:
                   if pattern in text:
                       violations.append(f'{path}:{pattern}')
-          assert not violations, violations
+          if violations:
+              raise SystemExit(f'workflow topology violations: {violations}')
           print(json.dumps({
-              'status': 'EXPERT_GOVERNANCE_TOPOLOGY_VALIDATED',
+              'status': 'EXPERT_GOVERNANCE_TOPOLOGY_V6_VALIDATED',
               'external_controller': row['external_controller'],
+              'selection_authority': 'decision-system-governance',
+              'orchestration_library': 'networkx==3.6.1',
               'gpts_direct_control_allowed': False,
               'direct_center_to_center_calls_allowed': False,
               'huggingface_direct_access_allowed': False,
-              'compute_baseline_access_allowed': True,
-              'compute_baseline_access_mode': row['compute_baseline_access_mode'],
               'tools_allowed': False,
-              'network_allowed': False,
+              'expert_model_network_allowed': False,
+              'governance_model_calls': 0,
+              'claude_calls': 0,
               'secret_values_exposed': False,
-              'model_calls': 0,
           }, ensure_ascii=False, sort_keys=True))
           PY
           git diff --check
