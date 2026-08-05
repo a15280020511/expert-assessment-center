@@ -53,30 +53,46 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _run_config(task: str, root: Path) -> RunConfig:
+def _run_config(
+    task: str,
+    root: Path,
+    *,
+    completion_tokens: int,
+    maximum_total_calls: int,
+    maximum_recovery_calls: int,
+    require_live_catalog: bool,
+) -> RunConfig:
     api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY is not set")
+    if completion_tokens <= 0:
+        raise RuntimeError("governance completion-token profile must be positive")
     return RunConfig(
-        api_key=api_key,
         task=task,
         output_dir=root,
-        catalog_file=None,
-        catalog_sorts=("intelligence-high-to-low", "pricing-low-to-high"),
+        api_key=api_key,
         ranking_limit=150,
-        min_context_length=8_192,
-        max_completion_tokens=2_000,
-        cost_anomaly_usd=None,
+        minimum_context_length=8_192,
+        catalog_sorts=["intelligence-high-to-low", "pricing-low-to-high"],
+        catalog_file=None,
+        max_completion_tokens=completion_tokens,
+        reasoning_effort="medium",
+        temperature=0.0,
         catalog_timeout_seconds=int(os.getenv("CATALOG_TIMEOUT_SECONDS", "30")),
-        model_timeout_seconds=int(os.getenv("MODEL_TIMEOUT_SECONDS", "240")),
         catalog_max_retries=int(os.getenv("CATALOG_MAX_RETRIES", "1")),
+        model_timeout_seconds=int(os.getenv("MODEL_TIMEOUT_SECONDS", "240")),
         model_max_retries=0,
+        maximum_replacements=maximum_recovery_calls,
         parallel_workers=max(1, int(os.getenv("PARALLEL_WORKERS", "4"))),
-        http_referer=os.getenv("OPENROUTER_SITE_URL", ""),
-        app_title=os.getenv(
-            "OPENROUTER_APP_NAME",
-            "self-managed-governed-expert-team-v6",
-        ),
+        provider={
+            "allow_fallbacks": False,
+            "require_parameters": True,
+            "explicit_provider_lock_required": True,
+        },
+        dry_run=False,
+        require_live_catalog=require_live_catalog,
+        maximum_total_calls=maximum_total_calls,
+        maximum_recovery_calls=maximum_recovery_calls,
     )
 
 
@@ -169,7 +185,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             },
         )
 
-        run = _run_config(task, root)
+        run = _run_config(
+            task,
+            root,
+            completion_tokens=completion_tokens,
+            maximum_total_calls=args.maximum_total_calls,
+            maximum_recovery_calls=args.maximum_recovery_calls,
+            require_live_catalog=bool(args.require_live_catalog),
+        )
+        if run.max_completion_tokens != completion_tokens:
+            raise RuntimeError("runtime completion envelope differs from governance profile")
         models, catalog_source = fetch_catalog(run)
         chosen, endpoint_catalog, endpoint_payloads = resolve_exact_endpoints(
             validation,
@@ -219,6 +244,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             {
                 **runtime.describe(),
                 "runtime_version": RUNTIME_VERSION,
+                "max_completion_tokens": completion_tokens,
+                "completion_token_source": "governance-roster-task-cost-profile",
                 "claude_mechanism_enabled": False,
                 "governance_model_calls": 0,
             },
@@ -248,6 +275,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
                 "maximum_total_calls": args.maximum_total_calls,
                 "maximum_recovery_calls": args.maximum_recovery_calls,
+                "maximum_completion_tokens": completion_tokens,
+                "completion_token_source": "governance-roster-task-cost-profile",
                 "governance_calls_reserved": 0,
                 "claude_mechanism_enabled": False,
                 "model_loop_allowed": False,
