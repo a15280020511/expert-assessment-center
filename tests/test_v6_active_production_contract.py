@@ -47,7 +47,10 @@ class ActiveV6ProductionContractTests(unittest.TestCase):
         ).lower()
         forbidden = (
             "claude-opus",
-            "claude_red_team",
+            "from v5_claude_red_team_policy",
+            "import v5_claude_red_team_policy",
+            "v5_production_claude_request",
+            "claude_model_for_request",
             "gpt_proposal",
             "gpt_synthesis",
             "selection_authority\": \"~openai",
@@ -59,6 +62,7 @@ class ActiveV6ProductionContractTests(unittest.TestCase):
         for marker in forbidden:
             self.assertNotIn(marker, sources)
         self.assertIn("claude_mechanism_enabled", sources)
+        self.assertIn("claude_red_team_calls", sources)
         self.assertIn("governance-signed-roster", sources)
         self.assertIn("networkx", sources)
 
