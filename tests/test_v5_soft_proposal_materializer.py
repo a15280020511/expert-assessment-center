@@ -77,12 +77,60 @@ def _graph() -> ExecutionGraph:
     )
 
 
+def _materialize_kwargs() -> dict[str, object]:
+    return {
+        "approved_total_calls": 4,
+        "governance_calls_reserved": 3,
+        "approved_recovery_calls": 0,
+        "cost_anomaly_usd": 0.01,
+    }
+
+
 class SoftProposalMaterializerTests(unittest.TestCase):
     def test_pipeline_uses_soft_materializer(self):
         self.assertEqual(
             v5_pipeline.materialize_proposal.__module__,
             "v5_soft_proposal_materializer",
         )
+
+    def test_structural_validation_error_is_preserved(self):
+        error = soft.structural.ProposalValidationError(
+            "recovery output advisory exceeds provider-native capacity"
+        )
+        with mock.patch.object(
+            soft.structural,
+            "materialize_proposal",
+            side_effect=error,
+        ):
+            with self.assertRaises(
+                soft.structural.ProposalValidationError
+            ) as raised:
+                soft.materialize_proposal(
+                    {},
+                    "task",
+                    {},
+                    {},
+                    **_materialize_kwargs(),
+                )
+        self.assertIs(error, raised.exception)
+
+    def test_deterministic_violations_reports_structural_error(self):
+        error = soft.structural.ProposalValidationError(
+            "recovery endpoint lacks required context capacity"
+        )
+        with mock.patch.object(
+            soft.structural,
+            "materialize_proposal",
+            side_effect=error,
+        ):
+            violations = soft.deterministic_violations(
+                {},
+                "task",
+                {},
+                {},
+                **_materialize_kwargs(),
+            )
+        self.assertEqual([str(error)], violations)
 
     def test_soft_materialization_removes_caps_before_artifact(self):
         structural_graph = _graph()
@@ -108,10 +156,7 @@ class SoftProposalMaterializerTests(unittest.TestCase):
                 "task",
                 {},
                 {},
-                approved_total_calls=4,
-                governance_calls_reserved=3,
-                approved_recovery_calls=0,
-                cost_anomaly_usd=0.01,
+                **_materialize_kwargs(),
             )
 
         self.assertIsNone(
@@ -122,7 +167,10 @@ class SoftProposalMaterializerTests(unittest.TestCase):
         self.assertNotIn("max_completion_tokens", request)
         self.assertNotIn("max_tokens", request["reasoning"])
         recovery = graph.metadata["recovery_pool"]["n1"][0]
-        self.assertNotIn("max_completion_tokens", recovery["request_config"])
+        self.assertNotIn(
+            "max_completion_tokens",
+            recovery["request_config"],
+        )
         self.assertNotIn(
             "token_budget",
             recovery["request_config"].get("reasoning", {}),
@@ -134,7 +182,9 @@ class SoftProposalMaterializerTests(unittest.TestCase):
             audit["cost_threshold_can_reject_materialization"]
         )
         self.assertFalse(audit["local_token_ceiling_enforced"])
-        self.assertTrue(audit["request_token_fields_removed_before_artifact"])
+        self.assertTrue(
+            audit["request_token_fields_removed_before_artifact"]
+        )
 
 
 if __name__ == "__main__":
