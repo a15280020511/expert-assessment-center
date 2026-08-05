@@ -1,106 +1,22 @@
 #!/usr/bin/env python3
-"""Deterministic audit for the zero-governance price-ranked production path."""
+"""Deterministic audit for governance-selected expert execution."""
 from __future__ import annotations
 
 import argparse
 import json
 import math
 import os
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
 from artifact_manifest import sha256_file
+from v5_governance_model_plan import validate_governance_model_plan
 from v5_json_io import write_json
-from v5_price_ranked_support import load_mapping, mapping_rows
+from v5_price_ranked_support import load_mapping, mapping_rows, models_from_graph
 from v5_provider_lock import canonical_provider_lock
 
-RUNTIME_VERSION = "v5-price-ranked-runtime-1"
+RUNTIME_VERSION = "v5-governance-plan-runtime-1"
 EXECUTOR_ID = "v5-native-execution-engine"
-
-
-@dataclass(frozen=True)
-class BudgetState:
-    total: int
-    recovery: int
-    initial: int
-    valid: bool
-
-    def checks(self) -> dict[str, Any]:
-        return {
-            "approved_total_calls": self.total,
-            "approved_recovery_calls": self.recovery,
-            "approved_initial_calls": self.initial,
-            "budget_valid": self.valid,
-        }
-
-
-@dataclass(frozen=True)
-class CallState:
-    count: int
-    expert_calls: int
-    governance_calls: int
-    actual_cost: float
-
-
-@dataclass(frozen=True)
-class AuditSource:
-    root: Path
-    ticket: Mapping[str, Any]
-    runtime: Mapping[str, Any]
-    runtime_config: Mapping[str, Any]
-    result: Mapping[str, Any]
-    summary: Mapping[str, Any]
-    graph: Mapping[str, Any]
-    request_audit: Mapping[str, Any]
-    ledger: Mapping[str, Any]
-    selection: Mapping[str, Any]
-    governance: Mapping[str, Any]
-    bundle: Mapping[str, Any]
-    report_manifest: Mapping[str, Any]
-
-    @classmethod
-    def from_root(cls, root: Path) -> "AuditSource":
-        return cls(
-            root=root,
-            ticket=load_mapping(root, "ticket-status.json"),
-            runtime=load_mapping(root, "production-runtime.json"),
-            runtime_config=load_mapping(root, "v5-runtime-config.json"),
-            result=load_mapping(root, "expert-team-result.json"),
-            summary=load_mapping(root, "v5-execution-summary.json"),
-            graph=load_mapping(root, "v5-execution-graph.json"),
-            request_audit=load_mapping(root, "request-audit.json"),
-            ledger=load_mapping(root, "call-ledger.json"),
-            selection=load_mapping(root, "v5-price-ranked-selection.json"),
-            governance=load_mapping(root, "v5-governance-calls.json"),
-            bundle=load_mapping(root, "evidence-bundle.json"),
-            report_manifest=load_mapping(
-                root,
-                "report-comments/report-comments-manifest.json",
-            ),
-        )
-
-    @property
-    def nodes(self) -> tuple[Mapping[str, Any], ...]:
-        return mapping_rows(self.graph.get("nodes"))
-
-    @property
-    def final_nodes(self) -> tuple[str, ...]:
-        value = self.graph.get("final_nodes")
-        if not isinstance(value, list):
-            return ()
-        return tuple(str(item) for item in value)
-
-    @property
-    def requests(self) -> tuple[Mapping[str, Any], ...]:
-        return mapping_rows(self.request_audit.get("requests"))
-
-    @property
-    def ledger_summary(self) -> Mapping[str, Any]:
-        value = self.ledger.get("summary")
-        if isinstance(value, Mapping):
-            return value
-        return {}
 
 
 def _write_output(name: str, value: Any) -> None:
@@ -114,353 +30,6 @@ def _write_output(name: str, value: Any) -> None:
 def _record(failures: list[str], condition: bool, message: str) -> None:
     if not condition:
         failures.append(message)
-
-
-def _budget_state(ticket: Mapping[str, Any]) -> BudgetState:
-    total = int(ticket.get("calls") or 0)
-    recovery = int(ticket.get("maximum_recovery_calls") or 0)
-    initial = int(ticket.get("maximum_initial_calls") or 0)
-    valid = (
-        4 <= total <= 16
-        and 0 <= recovery < total
-        and initial == total - recovery
-        and initial >= 3
-    )
-    return BudgetState(total, recovery, initial, valid)
-
-
-def _call_state(source: AuditSource) -> CallState:
-    summary = source.ledger_summary
-    return CallState(
-        count=int(summary.get("call_count") or 0),
-        expert_calls=int(summary.get("expert_calls") or 0),
-        governance_calls=int(summary.get("governance_calls") or 0),
-        actual_cost=float(summary.get("provider_actual_cost_usd") or 0.0),
-    )
-
-
-def _check_outcomes(
-    source: AuditSource,
-    execute_outcome: str,
-    publish_outcome: str,
-) -> list[str]:
-    failures: list[str] = []
-    _record(
-        failures,
-        execute_outcome == "success",
-        f"execution step outcome is {execute_outcome}",
-    )
-    _record(
-        failures,
-        publish_outcome == "success",
-        f"report preparation outcome is {publish_outcome}",
-    )
-    _record(
-        failures,
-        source.ticket.get("accepted") is True,
-        "production ticket was not accepted",
-    )
-    return failures
-
-
-def _check_runtime(source: AuditSource) -> list[str]:
-    failures: list[str] = []
-    _record(
-        failures,
-        source.runtime.get("runtime_version") == RUNTIME_VERSION,
-        "production runtime version is not price-ranked runtime v1",
-    )
-    _record(
-        failures,
-        source.result.get("runtime_version") == RUNTIME_VERSION,
-        "result runtime version is not price-ranked runtime v1",
-    )
-    _record(
-        failures,
-        source.runtime.get("fallback_policy")
-        == "fail-closed-no-alternate-runtime",
-        "fail-closed runtime evidence is missing",
-    )
-    _record(
-        failures,
-        source.runtime.get("legacy_runtime_present") is False,
-        "legacy runtime absence is not proven",
-    )
-    _record(
-        failures,
-        source.runtime.get("claude_mechanism_enabled") is False,
-        "Claude mechanism is not explicitly disabled",
-    )
-    _record(
-        failures,
-        int(source.runtime.get("claude_calls") or 0) == 0,
-        "runtime reports a Claude call",
-    )
-    _record(
-        failures,
-        int(source.runtime.get("governance_model_calls") or 0) == 0,
-        "runtime reports governance model calls",
-    )
-    _record(
-        failures,
-        source.runtime_config.get("claude_mechanism_enabled") is False,
-        "pipeline runtime config does not disable Claude",
-    )
-    _record(
-        failures,
-        int(source.governance.get("actual_governance_calls") or 0) == 0,
-        "governance ledger is not zero-call",
-    )
-    _record(
-        failures,
-        int(source.governance.get("claude_red_team_calls") or 0) == 0,
-        "governance ledger reports a Claude red-team call",
-    )
-    return failures
-
-
-def _delivery_values(source: AuditSource) -> dict[str, Any]:
-    integrity = source.summary.get("quality_integrity")
-    integrity = dict(integrity) if isinstance(integrity, Mapping) else {}
-    return {
-        "status": str(
-            source.summary.get("status") or source.result.get("status") or ""
-        ),
-        "completion": str(
-            source.summary.get("completion_mode")
-            or source.result.get("completion_mode")
-            or ""
-        ),
-        "quality": str(
-            source.summary.get("quality_status")
-            or source.result.get("quality_status")
-            or ""
-        ),
-        "integrity_status": integrity.get("status"),
-        "answer": str(
-            source.summary.get("final_answer")
-            or source.result.get("final_answer")
-            or ""
-        ).strip(),
-        "executor": str(
-            source.summary.get("executor")
-            or source.result.get("executor")
-            or ""
-        ),
-    }
-
-
-def _check_delivery(source: AuditSource) -> list[str]:
-    values = _delivery_values(source)
-    failures: list[str] = []
-    _record(
-        failures,
-        values["status"] == "success",
-        f"delivery status is {values['status'] or 'missing'}",
-    )
-    _record(
-        failures,
-        values["completion"] == "full",
-        f"completion mode is {values['completion'] or 'missing'}, not full",
-    )
-    _record(
-        failures,
-        values["quality"] == "full_success",
-        f"quality status is {values['quality'] or 'missing'}, not full_success",
-    )
-    _record(
-        failures,
-        values["integrity_status"] == "PASS",
-        "quality integrity status is not PASS",
-    )
-    _record(
-        failures,
-        values["executor"] == EXECUTOR_ID,
-        "native executor evidence is missing",
-    )
-    _record(
-        failures,
-        len(values["answer"]) >= 160,
-        "final answer is missing or too short",
-    )
-    return failures
-
-
-def _selection_checks(
-    selection: Mapping[str, Any],
-) -> tuple[dict[str, Any], list[str]]:
-    candidate_set = mapping_rows(selection.get("cheapest_candidate_set"))
-    assigned = mapping_rows(selection.get("selected_endpoints"))
-    costs = tuple(
-        float(row.get("estimated_call_cost_usd") or 0.0)
-        for row in candidate_set
-    )
-    companies = tuple(str(row.get("company") or "") for row in candidate_set)
-    failures: list[str] = []
-    _record(
-        failures,
-        selection.get("status") == "PASS",
-        "price-ranked selection status is not PASS",
-    )
-    _record(
-        failures,
-        selection.get("selection_authority")
-        == "python-price-ranked-orchestrator",
-        "selection authority is not the deterministic Python orchestrator",
-    )
-    _record(
-        failures,
-        selection.get("claude_calls") in {0, None},
-        "selection audit reports a Claude call",
-    )
-    _record(
-        failures,
-        selection.get("gpt_selection_calls") in {0, None},
-        "selection audit reports a GPT selection call",
-    )
-    _record(
-        failures,
-        selection.get("networkx_used_for_dag_validation") is True,
-        "NetworkX DAG validation evidence is missing",
-    )
-    _record(
-        failures,
-        bool(candidate_set and assigned),
-        "selected endpoint evidence is missing",
-    )
-    _record(
-        failures,
-        costs == tuple(sorted(costs)),
-        "candidate set is not ordered by estimated task cost",
-    )
-    _record(
-        failures,
-        all(company and company != "unknown" for company in companies),
-        "one or more selected model companies is unresolved",
-    )
-    _record(
-        failures,
-        len(companies) == len(set(companies)),
-        "selected model companies are not globally distinct",
-    )
-    checks = {
-        "candidate_count": len(candidate_set),
-        "assigned_count": len(assigned),
-        "candidate_costs": list(costs),
-        "companies": list(companies),
-    }
-    return checks, failures
-
-
-def _check_graph(
-    source: AuditSource,
-    budget: BudgetState,
-    selection_checks: Mapping[str, Any],
-) -> list[str]:
-    failures: list[str] = []
-    node_limit = min(6, budget.initial if budget.initial > 0 else 0)
-    _record(
-        failures,
-        3 <= len(source.nodes) <= node_limit,
-        "expert graph node count violates approved bounds",
-    )
-    _record(
-        failures,
-        "expert-final-synthesis" in source.final_nodes,
-        "final synthesis node is missing from final_nodes",
-    )
-    _record(
-        failures,
-        int(selection_checks.get("candidate_count") or 0) == len(source.nodes),
-        "cheapest selected candidate count does not match graph node count",
-    )
-    return failures
-
-
-def _check_calls(
-    source: AuditSource,
-    budget: BudgetState,
-    calls: CallState,
-) -> list[str]:
-    failures: list[str] = []
-    provider_locks_valid = all(
-        canonical_provider_lock(row) for row in source.requests
-    )
-    _record(
-        failures,
-        source.request_audit.get("status") == "PASS",
-        "request audit status is not PASS",
-    )
-    _record(
-        failures,
-        provider_locks_valid,
-        "one or more expert requests lacks an exact provider lock",
-    )
-    _record(
-        failures,
-        source.request_audit.get("external_tools_allowed") is False,
-        "request audit does not prove external tools forbidden",
-    )
-    _record(
-        failures,
-        source.request_audit.get("provider_fallback_allowed") is False,
-        "request audit does not prove provider fallback forbidden",
-    )
-    _record(
-        failures,
-        calls.governance_calls == 0,
-        "normalized call ledger reports governance calls",
-    )
-    _record(
-        failures,
-        calls.count == calls.expert_calls == len(source.requests),
-        "call ledger and complete request audit disagree",
-    )
-    _record(
-        failures,
-        calls.count <= budget.total,
-        "model calls exceed the approved total ceiling",
-    )
-    _record(
-        failures,
-        math.isfinite(calls.actual_cost) and calls.actual_cost >= 0,
-        "provider actual cost is invalid",
-    )
-    return failures
-
-
-def _publication_values(source: AuditSource) -> tuple[str, tuple[Any, ...]]:
-    status = str(source.report_manifest.get("publication_status") or "")
-    files = source.report_manifest.get("files")
-    if not isinstance(files, list):
-        return status, ()
-    return status, tuple(files)
-
-
-def _check_publication(source: AuditSource) -> tuple[list[str], str]:
-    publication_status, report_files = _publication_values(source)
-    failures: list[str] = []
-    _record(
-        failures,
-        publication_status == "prepared_full_success",
-        "report publication package is not prepared_full_success",
-    )
-    _record(
-        failures,
-        bool(report_files),
-        "report publication package has no comment files",
-    )
-    _record(
-        failures,
-        source.bundle.get("business_evidence_frozen") is True,
-        "business evidence is not marked frozen",
-    )
-    _record(
-        failures,
-        source.bundle.get("claude_mechanism_enabled") is False,
-        "evidence bundle does not prove Claude disabled",
-    )
-    return failures, publication_status
 
 
 def _manifest_files_valid(root: Path) -> tuple[bool, list[str]]:
@@ -481,49 +50,6 @@ def _manifest_files_valid(root: Path) -> tuple[bool, list[str]]:
     return not failures, failures
 
 
-def _primary_failure(failures: list[str]) -> dict[str, Any]:
-    if not failures:
-        return {}
-    return {
-        "code": "PRICE_RANKED_AUDIT_FAILED",
-        "stage": "deterministic-audit",
-        "message": failures[0],
-        "retryable": False,
-    }
-
-
-def _diagnosis(
-    source: AuditSource,
-    failures: list[str],
-    checks: Mapping[str, Any],
-    calls: CallState,
-    publication_status: str,
-) -> dict[str, Any]:
-    unique_failures = list(dict.fromkeys(failures))
-    return {
-        "schema_version": "v5-price-ranked-execution-diagnosis-1",
-        "status": "PASS" if not unique_failures else "FAIL",
-        "runtime_version": RUNTIME_VERSION,
-        "failures": unique_failures,
-        "degradations": [],
-        "primary_failure": _primary_failure(unique_failures),
-        "checks": {
-            **checks,
-            "runtime_version": source.runtime.get("runtime_version"),
-            "claude_mechanism_enabled": source.runtime.get(
-                "claude_mechanism_enabled"
-            ),
-            "governance_model_calls": calls.governance_calls,
-            "node_count": len(source.nodes),
-            "model_calls": calls.count,
-            "request_count": len(source.requests),
-            "actual_cost_usd": calls.actual_cost,
-            "publication_status": publication_status,
-            "evidence_frozen": source.bundle.get("business_evidence_frozen"),
-        },
-    }
-
-
 def audit(
     root: Path,
     *,
@@ -531,35 +57,177 @@ def audit(
     publish_outcome: str,
     require_manifest: bool = False,
 ) -> dict[str, Any]:
-    source = AuditSource.from_root(root)
-    budget = _budget_state(source.ticket)
-    calls = _call_state(source)
-    selection_checks, selection_failures = _selection_checks(source.selection)
-    publication_failures, publication_status = _check_publication(source)
-    failures = [
-        *_check_outcomes(source, execute_outcome, publish_outcome),
-        *([] if budget.valid else [
-            "approved price-ranked budget is invalid or inconsistent"
-        ]),
-        *_check_runtime(source),
-        *_check_delivery(source),
-        *selection_failures,
-        *_check_graph(source, budget, selection_checks),
-        *_check_calls(source, budget, calls),
-        *publication_failures,
-    ]
-    checks = {**budget.checks(), **selection_checks}
+    ticket_status = load_mapping(root, "ticket-status.json")
+    ticket = load_mapping(root, "ticket.json")
+    plan_file = load_mapping(root, "governance-model-plan.json")
+    runtime = load_mapping(root, "production-runtime.json")
+    runtime_config = load_mapping(root, "v5-runtime-config.json")
+    result = load_mapping(root, "expert-team-result.json")
+    summary = load_mapping(root, "v5-execution-summary.json")
+    graph = load_mapping(root, "v5-execution-graph.json")
+    request_audit = load_mapping(root, "request-audit.json")
+    ledger = load_mapping(root, "call-ledger.json")
+    selection = load_mapping(root, "v5-price-ranked-selection.json")
+    governance = load_mapping(root, "v5-governance-calls.json")
+    bundle = load_mapping(root, "evidence-bundle.json")
+    report_manifest = load_mapping(
+        root, "report-comments/report-comments-manifest.json"
+    )
+
+    failures: list[str] = []
+    _record(failures, execute_outcome == "success", f"execution step outcome is {execute_outcome}")
+    _record(failures, publish_outcome == "success", f"report preparation outcome is {publish_outcome}")
+    _record(failures, ticket_status.get("accepted") is True, "production ticket was not accepted")
+
+    try:
+        plan = validate_governance_model_plan(ticket, plan_file)
+    except Exception as exc:  # noqa: BLE001
+        plan = {}
+        failures.append(f"governance model plan validation failed: {exc}")
+    plan_sha = str(plan.get("plan_sha256") or "")
+
+    total = int(ticket_status.get("calls") or 0)
+    recovery = int(ticket_status.get("maximum_recovery_calls") or 0)
+    initial = int(ticket_status.get("maximum_initial_calls") or 0)
+    budget_valid = (
+        4 <= total <= 16
+        and 0 <= recovery < total
+        and initial == total - recovery
+        and initial >= 3
+    )
+    _record(failures, budget_valid, "approved governance-plan budget is invalid")
+
+    _record(failures, runtime.get("runtime_version") == RUNTIME_VERSION, "production runtime version mismatch")
+    _record(failures, result.get("runtime_version") == RUNTIME_VERSION, "result runtime version mismatch")
+    _record(failures, runtime.get("fallback_policy") == "fail-closed-no-alternate-runtime", "fail-closed runtime evidence is missing")
+    _record(failures, runtime.get("legacy_runtime_present") is False, "legacy runtime absence is not proven")
+    _record(failures, runtime.get("selection_authority") == "decision-system-governance", "runtime selection authority is not governance")
+    _record(failures, runtime_config.get("selection_authority") == "decision-system-governance", "runtime config selection authority is not governance")
+    _record(failures, result.get("selection_authority") == "decision-system-governance", "result selection authority is not governance")
+    _record(failures, selection.get("selection_authority") == "decision-system-governance", "selection materialization authority is not governance")
+    _record(failures, runtime.get("governance_model_plan_sha256") == plan_sha, "runtime model plan digest mismatch")
+    _record(failures, runtime_config.get("governance_model_plan_sha256") == plan_sha, "runtime config model plan digest mismatch")
+    _record(failures, result.get("governance_model_plan_sha256") == plan_sha, "result model plan digest mismatch")
+    _record(failures, bundle.get("governance_model_plan_sha256") == plan_sha, "evidence bundle model plan digest mismatch")
+
+    for name, document in (
+        ("runtime", runtime),
+        ("runtime_config", runtime_config),
+        ("result", result),
+        ("selection", selection),
+        ("bundle", bundle),
+    ):
+        _record(
+            failures,
+            document.get("model_selection_performed_locally") is False,
+            f"{name} does not prove local model selection disabled",
+        )
+    for name, document in (
+        ("runtime", runtime),
+        ("runtime_config", runtime_config),
+        ("selection", selection),
+    ):
+        _record(
+            failures,
+            document.get("model_reranking_performed_locally") is False,
+            f"{name} does not prove local model reranking disabled",
+        )
+    _record(failures, runtime.get("model_substitution_allowed") is False, "runtime permits model substitution")
+    _record(failures, runtime_config.get("model_substitution_allowed") is False, "runtime config permits model substitution")
+    _record(failures, int(governance.get("actual_governance_calls") or 0) == 0, "expert center governance calls are not zero")
+
+    graph_nodes = mapping_rows(graph.get("nodes"))
+    planned_models = tuple(
+        str(row.get("model") or "")
+        for row in plan.get("selected_models", [])
+        if isinstance(row, Mapping)
+    )
+    graph_models = tuple(models_from_graph(graph))
+    _record(failures, graph_models == planned_models, "executed graph models differ from governance plan")
+    _record(failures, 3 <= len(graph_nodes) <= min(6, initial if initial > 0 else 0), "expert graph node count violates approved bounds")
+    final_nodes = graph.get("final_nodes")
+    _record(failures, isinstance(final_nodes, list) and "expert-final-synthesis" in final_nodes, "final synthesis node is missing")
+    _record(failures, selection.get("status") == "PASS", "governance plan materialization status is not PASS")
+    _record(failures, selection.get("networkx_used_for_dag_validation") is True, "NetworkX DAG validation evidence is missing")
+
+    requests = mapping_rows(request_audit.get("requests"))
+    _record(failures, request_audit.get("status") == "PASS", "request audit status is not PASS")
+    _record(failures, all(canonical_provider_lock(row) for row in requests), "one or more requests lacks exact provider lock")
+    _record(failures, request_audit.get("external_tools_allowed") is False, "request audit does not prohibit tools")
+    _record(failures, request_audit.get("provider_fallback_allowed") is False, "request audit permits provider fallback")
+
+    ledger_summary = ledger.get("summary")
+    ledger_summary = dict(ledger_summary) if isinstance(ledger_summary, Mapping) else {}
+    call_count = int(ledger_summary.get("call_count") or 0)
+    expert_calls = int(ledger_summary.get("expert_calls") or 0)
+    local_governance_calls = int(
+        ledger_summary.get("governance_calls_in_expert_center") or 0
+    )
+    actual_cost = float(ledger_summary.get("provider_actual_cost_usd") or 0.0)
+    _record(failures, local_governance_calls == 0, "call ledger reports governance calls in expert center")
+    _record(failures, call_count == expert_calls == len(requests), "call ledger and request audit disagree")
+    _record(failures, call_count <= total, "model calls exceed approved ceiling")
+    _record(failures, math.isfinite(actual_cost) and actual_cost >= 0, "provider actual cost is invalid")
+
+    integrity = summary.get("quality_integrity")
+    integrity = dict(integrity) if isinstance(integrity, Mapping) else {}
+    answer = str(summary.get("final_answer") or result.get("final_answer") or "").strip()
+    executor = str(summary.get("executor") or result.get("executor") or "")
+    _record(failures, str(summary.get("status") or result.get("status") or "") == "success", "delivery status is not success")
+    _record(failures, str(summary.get("completion_mode") or result.get("completion_mode") or "") == "full", "completion mode is not full")
+    _record(failures, str(summary.get("quality_status") or result.get("quality_status") or "") == "full_success", "quality status is not full_success")
+    _record(failures, integrity.get("status") == "PASS", "quality integrity status is not PASS")
+    _record(failures, executor == EXECUTOR_ID, "native executor evidence is missing")
+    _record(failures, len(answer) >= 160, "final answer is missing or too short")
+
+    publication_status = str(report_manifest.get("publication_status") or "")
+    report_files = report_manifest.get("files")
+    _record(failures, publication_status == "prepared_full_success", "report publication package is not prepared_full_success")
+    _record(failures, isinstance(report_files, list) and bool(report_files), "report publication package has no files")
+    _record(failures, bundle.get("business_evidence_frozen") is True, "business evidence is not frozen")
+
+    checks: dict[str, Any] = {
+        "approved_total_calls": total,
+        "approved_recovery_calls": recovery,
+        "approved_initial_calls": initial,
+        "budget_valid": budget_valid,
+        "selection_authority": "decision-system-governance",
+        "governance_model_plan_sha256": plan_sha,
+        "planned_models": list(planned_models),
+        "executed_models": list(graph_models),
+        "node_count": len(graph_nodes),
+        "request_count": len(requests),
+        "call_count": call_count,
+        "actual_cost_usd": actual_cost,
+        "publication_status": publication_status,
+    }
     if require_manifest:
         manifest_valid, manifest_failures = _manifest_files_valid(root)
         checks["artifact_manifest_valid"] = manifest_valid
         failures.extend(manifest_failures)
-    diagnosis = _diagnosis(
-        source,
-        failures,
-        checks,
-        calls,
-        publication_status,
-    )
+
+    failures = list(dict.fromkeys(failures))
+    diagnosis = {
+        "schema_version": "v5-governance-plan-execution-diagnosis-1",
+        "runtime_version": RUNTIME_VERSION,
+        "status": "PASS" if not failures else "FAIL",
+        "selection_authority": "decision-system-governance",
+        "model_selection_performed_locally": False,
+        "model_reranking_performed_locally": False,
+        "model_substitution_allowed": False,
+        "checks": checks,
+        "failures": failures,
+        "primary_failure": (
+            {}
+            if not failures
+            else {
+                "code": "GOVERNANCE_PLAN_AUDIT_FAILED",
+                "stage": "deterministic-audit",
+                "message": failures[0],
+                "retryable": False,
+            }
+        ),
+    }
     write_json(root / "execution-diagnosis.json", diagnosis)
     return diagnosis
 
@@ -578,10 +246,7 @@ def main() -> int:
         require_manifest=args.require_manifest,
     )
     _write_output("status", diagnosis["status"])
-    _write_output(
-        "diagnosis",
-        str(Path(args.output_dir) / "execution-diagnosis.json"),
-    )
+    _write_output("diagnosis", str(Path(args.output_dir) / "execution-diagnosis.json"))
     print(json.dumps(diagnosis, ensure_ascii=False))
     return 0
 
