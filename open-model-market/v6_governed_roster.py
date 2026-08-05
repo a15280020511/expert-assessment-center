@@ -352,6 +352,11 @@ def _request_config(endpoint: Mapping[str, Any]) -> dict[str, Any]:
     return config
 
 
+def _quality_score(member: Mapping[str, Any]) -> float:
+    score = float(member.get("balanced_score") or 0.0)
+    return min(1.0, max(0.0, score / 100.0))
+
+
 def _selected_node(
     member: Mapping[str, Any],
     work: Mapping[str, Any],
@@ -391,7 +396,7 @@ def _selected_node(
             required_outputs,
             final_node=work_id == final_work_id,
         ),
-        estimated_quality=float(member.get("balanced_score") or 0.0),
+        estimated_quality=_quality_score(member),
         quality_uncertainty=0.0,
         estimated_cost=float(endpoint["estimated_task_cost_usd"]),
         failure_probability=0.0,
@@ -420,7 +425,7 @@ def _recovery_row(
         "provider_endpoint": str(endpoint["provider_endpoint"]),
         "provider_slug": str(endpoint["provider"]),
         "output_contract": dict(selected.output_contract),
-        "estimated_quality": float(member.get("balanced_score") or 0.0),
+        "estimated_quality": _quality_score(member),
         "quality_uncertainty": 0.0,
         "estimated_cost": float(endpoint["estimated_task_cost_usd"]),
         "failure_probability": 0.0,
@@ -485,7 +490,7 @@ def materialize_execution_graph(
         SelectedEdge(
             source=str(source),
             target=str(target),
-            relation_type="declared-work-dependency",
+            relation_type="dependency",
             payload_type="structured-node-result",
             visibility_policy="declared-edge-only",
         )
