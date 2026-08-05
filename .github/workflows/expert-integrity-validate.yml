@@ -2,6 +2,7 @@ name: Expert Integrity Validate
 
 on:
   pull_request:
+    branches: [main]
   push:
     branches: [main]
 
@@ -9,35 +10,75 @@ permissions:
   contents: read
 
 concurrency:
-  group: expert-integrity-${{ github.ref }}
+  group: expert-integrity-v6-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   integrity:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Checkout pinned source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: "3.12"
 
-      - name: Validate V5 production integrity
+      - name: Install pinned validation dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+
+      - name: Validate governed V6 production integrity
         run: |
           set -euo pipefail
-          python -m compileall -q open-model-market tests
-          PYTHONPATH=open-model-market python -m unittest \
-            tests.test_v5_production_cutover \
-            tests.test_workflow_contract \
-            tests.test_legacy_runtime_removed \
-            -v
+          python -m compileall -q open-model-market tests tools
+          python tests/test_v6_governed_roster.py
+          python tests/test_v6_active_production_contract.py
+          python tests/test_workflow_contract.py
+          python tests/test_legacy_runtime_removed.py
           python - <<'PY'
           import json
           from pathlib import Path
+
           for path in Path('.').rglob('*.json'):
               if '.git' not in path.parts:
                   json.loads(path.read_text(encoding='utf-8'))
+
+          workflow = Path('.github/workflows/execution-ticket.yml').read_text('utf-8').lower()
+          required = (
+              'v6_production_ticket.py',
+              'v6_execution_auditor.py',
+              'v6_independent_artifact_revalidation.py',
+              'model_max_retries: "0"',
+              'ref: production',
+          )
+          forbidden = (
+              'v5_production_ticket.py',
+              'v5_claude_red_team_policy',
+              'v5_governance_runtime',
+              'claude-opus',
+              'contents: write',
+              'repository_dispatch',
+          )
+          for marker in required:
+              if marker not in workflow:
+                  raise SystemExit(f'missing V6 production marker: {marker}')
+          for marker in forbidden:
+              if marker in workflow:
+                  raise SystemExit(f'forbidden production marker: {marker}')
+
+          constitution = Path('CONSTITUTION.md').read_text('utf-8')
+          for marker in (
+              'Claude 红队机制、GPT 提案机制、GPT 综合机制以及任何其他治理模型链全部取消',
+              'networkx==3.6.1',
+              '任务级全局 `all-different` 约束',
+          ):
+              if marker not in constitution:
+                  raise SystemExit(f'missing constitutional marker: {marker}')
+          print('EXPERT_V6_INTEGRITY_PASS')
           PY
