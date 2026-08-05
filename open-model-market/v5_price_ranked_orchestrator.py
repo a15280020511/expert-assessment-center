@@ -1,6 +1,6 @@
 """Deterministic low-price expert-team selection and DAG orchestration.
 
-The selector reads the already validated exact endpoint catalog, ranks eligible
+The selector reads the validated exact endpoint catalog, ranks eligible
 endpoints by estimated task cost, keeps model companies globally distinct, and
 builds a bounded expert graph. It performs no model call and uses no cross-task
 history.
@@ -25,6 +25,7 @@ MIN_EXPERT_COUNT = 3
 MAX_EXPERT_COUNT = 6
 DEFAULT_EXPERT_COUNT = 4
 DEFAULT_OUTPUT_TOKENS = 4096
+SYNTHESIS_OUTPUT_TOKENS = 6144
 
 
 class PriceRankedOrchestrationError(RuntimeError):
@@ -97,7 +98,10 @@ def _estimated_tokens(task_envelope: Mapping[str, Any]) -> tuple[int, int]:
         task_envelope.get("completion_capacity_advisory_tokens"),
         DEFAULT_OUTPUT_TOKENS,
     )
-    completion_tokens = max(1024, min(requested_output, DEFAULT_OUTPUT_TOKENS))
+    completion_tokens = max(
+        1024,
+        min(requested_output, DEFAULT_OUTPUT_TOKENS),
+    )
     return prompt_tokens, completion_tokens
 
 
@@ -112,7 +116,9 @@ def _endpoint_from_row(
     provider = str(row.get("provider") or "").strip()
     raw_company = str(row.get("company") or "").strip()
     company = canonical_model_company(model)
-    declared_company = canonical_model_company(raw_company) if raw_company else company
+    declared_company = (
+        canonical_model_company(raw_company) if raw_company else company
+    )
     provider_endpoint = str(row.get("provider_endpoint") or "").strip()
     official_rank = _positive_int(row.get("official_intelligence_rank"))
     context_length = _positive_int(row.get("context_length"))
@@ -121,18 +127,17 @@ def _endpoint_from_row(
     completion_price = _non_negative_float(
         row.get("completion_price_per_million")
     )
+    expected_endpoint = f"{model}@{provider}"
     if (
         not stable_model_id(model)
         or not provider
-        or not provider_endpoint
+        or provider_endpoint != expected_endpoint
         or not company
         or company == "unknown"
         or declared_company != company
         or official_rank <= 0
         or official_rank > MAX_VISIBLE_MODELS
-        or context_length <= 0
         or context_length < required_context_tokens
-        or max_completion <= 0
         or max_completion < MINIMUM_EXPERT_COMPLETION_TOKENS
     ):
         raise PriceRankedOrchestrationError(
@@ -233,9 +238,10 @@ def _distinct_company_endpoints(
 def _role_blueprint(expert_count: int) -> list[dict[str, Any]]:
     if not MIN_EXPERT_COUNT <= expert_count <= MAX_EXPERT_COUNT:
         raise PriceRankedOrchestrationError(
-            f"expert_count must be between {MIN_EXPERT_COUNT} and {MAX_EXPERT_COUNT}"
+            f"expert_count must be between {MIN_EXPERT_COUNT} and "
+            f"{MAX_EXPERT_COUNT}"
         )
-    independent_count = max(0, expert_count - 2)
+    independent_count = expert_count - 2
     lenses = (
         ("evidence", "证据、事实、数据质量、关键假设与不确定性"),
         ("options", "备选方案、机制、因果链与反事实"),
@@ -257,29 +263,35 @@ def _role_blueprint(expert_count: int) -> list[dict[str, Any]]:
                 ],
             }
         )
-    roles.append(
-        {
-            "kind": "review",
-            "lens_id": "review",
-            "role": "交叉审查专家：比较前序分析，找出冲突、遗漏、薄弱证据和失败模式",
-            "functions": [
-                "cross_review",
-                "adversarial_testing",
-                "conflict_resolution",
-            ],
-        }
-    )
-    roles.append(
-        {
-            "kind": "synthesis",
-            "lens_id": "synthesis",
-            "role": "最终综合专家：依据原始任务和全部前序结果形成唯一完整交付",
-            "functions": [
-                "final_synthesis",
-                "decision_integration",
-                "output_contract_completion",
-            ],
-        }
+    roles.extend(
+        [
+            {
+                "kind": "review",
+                "lens_id": "review",
+                "role": (
+                    "交叉审查专家：比较前序分析，找出冲突、遗漏、"
+                    "薄弱证据和失败模式"
+                ),
+                "functions": [
+                    "cross_review",
+                    "adversarial_testing",
+                    "conflict_resolution",
+                ],
+            },
+            {
+                "kind": "synthesis",
+                "lens_id": "synthesis",
+                "role": (
+                    "最终综合专家：依据原始任务和全部前序结果形成"
+                    "唯一完整交付"
+                ),
+                "functions": [
+                    "final_synthesis",
+                    "decision_integration",
+                    "output_contract_completion",
+                ],
+            },
+        ]
     )
     return roles
 
@@ -289,7 +301,9 @@ def _assign_endpoints(
     roles: Sequence[Mapping[str, Any]],
 ) -> list[RankedEndpoint]:
     if len(chosen) != len(roles):
-        raise PriceRankedOrchestrationError("endpoint and role counts disagree")
+        raise PriceRankedOrchestrationError(
+            "endpoint and role counts disagree"
+        )
     by_quality = sorted(
         chosen,
         key=lambda item: (
@@ -299,7 +313,7 @@ def _assign_endpoints(
         ),
     )
     synthesis = by_quality[0]
-    review = by_quality[1] if len(by_quality) > 1 else by_quality[0]
+    review = by_quality[1]
     remaining = [
         endpoint
         for endpoint in chosen
@@ -327,8 +341,45 @@ def _assign_endpoints(
 
 
 def _output_tokens(endpoint: RankedEndpoint, kind: str) -> int:
-    desired = 6144 if kind == "synthesis" else 4096
-    return max(256, min(desired, endpoint.max_completion_tokens))
+    desired = (
+        SYNTHESIS_OUTPUT_TOKENS
+        if kind == "synthesis"
+        else DEFAULT_OUTPUT_TOKENS
+    )
+    return max(
+        MINIMUM_EXPERT_COMPLETION_TOKENS,
+        min(desired, endpoint.max_completion_tokens),
+    )
+
+
+def _recovery_pool(
+    ranked: Sequence[RankedEndpoint],
+    chosen: Sequence[RankedEndpoint],
+    roles: Sequence[Mapping[str, Any]],
+    assigned: Sequence[RankedEndpoint],
+    recovery_calls: int,
+) -> tuple[list[RankedEndpoint], int]:
+    if recovery_calls == 0:
+        return [], 0
+    output_floor = max(
+        _output_tokens(endpoint, str(role.get("kind") or ""))
+        for role, endpoint in zip(roles, assigned, strict=True)
+    )
+    selected_companies = {endpoint.company for endpoint in chosen}
+    compatible = [
+        endpoint
+        for endpoint in ranked
+        if endpoint.company not in selected_companies
+        and endpoint.max_completion_tokens >= output_floor
+    ]
+    candidates = _distinct_company_endpoints(compatible)
+    if len(candidates) < recovery_calls:
+        raise PriceRankedOrchestrationError(
+            "not enough distinct recovery endpoints with provider-native "
+            f"output capacity: need {recovery_calls}, found {len(candidates)}, "
+            f"floor {output_floor}"
+        )
+    return candidates[:recovery_calls], output_floor
 
 
 def _work_items(roles: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -371,12 +422,15 @@ def _work_items(roles: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
                     ],
                 }
             )
-        elif kind == "synthesis":
+        else:
             items.append(
                 {
                     "work_id": "work-final-synthesis",
                     "objective": str(role["role"]),
-                    "dependencies": [*independent_ids, "work-cross-review"],
+                    "dependencies": [
+                        *independent_ids,
+                        "work-cross-review",
+                    ],
                     "required_outputs": [
                         "直接结论",
                         "推理链",
@@ -395,23 +449,22 @@ def _nodes(
     assigned: Sequence[RankedEndpoint],
     recoveries: Sequence[RankedEndpoint],
 ) -> list[dict[str, Any]]:
-    nodes: list[dict[str, Any]] = []
-    independent_index = 0
-    recovery_by_index: dict[int, list[RankedEndpoint]] = {}
     priority = [
         index
         for kind in ("synthesis", "review", "independent")
         for index, role in enumerate(roles)
         if role.get("kind") == kind
     ]
-    if recoveries and not priority:
-        raise PriceRankedOrchestrationError(
-            "recovery endpoints cannot be assigned without expert nodes"
-        )
+    recovery_by_index: dict[int, list[RankedEndpoint]] = {}
     for recovery_index, recovery in enumerate(recoveries):
         node_index = priority[recovery_index % len(priority)]
         recovery_by_index.setdefault(node_index, []).append(recovery)
-    for index, (role, endpoint) in enumerate(zip(roles, assigned, strict=True)):
+
+    nodes: list[dict[str, Any]] = []
+    independent_index = 0
+    for index, (role, endpoint) in enumerate(
+        zip(roles, assigned, strict=True)
+    ):
         kind = str(role.get("kind") or "")
         if kind == "independent":
             independent_index += 1
@@ -423,10 +476,15 @@ def _nodes(
         else:
             node_id = "expert-final-synthesis"
             work_ids = ["work-final-synthesis"]
-        recovery_rows = [
-            {"model": fallback.model, "provider": fallback.provider}
-            for fallback in recovery_by_index.get(index, [])
-        ]
+        output_tokens = _output_tokens(endpoint, kind)
+        fallbacks = recovery_by_index.get(index, [])
+        if any(
+            fallback.max_completion_tokens < output_tokens
+            for fallback in fallbacks
+        ):
+            raise PriceRankedOrchestrationError(
+                "recovery endpoint lacks provider-native output capacity"
+            )
         nodes.append(
             {
                 "node_id": node_id,
@@ -436,10 +494,18 @@ def _nodes(
                 "model": endpoint.model,
                 "provider": endpoint.provider,
                 "reasoning_effort": (
-                    "high" if kind in {"review", "synthesis"} else "medium"
+                    "high"
+                    if kind in {"review", "synthesis"}
+                    else "medium"
                 ),
-                "max_output_tokens": _output_tokens(endpoint, kind),
-                "recovery": recovery_rows,
+                "max_output_tokens": output_tokens,
+                "recovery": [
+                    {
+                        "model": fallback.model,
+                        "provider": fallback.provider,
+                    }
+                    for fallback in fallbacks
+                ],
             }
         )
     return nodes
@@ -483,27 +549,35 @@ def _validate_dag(
 ) -> None:
     node_ids = [str(node["node_id"]) for node in nodes]
     if len(node_ids) != len(set(node_ids)):
-        raise PriceRankedOrchestrationError("generated expert graph has duplicate nodes")
+        raise PriceRankedOrchestrationError(
+            "generated expert graph has duplicate nodes"
+        )
     known = set(node_ids)
-    for edge in edges:
-        if str(edge["source"]) not in known or str(edge["target"]) not in known:
-            raise PriceRankedOrchestrationError(
-                "generated expert graph references an unknown node"
-            )
+    if any(
+        str(edge["source"]) not in known
+        or str(edge["target"]) not in known
+        for edge in edges
+    ):
+        raise PriceRankedOrchestrationError(
+            "generated expert graph references an unknown node"
+        )
     graph = nx.DiGraph()
     graph.add_nodes_from(node_ids)
     graph.add_edges_from(
-        (str(edge["source"]), str(edge["target"])) for edge in edges
+        (str(edge["source"]), str(edge["target"]))
+        for edge in edges
     )
+    final = "expert-final-synthesis"
     if not nx.is_directed_acyclic_graph(graph):
-        raise PriceRankedOrchestrationError("generated expert graph is cyclic")
-    if "expert-final-synthesis" not in graph:
-        raise PriceRankedOrchestrationError("final synthesis node is missing")
-    if graph.out_degree("expert-final-synthesis") != 0:
-        raise PriceRankedOrchestrationError("final synthesis node must be a sink")
+        raise PriceRankedOrchestrationError(
+            "generated expert graph is cyclic"
+        )
+    if final not in graph or graph.out_degree(final) != 0:
+        raise PriceRankedOrchestrationError(
+            "final synthesis node must exist and be a sink"
+        )
     if any(
-        node_id != "expert-final-synthesis"
-        and not nx.has_path(graph, node_id, "expert-final-synthesis")
+        node_id != final and not nx.has_path(graph, node_id, final)
         for node_id in node_ids
     ):
         raise PriceRankedOrchestrationError(
@@ -524,23 +598,28 @@ def build_price_ranked_proposal(
         task_envelope,
         allow_synthetic_fixture=allow_synthetic_fixture,
     )
-    distinct = _distinct_company_endpoints(ranked)
     expert_count = int(expert_count)
     recovery_calls = int(recovery_calls)
     if recovery_calls < 0:
         raise PriceRankedOrchestrationError(
             "recovery_calls must be non-negative"
         )
-    required = expert_count + recovery_calls
-    if len(distinct) < required:
+    roles = _role_blueprint(expert_count)
+    distinct = _distinct_company_endpoints(ranked)
+    if len(distinct) < expert_count:
         raise PriceRankedOrchestrationError(
             "not enough eligible endpoints from distinct model companies: "
-            f"need {required}, found {len(distinct)}"
+            f"need {expert_count}, found {len(distinct)}"
         )
     chosen = distinct[:expert_count]
-    recovery_pool = distinct[expert_count:required]
-    roles = _role_blueprint(expert_count)
     assigned = _assign_endpoints(chosen, roles)
+    recovery_pool, recovery_output_floor = _recovery_pool(
+        ranked,
+        chosen,
+        roles,
+        assigned,
+        recovery_calls,
+    )
     work_items = _work_items(roles)
     nodes = _nodes(roles, assigned, recovery_pool)
     attached_recovery_count = sum(
@@ -559,16 +638,17 @@ def build_price_ranked_proposal(
         "final_nodes": ["expert-final-synthesis"],
     }
     audit = {
-        "schema_version": "v5-price-ranked-selection-1",
+        "schema_version": "v5-price-ranked-selection-2",
         "status": "PASS",
         "selection_authority": "python-price-ranked-orchestrator",
         "selection_policy": (
             "eligible-top-intelligence-catalog -> estimated-task-cost-ascending "
-            "-> distinct-model-companies"
+            "-> distinct-model-companies -> recovery-native-capacity"
         ),
         "expert_count": expert_count,
         "recovery_count": recovery_calls,
         "attached_recovery_count": attached_recovery_count,
+        "recovery_native_output_floor_tokens": recovery_output_floor,
         "recovery_distribution": {
             str(node["node_id"]): len(node.get("recovery", []))
             for node in nodes
@@ -578,12 +658,17 @@ def build_price_ranked_proposal(
         "cheapest_candidate_set": [
             endpoint.audit_row() for endpoint in chosen
         ],
-        "selected_endpoints": [endpoint.audit_row() for endpoint in assigned],
+        "selected_endpoints": [
+            endpoint.audit_row() for endpoint in assigned
+        ],
         "recovery_endpoints": [
             endpoint.audit_row() for endpoint in recovery_pool
         ],
         "selected_total_estimated_cost_usd": round(
-            sum(endpoint.estimated_call_cost_usd for endpoint in assigned),
+            sum(
+                endpoint.estimated_call_cost_usd
+                for endpoint in assigned
+            ),
             10,
         ),
         "local_model_calls": 0,
@@ -591,7 +676,9 @@ def build_price_ranked_proposal(
         "gpt_selection_calls": 0,
         "optimizer_used": False,
         "agent_framework_used": False,
-        "compatibility_excluded_companies": sorted(GOVERNANCE_COMPANIES),
+        "compatibility_excluded_companies": sorted(
+            GOVERNANCE_COMPANIES
+        ),
         "synthetic_fixture_allowed": bool(allow_synthetic_fixture),
         "networkx_used_for_dag_validation": True,
         "cross_task_history_used": False,
