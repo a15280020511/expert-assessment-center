@@ -51,8 +51,10 @@ class ActiveV6ProductionContractTests(unittest.TestCase):
             "import v5_claude_red_team_policy",
             "v5_production_claude_request",
             "claude_model_for_request",
-            "gpt_proposal",
-            "gpt_synthesis",
+            "from v5_governance_runtime",
+            "import v5_governance_runtime",
+            "from v5_gpt_expert_selector",
+            "import v5_gpt_expert_selector",
             "selection_authority\": \"~openai",
             "while true",
             "langchain",
@@ -61,10 +63,15 @@ class ActiveV6ProductionContractTests(unittest.TestCase):
         )
         for marker in forbidden:
             self.assertNotIn(marker, sources)
-        self.assertIn("claude_mechanism_enabled", sources)
-        self.assertIn("claude_red_team_calls", sources)
-        self.assertIn("governance-signed-roster", sources)
-        self.assertIn("networkx", sources)
+        for marker in (
+            "claude_mechanism_enabled",
+            "claude_red_team_calls",
+            "gpt_planning_calls",
+            "gpt_synthesis_calls",
+            "governance-signed-roster",
+            "networkx",
+        ):
+            self.assertIn(marker, sources)
 
     def test_schema_requires_plan_roster_and_exact_budget_range(self):
         schema = json.loads(SCHEMA.read_text("utf-8"))
