@@ -45,9 +45,12 @@ class LegacyRuntimeRemovalTests(unittest.TestCase):
 
     def test_production_workflow_is_v5_only(self):
         text = (ROOT / ".github" / "workflows" / "execution-ticket.yml").read_text(encoding="utf-8")
-        self.assertIn("v5_production_ticket.py", text)
-        self.assertIn("v5_execution_auditor_integrity.py", text)
+        self.assertIn("v5_price_ranked_production_ticket.py", text)
+        self.assertIn("v5_price_ranked_execution_auditor.py", text)
+        self.assertIn("v5_price_ranked_independent_revalidation.py", text)
         self.assertNotIn("python open-model-market/v5_execution_auditor.py", text)
+        self.assertNotIn("v5_production_ticket.py", text)
+        self.assertNotIn("v5_execution_auditor_integrity.py", text)
         self.assertNotIn("expert_team_hardened.py", text)
         self.assertNotIn("manual rollback", text.casefold())
 
