@@ -51,15 +51,15 @@ class PriceRankedOrchestratorTests(unittest.TestCase):
         self.catalog = {
             "endpoints": [
                 endpoint(
-                    "cheap-a/model",
+                    "cheap-a/value-model",
                     "p1",
                     "cheap-a",
                     rank=12,
-                    prompt=0.05,
-                    completion=0.1,
+                    prompt=0.01,
+                    completion=0.02,
                 ),
                 endpoint(
-                    "cheap-a/model-2",
+                    "cheap-a/flagship-model",
                     "p2",
                     "cheap-a",
                     rank=8,
@@ -67,7 +67,7 @@ class PriceRankedOrchestratorTests(unittest.TestCase):
                     completion=0.12,
                 ),
                 endpoint(
-                    "cheap-b/model",
+                    "cheap-b/flagship-model",
                     "p3",
                     "cheap-b",
                     rank=20,
@@ -75,7 +75,7 @@ class PriceRankedOrchestratorTests(unittest.TestCase):
                     completion=0.14,
                 ),
                 endpoint(
-                    "quality-c/model",
+                    "quality-c/flagship-model",
                     "p4",
                     "quality-c",
                     rank=2,
@@ -83,7 +83,7 @@ class PriceRankedOrchestratorTests(unittest.TestCase):
                     completion=0.16,
                 ),
                 endpoint(
-                    "quality-d/model",
+                    "quality-d/flagship-model",
                     "p5",
                     "quality-d",
                     rank=5,
@@ -91,7 +91,7 @@ class PriceRankedOrchestratorTests(unittest.TestCase):
                     completion=0.18,
                 ),
                 endpoint(
-                    "reserve-e/model",
+                    "reserve-e/flagship-model",
                     "p6",
                     "reserve-e",
                     rank=9,
@@ -99,7 +99,7 @@ class PriceRankedOrchestratorTests(unittest.TestCase):
                     completion=0.20,
                 ),
                 endpoint(
-                    "reserve-f/model",
+                    "reserve-f/flagship-model",
                     "p7",
                     "reserve-f",
                     rank=11,
@@ -109,20 +109,35 @@ class PriceRankedOrchestratorTests(unittest.TestCase):
             ]
         }
 
-    def test_cheapest_distinct_company_set_is_selected(self) -> None:
+    def test_company_flagships_are_price_ranked_before_selection(self) -> None:
         proposal, audit = build_price_ranked_proposal(
             catalog=self.catalog,
             task_envelope=self.envelope,
             expert_count=4,
             recovery_calls=1,
         )
-        candidate_set = audit["cheapest_candidate_set"]
-        costs = [
-            row["estimated_call_cost_usd"] for row in candidate_set
+        flagship_rows = audit["flagship_price_ranking"]
+        flagship_costs = [
+            row["estimated_call_cost_usd"] for row in flagship_rows
         ]
-        companies = [row["company"] for row in candidate_set]
-        self.assertEqual(costs, sorted(costs))
-        self.assertEqual(len(companies), len(set(companies)))
+        self.assertEqual(flagship_costs, sorted(flagship_costs))
+        self.assertEqual(
+            len(flagship_rows),
+            len({row["company"] for row in flagship_rows}),
+        )
+
+        flagship_models = [row["model"] for row in flagship_rows]
+        self.assertIn("cheap-a/flagship-model", flagship_models)
+        self.assertNotIn("cheap-a/value-model", flagship_models)
+
+        selected = audit["selected_flagships"]
+        self.assertEqual(4, len(selected))
+        self.assertEqual(selected, audit["cheapest_candidate_set"])
+        self.assertEqual(
+            [row["company"] for row in selected],
+            [row["company"] for row in flagship_rows[:4]],
+        )
+
         self.assertEqual(4, len(proposal["nodes"]))
         self.assertEqual(
             ["expert-final-synthesis"],
@@ -133,7 +148,7 @@ class PriceRankedOrchestratorTests(unittest.TestCase):
             for row in proposal["nodes"]
             if row["node_id"] == "expert-final-synthesis"
         )
-        self.assertEqual("quality-c/model", final["model"])
+        self.assertEqual("quality-c/flagship-model", final["model"])
         self.assertEqual(1, len(final["recovery"]))
         self.assertEqual(0, audit["claude_calls"])
         self.assertEqual(0, audit["gpt_selection_calls"])
@@ -141,11 +156,106 @@ class PriceRankedOrchestratorTests(unittest.TestCase):
             audit["networkx_used_for_dag_validation"]
         )
 
+    def test_cheapest_exact_provider_is_used_for_company_flagship(self) -> None:
+        catalog = {
+            "endpoints": [
+                endpoint(
+                    "a/flagship",
+                    "expensive-provider",
+                    "a",
+                    rank=1,
+                    prompt=1.0,
+                    completion=2.0,
+                ),
+                endpoint(
+                    "a/flagship",
+                    "cheap-provider",
+                    "a",
+                    rank=1,
+                    prompt=0.1,
+                    completion=0.2,
+                ),
+                endpoint(
+                    "b/flagship",
+                    "p2",
+                    "b",
+                    rank=2,
+                    prompt=0.2,
+                    completion=0.3,
+                ),
+                endpoint(
+                    "c/flagship",
+                    "p3",
+                    "c",
+                    rank=3,
+                    prompt=0.3,
+                    completion=0.4,
+                ),
+            ]
+        }
+        _, audit = build_price_ranked_proposal(
+            catalog=catalog,
+            task_envelope=self.envelope,
+            expert_count=3,
+        )
+        row = next(
+            item
+            for item in audit["flagship_price_ranking"]
+            if item["company"] == "a"
+        )
+        self.assertEqual("cheap-provider", row["provider"])
+
+    def test_cheaper_non_flagship_cannot_replace_company_flagship(self) -> None:
+        catalog = {
+            "endpoints": [
+                endpoint(
+                    "a/value",
+                    "p1",
+                    "a",
+                    rank=100,
+                    prompt=0.0,
+                    completion=0.0,
+                ),
+                endpoint(
+                    "a/flagship",
+                    "p2",
+                    "a",
+                    rank=1,
+                    prompt=5.0,
+                    completion=10.0,
+                ),
+                endpoint(
+                    "b/flagship",
+                    "p3",
+                    "b",
+                    rank=2,
+                    prompt=0.2,
+                    completion=0.3,
+                ),
+                endpoint(
+                    "c/flagship",
+                    "p4",
+                    "c",
+                    rank=3,
+                    prompt=0.3,
+                    completion=0.4,
+                ),
+            ]
+        }
+        _, audit = build_price_ranked_proposal(
+            catalog=catalog,
+            task_envelope=self.envelope,
+            expert_count=3,
+        )
+        models = [row["model"] for row in audit["flagship_price_ranking"]]
+        self.assertIn("a/flagship", models)
+        self.assertNotIn("a/value", models)
+
     def test_recovery_selection_skips_cheaper_insufficient_capacity(self) -> None:
         catalog = {
             "endpoints": [
                 endpoint(
-                    f"expert-{index}/model",
+                    f"expert-{index}/flagship",
                     f"p{index}",
                     f"expert-{index}",
                     rank=index,
@@ -156,7 +266,7 @@ class PriceRankedOrchestratorTests(unittest.TestCase):
             ]
             + [
                 endpoint(
-                    "cheap-low-cap/model",
+                    "cheap-low-cap/flagship",
                     "p5",
                     "cheap-low-cap",
                     rank=5,
@@ -165,7 +275,7 @@ class PriceRankedOrchestratorTests(unittest.TestCase):
                     max_completion_tokens=2048,
                 ),
                 endpoint(
-                    "capable-reserve/model",
+                    "capable-reserve/flagship",
                     "p6",
                     "capable-reserve",
                     rank=6,
@@ -186,7 +296,7 @@ class PriceRankedOrchestratorTests(unittest.TestCase):
             audit["recovery_native_output_floor_tokens"],
         )
         self.assertEqual(
-            ["capable-reserve/model"],
+            ["capable-reserve/flagship"],
             [row["model"] for row in audit["recovery_endpoints"]],
         )
         attached = [
@@ -194,13 +304,13 @@ class PriceRankedOrchestratorTests(unittest.TestCase):
             for node in proposal["nodes"]
             for recovery in node["recovery"]
         ]
-        self.assertEqual(["capable-reserve/model"], attached)
+        self.assertEqual(["capable-reserve/flagship"], attached)
 
     def test_insufficient_capable_recovery_pool_fails_closed(self) -> None:
         catalog = {
             "endpoints": [
                 endpoint(
-                    f"expert-{index}/model",
+                    f"expert-{index}/flagship",
                     f"p{index}",
                     f"expert-{index}",
                     rank=index,
@@ -211,7 +321,7 @@ class PriceRankedOrchestratorTests(unittest.TestCase):
             ]
             + [
                 endpoint(
-                    "low-cap/model",
+                    "low-cap/flagship",
                     "p5",
                     "low-cap",
                     rank=5,
@@ -223,7 +333,7 @@ class PriceRankedOrchestratorTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(
             PriceRankedOrchestrationError,
-            "provider-native output capacity",
+            "flagship recovery endpoints",
         ):
             build_price_ranked_proposal(
                 catalog=catalog,
@@ -238,7 +348,7 @@ class PriceRankedOrchestratorTests(unittest.TestCase):
         catalog = {
             "endpoints": [
                 endpoint(
-                    f"c{i}/m",
+                    f"c{i}/flagship",
                     f"p{i}",
                     f"c{i}",
                     rank=i,
@@ -258,7 +368,7 @@ class PriceRankedOrchestratorTests(unittest.TestCase):
         )
         self.assertEqual(4, len(rows))
 
-    def test_insufficient_distinct_companies_fails_closed(self) -> None:
+    def test_insufficient_distinct_flagship_companies_fails_closed(self) -> None:
         catalog = {
             "endpoints": [
                 endpoint(
@@ -274,7 +384,7 @@ class PriceRankedOrchestratorTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(
             PriceRankedOrchestrationError,
-            "distinct model companies",
+            "flagship models from distinct companies",
         ):
             build_price_ranked_proposal(
                 catalog=catalog,
