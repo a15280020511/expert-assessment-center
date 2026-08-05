@@ -89,7 +89,7 @@ class SelectedEdge:
 
 @dataclass(frozen=True)
 class ExecutionGraph:
-    """The complete auditable V5 execution plan authored by GPT and hard-validated."""
+    """The complete auditable V5 execution plan supplied by governance and hard-validated."""
 
     nodes: tuple[SelectedNode, ...]
     edges: tuple[SelectedEdge, ...]

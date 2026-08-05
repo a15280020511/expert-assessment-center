@@ -92,17 +92,23 @@ class NoToolsNetworkPolicyTests(unittest.TestCase):
             {"model": "vendor/exact-model", "messages": []}
         )
 
-    def test_free_canary_uses_exact_model_without_router_bypass(self) -> None:
+    def test_zero_call_qualification_does_not_select_a_canary_model(self) -> None:
         workflow = (
             ROOT / ".github" / "workflows" / "v5-free-model-qualification.yml"
         ).read_text(encoding="utf-8")
         self.assertNotIn('"model": "openrouter/free"', workflow)
-        self.assertIn("MODELS_URL", workflow)
-        self.assertIn('model_id.endswith(":free")', workflow)
-        self.assertIn('"requested_model": selected_model', workflow)
-        self.assertIn('"exact_model_required": True', workflow)
-        self.assertIn('zero_price(pricing.get("prompt"))', workflow)
-        self.assertIn('zero_price(pricing.get("completion"))', workflow)
+        self.assertNotIn("MODELS_URL", workflow)
+        self.assertNotIn('model_id.endswith(":free")', workflow)
+        self.assertNotIn("CHAT_URL", workflow)
+        self.assertIn('"model_calls": 0', workflow)
+        self.assertIn(
+            '"selection_authority": "decision-system-governance"',
+            workflow,
+        )
+        self.assertIn(
+            '"model_selection_performed_locally": False',
+            workflow,
+        )
 
     def test_response_side_tool_and_network_evidence_is_rejected(self) -> None:
         responses = (

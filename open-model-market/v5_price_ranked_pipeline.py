@@ -152,12 +152,23 @@ def _catalog_state(
         )
         endpoint_source = "openrouter-live-exact-endpoints"
         synthetic = False
-    catalog = compact_endpoint_catalog(
-        ranked,
-        payloads,
-        allow_synthetic_fixture=synthetic,
-        required_context_tokens=required_context,
-        minimum_completion_tokens=MINIMUM_EXPERT_COMPLETION_TOKENS,
+    catalog = dict(
+        compact_endpoint_catalog(
+            ranked,
+            payloads,
+            allow_synthetic_fixture=synthetic,
+            required_context_tokens=required_context,
+            minimum_completion_tokens=MINIMUM_EXPERT_COMPLETION_TOKENS,
+        )
+    )
+    catalog.update(
+        {
+            "selection_authority": "decision-system-governance",
+            "model_selection_performed_locally": False,
+            "model_reranking_performed_locally": False,
+            "model_substitution_allowed": False,
+            "provider_resolution_only": True,
+        }
     )
     return catalog, catalog_source, endpoint_source
 

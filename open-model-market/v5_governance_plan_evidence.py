@@ -19,6 +19,7 @@ from v5_price_ranked_support import (
 from v5_provider_lock import canonical_provider_lock
 
 RUNTIME_VERSION = "v5-governance-plan-runtime-1"
+AUTHORITY = "decision-system-governance"
 
 
 def _source(root: Path) -> dict[str, Any]:
@@ -45,98 +46,120 @@ def _source(root: Path) -> dict[str, Any]:
     }
 
 
-def _validate(
-    source: Mapping[str, Any],
-    *,
-    approved_total_calls: int,
-    approved_recovery_calls: int,
-    require_report: bool,
-) -> tuple[int, float, str]:
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        raise RuntimeError(message)
+
+
+def _validate_authority(source: Mapping[str, Any], plan: Mapping[str, Any]) -> None:
     runtime = source["runtime"]
     config = source["runtime_config"]
     selection = source["selection"]
-    request_audit = source["request_audit"]
-    governance = source["governance"]
-    summary = source["summary"]
-    ticket = source["ticket"]
-    plan = validate_governance_model_plan(ticket, source["plan"])
+    _require(
+        runtime.get("runtime_version") == RUNTIME_VERSION,
+        "governance-plan production runtime envelope is missing",
+    )
+    _require(
+        config.get("selection_authority") == AUTHORITY,
+        "runtime config does not preserve governance selection authority",
+    )
+    _require(
+        config.get("model_selection_performed_locally") is False,
+        "expert runtime reports local model selection",
+    )
+    _require(
+        config.get("model_reranking_performed_locally") is False,
+        "expert runtime reports local model reranking",
+    )
+    _require(
+        config.get("governance_model_plan_sha256") == plan["plan_sha256"],
+        "runtime config model plan digest mismatch",
+    )
+    _require(
+        selection.get("status") == "PASS",
+        "governance plan materialization did not pass",
+    )
+    _require(
+        selection.get("selection_authority") == AUTHORITY,
+        "selection evidence authority mismatch",
+    )
+    _require(
+        selection.get("model_selection_performed_locally") is False,
+        "selection evidence reports local model selection",
+    )
+    _require(
+        int(source["governance"].get("actual_governance_calls") or 0) == 0,
+        "expert center governance calls must equal zero",
+    )
 
-    if runtime.get("runtime_version") != RUNTIME_VERSION:
-        raise RuntimeError("governance-plan production runtime envelope is missing")
-    if config.get("selection_authority") != "decision-system-governance":
-        raise RuntimeError("runtime config does not preserve governance selection authority")
-    if config.get("model_selection_performed_locally") is not False:
-        raise RuntimeError("expert runtime reports local model selection")
-    if config.get("model_reranking_performed_locally") is not False:
-        raise RuntimeError("expert runtime reports local model reranking")
-    if config.get("governance_model_plan_sha256") != plan["plan_sha256"]:
-        raise RuntimeError("runtime config model plan digest mismatch")
-    if selection.get("status") != "PASS":
-        raise RuntimeError("governance plan materialization did not pass")
-    if selection.get("selection_authority") != "decision-system-governance":
-        raise RuntimeError("selection evidence authority mismatch")
-    if selection.get("model_selection_performed_locally") is not False:
-        raise RuntimeError("selection evidence reports local model selection")
-    if int(governance.get("actual_governance_calls") or 0) != 0:
-        raise RuntimeError("expert center governance calls must equal zero")
-    if request_audit.get("status") != "PASS":
-        raise RuntimeError("complete request audit did not pass")
-    if any(not canonical_provider_lock(row) for row in source["requests"]):
-        raise RuntimeError("one or more expert requests lacks an exact provider lock")
-    if not 3 <= len(source["graph_nodes"]) <= min(
-        6, approved_total_calls - approved_recovery_calls
-    ):
-        raise RuntimeError("expert graph size violates approved bounds")
-    graph_models = models_from_graph(source["graph"])
+
+def _validate_graph_and_requests(
+    source: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    *,
+    maximum_nodes: int,
+) -> int:
+    request_audit = source["request_audit"]
+    requests = source["requests"]
+    _require(request_audit.get("status") == "PASS", "complete request audit did not pass")
+    _require(
+        all(canonical_provider_lock(row) for row in requests),
+        "one or more expert requests lacks an exact provider lock",
+    )
+    _require(
+        3 <= len(source["graph_nodes"]) <= min(6, maximum_nodes),
+        "expert graph size violates approved bounds",
+    )
+    graph_models = tuple(models_from_graph(source["graph"]))
     planned_models = tuple(
         str(row.get("model") or "") for row in plan["selected_models"]
     )
-    if tuple(graph_models) != planned_models:
-        raise RuntimeError("executed graph models differ from governance model plan")
-
-    budget = summary.get("execution_budget")
+    _require(
+        graph_models == planned_models,
+        "executed graph models differ from governance model plan",
+    )
+    budget = source["summary"].get("execution_budget")
     budget = dict(budget) if isinstance(budget, Mapping) else {}
-    call_count = int(budget.get("calls_reserved") or len(source["requests"]))
-    if len(source["requests"]) != call_count:
-        raise RuntimeError("request audit and expert call ledger disagree")
-    if call_count > approved_total_calls:
-        raise RuntimeError("approved total model-call ceiling exceeded")
-    actual_cost = float(summary.get("actual_cost_usd") or 0.0)
-    if not math.isfinite(actual_cost) or actual_cost < 0:
-        raise RuntimeError("actual execution cost is invalid")
-    answer = str(summary.get("final_answer") or "").strip()
-    if require_report and (not source["report"].strip() or not answer):
-        raise RuntimeError("governance-plan runtime did not produce a final report")
-    return call_count, actual_cost, answer
+    call_count = int(budget.get("calls_reserved") or len(requests))
+    _require(
+        len(requests) == call_count,
+        "request audit and expert call ledger disagree",
+    )
+    return call_count
 
 
-def normalize_governance_plan_evidence(
-    root: Path,
+def _validated_result(
+    source: Mapping[str, Any],
     *,
-    approved_total_calls: int,
-    approved_recovery_calls: int,
-    cost_anomaly_usd: float | None,
+    total: int,
+    recovery: int,
     require_report: bool,
-) -> dict[str, Any]:
-    total = int(approved_total_calls)
-    recovery = int(approved_recovery_calls)
-    if not 4 <= total <= 16 or not 0 <= recovery < total:
-        raise ValueError("approved call budget is invalid")
-    source = _source(root)
-    call_count, actual_cost, answer = _validate(
+) -> tuple[dict[str, Any], int, float, str]:
+    plan = validate_governance_model_plan(source["ticket"], source["plan"])
+    _validate_authority(source, plan)
+    call_count = _validate_graph_and_requests(
         source,
-        approved_total_calls=total,
-        approved_recovery_calls=recovery,
-        require_report=require_report,
+        plan,
+        maximum_nodes=total - recovery,
     )
-    plan = source["plan"]
-    providers = providers_from_requests(source["requests"])
-    expert_models = models_from_graph(source["graph"])
-    exceeded = bool(
-        cost_anomaly_usd is not None
-        and actual_cost > float(cost_anomaly_usd) + 1e-12
+    _require(call_count <= total, "approved total model-call ceiling exceeded")
+    actual_cost = float(source["summary"].get("actual_cost_usd") or 0.0)
+    _require(
+        math.isfinite(actual_cost) and actual_cost >= 0,
+        "actual execution cost is invalid",
     )
-    approved = {
+    answer = str(source["summary"].get("final_answer") or "").strip()
+    _require(
+        not require_report or (bool(source["report"].strip()) and bool(answer)),
+        "governance-plan runtime did not produce a final report",
+    )
+    return plan, call_count, actual_cost, answer
+
+
+def _approved_budget(
+    total: int, recovery: int, cost_anomaly_usd: float | None
+) -> dict[str, Any]:
+    return {
         "maximum_total_calls": total,
         "governance_calls_reserved": 0,
         "maximum_expert_calls": total,
@@ -144,38 +167,64 @@ def normalize_governance_plan_evidence(
         "maximum_expert_initial_calls": total - recovery,
         "cost_anomaly_usd": cost_anomaly_usd,
     }
-    evidence_input = {
-        "runtime": source["runtime"],
-        "runtime_config": source["runtime_config"],
-        "catalog": source["catalog"],
-        "graph": source["graph"],
-        "nodes": list(source["nodes"]),
-        "summary": source["summary"],
-        "selection": source["selection"],
-        "request_audit": source["request_audit"],
-        "governance": source["governance"],
-        "ticket_status": source["ticket_status"],
-        "plan": plan,
-        "approved": approved,
-        "report": source["report"],
-    }
-    evidence_sha = canonical_json_sha(evidence_input)
 
-    request_document = {
+
+def _evidence_sha(
+    source: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    approved: Mapping[str, Any],
+) -> str:
+    return canonical_json_sha(
+        {
+            "runtime": source["runtime"],
+            "runtime_config": source["runtime_config"],
+            "catalog": source["catalog"],
+            "graph": source["graph"],
+            "nodes": list(source["nodes"]),
+            "summary": source["summary"],
+            "selection": source["selection"],
+            "request_audit": source["request_audit"],
+            "governance": source["governance"],
+            "ticket_status": source["ticket_status"],
+            "plan": plan,
+            "approved": approved,
+            "report": source["report"],
+        }
+    )
+
+
+def _request_document(
+    source: Mapping[str, Any], total: int
+) -> dict[str, Any]:
+    requests = source["requests"]
+    return {
         **source["request_audit"],
         "runtime_version": RUNTIME_VERSION,
         "status": "PASS",
-        "request_count": len(source["requests"]),
+        "request_count": len(requests),
         "approved_total_call_ceiling": total,
         "governance_request_count": 0,
-        "expert_request_count": len(source["requests"]),
+        "expert_request_count": len(requests),
         "provider_locks_valid": True,
         "external_tools_allowed": False,
         "provider_fallback_allowed": False,
-        "selection_authority": "decision-system-governance",
+        "selection_authority": AUTHORITY,
         "model_selection_performed_locally": False,
     }
-    ledger_document = {
+
+
+def _ledger_document(
+    source: Mapping[str, Any],
+    *,
+    call_count: int,
+    total: int,
+    recovery: int,
+    actual_cost: float,
+    cost_anomaly_usd: float | None,
+    exceeded: bool,
+) -> dict[str, Any]:
+    providers = providers_from_requests(source["requests"])
+    return {
         "version": 5,
         "runtime_version": RUNTIME_VERSION,
         "summary": {
@@ -194,37 +243,43 @@ def normalize_governance_plan_evidence(
         "governance": source["governance"],
         "node_results": list(source["nodes"]),
     }
-    selection_document = {
+
+
+def _selection_document(
+    source: Mapping[str, Any], plan: Mapping[str, Any]
+) -> dict[str, Any]:
+    return {
         "version": 5,
         "runtime_version": RUNTIME_VERSION,
-        "selection_authority": "decision-system-governance",
+        "selection_authority": AUTHORITY,
         "governance_model_plan_sha256": plan["plan_sha256"],
         "model_selection_performed_locally": False,
         "model_reranking_performed_locally": False,
         "model_substitution_allowed": False,
         "provider_resolution_only": True,
-        "expert_models": list(expert_models),
+        "expert_models": list(models_from_graph(source["graph"])),
         "node_count": len(source["graph_nodes"]),
         "catalog_snapshot_id": source["catalog"].get("catalog_snapshot_id"),
         "networkx_used": True,
         "cross_task_history_used": False,
     }
-    routing_document = {
-        "version": 5,
-        "runtime_version": RUNTIME_VERSION,
-        "status": "PASS",
-        "mode": "governance-selected-networkx-dag",
-        "topology": "parallel-independent-analysis -> cross-review -> final-synthesis",
-        "selection_authority": "decision-system-governance",
-        "model_loop_allowed": False,
-    }
-    summary_document = {
+
+
+def _summary_document(
+    source: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    approved: Mapping[str, Any],
+    evidence_sha: str,
+    cost_anomaly_usd: float | None,
+    exceeded: bool,
+) -> dict[str, Any]:
+    return {
         **source["summary"],
         "runtime_version": RUNTIME_VERSION,
         "approved_budget": approved,
         "catalog_snapshot_id": source["catalog"].get("catalog_snapshot_id"),
         "evidence_input_sha256": evidence_sha,
-        "selection_authority": "decision-system-governance",
+        "selection_authority": AUTHORITY,
         "governance_model_plan_sha256": plan["plan_sha256"],
         "model_selection_performed_locally": False,
         "resource_governance": {
@@ -235,29 +290,36 @@ def normalize_governance_plan_evidence(
             "local_token_ceiling_enforced": False,
         },
     }
-    result_document = {
+
+
+def _result_document(
+    source: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    approved: Mapping[str, Any],
+    evidence_sha: str,
+    answer: str,
+    actual_cost: float,
+) -> dict[str, Any]:
+    summary = source["summary"]
+    return {
         "version": 5,
         "runtime_version": RUNTIME_VERSION,
-        "status": str(source["summary"].get("status") or "failed"),
-        "completion_mode": str(
-            source["summary"].get("completion_mode") or "none"
-        ),
-        "quality_status": str(
-            source["summary"].get("quality_status") or "failed"
-        ),
-        "quality_integrity": source["summary"].get("quality_integrity"),
+        "status": str(summary.get("status") or "failed"),
+        "completion_mode": str(summary.get("completion_mode") or "none"),
+        "quality_status": str(summary.get("quality_status") or "failed"),
+        "quality_integrity": summary.get("quality_integrity"),
         "final_answer": answer,
         "actual_cost_usd": round(actual_cost, 8),
-        "executor": source["summary"].get("executor"),
-        "work_coverage": source["summary"].get("work_coverage"),
-        "degradation": source["summary"].get("degradation"),
-        "execution_budget": source["summary"].get("execution_budget"),
+        "executor": summary.get("executor"),
+        "work_coverage": summary.get("work_coverage"),
+        "degradation": summary.get("degradation"),
+        "execution_budget": summary.get("execution_budget"),
         "approved_budget": approved,
         "catalog_snapshot_id": source["catalog"].get("catalog_snapshot_id"),
         "node_count": len(source["graph_nodes"]),
-        "model_count": len(expert_models),
-        "provider_count": len(providers),
-        "selection_authority": "decision-system-governance",
+        "model_count": len(models_from_graph(source["graph"])),
+        "provider_count": len(providers_from_requests(source["requests"])),
+        "selection_authority": AUTHORITY,
         "governance_model_plan_sha256": plan["plan_sha256"],
         "model_selection_performed_locally": False,
         "production_entrypoint": True,
@@ -267,14 +329,72 @@ def normalize_governance_plan_evidence(
         "ticket_task_id": source["ticket_status"].get("task_id"),
         "evidence_input_sha256": evidence_sha,
     }
-    documents = {
-        "request-audit.json": request_document,
-        "call-ledger.json": ledger_document,
-        "model-selection.json": selection_document,
-        "task-routing.json": routing_document,
-        "execution-summary.json": summary_document,
-        "expert-team-result.json": result_document,
+
+
+def _documents(
+    source: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    approved: Mapping[str, Any],
+    *,
+    total: int,
+    recovery: int,
+    call_count: int,
+    actual_cost: float,
+    answer: str,
+    cost_anomaly_usd: float | None,
+    exceeded: bool,
+    evidence_sha: str,
+) -> dict[str, dict[str, Any]]:
+    return {
+        "request-audit.json": _request_document(source, total),
+        "call-ledger.json": _ledger_document(
+            source,
+            call_count=call_count,
+            total=total,
+            recovery=recovery,
+            actual_cost=actual_cost,
+            cost_anomaly_usd=cost_anomaly_usd,
+            exceeded=exceeded,
+        ),
+        "model-selection.json": _selection_document(source, plan),
+        "task-routing.json": {
+            "version": 5,
+            "runtime_version": RUNTIME_VERSION,
+            "status": "PASS",
+            "mode": "governance-selected-networkx-dag",
+            "topology": (
+                "parallel-independent-analysis -> cross-review -> final-synthesis"
+            ),
+            "selection_authority": AUTHORITY,
+            "model_loop_allowed": False,
+        },
+        "execution-summary.json": _summary_document(
+            source,
+            plan,
+            approved,
+            evidence_sha,
+            cost_anomaly_usd,
+            exceeded,
+        ),
+        "expert-team-result.json": _result_document(
+            source,
+            plan,
+            approved,
+            evidence_sha,
+            answer,
+            actual_cost,
+        ),
     }
+
+
+def _write_bundle(
+    root: Path,
+    source: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    approved: Mapping[str, Any],
+    evidence_sha: str,
+    documents: Mapping[str, Mapping[str, Any]],
+) -> None:
     for name, document in documents.items():
         write_json(root / name, document)
     if source["report"].strip():
@@ -290,7 +410,7 @@ def normalize_governance_plan_evidence(
             "approved": approved,
             "catalog_snapshot_id": source["catalog"].get("catalog_snapshot_id"),
             "governance_model_plan_sha256": plan["plan_sha256"],
-            "selection_authority": "decision-system-governance",
+            "selection_authority": AUTHORITY,
             "model_selection_performed_locally": False,
             "generated_documents": {
                 name: canonical_json_sha(document)
@@ -306,7 +426,48 @@ def normalize_governance_plan_evidence(
         },
     )
     write_manifest(root)
-    return result_document
+
+
+def normalize_governance_plan_evidence(
+    root: Path,
+    *,
+    approved_total_calls: int,
+    approved_recovery_calls: int,
+    cost_anomaly_usd: float | None,
+    require_report: bool,
+) -> dict[str, Any]:
+    total = int(approved_total_calls)
+    recovery = int(approved_recovery_calls)
+    if not 4 <= total <= 16 or not 0 <= recovery < total:
+        raise ValueError("approved call budget is invalid")
+    source = _source(root)
+    plan, call_count, actual_cost, answer = _validated_result(
+        source,
+        total=total,
+        recovery=recovery,
+        require_report=require_report,
+    )
+    approved = _approved_budget(total, recovery, cost_anomaly_usd)
+    evidence_sha = _evidence_sha(source, plan, approved)
+    exceeded = bool(
+        cost_anomaly_usd is not None
+        and actual_cost > float(cost_anomaly_usd) + 1e-12
+    )
+    documents = _documents(
+        source,
+        plan,
+        approved,
+        total=total,
+        recovery=recovery,
+        call_count=call_count,
+        actual_cost=actual_cost,
+        answer=answer,
+        cost_anomaly_usd=cost_anomaly_usd,
+        exceeded=exceeded,
+        evidence_sha=evidence_sha,
+    )
+    _write_bundle(root, source, plan, approved, evidence_sha, documents)
+    return documents["expert-team-result.json"]
 
 
 __all__ = ["RUNTIME_VERSION", "normalize_governance_plan_evidence"]

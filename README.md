@@ -82,9 +82,10 @@ Claude 红队机制已从生产入口取消：
 
 ## 主要生产组件
 
-- `v5_price_ranked_issue_ticket.py`：安全票据准入和零治理调用回执；
-- `v5_price_ranked_orchestrator.py`：价格升序、公司去重、角色分配和 NetworkX DAG；
-- `v5_price_ranked_pipeline.py`：目录、物化、执行与原始证据；
+- `v5_price_ranked_issue_ticket.py`：校验治理中心下发的不可变模型计划；
+- `v5_governance_model_plan.py`：校验任务哈希、计划哈希、模型公司和预算边界；
+- `v5_governed_plan_orchestrator.py`：仅解析治理指定模型的精确 Provider，并构建 NetworkX DAG；
+- `v5_price_ranked_pipeline.py`：按治理计划物化、执行与生成原始证据；
 - `v5_price_ranked_production_ticket.py`：正式生产入口；
 - `v5_price_ranked_evidence.py`：统一证据和调用账本；
 - `v5_price_ranked_execution_auditor.py`：生产前确定性审计；
@@ -96,8 +97,8 @@ Claude 红队机制已从生产入口取消：
 开发和维护按以下顺序执行：
 
 ```text
-静态检查与单元测试（0 次模型调用）
-→ 免费模型 Canary（实际费用必须为 0.0 USD）
+静态检查、单元测试与治理计划压力测试（0 次模型调用）
+→ 不在专家团中心执行任何测试选模或免费模型 Canary
 → 用户明确授权的正式付费验收或生产任务
 ```
 

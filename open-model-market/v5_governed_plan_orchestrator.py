@@ -23,11 +23,13 @@ class GovernedPlanOrchestrationError(RuntimeError):
 
 
 def _positive_int(value: Any, default: int = 0) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
+    if isinstance(value, bool):
         return default
-    return parsed if parsed > 0 else default
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        parsed = default
+    return max(parsed, 1) if parsed > 0 else default
 
 
 def _finite_nonnegative(value: Any, field: str) -> float:
