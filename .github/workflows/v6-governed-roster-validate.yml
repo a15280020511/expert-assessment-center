@@ -8,6 +8,7 @@ on:
     paths:
       - "open-model-market/v6_*.py"
       - "open-model-market/v5_endpoint_catalog.py"
+      - "open-model-market/v5_recovery_runtime.py"
       - "open-model-market/execution-ticket.schema.json"
       - "tests/test_v6_*.py"
       - ".github/workflows/execution-ticket.yml"
@@ -19,6 +20,7 @@ on:
     paths:
       - "open-model-market/v6_*.py"
       - "open-model-market/v5_endpoint_catalog.py"
+      - "open-model-market/v5_recovery_runtime.py"
       - "open-model-market/execution-ticket.schema.json"
       - "tests/test_v6_*.py"
       - ".github/workflows/execution-ticket.yml"
@@ -71,7 +73,10 @@ jobs:
             open-model-market/v6_independent_artifact_revalidation.py \
             open-model-market/v6_final_status.py \
             open-model-market/v6_final_attestation.py \
+            open-model-market/v6_resource_runtime.py \
+            open-model-market/v6_expert_runtime_policy.py \
             open-model-market/v5_endpoint_catalog.py \
+            open-model-market/v5_recovery_runtime.py \
             tests
 
       - name: Validate JSON schema
@@ -98,6 +103,7 @@ jobs:
               path.read_text('utf-8').lower()
               for path in sorted(Path('open-model-market').glob('v6_*.py'))
           )
+          compatibility = Path('open-model-market/v5_recovery_runtime.py').read_text('utf-8').lower()
           forbidden_workflow = (
               'v5_production_ticket.py',
               'v5_issue_ticket.py',
@@ -128,7 +134,7 @@ jobs:
               'crewai',
           )
           for marker in forbidden_sources:
-              if marker in sources:
+              if marker in sources or marker in compatibility:
                   raise SystemExit(f'forbidden V6 source marker: {marker}')
           required = (
               'networkx',
@@ -143,6 +149,9 @@ jobs:
           for marker in required:
               if marker not in sources:
                   raise SystemExit(f'missing V6 contract marker: {marker}')
+          for marker in ('v6_expert_runtime_policy', 'v6_resource_runtime'):
+              if marker not in compatibility:
+                  raise SystemExit(f'missing V6 compatibility import: {marker}')
           print('V6_ZERO_GOVERNANCE_MODEL_CALL_BOUNDARY_PASS')
           PY
 
