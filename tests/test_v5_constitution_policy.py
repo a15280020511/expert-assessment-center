@@ -25,18 +25,13 @@ class ConstitutionPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.policy = json.loads(
-            (MARKET / "constitutional_policy.json").read_text(
-                encoding="utf-8"
-            )
+            (MARKET / "constitutional_policy.json").read_text(encoding="utf-8")
         )
-        cls.constitution = (ROOT / "CONSTITUTION.md").read_text(
-            encoding="utf-8"
-        )
+        cls.constitution = (ROOT / "CONSTITUTION.md").read_text(encoding="utf-8")
 
     def test_free_first_policy_is_fail_closed(self) -> None:
-        policy = self.policy
-        free = policy["free_first_testing"]
-        self.assertTrue(policy["fail_closed"])
+        free = self.policy["free_first_testing"]
+        self.assertTrue(self.policy["fail_closed"])
         self.assertEqual(
             free["required_order"],
             [
@@ -45,13 +40,8 @@ class ConstitutionPolicyTests(unittest.TestCase):
                 "explicitly_authorized_paid_acceptance_or_production",
             ],
         )
-        self.assertTrue(free["free_model_required_before_paid"])
         self.assertEqual(free["free_model_actual_cost_usd"], 0.0)
         self.assertFalse(free["automatic_paid_full_task_retry_allowed"])
-        self.assertTrue(free["finite_preapproved_recovery_allowed"])
-        self.assertFalse(
-            free["free_evidence_can_qualify_formal_model_identity"]
-        )
         self.assertFalse(free["free_evidence_can_move_production"])
 
     def test_free_preflight_cannot_promote_production(self) -> None:
@@ -79,7 +69,6 @@ class ConstitutionPolicyTests(unittest.TestCase):
         self.assertEqual(verdict["status"], "PASS")
         self.assertTrue(verdict["paid_acceptance_allowed"])
         self.assertFalse(verdict["production_promotion_allowed"])
-        self.assertFalse(verdict["formal_model_identity_qualified"])
 
     def test_company_aliases_cannot_evade_all_different_rule(self) -> None:
         self.assertTrue(REQUIRE_DISTINCT_MODEL_COMPANIES)
@@ -90,84 +79,49 @@ class ConstitutionPolicyTests(unittest.TestCase):
         self.assertFalse(diversity["provider_can_override_company"])
         self.assertEqual(diversity["duplicate_company_action"], "fail_closed")
 
-    def test_dynamic_task_matching_is_required_and_task_local(self) -> None:
+    def test_active_governance_has_zero_model_calls(self) -> None:
         self.assertEqual(
             self.policy["schema_version"],
             "v5-constitutional-policy-5",
         )
-        dynamic = self.policy["dynamic_task_matching"]
-        self.assertTrue(dynamic["required"])
-        self.assertEqual(dynamic["planner"], "gpt_latest_single_pass")
-        self.assertTrue(dynamic["recomputed_from_current_task"])
-        self.assertFalse(dynamic["cross_task_history_allowed"])
-        self.assertTrue(dynamic["live_complete_endpoint_catalog_required"])
-        self.assertTrue(
-            dynamic["all_dynamically_determinable_variables_must_be_dynamic"]
-        )
+        chain = self.policy["governance_chain"]
         self.assertEqual(
-            dynamic["primary_objective"],
-            "highest_cost_effectiveness_subject_to_task_contract",
+            chain["selection_authority"],
+            "python_price_ranked_orchestrator",
         )
-        self.assertTrue(
-            dynamic["lowest_price_alone_is_not_cost_effectiveness"]
-        )
-        self.assertTrue(dynamic["expected_recovery_cost_is_part_of_cost_effectiveness"])
-        required_dynamic_fields = {
-            "problem_structure",
-            "work_items",
-            "work_granularity",
-            "dependency_graph",
-            "execution_stages",
-            "parallel_or_serial_organization",
-            "expert_count",
-            "expert_roles",
-            "expert_functions",
-            "expert_collaboration_and_review_relationships",
-            "final_nodes",
-            "critical_work",
-            "optional_work",
-            "non_degradable_work",
-            "minimum_usable_coverage",
-            "model",
-            "provider",
-            "reasoning_effort",
-            "output_capacity_advisory",
-            "recovery_candidate_count",
-            "recovery_candidate_distribution",
-            "recovery_priority",
-            "recovery_stop_condition",
-        }
-        self.assertTrue(
-            required_dynamic_fields.issubset(
-                set(dynamic["dynamically_determined"])
-            )
-        )
-        for key in (
-            "fixed_expert_slots_allowed",
-            "fixed_expert_count_allowed",
-            "fixed_roles_allowed",
-            "fixed_model_combinations_allowed",
-            "fixed_provider_routes_allowed",
-            "fixed_parameter_tiers_allowed",
-            "keyword_routing_allowed",
-            "domain_hardcoding_allowed",
-            "local_scoring_or_optimizer_selection_allowed",
-            "deterministic_validator_can_redesign_team",
-        ):
-            self.assertFalse(dynamic[key], key)
-        self.assertEqual(
-            dynamic["invalid_dynamic_plan_action"],
-            "fail_closed",
-        )
+        self.assertFalse(chain["claude_mechanism_enabled"])
+        self.assertEqual(chain["claude_calls_per_task"], 0)
+        self.assertEqual(chain["gpt_selection_calls_per_task"], 0)
+        self.assertEqual(chain["governance_model_calls_per_task"], 0)
+        self.assertFalse(chain["model_loop_allowed"])
+        self.assertFalse(chain["agent_framework_allowed"])
 
-    def test_tool_prohibition_covers_governance_and_all_experts(self) -> None:
+    def test_price_ranked_networkx_organization_is_authoritative(self) -> None:
+        matching = self.policy["dynamic_task_matching"]
+        self.assertEqual(matching["planner"], "python_price_ranked_orchestrator")
+        self.assertEqual(matching["sort_order"], "estimated_task_cost_ascending")
+        self.assertEqual(matching["official_intelligence_rank_window"], 150)
+        self.assertEqual(matching["team_size"], {
+            "minimum": 3,
+            "default": 4,
+            "maximum": 6,
+            "bounded_by_initial_call_capacity": True,
+        })
+        self.assertEqual(
+            matching["organization"],
+            "parallel_independent_analysis_then_cross_review_then_final_synthesis",
+        )
+        self.assertIn("取消 Claude", self.constitution)
+        self.assertIn("NetworkX", self.constitution)
+        self.assertIn("价格优先", self.constitution)
+        self.assertIn("Token 与费用实行软治理", self.constitution)
+
+    def test_tool_prohibition_covers_selection_and_experts(self) -> None:
         tools = self.policy["tool_prohibition"]
         self.assertEqual(
             tools["scope"],
             [
-                "gpt_proposal",
-                "claude_red_team",
-                "gpt_synthesis",
+                "deterministic_selection",
                 "expert_execution",
                 "expert_recovery",
             ],
@@ -184,28 +138,6 @@ class ConstitutionPolicyTests(unittest.TestCase):
         ):
             self.assertFalse(tools[key], key)
         self.assertEqual(tools["violation_action"], "fail_closed")
-
-    def test_constitution_exposes_dynamic_matching_and_no_tools_as_top_articles(
-        self,
-    ) -> None:
-        self.assertIn(
-            "## 第六条：具体问题具体分析，全部可动态项动态决定，性价比优先",
-            self.constitution,
-        )
-        self.assertIn(
-            "## 第七条：治理链和专家执行全面禁止使用工具",
-            self.constitution,
-        )
-        self.assertIn("具体问题具体分析", self.constitution)
-        self.assertIn("具体选择专家", self.constitution)
-        self.assertIn("具体组合专家", self.constitution)
-        self.assertIn("具体组织执行", self.constitution)
-        self.assertIn("具体匹配模型与参数", self.constitution)
-        self.assertIn("所有能够根据任务动态决定的变量必须动态决定", self.constitution)
-        self.assertIn("性价比最高", self.constitution)
-        self.assertIn("不得沿用跨任务历史编组", self.constitution)
-        self.assertIn("模型参数必须根据具体任务复杂度", self.constitution)
-        self.assertIn("请求体不得向模型暴露 `tools`", self.constitution)
 
     def test_duplicate_expert_companies_fail_graph_validation(self) -> None:
         def node(node_id: str, work: str, model: str) -> SelectedNode:
