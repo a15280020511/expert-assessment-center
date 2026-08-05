@@ -1,0 +1,110 @@
+{
+  "task_id": "governance-fixture-001",
+  "objective": "验证治理中心选模、专家团只执行的零调用路径",
+  "pipeline": "expert-team",
+  "task": {
+    "question": "仅依据题面比较A与B，禁止工具，输出已知事实和最终建议。",
+    "requirements": [
+      "不得调用工具",
+      "必须给出最终建议"
+    ],
+    "language": "zh-CN"
+  },
+  "execution_acceptance": [
+    "治理模型计划有效",
+    "专家中心不进行本地选模"
+  ],
+  "evidence": [],
+  "approved_budget": {
+    "calls": 8,
+    "maximum_recovery_calls": 1
+  },
+  "private_output": false,
+  "governance_model_plan": {
+    "schema_version": "governance-expert-model-plan-v1",
+    "selection_authority": "decision-system-governance",
+    "selection_policy": "qualified-paid-general-purpose-flagships -> estimated-task-cost-ascending -> distinct-model-companies",
+    "task_sha256": "2a3ab21e6e6d0b1ebed1faef730c3b85ffe90961c4d37cf2558a1f7cf1089bb0",
+    "task_cost_profile": {
+      "expected_prompt_tokens": 4096,
+      "expected_completion_tokens": 4096
+    },
+    "expert_count": 4,
+    "recovery_count": 1,
+    "selected_models": [
+      {
+        "slot": 1,
+        "model": "gamma/fast",
+        "company": "gamma",
+        "role_id": "evidence",
+        "role_kind": "independent",
+        "role": "独立分析专家：重点检查证据、事实、数据质量、关键假设与不确定性",
+        "estimated_task_cost_usd": 0.01,
+        "prompt_usd_per_million": 0.01,
+        "completion_usd_per_million": 0.03,
+        "balanced_score": 79,
+        "selection_evidence": "test-qualified-flagship"
+      },
+      {
+        "slot": 2,
+        "model": "deepseek/china",
+        "company": "deepseek",
+        "role_id": "options",
+        "role_kind": "independent",
+        "role": "独立分析专家：重点检查备选方案、机制、因果链与反事实",
+        "estimated_task_cost_usd": 0.02,
+        "prompt_usd_per_million": 0.02,
+        "completion_usd_per_million": 0.06,
+        "balanced_score": 78,
+        "selection_evidence": "test-qualified-flagship"
+      },
+      {
+        "slot": 3,
+        "model": "beta/value",
+        "company": "beta",
+        "role_id": "review",
+        "role_kind": "review",
+        "role": "交叉审查专家：比较前序分析，找出冲突、遗漏、薄弱证据和失败模式",
+        "estimated_task_cost_usd": 0.03,
+        "prompt_usd_per_million": 0.03,
+        "completion_usd_per_million": 0.09,
+        "balanced_score": 77,
+        "selection_evidence": "test-qualified-flagship"
+      },
+      {
+        "slot": 4,
+        "model": "tau/math",
+        "company": "tau",
+        "role_id": "synthesis",
+        "role_kind": "synthesis",
+        "role": "最终综合专家：依据原始任务和全部前序结果形成唯一完整交付",
+        "estimated_task_cost_usd": 0.04,
+        "prompt_usd_per_million": 0.04,
+        "completion_usd_per_million": 0.12,
+        "balanced_score": 76,
+        "selection_evidence": "test-qualified-flagship"
+      }
+    ],
+    "recovery_models": [
+      {
+        "slot": 1,
+        "model": "rho/forecast",
+        "company": "rho",
+        "estimated_task_cost_usd": 0.05,
+        "prompt_usd_per_million": 0.05,
+        "completion_usd_per_million": 0.15,
+        "balanced_score": 70,
+        "selection_evidence": "test-qualified-flagship"
+      }
+    ],
+    "provider_selection_authority": "expert-runtime-exact-endpoint-resolution-only",
+    "model_substitution_allowed": false,
+    "expert_center_reranking_allowed": false,
+    "cross_task_history_used": false,
+    "source_selector_schema_version": "fixture",
+    "source_ranking_schema_version": "fixture",
+    "source_catalog_snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "model_calls": 0,
+    "plan_sha256": "4ce427ba4dd500cb04dec807d6f4406539ec065814e3e3a9e10c7507db44c2ed"
+  }
+}

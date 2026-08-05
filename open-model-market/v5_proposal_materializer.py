@@ -167,7 +167,7 @@ def _selected_node(
         prompt_profile={
             "modules": list(functions),
             "role": str(raw.get("role") or ""),
-            "source": "gpt-authored-task-and-expert-graph",
+            "source": "governance-authored-model-plan",
         },
         reasoning_profile={
             "reasoning_enabled": "reasoning" in {
@@ -181,7 +181,7 @@ def _selected_node(
                 endpoint.get("supported_parameters", [])
             ),
             "recommended_output_allowance_tokens": max_output,
-            "selection_source": "gpt-direct-no-local-scoring",
+            "selection_source": "governance-plan-no-local-selection",
         },
         model=str(raw.get("model") or ""),
         provider_endpoint=str(endpoint.get("provider_endpoint") or ""),

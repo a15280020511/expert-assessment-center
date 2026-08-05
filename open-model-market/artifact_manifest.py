@@ -51,7 +51,7 @@ def _architecture_hashes(root: Path) -> dict[str, str]:
     paths = {
         "config": "config.json",
         "task_envelope": "v5_task_envelope.py",
-        "price_ranked_orchestrator": "v5_price_ranked_orchestrator.py",
+        "governed_plan_orchestrator": "v5_governed_plan_orchestrator.py",
         "price_ranked_pipeline": "v5_price_ranked_pipeline.py",
         "price_ranked_evidence": "v5_price_ranked_evidence.py",
         "proposal_validator": "v5_proposal_materializer.py",

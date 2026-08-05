@@ -1,4 +1,4 @@
-name: V5 Price-Ranked Free Qualification
+name: V5 Governance-Plan Zero-Call Qualification
 
 on:
   workflow_dispatch:
@@ -15,20 +15,15 @@ permissions:
   contents: read
 
 concurrency:
-  group: v5-price-ranked-free-qualification-${{ github.ref }}
+  group: v5-governance-plan-zero-call-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  free-model-qualification:
+  governance-plan-qualification:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      MODEL_MAX_RETRIES: "0"
-      MODEL_TIMEOUT_SECONDS: "120"
-      OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
-      OPENROUTER_APP_NAME: expert-center-price-ranked-free-qualification
       TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -54,148 +49,81 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p free-qualification/logs free-qualification/artifacts
+          mkdir -p free-qualification/logs free-qualification/artifacts/dry-run
           python -m ruff check . 2>&1 | tee free-qualification/logs/ruff.log
           python -m compileall -q open-model-market tests tools \
             2>&1 | tee free-qualification/logs/compileall.log
           python -m unittest discover -s tests -p 'test*.py' -v \
             2>&1 | tee free-qualification/logs/unit-tests.log
+          cp tests/fixtures/governance-ticket.json \
+            free-qualification/artifacts/dry-run/ticket.json
           python open-model-market/v5_price_ranked_pipeline.py \
             --task "仅依据题面比较A与B，禁止工具，输出已知事实和最终建议。" \
+            --governance-plan-file free-qualification/artifacts/dry-run/ticket.json \
             --catalog-file tests/fixtures/models.json \
             --endpoint-file tests/fixtures/endpoints.json \
             --dry-run \
             --maximum-total-calls 8 \
             --maximum-recovery-calls 1 \
-            --expert-count 4 \
             --output-dir free-qualification/artifacts/dry-run
           python - <<'PY'
           import json
           from pathlib import Path
 
           root = Path("free-qualification/artifacts/dry-run")
+          ticket = json.loads((root / "ticket.json").read_text())
+          plan = ticket["governance_model_plan"]
           dry = json.loads((root / "v5-dry-run.json").read_text())
           selection = json.loads(
               (root / "v5-price-ranked-selection.json").read_text()
           )
           runtime = json.loads((root / "v5-runtime-config.json").read_text())
+          graph = json.loads((root / "v5-execution-graph.json").read_text())
           assert dry["status"] == "validated-not-executed"
           assert dry["model_calls"] == 0
-          assert dry["claude_calls"] == 0
           assert selection["status"] == "PASS"
-          assert selection["claude_calls"] == 0
-          assert selection["gpt_selection_calls"] == 0
+          assert selection["selection_authority"] == "decision-system-governance"
+          assert selection["plan_sha256"] == plan["plan_sha256"]
+          assert selection["model_selection_performed_locally"] is False
+          assert selection["model_reranking_performed_locally"] is False
+          assert selection["model_substitution_performed_locally"] is False
+          assert selection["provider_resolution_performed_locally"] is True
           assert selection["networkx_used_for_dag_validation"] is True
-          assert selection["expert_count"] == 4
-          costs = [
-              row["estimated_call_cost_usd"]
-              for row in selection["cheapest_candidate_set"]
-          ]
-          assert costs == sorted(costs)
-          companies = [
-              row["company"]
-              for row in selection["cheapest_candidate_set"]
-          ]
-          assert len(companies) == len(set(companies))
+          assert runtime["selection_authority"] == "decision-system-governance"
+          assert runtime["model_selection_performed_locally"] is False
+          assert runtime["model_reranking_performed_locally"] is False
+          assert runtime["model_substitution_allowed"] is False
           assert runtime["governance_model_calls"] == 0
           assert runtime["orchestration_library"] == "networkx"
+          planned = [row["model"] for row in plan["selected_models"]]
+          executed = [row["model"] for row in graph["nodes"]]
+          assert executed == planned
           PY
 
-      - name: Run one real zero-cost exact-model Canary
+      - name: Write zero-call qualification receipt
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${OPENROUTER_API_KEY:-}"
-          PYTHONPATH=open-model-market python - <<'PY'
+          python - <<'PY'
           import json
           import os
-          from decimal import Decimal, InvalidOperation
           from pathlib import Path
-          from typing import Any, Mapping
 
-          from openrouter_api import CHAT_URL, MODELS_URL, request_json
-          from v5_execution_primitives import actual_cost, extract_answer
-
-          def zero_price(value: Any) -> bool:
-              try:
-                  return Decimal(str(value)) == Decimal("0")
-              except (InvalidOperation, TypeError, ValueError):
-                  return False
-
-          key = os.environ["OPENROUTER_API_KEY"]
-          response = request_json(MODELS_URL, key, 120, 0)
-          rows = response.get("data")
-          if not isinstance(rows, list):
-              raise RuntimeError("OpenRouter model catalog is unavailable")
-          candidates = []
-          for row in rows:
-              if not isinstance(row, Mapping):
-                  continue
-              model_id = str(row.get("id") or "")
-              pricing = row.get("pricing")
-              if not model_id.endswith(":free") or not isinstance(pricing, Mapping):
-                  continue
-              if not zero_price(pricing.get("prompt")) or not zero_price(pricing.get("completion")):
-                  continue
-              architecture = row.get("architecture")
-              architecture = architecture if isinstance(architecture, Mapping) else {}
-              inputs = {str(v).casefold() for v in architecture.get("input_modalities", [])}
-              outputs = {str(v).casefold() for v in architecture.get("output_modalities", [])}
-              if inputs and "text" not in inputs:
-                  continue
-              if outputs and "text" not in outputs:
-                  continue
-              candidates.append({
-                  "id": model_id,
-                  "created": int(row.get("created") or 0),
-                  "context_length": int(row.get("context_length") or 0),
-              })
-          if not candidates:
-              raise RuntimeError("no exact zero-price text model is available")
-          selected = sorted(
-              candidates,
-              key=lambda row: (-row["created"], -row["context_length"], row["id"]),
-          )[0]
-          selected_model = selected["id"]
-          result = request_json(
-              CHAT_URL,
-              key,
-              120,
-              0,
-              {
-                  "model": selected_model,
-                  "messages": [
-                      {"role": "system", "content": "Return only the requested final answer."},
-                      {"role": "user", "content": "Reply with exactly PASS and nothing else."},
-                  ],
-                  "stream": False,
-                  "provider": {
-                      "data_collection": "allow",
-                      "zdr": False,
-                      "require_parameters": True,
-                  },
-              },
-          )
-          answer = extract_answer(result).strip()
-          cost = float(actual_cost(result))
-          if answer.upper() != "PASS":
-              raise RuntimeError("free Canary response is invalid")
-          if abs(cost) > 1e-12:
-              raise RuntimeError(f"free Canary returned positive cost: {cost}")
+          root = Path("free-qualification/artifacts/dry-run")
+          plan = json.loads((root / "governance-model-plan.json").read_text())
           receipt = {
-              "schema_version": "v5-price-ranked-free-qualification-1",
+              "schema_version": "v5-governance-plan-zero-call-qualification-1",
               "target_sha": os.environ["TARGET_SHA"],
-              "zero_call_validation": "PASS",
-              "free_canary": {
-                  "status": "PASS",
-                  "requested_model": selected_model,
-                  "exact_model_required": True,
-                  "response_model": str(result.get("model") or ""),
-                  "provider": str(result.get("provider") or ""),
-                  "actual_cost_usd": cost,
-              },
+              "status": "PASS",
+              "model_calls": 0,
+              "selection_authority": "decision-system-governance",
+              "governance_model_plan_sha256": plan["plan_sha256"],
+              "model_selection_performed_locally": False,
+              "model_reranking_performed_locally": False,
+              "model_substitution_allowed": False,
+              "provider_resolution_only": True,
               "claude_mechanism_enabled": False,
-              "governance_model_calls": 0,
+              "governance_model_calls_in_expert_center": 0,
               "production_ref_moved": False,
           }
           Path("free-qualification/free-qualification.json").write_text(
@@ -208,7 +136,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: v5-price-ranked-free-qualification-${{ github.run_id }}
+          name: v5-governance-plan-zero-call-${{ github.run_id }}
           path: free-qualification/
           if-no-files-found: error
           retention-days: 14

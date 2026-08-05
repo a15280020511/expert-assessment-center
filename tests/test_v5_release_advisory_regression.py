@@ -13,7 +13,7 @@ class V5ReleaseAdvisoryRegressionTests(unittest.TestCase):
         cls.text = WORKFLOW.read_text(encoding="utf-8")
 
     def test_release_gate_does_not_import_named_task_architecture(self) -> None:
-        forbidden = (
+        for fragment in (
             "FAILED_PRODUCTION_TASK",
             "closed_book_tabletop_compaction_applied",
             "第五类复合事件",
@@ -22,29 +22,25 @@ class V5ReleaseAdvisoryRegressionTests(unittest.TestCase):
             "v5-optimization.json",
             "solver_status",
             "preselection_objective_weights",
-        )
-        for fragment in forbidden:
-            with self.subTest(fragment=fragment):
-                self.assertNotIn(fragment, self.text)
+        ):
+            self.assertNotIn(fragment, self.text)
 
-    def test_release_gate_checks_advisory_properties(self) -> None:
+    def test_release_gate_checks_governance_plan_properties(self) -> None:
         required = (
             "task-independent advisory matrix",
-            "~openai/gpt-latest",
-            "~anthropic/claude-opus-latest",
-            "claude_is_advisory_only",
-            "claude_gatekeeping_allowed",
-            "gpt_synthesis_calls",
-            "second_claude_review_allowed",
-            "deterministic-constitutional-validator",
-            "local_scoring_used",
-            "optimizer_used",
-            "cp_sat_used",
+            "decision-system-governance",
+            "v5_governance_model_plan.py",
+            "v5_governed_plan_orchestrator.py",
+            "model_selection_performed_locally",
+            "model_reranking_performed_locally",
+            "model_substitution_performed_locally",
+            "provider_resolution_performed_locally",
             "model_loop_allowed",
         )
         for fragment in required:
-            with self.subTest(fragment=fragment):
-                self.assertIn(fragment, self.text)
+            self.assertIn(fragment, self.text)
+        for forbidden in ("~openai/gpt-latest", "~anthropic/claude-opus-latest"):
+            self.assertNotIn(forbidden, self.text)
 
     def test_release_gate_remains_read_only(self) -> None:
         self.assertIn("permissions:\n  contents: read", self.text)

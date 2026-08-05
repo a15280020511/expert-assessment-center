@@ -1,34 +1,31 @@
-name: Validate V5 Advisory Architecture
+name: Validate V5 Governance-Plan Architecture
 
 on:
   pull_request:
     paths:
       - "open-model-market/**"
       - "tests/**"
-      - "tools/**"
-      - ".github/workflows/v5-validate.yml"
+      - ".github/workflows/**"
       - "requirements*.txt"
-  push:
-    branches: [main]
-    paths:
-      - "open-model-market/**"
-      - "tests/**"
-      - "tools/**"
-      - ".github/workflows/v5-validate.yml"
-      - "requirements*.txt"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: v5-governance-plan-validate-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  validate-v5-advisory:
-    name: Validate GPT Claude advisory runtime
+  validate-governance-plan:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
@@ -36,99 +33,50 @@ jobs:
           cache-dependency-path: |
             requirements-runtime.txt
             requirements-dev.txt
-      - name: Install pinned dependencies
+
+      - name: Install pinned validation dependencies
         run: |
+          set -euo pipefail
           python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
           python -m pip check
-      - name: Verify advisory-only architecture
-        shell: bash
+
+      - name: Verify governance-plan modules and inactive legacy selectors
         run: |
           set -euo pipefail
-          required=(
-            open-model-market/v5_pipeline.py
-            open-model-market/v5_task_envelope.py
-            open-model-market/v5_gpt_expert_selector.py
-            open-model-market/v5_claude_red_team_policy.py
-            open-model-market/v5_governance_runtime.py
-            open-model-market/v5_proposal_materializer.py
-            open-model-market/execution_graph_validator.py
-            open-model-market/v5_runtime.py
-          )
-          for path in "${required[@]}"; do test -s "$path"; done
-          removed=(
-            open-model-market/v5_single_pass_advisory.py
-            open-model-market/v5_constitutional_pipeline.py
-            open-model-market/v5_planner.py
-            open-model-market/v5_value_optimizer.py
-            open-model-market/v5_operational_resilience.py
-            open-model-market/v5_benchmark.py
-            open-model-market/v5_cross_endpoint_planner.py
-            open-model-market/v5_cross_endpoint_planner_impl.py
-            open-model-market/v5_dynamic_configuration.py
-            open-model-market/v5_planning_diagnostics.py
-            open-model-market/v5_single_pass_dialectic_gate.py
-            open-model-market/v5_general_task_planning.py
-            open-model-market/task_semantic_compiler.py
-            open-model-market/resource_matrix.py
-            open-model-market/atomic_work_graph.py
-            open-model-market/team_policy.json
-          )
-          for path in "${removed[@]}"; do test ! -e "$path"; done
-          ! grep -R --line-number --exclude-dir=.git \
-            -E 'ortools|cp_model|google-or-tools-cp-sat|optimize_execution_graph|pareto_prune|import numpy|from numpy|compile_v5_task_resources|compile_task_semantics' \
-            open-model-market requirements-runtime.txt
-          python - <<'PY'
-          import sys
-          from pathlib import Path
+          test -f open-model-market/v5_governance_model_plan.py
+          test -f open-model-market/v5_governed_plan_orchestrator.py
+          grep -q 'SELECTION_AUTHORITY = "decision-system-governance"' \
+            open-model-market/v5_governance_model_plan.py
+          grep -q 'model_selection_performed_locally.*False' \
+            open-model-market/v5_price_ranked_pipeline.py
+          grep -q 'model_reranking_performed_locally.*False' \
+            open-model-market/v5_price_ranked_pipeline.py
+          grep -q 'model_substitution_allowed.*False' \
+            open-model-market/v5_price_ranked_pipeline.py
+          ! grep -q 'build_price_ranked_proposal' \
+            open-model-market/v5_price_ranked_pipeline.py
+          ! grep -q 'v5_governance_runtime' \
+            open-model-market/v5_price_ranked_pipeline.py
+          ! grep -q 'v5_claude_red_team_policy' \
+            open-model-market/v5_price_ranked_pipeline.py
 
-          sys.path.insert(0, "open-model-market")
-          from v5_claude_red_team_policy import (
-              CLAUDE_RED_TEAM_GOVERNANCE_CALLS,
-              CLAUDE_RED_TEAM_MAX_CALLS_PER_TASK,
-              CLAUDE_RED_TEAM_MODEL,
-              GPT_SYNTHESIS_CALLS,
-          )
-          from v5_gpt_expert_selector import GPT_SELECTOR_MODEL
-
-          assert GPT_SELECTOR_MODEL == "~openai/gpt-latest"
-          assert CLAUDE_RED_TEAM_MODEL == "~anthropic/claude-opus-latest"
-          assert CLAUDE_RED_TEAM_MAX_CALLS_PER_TASK == 1
-          assert GPT_SYNTHESIS_CALLS == 1
-          assert CLAUDE_RED_TEAM_GOVERNANCE_CALLS == 3
-          source = Path("open-model-market/v5_governance_runtime.py").read_text()
-          assert "claude_is_advisory_only" in source
-          assert "claude_gatekeeping_allowed" in source
-          assert "deterministic-constitutional-validator" in source
-          assert "task_envelope" in source
-          PY
-      - name: Run static and constitutional tests
-        shell: bash
+      - name: Run targeted governance-plan tests
         run: |
           set -euo pipefail
-          mkdir -p v5-validation-logs
-          python -m ruff check . 2>&1 | tee v5-validation-logs/ruff.log
-          python -m compileall -q open-model-market tests tools \
-            2>&1 | tee v5-validation-logs/compileall.log
           python -m unittest \
-            tests.test_v5_claude_red_team_advice \
-            tests.test_v5_admission_task_isolation \
-            tests.test_v5_full_load_stability \
-            tests.test_v5_extreme_advisory_stress \
-            tests.test_v5_repository_residue_audit \
-            tests.test_execution_graph_validator \
-            tests.test_v5_constitutional_runtime \
-            tests.test_v5_task_constraints \
-            tests.test_v5_evidence_bundle \
-            tests.test_v5_production_cutover \
-            tests.test_v5_p0_governance \
-            tests.test_legacy_runtime_removed \
-            -v 2>&1 | tee v5-validation-logs/critical-tests.log
-      - name: Run zero-call advisory dry-run
-        shell: bash
+            tests.test_v5_governance_model_plan \
+            tests.test_v5_governed_plan_orchestrator \
+            tests.test_v5_repository_residue_audit -v
+
+      - name: Run governance-plan dry-run
         run: |
           set -euo pipefail
-          python open-model-market/v5_pipeline.py \
-            --task "比较三个公共投资方案，给出风险、证据和最终决策。" \
+          rm -rf v5-validation-artifacts
+          mkdir -p v5-validation-artifacts
+          cp tests/fixtures/governance-ticket.json v5-validation-artifacts/ticket.json
+          python open-model-market/v5_price_ranked_pipeline.py \
+            --task "仅依据题面比较A与B，禁止工具，输出已知事实和最终建议。" \
+            --governance-plan-file v5-validation-artifacts/ticket.json \
             --catalog-file tests/fixtures/models.json \
             --endpoint-file tests/fixtures/endpoints.json \
             --dry-run \
@@ -138,36 +86,23 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
-
           root = Path("v5-validation-artifacts")
           dry = json.loads((root / "v5-dry-run.json").read_text())
-          runtime = json.loads((root / "v5-runtime-config.json").read_text())
-          envelope = json.loads((root / "v5-task-envelope.json").read_text())
+          selection = json.loads((root / "v5-price-ranked-selection.json").read_text())
           assert dry["status"] == "validated-not-executed"
           assert dry["model_calls"] == 0
-          assert dry["proposal_request"]["model"] == "~openai/gpt-latest"
-          assert dry["claude_model"] == "~anthropic/claude-opus-latest"
-          assert dry["claude_calls_per_task"] == 1
-          assert dry["claude_is_advisory_only"] is True
-          assert dry["claude_gatekeeping_allowed"] is False
-          assert dry["gpt_synthesis_calls"] == 1
-          assert dry["local_task_classification_used"] is False
-          assert dry["local_atomic_work_generation_used"] is False
-          assert dry["local_resource_matrix_used"] is False
-          assert dry["local_scoring_used"] is False
-          assert dry["optimizer_used"] is False
-          assert dry["cp_sat_used"] is False
-          assert runtime["final_authority"] == "deterministic-constitutional-validator"
-          assert runtime["task_decomposition_authority"] == "gpt-latest"
-          assert envelope["local_task_classification_used"] is False
-          assert not (root / "v5-execution-graph.json").exists()
+          assert selection["selection_authority"] == "decision-system-governance"
+          assert selection["model_selection_performed_locally"] is False
+          assert selection["model_reranking_performed_locally"] is False
+          assert selection["model_substitution_performed_locally"] is False
+          assert selection["provider_resolution_performed_locally"] is True
           PY
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+
+      - name: Upload V5 validation evidence
         if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: v5-advisory-validation-${{ github.run_id }}
-          path: |
-            v5-validation-artifacts/
-            v5-validation-logs/
+          name: v5-governance-plan-validation-${{ github.run_id }}
+          path: v5-validation-artifacts/
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 14

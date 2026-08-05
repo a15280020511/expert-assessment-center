@@ -1,13 +1,24 @@
 #!/usr/bin/env python3
-"""Price-ranked admission wrapper preserving V5 ticket security controls."""
+"""Admission wrapper for governance-selected expert models.
+
+The legacy ticket validator remains responsible for authorization, duplicate
+protection and task projection. This wrapper removes the governance model plan
+before legacy schema validation, then validates and restores it as an immutable
+execution contract.
+"""
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from pathlib import Path
 from typing import Any, Mapping
 
 import v5_issue_ticket as legacy
+from v5_governance_model_plan import (
+    GovernanceModelPlanError,
+    validate_governance_model_plan,
+)
 
 LEGACY_GOVERNANCE_RESERVE_REASON = (
     "approved recovery calls must leave at least one initial expert call "
@@ -15,73 +26,140 @@ LEGACY_GOVERNANCE_RESERVE_REASON = (
 )
 
 DELEGATION_NOTICE = (
-    "委托边界：专家编组由本仓库的确定性 Python 选模器完成；只从合格模型目录中按"
-    "预计任务成本由低到高选择，并强制模型公司互异。NetworkX 只负责验证和编排"
-    "有向无环执行图。Claude、GPT 选模与任何其他治理模型调用均已关闭。"
+    "委托边界：具体模型由治理中心在下发任务前选定并写入不可变模型计划；"
+    "专家团中心只校验计划、解析所选模型的精确Provider端点并执行。"
+    "专家团中心禁止重新排名、替换、补选或自行选择任何模型。"
+    "NetworkX只负责验证和编排有限有向无环执行图。"
     "专家禁止外部工具；网页GPT只负责忠实提交、监控、取回和转述。"
 )
 
 
 def _rewrite_outputs(status: Mapping[str, Any]) -> None:
     legacy._rewrite_outputs(status)  # noqa: SLF001
+    for key in (
+        "model_plan_sha256",
+        "selected_expert_count",
+        "selected_recovery_count",
+        "model_selection_authority",
+    ):
+        legacy._write_output(key, status.get(key, ""))  # noqa: SLF001
 
 
-def _postprocess(root: Path) -> dict[str, Any]:
-    path = root / "ticket-status.json"
-    status = json.loads(path.read_text(encoding="utf-8"))
-    total = int(status.get("calls") or 0)
-    recovery = int(status.get("maximum_recovery_calls") or 0)
+def _read_original_packet(args: argparse.Namespace, root: Path) -> tuple[dict[str, Any], argparse.Namespace]:
+    sanitized_args = copy.copy(args)
+    if args.event_path:
+        event = json.loads(Path(args.event_path).read_text(encoding="utf-8"))
+        issue = event.get("issue") if isinstance(event.get("issue"), Mapping) else {}
+        packet = json.loads(str(issue.get("body") or ""))
+        if not isinstance(packet, dict):
+            raise ValueError("Issue body must be one JSON object")
+        sanitized = dict(packet)
+        sanitized.pop("governance_model_plan", None)
+        sanitized_event = dict(event)
+        sanitized_issue = dict(issue)
+        sanitized_issue["body"] = json.dumps(
+            sanitized, ensure_ascii=False, separators=(",", ":")
+        )
+        sanitized_event["issue"] = sanitized_issue
+        path = root / "sanitized-admission-event.json"
+        path.write_text(
+            json.dumps(sanitized_event, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        sanitized_args.event_path = str(path)
+        return packet, sanitized_args
+
+    packet = json.loads(str(args.issue_body or ""))
+    if not isinstance(packet, dict):
+        raise ValueError("Issue body must be one JSON object")
+    sanitized = dict(packet)
+    sanitized.pop("governance_model_plan", None)
+    sanitized_args.issue_body = json.dumps(
+        sanitized, ensure_ascii=False, separators=(",", ":")
+    )
+    return packet, sanitized_args
+
+
+def _task_text(packet: Mapping[str, Any]) -> str:
+    sanitized = dict(packet)
+    sanitized.pop("governance_model_plan", None)
+    projected = legacy._substantive_task_text(sanitized)  # noqa: SLF001
+    if projected.startswith(legacy.DELEGATION_NOTICE):
+        projected = DELEGATION_NOTICE + projected[len(legacy.DELEGATION_NOTICE) :]
+    return projected
+
+
+def _accept_legacy_only_budget_rejection(
+    status: Mapping[str, Any], total: int, recovery: int
+) -> bool:
     errors = [str(value) for value in status.get("errors", [])]
-    legacy_only_rejection = (
+    return bool(
         status.get("accepted") is not True
         and errors == [LEGACY_GOVERNANCE_RESERVE_REASON]
         and total - recovery >= 3
     )
-    if legacy_only_rejection:
-        packet = json.loads((root / "ticket.json").read_text(encoding="utf-8"))
+
+
+def _postprocess(root: Path, packet: Mapping[str, Any]) -> dict[str, Any]:
+    path = root / "ticket-status.json"
+    status = json.loads(path.read_text(encoding="utf-8"))
+    total = int(status.get("calls") or 0)
+    recovery = int(status.get("maximum_recovery_calls") or 0)
+    if _accept_legacy_only_budget_rejection(status, total, recovery):
         status["accepted"] = True
         status["errors"] = []
         status["reason"] = ""
-        projected = legacy._substantive_task_text(packet)  # noqa: SLF001
-        if projected.startswith(legacy.DELEGATION_NOTICE):
-            projected = DELEGATION_NOTICE + projected[len(legacy.DELEGATION_NOTICE) :]
-        (root / "task.txt").write_text(projected, encoding="utf-8")
 
     if status.get("accepted") is True:
-        if total - recovery < 3:
-            status["accepted"] = False
-            status["errors"] = [
-                "price-ranked expert team requires at least three initial calls"
-            ]
-            status["reason"] = status["errors"][0]
-        else:
+        try:
+            plan = validate_governance_model_plan(packet)
+            if int(plan["expert_count"]) > total - recovery:
+                raise GovernanceModelPlanError(
+                    "selected expert count exceeds initial call capacity"
+                )
             status.update(
                 {
-                    "required_model_calls": 3,
+                    "required_model_calls": int(plan["expert_count"]),
                     "maximum_initial_calls": total - recovery,
-                    "analysis_owner": "github-price-ranked-networkx-expert-graph",
-                    "runtime_version": "v5-price-ranked-runtime-1",
+                    "analysis_owner": "governance-selected-expert-execution-runtime",
+                    "runtime_version": "v5-governance-plan-runtime-1",
                     "claude_red_team_calls": 0,
-                    "claude_is_advisory_only": False,
-                    "claude_gatekeeping_allowed": False,
                     "claude_mechanism_enabled": False,
                     "governance_model_calls": 0,
+                    "model_selection_authority": plan["selection_authority"],
+                    "model_plan_sha256": plan["plan_sha256"],
+                    "selected_expert_count": plan["expert_count"],
+                    "selected_recovery_count": plan["recovery_count"],
+                    "expert_center_model_selection_allowed": False,
+                    "expert_center_model_reranking_allowed": False,
+                    "model_substitution_allowed": False,
+                    "provider_resolution_only": True,
                     "call_policy": (
                         "approved-total-includes-experts-and-recovery-only"
                     ),
                     "reason": (
-                        "explicit command, ticket, authorization, uniqueness, "
-                        "expert reserve, recovery reserve, exact provider lock, "
-                        "and fail-closed policy accepted"
+                        "explicit command, authorization, uniqueness, immutable "
+                        "governance model plan, expert reserve, recovery reserve, "
+                        "exact provider lock, and fail-closed policy accepted"
                     ),
                 }
             )
-            task_path = root / "task.txt"
-            if task_path.is_file():
-                text = task_path.read_text(encoding="utf-8")
-                if text.startswith(legacy.DELEGATION_NOTICE):
-                    text = DELEGATION_NOTICE + text[len(legacy.DELEGATION_NOTICE) :]
-                task_path.write_text(text, encoding="utf-8")
+            (root / "ticket.json").write_text(
+                json.dumps(packet, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            (root / "governance-model-plan.json").write_text(
+                json.dumps(plan, ensure_ascii=False, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+            (root / "task.txt").write_text(_task_text(packet), encoding="utf-8")
+        except (GovernanceModelPlanError, KeyError, TypeError, ValueError) as exc:
+            status["accepted"] = False
+            status["errors"] = [str(exc)]
+            status["reason"] = str(exc)
+            status["model_selection_authority"] = "decision-system-governance"
+            status["expert_center_model_selection_allowed"] = False
+
     path.write_text(
         json.dumps(status, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -91,8 +169,24 @@ def _postprocess(root: Path) -> dict[str, Any]:
 
 
 def prepare(args: argparse.Namespace) -> int:
-    legacy.prepare(args)
-    _postprocess(Path(args.output_dir))
+    root = Path(args.output_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        packet, sanitized_args = _read_original_packet(args, root)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        legacy.prepare(args)
+        status_path = root / "ticket-status.json"
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+        status["accepted"] = False
+        status["errors"] = [str(exc)]
+        status["reason"] = str(exc)
+        status_path.write_text(
+            json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        _rewrite_outputs(status)
+        return 0
+    legacy.prepare(sanitized_args)
+    _postprocess(root, packet)
     return 0
 
 
@@ -117,22 +211,23 @@ def render(args: argparse.Namespace) -> int:
         )
         text = (
             f"## {heading}\n\n"
-            "GitHub Issue Runner 已接收唯一价格优先专家任务。\n\n"
+            "GitHub Issue Runner 已接收治理中心选模后的唯一专家任务。\n\n"
             f"- Task ID：`{status.get('task_id')}`\n"
             f"- TASK_FINGERPRINT: `{status.get('task_fingerprint')}`\n"
             + identity
-            + "- 编组：`合格模型目录 → 预计任务成本升序 → 模型公司去重 → NetworkX DAG`\n"
+            + f"- 模型计划SHA256：`{status.get('model_plan_sha256')}`\n"
+            + "- 选模权：`decision-system-governance`\n"
+            + "- 专家团权限：`只校验和执行；禁止排名、选模、补选、替换`\n"
+            + "- Provider：`仅解析治理中心指定模型的精确兼容端点；精确单锁；禁止fallback`\n"
             + "- 组织：`并行独立分析 → 交叉审查 → 最终综合`\n"
             + "- Claude机制：`关闭；调用数0`\n"
-            + "- GPT选模：`关闭；调用数0`\n"
             + f"- 模型调用总硬上限：`{status.get('calls')}`（专家与恢复合计）\n"
-            + f"- 专家初始调用上限：`{status.get('maximum_initial_calls')}`\n"
-            + f"- 恢复调用保留：`{status.get('maximum_recovery_calls')}`\n"
+            + f"- 计划专家数：`{status.get('selected_expert_count')}`\n"
+            + f"- 计划恢复模型数：`{status.get('selected_recovery_count')}`\n"
             + f"- 费用异常提示阈值：{anomaly_text}\n"
             + "- 专家外部工具：`禁止`\n"
-            + "- Provider：`精确单锁；禁止fallback`\n"
-            + "- 跨任务历史：`不读取、不保存、不参与编组`\n"
-            + "- 失败策略：`失败关闭；不调用旧运行时`\n"
+            + "- 跨任务历史：`不读取、不保存、不参与执行`\n"
+            + "- 失败策略：`计划缺失、篡改、不匹配或模型不可执行即失败关闭`\n"
             + run_line
         )
     elif args.phase == "rejected":
@@ -147,7 +242,7 @@ def render(args: argparse.Namespace) -> int:
         text = (
             "## EXECUTION_FAILED\n\n"
             + run_line
-            + "最终状态由价格优先运行时、独立审计、主Artifact和最终证明发布。\n"
+            + "最终状态由治理模型计划、独立审计、主Artifact和最终证明发布。\n"
         )
     print(text)
     return 0
