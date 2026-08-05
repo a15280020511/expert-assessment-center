@@ -1,0 +1,35 @@
+name: Expert Refactor Autofix
+
+on:
+  push:
+    branches:
+      - refactor/governance-owned-expert-selection
+
+permissions:
+  contents: write
+
+jobs:
+  autofix:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: refactor/governance-owned-expert-selection
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+      - name: Apply deterministic Ruff fixes and remove one-time workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-input ruff==0.16.0
+          rm -f .github/workflows/expert-refactor-autofix.yml
+          python -m ruff check . --fix
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "style: apply deterministic refactor fixes"
+          git push origin HEAD:refactor/governance-owned-expert-selection
