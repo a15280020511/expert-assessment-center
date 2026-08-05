@@ -24,7 +24,7 @@ jobs:
           ref: feat/execution-only-governance-model-plan
           fetch-depth: 0
 
-      - name: Verify and atomically apply staged patch
+      - name: Verify and atomically apply non-workflow patch
         shell: bash
         run: |
           set -euo pipefail
@@ -38,14 +38,14 @@ jobs:
           tar -tzf /tmp/expert-governance-patch.tar.gz >/tmp/expert-governance-patch.files
           tar -xzf /tmp/expert-governance-patch.tar.gz -C .
 
+          # GitHub Actions tokens cannot mutate workflow files. Restore them here;
+          # the API updates those files separately after this atomic code commit.
+          git restore --source=HEAD --staged --worktree .github/workflows
           rm -rf .github/patches
           rm -f \
             open-model-market/v5_price_ranked_orchestrator.py \
             tests/test_v5_price_ranked_orchestrator.py \
-            tests/test_v5_price_ranked_full_load.py \
-            .github/workflows/v5-live-flagship-price-ranking.yml \
-            .github/workflows/one-time-expert-governance-plan-sync.yml \
-            .github/workflows/one-time-expert-governance-plan-sync-v2.yml
+            tests/test_v5_price_ranked_full_load.py
 
           python -m compileall -q open-model-market tests
           python - <<'PY'
@@ -54,7 +54,6 @@ jobs:
               Path('open-model-market/v5_price_ranked_orchestrator.py'),
               Path('tests/test_v5_price_ranked_orchestrator.py'),
               Path('tests/test_v5_price_ranked_full_load.py'),
-              Path('.github/workflows/v5-live-flagship-price-ranking.yml'),
           ]
           present = [str(path) for path in forbidden if path.exists()]
           if present:
