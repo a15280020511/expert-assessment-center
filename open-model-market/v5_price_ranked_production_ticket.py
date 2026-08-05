@@ -8,32 +8,16 @@ import json
 import os
 import traceback
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Sequence
 
 import v5_price_ranked_pipeline
-from v5_json_io import load_json_or_default, write_json
+from v5_json_io import write_json
 from v5_price_ranked_evidence import (
     RUNTIME_VERSION,
     normalize_price_ranked_evidence,
 )
+from v5_price_ranked_support import canonical_ticket_task
 from v5_task_constraints import compile_task_constraints
-
-
-def _canonical_user_task(root: Path, fallback: str) -> tuple[str, str]:
-    packet = load_json_or_default(root / "ticket.json", {})
-    task = packet.get("task") if isinstance(packet, Mapping) else None
-    if not isinstance(task, Mapping) or not str(task.get("question") or "").strip():
-        return str(fallback).strip(), "fallback-cli-task"
-    sections = [str(task["question"]).strip()]
-    requirements = task.get("requirements")
-    if isinstance(requirements, list):
-        rows = [str(value).strip() for value in requirements if str(value).strip()]
-        if rows:
-            sections.append("执行要求：\n" + "\n".join(f"- {row}" for row in rows))
-    language = str(task.get("language") or "").strip()
-    if language:
-        sections.append(f"输出语言：{language}")
-    return "\n\n".join(sections), "ticket.task"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -111,7 +95,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.max_completion_tokens is not None and args.max_completion_tokens <= 0:
         raise ValueError("max-completion-tokens must be positive")
 
-    task, source = _canonical_user_task(root, args.task)
+    task, source = canonical_ticket_task(root, args.task)
     if not task:
         raise ValueError("canonical user task is empty")
     constraints = compile_task_constraints(task)

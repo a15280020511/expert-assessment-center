@@ -3,28 +3,15 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from v5_json_io import load_json_or_default
+from artifact_manifest import sha256_file
 from v5_price_ranked_execution_auditor import audit
+from v5_price_ranked_support import load_mapping
 
 SCHEMA_VERSION = "v5-independent-artifact-revalidation-3"
-
-
-def _mapping(root: Path, name: str) -> dict[str, Any]:
-    value = load_json_or_default(root / name, {})
-    return dict(value) if isinstance(value, Mapping) else {}
-
-
-def _archive_digest(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _expected_digest(value: str) -> str:
@@ -42,12 +29,12 @@ def revalidate(
     archive: Path,
     expected_artifact_digest: str,
 ) -> dict[str, Any]:
-    runtime = _mapping(root, "production-runtime.json")
-    ticket = _mapping(root, "ticket-status.json")
-    ledger = _mapping(root, "call-ledger.json")
+    runtime = load_mapping(root, "production-runtime.json")
+    ticket = load_mapping(root, "ticket-status.json")
+    ledger = load_mapping(root, "call-ledger.json")
     failures: list[str] = []
 
-    observed_archive_digest = _archive_digest(archive)
+    observed_archive_digest = sha256_file(archive)
     expected_digest = _expected_digest(expected_artifact_digest)
     if expected_digest and observed_archive_digest != expected_digest:
         failures.append(

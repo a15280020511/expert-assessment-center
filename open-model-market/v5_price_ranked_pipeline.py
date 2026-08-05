@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -18,13 +17,14 @@ from v5_catalog_view import (
 from v5_endpoint_catalog import fetch_live_endpoint_payloads
 from v5_json_io import load_json_or_default, write_json
 from v5_no_tools_policy import forbidden_request_fields
-from v5_price_ranked_artifact_manifest import write_manifest
+from artifact_manifest import write_manifest
 from v5_price_ranked_orchestrator import (
     DEFAULT_EXPERT_COUNT,
     MAX_EXPERT_COUNT,
     MIN_EXPERT_COUNT,
     build_price_ranked_proposal,
 )
+from v5_price_ranked_support import load_mapping_path
 from v5_provider_lock import canonical_provider_lock
 from v5_recovery_runtime import build_production_runtime
 from v5_runtime import RuntimeConfig
@@ -33,13 +33,6 @@ from v5_task_envelope import build_task_envelope
 
 RUNTIME_VERSION = "v5-price-ranked-runtime-1"
 GOVERNANCE_CALLS_RESERVED = 0
-
-
-def _load(path: str | Path) -> Mapping[str, Any]:
-    value = json.loads(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(value, Mapping):
-        raise ValueError(f"JSON root must be an object: {path}")
-    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -124,22 +117,6 @@ def _task_state(
     return task, digest, envelope
 
 
-def _endpoint_payload_source(
-    args: argparse.Namespace,
-    run: Any,
-    ranked: Sequence[Mapping[str, Any]],
-) -> tuple[Mapping[str, Any], str, bool]:
-    if args.endpoint_file:
-        return _load(args.endpoint_file), f"fixture:{args.endpoint_file}", False
-    if run.dry_run and run.catalog_file:
-        return {}, "synthetic-fixture-endpoints", True
-    return (
-        fetch_live_endpoint_payloads(ranked, run, maximum_models=len(ranked)),
-        "openrouter-live-exact-endpoints",
-        False,
-    )
-
-
 def _catalog_state(
     args: argparse.Namespace,
     run: Any,
@@ -152,11 +129,22 @@ def _catalog_state(
         requested_context=required_context,
         maximum_models=int(args.ranking_limit),
     )
-    payloads, endpoint_source, synthetic = _endpoint_payload_source(
-        args,
-        run,
-        ranked,
-    )
+    if args.endpoint_file:
+        payloads = load_mapping_path(Path(args.endpoint_file))
+        endpoint_source = f"fixture:{args.endpoint_file}"
+        synthetic = False
+    elif run.dry_run and run.catalog_file:
+        payloads = {}
+        endpoint_source = "synthetic-fixture-endpoints"
+        synthetic = True
+    else:
+        payloads = fetch_live_endpoint_payloads(
+            ranked,
+            run,
+            maximum_models=len(ranked),
+        )
+        endpoint_source = "openrouter-live-exact-endpoints"
+        synthetic = False
     catalog = compact_endpoint_catalog(
         ranked,
         payloads,

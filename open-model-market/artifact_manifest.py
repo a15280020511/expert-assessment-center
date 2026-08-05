@@ -51,34 +51,35 @@ def _architecture_hashes(root: Path) -> dict[str, str]:
     paths = {
         "config": "config.json",
         "task_envelope": "v5_task_envelope.py",
-        "gpt_selector": "v5_gpt_expert_selector.py",
-        "claude_advisory": "v5_claude_red_team_policy.py",
-        "governance_runtime": "v5_governance_runtime.py",
+        "price_ranked_orchestrator": "v5_price_ranked_orchestrator.py",
+        "price_ranked_pipeline": "v5_price_ranked_pipeline.py",
+        "price_ranked_evidence": "v5_price_ranked_evidence.py",
         "proposal_validator": "v5_proposal_materializer.py",
         "execution_graph_validator": "execution_graph_validator.py",
+        "execution_auditor": "v5_price_ranked_execution_auditor.py",
     }
-    return {
-        name: sha256_file(root / filename)
-        for name, filename in paths.items()
-    }
+    return {name: sha256_file(root / filename) for name, filename in paths.items()}
+
+
+def _manifest_rows(output_dir: Path) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for path in sorted(output_dir.rglob("*")):
+        if path.is_file() and path.name != "artifact-manifest.json":
+            rows.append(
+                {
+                    "path": str(path.relative_to(output_dir)),
+                    "size": path.stat().st_size,
+                    "sha256": sha256_file(path),
+                }
+            )
+    return rows
 
 
 def write_manifest(output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    files = []
-    for path in sorted(output_dir.rglob("*")):
-        if not path.is_file() or path.name == "artifact-manifest.json":
-            continue
-        files.append(
-            {
-                "path": str(path.relative_to(output_dir)),
-                "size": path.stat().st_size,
-                "sha256": sha256_file(path),
-            }
-        )
     root = Path(__file__).resolve().parent
     provenance = {
-        "schema_version": "v5-artifact-manifest-3",
+        "schema_version": "v5-artifact-manifest-4",
         "created_at": datetime.now(timezone.utc).isoformat(),
         **_execution_source(),
         "github_run_id": os.getenv("GITHUB_RUN_ID"),
@@ -86,8 +87,12 @@ def write_manifest(output_dir: Path) -> None:
         "github_repository": os.getenv("GITHUB_REPOSITORY"),
         "issue_number": os.getenv("ISSUE_NUMBER"),
         "architecture_sha256": _architecture_hashes(root),
+        "active_selection_authority": "python-price-ranked-orchestrator",
+        "active_orchestration_library": "networkx",
+        "claude_mechanism_enabled": False,
+        "governance_model_calls": 0,
         "obsolete_team_policy_present": False,
-        "files": files,
+        "files": _manifest_rows(output_dir),
     }
     (output_dir / "artifact-manifest.json").write_text(
         json.dumps(provenance, ensure_ascii=False, indent=2),
