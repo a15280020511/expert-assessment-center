@@ -1,5 +1,5 @@
 {
-  "schema_version": "v5-constitutional-policy-6",
+  "schema_version": "v5-constitutional-policy-5",
   "authority": "CONSTITUTION.md",
   "fail_closed": true,
   "free_first_testing": {
