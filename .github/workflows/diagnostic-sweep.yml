@@ -35,27 +35,79 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       DIAGNOSTIC_CENTER: expert
       LOOKBACK_HOURS: ${{ inputs.lookback_hours || '2' }}
       MAX_RUNS: ${{ inputs.max_runs || '200' }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
       - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: "3.12"
-      - name: Collect and classify workflow diagnostics
+
+      - name: Collect same-repository Actions evidence
+        shell: bash
         run: |
           set -euo pipefail
-          python tools/workflow_diagnostics.py \
+          mkdir -p actions-input/pages actions-input/jobs actions-input/logs
+          : > actions-input/run-rows.jsonl
+          for page in 1 2; do
+            page_file="actions-input/pages/${page}.json"
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "/repos/${GITHUB_REPOSITORY}/actions/runs?per_page=100&page=${page}" \
+              > "${page_file}"
+            jq -c '.workflow_runs[]' "${page_file}" >> actions-input/run-rows.jsonl
+            count="$(jq '.workflow_runs | length' "${page_file}")"
+            if [[ "${count}" -lt 100 ]]; then
+              break
+            fi
+          done
+          jq -s '{workflow_runs: .}' actions-input/run-rows.jsonl > actions-input/runs.json
+
+          python tools/workflow_diagnostics.py plan \
+            --runs-json actions-input/runs.json \
             --repository "${GITHUB_REPOSITORY}" \
-            --center "${DIAGNOSTIC_CENTER}" \
             --lookback-hours "${LOOKBACK_HOURS}" \
             --max-runs "${MAX_RUNS}" \
             --exclude-workflow-path ".github/workflows/diagnostic-sweep.yml" \
+            --output actions-input/plan.json
+
+          while IFS= read -r run_id; do
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?filter=latest&per_page=100" \
+              > "actions-input/jobs/${run_id}.json" \
+              2> "actions-input/jobs/${run_id}.error.txt" || true
+          done < <(jq -r '.runs[].id' actions-input/plan.json)
+
+          while IFS= read -r run_id; do
+            if ! gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/logs" \
+              > "actions-input/logs/${run_id}.zip" \
+              2> "actions-input/logs/${run_id}.error.txt"; then
+              rm -f "actions-input/logs/${run_id}.zip"
+            fi
+          done < <(jq -r '.failure_run_ids[]' actions-input/plan.json)
+
+      - name: Analyze and classify local evidence
+        run: |
+          set -euo pipefail
+          python tools/workflow_diagnostics.py analyze \
+            --input-dir actions-input \
+            --repository "${GITHUB_REPOSITORY}" \
+            --center "${DIAGNOSTIC_CENTER}" \
             --output-dir diagnostic-bundle
+
       - name: Package diagnostic evidence
         if: always()
         run: |
@@ -63,16 +115,18 @@ jobs:
           test -d diagnostic-bundle
           tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
             -czf "workflow-diagnostics-${GITHUB_RUN_ID}.tar.gz" diagnostic-bundle
+
       - name: Upload diagnostic artifact
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: workflow-diagnostics-${{ github.run_id }}
           path: workflow-diagnostics-${{ github.run_id }}.tar.gz
           if-no-files-found: error
           retention-days: 30
+
       - name: Attest diagnostic artifact provenance
         if: success() && github.event_name != 'pull_request'
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
         with:
           subject-path: workflow-diagnostics-${{ github.run_id }}.tar.gz
