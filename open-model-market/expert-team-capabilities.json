@@ -1,7 +1,7 @@
 {
-  "schema_version": "expert-team-capabilities-v2",
+  "schema_version": "expert-team-capabilities-v3",
   "catalog_status": "production-candidate",
-  "selection_owner": "gpt-latest-governance",
+  "selection_owner": "python-price-ranked-orchestrator",
   "execution_owner": "github-expert-team-control-plane",
   "maintenance_owner": "ordinary-web-gpt-with-github-plugin",
   "gpts_exposure": {
@@ -16,7 +16,7 @@
   },
   "use_when": [
     "the task requires multidisciplinary judgment rather than only deterministic calculation",
-    "evidence, assumptions, trade-offs, strategy, policy, business, risk, or red-team analysis must be synthesized",
+    "evidence, assumptions, trade-offs, strategy, policy, business, risk, or adversarial review must be synthesized",
     "the user explicitly requests the GitHub expert team",
     "API or compute results require independent interpretation and adjudication"
   ],
@@ -27,25 +27,30 @@
     "the ticket would contain secrets, private personal data, or unverified artifact identifiers without the underlying body"
   ],
   "governance_chain": {
-    "proposal": "GPT latest creates the task decomposition, expert graph, model-company assignments and request parameters",
-    "red_team": "Claude Opus latest runs exactly once and returns advisory modifications only",
-    "synthesis": "GPT latest incorporates or rejects the advisory modifications exactly once",
-    "final_authority": "deterministic constitutional validator",
-    "claude_gatekeeping_allowed": false,
-    "second_claude_review_allowed": false,
-    "model_loop_allowed": false
+    "selection": "deterministic Python sorts eligible exact endpoints by estimated task cost ascending and enforces distinct model companies",
+    "orchestration": "NetworkX validates a bounded DAG: parallel independent analysis, one cross-review, one final synthesis",
+    "final_authority": "deterministic constitutional validator and independent artifact revalidation",
+    "claude_mechanism_enabled": false,
+    "claude_calls": 0,
+    "gpt_selection_calls": 0,
+    "governance_model_calls": 0,
+    "model_loop_allowed": false,
+    "agent_framework_allowed": false
   },
   "execution_contract": {
-    "expert_count": "task-derived within the approved call budget",
-    "roles": "task-derived; no fixed profession, red-team, judge or synthesis seat",
+    "expert_count": "3 to 6, default 4, bounded by the admitted initial-call capacity",
+    "roles": "N-2 independent analysts, one cross-reviewer, one final synthesizer",
     "company_policy": "selected and recovery models must use globally distinct model companies",
     "provider_policy": "each endpoint is explicitly locked and provider fallback is disabled",
+    "selection_policy": "eligible endpoint capability floor, then estimated task cost ascending",
+    "quality_assignment": "best official rank in the selected lowest-cost set performs final synthesis; second-best performs cross-review",
     "external_tools_allowed": false,
-    "recovery": "bounded inside approved_budget.calls",
+    "recovery": "bounded inside approved_budget.calls and selected after the initial lowest-cost distinct-company set",
+    "cross_task_history_used": false,
     "local_task_classification_used": false,
     "local_resource_matrix_used": false,
-    "local_scoring_used": false,
-    "optimizer_used": false
+    "optimizer_used": false,
+    "orchestration_library": "networkx==3.6.1"
   },
   "ticket_inputs": [
     "task_id",
@@ -64,8 +69,8 @@
     "private_output=false (optional)"
   ],
   "outputs": [
-    "GPT governance proposal, one Claude advisory review and one GPT synthesis receipt",
-    "validated task-specific expert execution graph",
+    "zero-governance-call selection receipt",
+    "price-ranked distinct-company expert execution graph",
     "expert outputs or a structured fail-closed result",
     "call ledger with actual models, providers, tokens, cost and errors",
     "execution diagnosis and final report",
@@ -75,8 +80,9 @@
   "restrictions": [
     "GPTs must not choose a concrete model ID or provider",
     "experts cannot browse, call tools, plugins, APIs or download artifacts",
-    "Claude is advisory only and cannot approve, reject or gate the task",
+    "Claude and GPT governance selection calls are disabled",
     "no unlimited retries, replacements or agent loops",
+    "no heavy agent framework in the production path",
     "no secret or private data in public issues",
     "no self-answer by Web GPT before the GitHub report when delegation is explicit"
   ],
