@@ -1,0 +1,156 @@
+name: V5 Live Flagship Price Ranking
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "open-model-market/v5_price_ranked_orchestrator.py"
+      - "tests/test_v5_price_ranked_orchestrator.py"
+      - ".github/workflows/v5-live-flagship-price-ranking.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v5-live-flagship-price-ranking-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live-flagship-price-ranking:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      MODEL_MAX_RETRIES: "0"
+      MODEL_TIMEOUT_SECONDS: "120"
+      OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
+      OPENROUTER_APP_NAME: expert-center-live-flagship-price-ranking
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-runtime.txt
+
+      - name: Install pinned runtime dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
+          python -m pip check
+
+      - name: Build current zero-call flagship price ranking
+        run: |
+          set -euo pipefail
+          test -n "${OPENROUTER_API_KEY:-}"
+          python open-model-market/v5_price_ranked_pipeline.py \
+            --task "对复杂决策任务进行多视角分析、交叉审查并形成最终综合结论。" \
+            --require-live-catalog \
+            --dry-run \
+            --ranking-limit 150 \
+            --maximum-total-calls 8 \
+            --maximum-recovery-calls 1 \
+            --expert-count 4 \
+            --output-dir flagship-ranking
+
+      - name: Verify and render flagship price table
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("flagship-ranking")
+          selection = json.loads(
+              (root / "v5-price-ranked-selection.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          rows = selection.get("flagship_price_ranking")
+          selected = selection.get("selected_flagships")
+          if selection.get("status") != "PASS":
+              raise RuntimeError("flagship selection did not pass")
+          if not isinstance(rows, list) or len(rows) < 4:
+              raise RuntimeError("flagship price ranking is incomplete")
+          if not isinstance(selected, list) or len(selected) != 4:
+              raise RuntimeError("selected flagship set is incomplete")
+          costs = [float(row["estimated_call_cost_usd"]) for row in rows]
+          if costs != sorted(costs):
+              raise RuntimeError("flagship ranking is not price ascending")
+          companies = [str(row["company"]) for row in rows]
+          if len(companies) != len(set(companies)):
+              raise RuntimeError("flagship ranking contains duplicate companies")
+          selected_keys = {
+              (str(row["model"]), str(row["provider"])) for row in selected
+          }
+          lines = [
+              "# Current eligible flagship model price ranking",
+              "",
+              f"Target SHA: `{__import__('os').environ['TARGET_SHA']}`",
+              "",
+              "Flagship definition: the best official-intelligence-ranked eligible model per company; the cheapest compatible exact Provider endpoint for that model.",
+              "",
+              "| Price order | Selected | Company | Flagship model | Provider | Intelligence rank | Input $/M | Output $/M | Estimated task cost $ |",
+              "|---:|:---:|---|---|---|---:|---:|---:|---:|",
+          ]
+          for index, row in enumerate(rows, start=1):
+              key = (str(row["model"]), str(row["provider"]))
+              lines.append(
+                  "| {index} | {selected} | {company} | `{model}` | {provider} | {rank} | {prompt:.6f} | {completion:.6f} | {cost:.10f} |".format(
+                      index=index,
+                      selected="YES" if key in selected_keys else "",
+                      company=row["company"],
+                      model=row["model"],
+                      provider=row["provider"],
+                      rank=row["official_intelligence_rank"],
+                      prompt=float(row["prompt_price_per_million"]),
+                      completion=float(row["completion_price_per_million"]),
+                      cost=float(row["estimated_call_cost_usd"]),
+                  )
+              )
+          lines.extend(
+              [
+                  "",
+                  f"Eligible flagship companies: **{len(rows)}**",
+                  f"Selected experts: **{len(selected)}**",
+                  "Model calls: **0**",
+              ]
+          )
+          (root / "flagship-price-ranking.md").write_text(
+              "\n".join(lines) + "\n",
+              encoding="utf-8",
+          )
+          (root / "flagship-price-ranking.json").write_text(
+              json.dumps(
+                  {
+                      "schema_version": "v5-live-flagship-price-ranking-1",
+                      "target_sha": __import__('os').environ["TARGET_SHA"],
+                      "status": "PASS",
+                      "model_calls": 0,
+                      "flagship_definition": selection["flagship_definition"],
+                      "compatibility_excluded_companies": selection.get(
+                          "compatibility_excluded_companies", []
+                      ),
+                      "flagship_price_ranking": rows,
+                      "selected_flagships": selected,
+                  },
+                  ensure_ascii=False,
+                  indent=2,
+              ),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Upload live flagship price evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: v5-live-flagship-price-ranking-${{ github.run_id }}
+          path: flagship-ranking/
+          if-no-files-found: error
+          retention-days: 30
