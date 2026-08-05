@@ -231,6 +231,7 @@ def _runtime_config(
         "cost_advisory_usd": args.cost_anomaly_usd,
         "completion_capacity_advisory_tokens": args.max_completion_tokens,
         "local_token_ceiling_enforced": False,
+        "local_task_classification_used": False,
         "optimizer_present": False,
         "agent_framework_present": False,
         "model_loop_allowed": False,
