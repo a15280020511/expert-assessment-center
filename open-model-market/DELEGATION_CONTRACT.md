@@ -1,59 +1,45 @@
-# 专家中心委托合同
+# Expert Team Delegation Contract
 
-## 唯一生产治理链
+## Authority boundary
 
-```text
-原始任务、硬约束、明确证据与精确 model+provider 目录
-→ GPT latest 一次生成工作项和专家执行图
-→ Claude Opus latest 一次统一红队审查
-→ GPT latest 一次综合
-→ 确定性宪法校验器唯一硬门
-→ 专家执行图
-→ 独立证据、Artifact 与最终证明
-```
+GPTs may submit, monitor, retrieve and faithfully relay an expert-team task. GPTs do not choose concrete models, providers, roles or execution edges.
 
-Claude 同一次审查同时覆盖：
-
-- GPT 提出的任务拆解、专家角色、模型、Provider、恢复顺序与执行边；
-- 输入信息的来源、数量、位置、未知项、推断边界和用户交付合同。
-
-Claude 只返回结构化修改建议。它不是批准者、否决者或门禁，不选择专家，不执行任务，不调用工具，不浏览，不写最终报告，不进行第二次复审。
-
-## 已删除的旧决策层
-
-生产仓库不得包含或恢复：
-
-- 本地任务领域分类、复杂度评分或风险关键词路由；
-- 本地原子工作生成、资源矩阵和能力权重；
-- OR-Tools、CP-SAT、Pareto、固定评分、价值比或候选宽度求解；
-- 本地模型选择、恢复候选排序或跨任务历史权重；
-- 固定专家、固定红队、固定裁判或无限 Agent 循环。
-
-确定性代码只允许执行硬校验、容量校验、Provider 单锁、预算与调用上限、DAG、工作覆盖、公司唯一性、工具禁止、交付合同和证据完整性验证。校验器不得生成、评分、排序或修复 GPT 提案。
-
-## 调用与预算口径
-
-批准的总调用上限同时包含：
-
-1. GPT 提案一次；
-2. Claude 红队一次；
-3. GPT 综合一次；
-4. 专家初始调用；
-5. 恢复调用。
-
-因此：
+The active production selector is deterministic Python code:
 
 ```text
-专家初始调用上限 = 总调用上限 - 3次治理调用 - 恢复保留
+eligible exact endpoints
+→ estimated task cost ascending
+→ globally distinct model companies
+→ 3–6 experts, default 4
+→ NetworkX DAG validation
 ```
 
-任何层不得把治理调用排除在总调用预算之外。
+Claude and GPT governance-selection calls are disabled and must remain exactly zero in admission, execution, audit and Artifact evidence.
 
-## 失败关闭
+## Team organization
 
-- Claude 输出为空、越界或非严格 JSON：失败关闭；
-- GPT 最终提案违反硬约束：失败关闭；
-- model 或 Provider 不在同一目录快照：失败关闭；
-- Provider fallback、专家工具、重复公司或工作遗漏：失败关闭；
-- 审计、Manifest、Artifact 或最终证明失败：不得发布成功报告；
-- 不调用旧运行时，不自动放宽，不进行第二轮 Claude。
+- `N-2` independent analysis nodes run first and may execute in parallel.
+- One cross-review node consumes all independent outputs.
+- One final-synthesis node consumes the original task, all independent outputs and the cross-review.
+- The best official intelligence rank inside the selected lowest-cost set receives final synthesis; the second-best receives cross-review.
+- Recovery candidates are preselected within the approved reserve and remain globally company-distinct.
+
+## Input contract
+
+The ticket contains the task, optional requirements and language, optional verified evidence, and an approved call/recovery envelope. Concrete model IDs, providers, tools and hidden prompts are not user-selectable ticket fields.
+
+## Evidence boundary
+
+Experts may use only the ticket, supplied evidence and legal prior outputs from the same task. Experts cannot browse, use tools, call plugins or APIs, execute code, query databases or directly contact other centers.
+
+## Completion
+
+An accepted ticket, queued workflow, successful job or uploaded Artifact is not completion. Completion requires an authoritative final status backed by:
+
+- exact provider-locked request audit;
+- complete call and cost ledger;
+- price-ranked selection receipt;
+- final report and quality integrity evidence;
+- frozen Artifact manifest;
+- independent Artifact revalidation;
+- final attestation bound to the same SHA, Run and Artifact digest.
