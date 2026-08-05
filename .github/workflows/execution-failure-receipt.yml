@@ -1,0 +1,112 @@
+name: Publish Expert Failure Terminal Receipt
+
+on:
+  workflow_run:
+    workflows:
+      - Execution Ticket Price-Ranked Expert Team V5
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+jobs:
+  publish-terminal-receipt:
+    if: >-
+      github.event.workflow_run.event == 'issue_comment' &&
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.actor.login == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    concurrency:
+      group: expert-failure-receipt-${{ github.event.workflow_run.id }}
+      cancel-in-progress: false
+    steps:
+      - name: Publish trusted terminal rejection when the child workflow failed silently
+        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
+        env:
+          FAILED_RUN_ID: ${{ github.event.workflow_run.id }}
+          FAILED_RUN_URL: ${{ github.event.workflow_run.html_url }}
+          FAILED_RUN_TITLE: ${{ github.event.workflow_run.display_title }}
+          FAILED_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const title = String(process.env.FAILED_RUN_TITLE || '').trim();
+            const runId = String(process.env.FAILED_RUN_ID || '').trim();
+            const runUrl = String(process.env.FAILED_RUN_URL || '').trim();
+            const conclusion = String(process.env.FAILED_RUN_CONCLUSION || '').trim();
+
+            if (!title.startsWith('[execution]')) {
+              core.info(`Ignoring non-execution workflow title: ${title}`);
+              return;
+            }
+
+            const taskMatch = title.match(/\b(gov-\d+-expert)\b/);
+            const taskId = taskMatch ? taskMatch[1] : '';
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: 'all',
+              sort: 'created',
+              direction: 'desc',
+              per_page: 100
+            });
+
+            let candidates = issues.filter(issue =>
+              !issue.pull_request && issue.title === title
+            );
+            if (taskId) {
+              const bodyMatched = candidates.filter(issue =>
+                String(issue.body || '').includes(`"task_id": "${taskId}"`)
+              );
+              if (bodyMatched.length > 0) {
+                candidates = bodyMatched;
+              }
+            }
+            candidates.sort((left, right) => right.number - left.number);
+
+            if (candidates.length === 0) {
+              core.setFailed(`No execution Issue found for failed workflow run ${runId}: ${title}`);
+              return;
+            }
+
+            const issue = candidates[0];
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: issue.number,
+              per_page: 100
+            });
+            const terminalPattern = /^##\s+(EXECUTION_COMPLETED|EXECUTION_FAILED|EXECUTION_DEGRADED|EXECUTION_REJECTED)\b/m;
+            const trustedTerminalExists = comments.some(comment =>
+              comment.user?.login === 'github-actions[bot]' &&
+              terminalPattern.test(String(comment.body || ''))
+            );
+
+            if (trustedTerminalExists) {
+              core.info(`Trusted terminal receipt already exists on Issue #${issue.number}`);
+              return;
+            }
+
+            const resolvedTaskId = taskId || `expert-issue-${issue.number}`;
+            const body = [
+              '## EXECUTION_REJECTED',
+              '',
+              `- Task ID: \`${resolvedTaskId}\``,
+              '- Reason: `CHILD_WORKFLOW_FAILED_BEFORE_TERMINAL_RECEIPT`',
+              `- Workflow conclusion: \`${conclusion || 'failure'}\``,
+              `- Failed workflow run: \`${runId}\``,
+              `- Run: ${runUrl}`,
+              '- Business success claimed: `false`',
+              '- Model-call evidence: `not attested`'
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: issue.number,
+              body
+            });
