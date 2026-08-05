@@ -72,7 +72,10 @@ def redact(text: str) -> str:
 
 
 def read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    if not path.is_file():
+        raise FileNotFoundError(f"diagnostic JSON file not found: {path}")
+    text = path.read_text(encoding="utf-8")
+    return json.loads(text)
 
 
 def duration(start: Any, end: Any) -> float | None:
