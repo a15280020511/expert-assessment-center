@@ -156,13 +156,14 @@ jobs:
               candidates,
               key=lambda row: (-row["created"], -row["context_length"], row["id"]),
           )[0]
+          selected_model = selected["id"]
           result = request_json(
               CHAT_URL,
               key,
               120,
               0,
               {
-                  "model": selected["id"],
+                  "model": selected_model,
                   "messages": [
                       {"role": "system", "content": "Return only the requested final answer."},
                       {"role": "user", "content": "Reply with exactly PASS and nothing else."},
@@ -187,7 +188,8 @@ jobs:
               "zero_call_validation": "PASS",
               "free_canary": {
                   "status": "PASS",
-                  "requested_model": selected["id"],
+                  "requested_model": selected_model,
+                  "exact_model_required": True,
                   "response_model": str(result.get("model") or ""),
                   "provider": str(result.get("provider") or ""),
                   "actual_cost_usd": cost,
