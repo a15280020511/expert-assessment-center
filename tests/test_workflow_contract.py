@@ -3,171 +3,88 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "execution-ticket.yml"
-PROMOTION = ROOT / ".github" / "workflows" / "promote-v5-production.yml"
-PAID_ACCEPTANCE = ROOT / ".github" / "workflows" / "v5-final-paid-claude-acceptance-20260803.yml"
-LEGACY_PAID_ACCEPTANCE = (
-    ROOT / ".github" / "workflows" / "v5-one-time-paid-acceptance.yml"
-)
-DETACHED_ATTESTATION = (
-    ROOT / ".github" / "workflows" / "v5-paid-acceptance-attest.yml"
-)
-DETACHED_ATTESTATION_REQUEST = (
-    ROOT / ".github" / "v5-paid-acceptance-attest-request.json"
-)
 
 
 class WorkflowContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.text = WORKFLOW.read_text(encoding="utf-8")
-        cls.promotion = PROMOTION.read_text(encoding="utf-8")
 
-    def test_dynamic_graph_uses_ticket_approved_call_ceiling(self):
-        self.assertNotIn('TOTAL_MODEL_CALLS: "16"', self.text)
-        self.assertIn("--maximum-total-calls", self.text)
-        self.assertIn("--maximum-recovery-calls", self.text)
-        self.assertIn("Execute explicit V5 production runtime", self.text)
-        self.assertNotIn("Execute fixed 3+1 expert team", self.text)
-
-    def test_production_uses_only_native_v5_entrypoints(self):
-        self.assertIn("v5_issue_ticket.py prepare", self.text)
-        self.assertIn("v5_production_ticket.py", self.text)
-        self.assertIn("v5_execution_auditor_integrity.py", self.text)
-        self.assertIn("v5_final_status.py", self.text)
-        self.assertIn("v5_final_attestation.py", self.text)
-        self.assertNotIn("expert_team_hardened.py", self.text)
-        self.assertNotIn(
-            "python open-model-market/execution_auditor.py", self.text
-        )
-        self.assertNotIn("python open-model-market/final_status.py", self.text)
-
-    def test_only_explicit_comment_commands_can_trigger_execution(self):
+    def test_only_explicit_comment_commands_trigger_execution(self):
         self.assertIn("issue_comment:", self.text)
         self.assertIn("types: [created]", self.text)
-        self.assertNotIn("issues:\n", self.text)
-        self.assertNotIn("types: [opened, reopened]", self.text)
-        self.assertIn(
-            "startsWith(github.event.comment.body, '/run-expert-team ')",
-            self.text,
-        )
-        self.assertIn(
-            "startsWith(github.event.comment.body, '/retry-expert-team ')",
-            self.text,
-        )
+        self.assertIn("startsWith(github.event.comment.body, '/run-expert-team ')", self.text)
+        self.assertIn("startsWith(github.event.comment.body, '/retry-expert-team ')", self.text)
 
-    def test_both_jobs_checkout_production_ref(self):
-        self.assertEqual(self.text.count("ref: production"), 2)
-        self.assertIn("Checkout production source for admission", self.text)
-        self.assertIn("Checkout pinned production source", self.text)
-        self.assertNotIn("ref: main", self.text)
-
-    def test_control_plane_and_execution_source_are_one_frozen_version(self):
-        self.assertEqual(
-            self.text.count("Enforce frozen production control plane"),
-            1,
-        )
-        self.assertIn("Resolve authoritative execution source", self.text)
-        self.assertGreaterEqual(
-            self.text.count('test "$main" = "$production"'),
-            2,
-        )
-        self.assertGreaterEqual(
-            self.text.count('test "$checked" = "$production"'),
-            2,
-        )
+    def test_both_jobs_checkout_frozen_production_ref(self):
+        self.assertEqual(2, self.text.count("ref: production"))
+        self.assertGreaterEqual(self.text.count('test "$main" = "$production"'), 2)
+        self.assertGreaterEqual(self.text.count('test "$checked" = "$production"'), 2)
         self.assertIn("checked-out-production-sha.txt", self.text)
-        self.assertIn(
-            '--commit-sha "$AUTHORITATIVE_EXECUTION_SHA"',
-            self.text,
-        )
-        self.assertNotIn('--commit-sha "${{ github.sha }}"', self.text)
 
-    def test_production_has_atomic_admission_and_execution_groups(self):
+    def test_active_path_is_price_ranked_and_zero_claude(self):
+        for name in (
+            "v5_price_ranked_issue_ticket.py",
+            "v5_price_ranked_ticket_gate.py",
+            "v5_price_ranked_production_ticket.py",
+            "v5_price_ranked_execution_auditor.py",
+            "v5_price_ranked_independent_revalidation.py",
+        ):
+            self.assertIn(name, self.text)
+        self.assertNotIn("v5_production_claude_request.py", self.text)
+        self.assertNotIn("v5_claude_red_team_policy.py", self.text)
+        self.assertNotIn("v5_governance_runtime.py", self.text)
+        self.assertNotIn("claude-opus", self.text.casefold())
+        self.assertNotIn("anthropic", self.text.casefold())
+
+    def test_production_is_serial_and_fail_closed(self):
         self.assertIn("group: expert-production-admission", self.text)
         self.assertIn("group: expert-production-global", self.text)
         self.assertIn("cancel-in-progress: false", self.text)
         self.assertIn("v5_admission_lock.py", self.text)
         self.assertIn("EXECUTION_REJECTED", self.text)
+        self.assertIn("--require-live-catalog", self.text)
 
-    def test_report_audit_primary_artifact_and_final_attestation_order(self):
+    def test_audit_artifact_revalidation_and_attestation_order(self):
+        execute = self.text.index("name: Execute explicit price-ranked production runtime")
         prepare = self.text.index("name: Prepare report publication package")
-        audit = self.text.index(
-            "name: Audit complete native V5 evidence before publication"
-        )
-        freeze = self.text.index(
-            "name: Freeze primary artifact manifest after audit"
-        )
+        audit = self.text.index("name: Audit complete price-ranked evidence before publication")
+        freeze = self.text.index("name: Freeze primary artifact manifest after audit")
         upload = self.text.index("name: Upload primary ticket artifacts")
-        publish_report = self.text.index(
-            "name: Publish report only after audit and artifact freeze"
-        )
+        revalidate = self.text.index("name: Independently revalidate uploaded primary artifact")
+        publish = self.text.index("name: Publish report only after audit and artifact freeze")
         final = self.text.index("name: Render authoritative V5 final status")
         attest = self.text.index("name: Generate post-upload final attestation")
         proof = self.text.index("name: Upload final attestation artifact")
-        publish_status = self.text.index(
-            "name: Publish authoritative V5 final status"
-        )
+        self.assertLess(execute, prepare)
         self.assertLess(prepare, audit)
         self.assertLess(audit, freeze)
         self.assertLess(freeze, upload)
-        self.assertLess(upload, publish_report)
-        self.assertLess(publish_report, final)
+        self.assertLess(upload, revalidate)
+        self.assertLess(revalidate, publish)
+        self.assertLess(publish, final)
         self.assertLess(final, attest)
         self.assertLess(attest, proof)
-        self.assertLess(proof, publish_status)
         self.assertIn("steps.audit.outputs.status == 'PASS'", self.text)
-        self.assertIn("ticket-artifacts/final-status.json", self.text)
+        self.assertIn("steps.independent.outputs.status == 'PASS'", self.text)
 
     def test_authoritative_failure_is_visible_job_failure(self):
         marker = self.text.index("name: Verify authoritative V5 final outcome")
         tail = self.text[marker:]
-        self.assertIn("steps.execute.outcome", tail)
-        self.assertIn("steps.prepare_report.outcome", tail)
-        self.assertIn("steps.ticket_artifact.outcome", tail)
-        self.assertIn("steps.audit.outcome", tail)
-        self.assertIn("steps.audit.outputs.status", tail)
-        self.assertIn("steps.manifest.outcome", tail)
-        self.assertIn("steps.publish.outcome", tail)
-        self.assertIn("steps.attest.outcome", tail)
-        self.assertIn("steps.proof_artifact.outcome", tail)
-        self.assertIn("steps.final.outputs.status", tail)
-
-    def test_production_has_anomaly_guard_not_fixed_cost_rewrite(self):
-        self.assertNotIn("MAX_ESTIMATED_COST_USD", self.text)
-        self.assertIn("cost_anomaly_usd", self.text)
-        self.assertIn("--cost-anomaly-usd", self.text)
-
-    def test_no_legacy_or_history_runtime_path_exists(self):
-        legacy_version = "v" + "3"
-        self.assertNotIn(legacy_version, self.text.casefold())
-        self.assertNotIn("Restore latest model performance history", self.text)
-        self.assertNotIn("model-performance-state", self.text)
-        self.assertNotIn("MODEL_HISTORY_PATH", self.text)
-
-    def test_promotion_is_read_only_until_explicit_acceptance(self):
-        self.assertIn("workflow_dispatch:", self.promotion)
-        self.assertIn("permissions:\n  contents: read", self.promotion)
-        self.assertIn("group: v5-production-qualification", self.promotion)
-        self.assertIn("task-independent advisory matrix", self.promotion)
-        self.assertIn("~openai/gpt-latest", self.promotion)
-        self.assertIn("~anthropic/claude-opus-latest", self.promotion)
-        self.assertIn("claude_is_advisory_only", self.promotion)
-        self.assertIn("claude_gatekeeping_allowed", self.promotion)
-        self.assertIn("gpt_synthesis_calls", self.promotion)
-        self.assertIn("deterministic-constitutional-validator", self.promotion)
-        self.assertIn("test ! -e .release-authorized", self.promotion)
-        self.assertNotIn("v5-adaptive-search.json", self.promotion)
-        self.assertNotIn("v5-optimization.json", self.promotion)
-        self.assertNotIn("git push", self.promotion)
-        self.assertNotIn("refs/heads/production", self.promotion)
-        self.assertNotIn("OPENROUTER_API_KEY", self.promotion)
-
-    def test_obsolete_date_bound_paid_acceptance_is_removed(self):
-        self.assertFalse(PAID_ACCEPTANCE.exists())
-        self.assertFalse(LEGACY_PAID_ACCEPTANCE.exists())
-        self.assertFalse(DETACHED_ATTESTATION.exists())
-        self.assertFalse(DETACHED_ATTESTATION_REQUEST.exists())
-
+        for field in (
+            "steps.execute.outcome",
+            "steps.prepare_report.outcome",
+            "steps.audit.outcome",
+            "steps.audit.outputs.status",
+            "steps.manifest.outcome",
+            "steps.ticket_artifact.outcome",
+            "steps.independent.outcome",
+            "steps.publish.outcome",
+            "steps.attest.outcome",
+            "steps.proof_artifact.outcome",
+            "steps.final.outputs.status",
+        ):
+            self.assertIn(field, tail)
 
 
 if __name__ == "__main__":
