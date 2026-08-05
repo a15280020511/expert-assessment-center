@@ -50,10 +50,9 @@ def _execution_source() -> dict[str, object]:
 def _architecture_hashes(root: Path) -> dict[str, str]:
     paths = {
         "config": "config.json",
-        "task_envelope": "v5_task_envelope.py",
-        "price_ranked_orchestrator": "v5_price_ranked_orchestrator.py",
-        "price_ranked_pipeline": "v5_price_ranked_pipeline.py",
-        "price_ranked_evidence": "v5_price_ranked_evidence.py",
+        "governance_selection_validator": "v5_governance_selection.py",
+        "governance_selected_pipeline": "v5_price_ranked_pipeline.py",
+        "governance_selected_evidence": "v5_price_ranked_evidence.py",
         "proposal_validator": "v5_proposal_materializer.py",
         "execution_graph_validator": "execution_graph_validator.py",
         "execution_auditor": "v5_price_ranked_execution_auditor.py",
@@ -79,7 +78,7 @@ def write_manifest(output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     root = Path(__file__).resolve().parent
     provenance = {
-        "schema_version": "v5-artifact-manifest-4",
+        "schema_version": "v5-artifact-manifest-5",
         "created_at": datetime.now(timezone.utc).isoformat(),
         **_execution_source(),
         "github_run_id": os.getenv("GITHUB_RUN_ID"),
@@ -87,11 +86,14 @@ def write_manifest(output_dir: Path) -> None:
         "github_repository": os.getenv("GITHUB_REPOSITORY"),
         "issue_number": os.getenv("ISSUE_NUMBER"),
         "architecture_sha256": _architecture_hashes(root),
-        "active_selection_authority": "python-price-ranked-orchestrator",
+        "active_selection_authority": "decision-system-governance",
+        "selection_occurs_in_this_repository": False,
+        "catalog_fetch_occurs_in_this_repository": False,
+        "local_selection_fallback_allowed": False,
         "active_orchestration_library": "networkx",
         "claude_mechanism_enabled": False,
         "governance_model_calls": 0,
-        "obsolete_team_policy_present": False,
+        "obsolete_local_selector_present": False,
         "files": _manifest_rows(output_dir),
     }
     (output_dir / "artifact-manifest.json").write_text(

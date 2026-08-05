@@ -1,4 +1,4 @@
-"""Normalize zero-governance price-ranked execution evidence."""
+"""Normalize evidence for governance-selected expert execution."""
 from __future__ import annotations
 
 import math
@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from artifact_manifest import write_manifest
+from v5_governance_selection import SELECTION_AUTHORITY
 from v5_json_io import load_json_or_default, write_json
 from v5_price_ranked_support import (
     canonical_json_sha,
@@ -38,7 +39,7 @@ class ApprovedContext:
         recovery = int(recovery_calls)
         if not 4 <= total <= 16:
             raise ValueError("approved total calls must be between 4 and 16")
-        if not 0 <= recovery < total:
+        if not 0 <= recovery < total or total - recovery < 3:
             raise ValueError("approved recovery reserve is invalid")
         return cls(total, recovery, cost_anomaly_usd)
 
@@ -61,6 +62,8 @@ class ApprovedContext:
 class EvidenceSource:
     runtime: Mapping[str, Any]
     runtime_config: Mapping[str, Any]
+    plan: Mapping[str, Any]
+    plan_validation: Mapping[str, Any]
     catalog: Mapping[str, Any]
     graph: Mapping[str, Any]
     summary: Mapping[str, Any]
@@ -80,6 +83,10 @@ class EvidenceSource:
         return cls(
             runtime=load_mapping(root, "production-runtime.json"),
             runtime_config=load_mapping(root, "v5-runtime-config.json"),
+            plan=load_mapping(root, "governance-selection.json"),
+            plan_validation=load_mapping(
+                root, "governance-selection-validation.json"
+            ),
             catalog=load_mapping(root, "catalog-snapshot.json"),
             graph=graph,
             summary=load_mapping(root, "v5-execution-summary.json"),
@@ -108,17 +115,49 @@ class PreparedEvidence:
     evidence_input_sha: str
 
 
-def _validate_zero_governance(source: EvidenceSource) -> None:
+def _validate_selection_boundary(source: EvidenceSource) -> None:
     if source.runtime.get("runtime_version") != RUNTIME_VERSION:
-        raise RuntimeError("price-ranked production runtime envelope is missing")
-    if source.runtime_config.get("claude_mechanism_enabled") is not False:
-        raise RuntimeError("Claude mechanism is not explicitly disabled")
+        raise RuntimeError("production runtime envelope is missing")
+    for document, label in (
+        (source.runtime, "production runtime"),
+        (source.runtime_config, "runtime config"),
+        (source.selection, "selection audit"),
+        (source.plan_validation, "governance selection validation"),
+    ):
+        if document.get("selection_authority") != SELECTION_AUTHORITY:
+            raise RuntimeError(f"{label} selection authority is not governance")
+    if source.plan.get("selection_authority") != SELECTION_AUTHORITY:
+        raise RuntimeError("governance plan authority is invalid")
+    plan_sha = str(source.plan.get("plan_sha256") or "")
+    if not plan_sha:
+        raise RuntimeError("governance plan digest is missing")
+    for document, field in (
+        (source.runtime, "selection_plan_sha256"),
+        (source.runtime_config, "selection_plan_sha256"),
+        (source.selection, "selection_plan_sha256"),
+        (source.plan_validation, "plan_sha256"),
+    ):
+        if str(document.get(field) or "") != plan_sha:
+            raise RuntimeError("governance plan digest is inconsistent")
+    if source.plan_validation.get("status") != "PASS":
+        raise RuntimeError("governance selection validation did not pass")
+    forbidden_true = (
+        (source.runtime, "expert_center_selection_performed"),
+        (source.runtime, "expert_center_catalog_fetch_performed"),
+        (source.runtime_config, "expert_center_selection_present"),
+        (source.runtime_config, "expert_center_catalog_fetch_present"),
+        (source.selection, "expert_center_selection_performed"),
+        (source.selection, "expert_center_catalog_fetch_performed"),
+        (source.selection, "local_fallback_used"),
+    )
+    if any(document.get(field) is not False for document, field in forbidden_true):
+        raise RuntimeError("expert center selection, catalog access or fallback is not disabled")
+    if source.runtime.get("local_selection_fallback_allowed") is not False:
+        raise RuntimeError("local selection fallback is not explicitly forbidden")
     if int(source.governance.get("actual_governance_calls") or 0) != 0:
-        raise RuntimeError("governance model calls must equal zero")
+        raise RuntimeError("governance inference calls must equal zero")
     if int(source.governance.get("claude_red_team_calls") or 0) != 0:
         raise RuntimeError("Claude calls must equal zero")
-    if source.selection.get("claude_calls") not in {0, None}:
-        raise RuntimeError("selection evidence reports a Claude call")
 
 
 def _validate_execution(
@@ -126,10 +165,13 @@ def _validate_execution(
     approved: ApprovedContext,
     require_report: bool,
 ) -> tuple[Mapping[str, Any], int, float, str]:
-    if not 3 <= len(source.graph_nodes) <= min(6, approved.initial_calls):
-        raise RuntimeError("expert graph size violates approved price-ranked bounds")
+    expected_nodes = int(source.plan.get("selected_expert_count") or 0)
+    if not 3 <= expected_nodes <= min(6, approved.initial_calls):
+        raise RuntimeError("governance-selected node count violates approved bounds")
+    if len(source.graph_nodes) != expected_nodes:
+        raise RuntimeError("execution graph differs from governance-selected node count")
     if source.selection.get("status") != "PASS":
-        raise RuntimeError("price-ranked selection audit did not pass")
+        raise RuntimeError("governance selection audit did not pass")
     if source.request_audit.get("status") != "PASS":
         raise RuntimeError("complete request audit did not pass")
     if any(not canonical_provider_lock(row) for row in source.requests):
@@ -146,7 +188,7 @@ def _validate_execution(
         raise RuntimeError("actual execution cost is invalid")
     answer = str(source.summary.get("final_answer") or "").strip()
     if require_report and (not source.report.strip() or not answer):
-        raise RuntimeError("price-ranked runtime did not produce a final report")
+        raise RuntimeError("governance-selected runtime did not produce a final report")
     return budget, call_count, actual_cost, answer
 
 
@@ -157,6 +199,8 @@ def _input_payload(
     return {
         "runtime": source.runtime,
         "runtime_config": source.runtime_config,
+        "governance_selection": source.plan,
+        "governance_selection_validation": source.plan_validation,
         "catalog": source.catalog,
         "graph": source.graph,
         "nodes": source.nodes,
@@ -175,11 +219,9 @@ def _prepare(
     approved: ApprovedContext,
     require_report: bool,
 ) -> PreparedEvidence:
-    _validate_zero_governance(source)
+    _validate_selection_boundary(source)
     budget, call_count, actual_cost, answer = _validate_execution(
-        source,
-        approved,
-        require_report,
+        source, approved, require_report
     )
     cost_exceeded = bool(
         approved.cost_anomaly_usd is not None
@@ -197,11 +239,13 @@ def _prepare(
     )
 
 
-def _request_document(
+def _documents(
     source: EvidenceSource,
     approved: ApprovedContext,
-) -> dict[str, Any]:
-    return {
+    prepared: PreparedEvidence,
+) -> dict[str, dict[str, Any]]:
+    plan_sha = source.plan["plan_sha256"]
+    request_document = {
         **source.request_audit,
         "runtime_version": RUNTIME_VERSION,
         "status": "PASS",
@@ -212,17 +256,12 @@ def _request_document(
         "provider_locks_valid": True,
         "external_tools_allowed": False,
         "provider_fallback_allowed": False,
-        "claude_mechanism_enabled": False,
+        "selection_authority": SELECTION_AUTHORITY,
+        "selection_plan_sha256": plan_sha,
+        "expert_center_selection_performed": False,
+        "expert_center_catalog_fetch_performed": False,
     }
-
-
-def _ledger_document(
-    source: EvidenceSource,
-    approved: ApprovedContext,
-    prepared: PreparedEvidence,
-) -> dict[str, Any]:
-    budget = prepared.budget
-    return {
+    ledger_document = {
         "version": 5,
         "runtime_version": RUNTIME_VERSION,
         "summary": {
@@ -239,63 +278,65 @@ def _ledger_document(
             "cost_threshold_can_invalidate_result": False,
             "substantive_providers": list(prepared.providers),
             "substantive_provider_count": len(prepared.providers),
-            "replacement_calls": int(budget.get("replacements_reserved") or 0),
-            "retry_calls": int(budget.get("retries_reserved") or 0),
-            "recovery_calls": int(budget.get("recovery_calls_reserved") or 0),
+            "replacement_calls": int(
+                prepared.budget.get("replacements_reserved") or 0
+            ),
+            "retry_calls": int(prepared.budget.get("retries_reserved") or 0),
+            "recovery_calls": int(
+                prepared.budget.get("recovery_calls_reserved") or 0
+            ),
         },
         "governance": source.governance,
         "node_results": list(source.nodes),
     }
-
-
-def _selection_document(
-    source: EvidenceSource,
-    prepared: PreparedEvidence,
-) -> dict[str, Any]:
-    return {
+    selection_document = {
         "version": 5,
         "runtime_version": RUNTIME_VERSION,
-        "selection_authority": "python-price-ranked-orchestrator",
-        "selection_policy": "estimated-task-cost-ascending-distinct-companies",
-        "claude_mechanism_enabled": False,
-        "claude_calls": 0,
-        "gpt_selection_calls": 0,
+        "selection_authority": SELECTION_AUTHORITY,
+        "selection_source_repository": source.plan["source_repository"],
+        "selection_source_commit": source.plan.get("source_commit", ""),
+        "selection_plan_sha256": plan_sha,
+        "selection_policy": source.plan.get("selection_rule"),
         "expert_models": list(prepared.expert_models),
         "node_count": len(source.graph_nodes),
         "catalog_snapshot_id": source.catalog.get("catalog_snapshot_id"),
         "networkx_used": True,
+        "expert_center_selection_performed": False,
+        "expert_center_catalog_fetch_performed": False,
+        "local_fallback_used": False,
         "optimizer_used": False,
         "agent_framework_used": False,
         "cross_task_history_used": False,
     }
-
-
-def _routing_document() -> dict[str, Any]:
-    return {
+    routing_document = {
         "version": 5,
         "runtime_version": RUNTIME_VERSION,
         "status": "PASS",
-        "mode": "price-ranked-networkx-dag",
-        "topology": "parallel-independent-analysis -> cross-review -> final-synthesis",
+        "mode": "governance-selected-networkx-dag",
+        "topology": "governance-declared-dag -> expert-validation -> execution",
+        "selection_authority": SELECTION_AUTHORITY,
+        "selection_plan_sha256": plan_sha,
+        "expert_center_selection_performed": False,
+        "local_fallback_used": False,
         "claude_mechanism_enabled": False,
         "model_loop_allowed": False,
     }
-
-
-def _summary_document(
-    source: EvidenceSource,
-    approved: ApprovedContext,
-    prepared: PreparedEvidence,
-) -> dict[str, Any]:
-    return {
+    summary_document = {
         **source.summary,
         "runtime_version": RUNTIME_VERSION,
         "approved_budget": approved.to_dict(),
         "catalog_snapshot_id": source.catalog.get("catalog_snapshot_id"),
         "evidence_input_sha256": prepared.evidence_input_sha,
+        "selection_authority": SELECTION_AUTHORITY,
+        "selection_plan_sha256": plan_sha,
+        "expert_center_selection_performed": False,
+        "expert_center_catalog_fetch_performed": False,
+        "local_fallback_used": False,
         "governance": {
             "actual_calls": 0,
             "reserved_calls": 0,
+            "selection_authority": SELECTION_AUTHORITY,
+            "selection_plan_sha256": plan_sha,
             "claude_mechanism_enabled": False,
         },
         "resource_governance": {
@@ -306,14 +347,7 @@ def _summary_document(
             "local_token_ceiling_enforced": False,
         },
     }
-
-
-def _result_document(
-    source: EvidenceSource,
-    approved: ApprovedContext,
-    prepared: PreparedEvidence,
-) -> dict[str, Any]:
-    return {
+    result_document = {
         "version": 5,
         "runtime_version": RUNTIME_VERSION,
         "status": str(source.summary.get("status") or "failed"),
@@ -327,16 +361,24 @@ def _result_document(
         "degradation": source.summary.get("degradation"),
         "execution_budget": prepared.budget,
         "approved_budget": approved.to_dict(),
+        "selection_authority": SELECTION_AUTHORITY,
+        "selection_source_repository": source.plan["source_repository"],
+        "selection_source_commit": source.plan.get("source_commit", ""),
+        "selection_plan_sha256": plan_sha,
+        "expert_center_selection_performed": False,
+        "expert_center_catalog_fetch_performed": False,
+        "local_fallback_used": False,
         "governance": {
             "actual_calls": 0,
             "reserved_calls": 0,
+            "selection_authority": SELECTION_AUTHORITY,
+            "selection_plan_sha256": plan_sha,
             "claude_mechanism_enabled": False,
         },
         "catalog_snapshot_id": source.catalog.get("catalog_snapshot_id"),
         "node_count": len(source.graph_nodes),
         "model_count": len(prepared.expert_models),
         "provider_count": len(prepared.providers),
-        "selection_authority": "python-price-ranked-orchestrator",
         "production_entrypoint": True,
         "fallback_used": False,
         "legacy_runtime_present": False,
@@ -345,20 +387,13 @@ def _result_document(
         "ticket_task_id": source.ticket.get("task_id"),
         "evidence_input_sha256": prepared.evidence_input_sha,
     }
-
-
-def _documents(
-    source: EvidenceSource,
-    approved: ApprovedContext,
-    prepared: PreparedEvidence,
-) -> dict[str, dict[str, Any]]:
     return {
-        "request-audit.json": _request_document(source, approved),
-        "call-ledger.json": _ledger_document(source, approved, prepared),
-        "model-selection.json": _selection_document(source, prepared),
-        "task-routing.json": _routing_document(),
-        "execution-summary.json": _summary_document(source, approved, prepared),
-        "expert-team-result.json": _result_document(source, approved, prepared),
+        "request-audit.json": request_document,
+        "call-ledger.json": ledger_document,
+        "model-selection.json": selection_document,
+        "task-routing.json": routing_document,
+        "execution-summary.json": summary_document,
+        "expert-team-result.json": result_document,
     }
 
 
@@ -369,26 +404,33 @@ def _write_bundle(
     prepared: PreparedEvidence,
     documents: Mapping[str, Mapping[str, Any]],
 ) -> None:
-    bundle = {
-        "schema_version": "v5-evidence-bundle-3",
-        "runtime_version": RUNTIME_VERSION,
-        "input_sha256": prepared.evidence_input_sha,
-        "approved": approved.to_dict(),
-        "catalog_snapshot_id": source.catalog.get("catalog_snapshot_id"),
-        "generated_documents": {
-            name: canonical_json_sha(document)
-            for name, document in sorted(documents.items())
+    write_json(
+        root / "evidence-bundle.json",
+        {
+            "schema_version": "v5-evidence-bundle-4",
+            "runtime_version": RUNTIME_VERSION,
+            "input_sha256": prepared.evidence_input_sha,
+            "approved": approved.to_dict(),
+            "catalog_snapshot_id": source.catalog.get("catalog_snapshot_id"),
+            "selection_authority": SELECTION_AUTHORITY,
+            "selection_plan_sha256": source.plan["plan_sha256"],
+            "generated_documents": {
+                name: canonical_json_sha(document)
+                for name, document in sorted(documents.items())
+            },
+            "business_evidence_frozen": True,
+            "governance_model_calls": 0,
+            "expert_center_selection_performed": False,
+            "expert_center_catalog_fetch_performed": False,
+            "local_fallback_used": False,
+            "claude_mechanism_enabled": False,
+            "post_upload_fields_pending": [
+                "primary_artifact_id",
+                "primary_artifact_digest",
+                "primary_artifact_url",
+            ],
         },
-        "business_evidence_frozen": True,
-        "governance_model_calls": 0,
-        "claude_mechanism_enabled": False,
-        "post_upload_fields_pending": [
-            "primary_artifact_id",
-            "primary_artifact_digest",
-            "primary_artifact_url",
-        ],
-    }
-    write_json(root / "evidence-bundle.json", bundle)
+    )
 
 
 def normalize_price_ranked_evidence(
@@ -400,9 +442,7 @@ def normalize_price_ranked_evidence(
     require_report: bool,
 ) -> dict[str, Any]:
     approved = ApprovedContext.build(
-        approved_total_calls,
-        approved_recovery_calls,
-        cost_anomaly_usd,
+        approved_total_calls, approved_recovery_calls, cost_anomaly_usd
     )
     source = EvidenceSource.from_root(root)
     prepared = _prepare(source, approved, require_report)
@@ -411,8 +451,7 @@ def normalize_price_ranked_evidence(
         write_json(root / name, document)
     if source.report.strip():
         (root / "expert-team-report.md").write_text(
-            source.report,
-            encoding="utf-8",
+            source.report, encoding="utf-8"
         )
     _write_bundle(root, source, approved, prepared, documents)
     write_manifest(root)
