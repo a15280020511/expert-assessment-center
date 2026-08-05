@@ -1,4 +1,4 @@
-name: Execution Ticket Expert Team V5
+name: Execution Ticket Governed Expert Team V6
 
 on:
   issue_comment:
@@ -32,6 +32,7 @@ jobs:
       task_id: ${{ steps.ticket.outputs.task_id }}
       trigger_mode: ${{ steps.ticket.outputs.trigger_mode }}
       execution_id: ${{ steps.ticket.outputs.execution_id }}
+      governance_roster_sha256: ${{ steps.ticket.outputs.governance_roster_sha256 }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -39,13 +40,13 @@ jobs:
       RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout production source for admission
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: production
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Enforce frozen production control plane
+      - name: Enforce frozen production source
         shell: bash
         run: |
           set -euo pipefail
@@ -64,41 +65,40 @@ jobs:
 
       - name: Publish explicit busy rejection
         if: steps.lock.outputs.allowed != 'true'
-        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
+        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333
         with:
           script: |
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `## EXECUTION_REJECTED\n\n${{ steps.lock.outputs.reason }}\n\n模型调用：\`0\`。请等待当前生产任务完成后，在本 Issue 评论新的唯一命令。\n- Run: \`${process.env.RUN_URL}\``
+              body: `## EXECUTION_REJECTED\n\n${{ steps.lock.outputs.reason }}\n\n模型调用：\`0\`。请等待当前生产任务完成。\n- Run: \`${process.env.RUN_URL}\``
             })
 
-      - name: Validate explicit V5 ticket command
+      - name: Validate governance-signed V6 ticket
         if: steps.lock.outputs.allowed == 'true'
         id: ticket
         run: |
-          python open-model-market/v5_issue_ticket.py prepare \
+          python open-model-market/v6_issue_ticket.py prepare \
             --event-path "$GITHUB_EVENT_PATH" \
             --output-dir ticket-artifacts
 
       - name: Render admission status
         if: steps.lock.outputs.allowed == 'true'
-        id: receipt
         run: |
           if [[ "${{ steps.ticket.outputs.accepted }}" == "true" ]]; then
             phase=accepted
           else
             phase=rejected
           fi
-          python open-model-market/v5_issue_ticket.py render \
+          python open-model-market/v6_issue_ticket.py render \
             --phase "$phase" \
             --output-dir ticket-artifacts \
             --run-url "$RUN_URL" > admission-status.md
 
-      - name: Upload admission evidence
+      - name: Upload immutable admission evidence
         if: always() && steps.lock.outputs.allowed == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ticket-admission-${{ github.run_id }}
           path: |
@@ -110,7 +110,7 @@ jobs:
 
       - name: Publish admission status
         if: steps.lock.outputs.allowed == 'true'
-        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
+        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333
         env:
           STATUS_FILE: admission-status.md
         with:
@@ -141,10 +141,10 @@ jobs:
       MODEL_TIMEOUT_SECONDS: "240"
       PARALLEL_WORKERS: "4"
       OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
-      OPENROUTER_APP_NAME: self-managed-open-model-expert-team-v5
+      OPENROUTER_APP_NAME: self-managed-governed-expert-team-v6
     steps:
       - name: Checkout pinned production source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: production
           fetch-depth: 0
@@ -166,7 +166,7 @@ jobs:
           printf '%s\n' "$checked" > checked-out-production-sha.txt
 
       - name: Download admitted ticket
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:
           name: ticket-admission-${{ github.run_id }}
           path: admission-download
@@ -181,15 +181,15 @@ jobs:
           python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
           python -m pip check
 
-      - name: Enforce admitted execution contract
+      - name: Enforce immutable governance-roster contract
         run: |
-          python open-model-market/v5_ticket_gate.py \
+          python open-model-market/v6_ticket_gate.py \
             --output-dir ticket-artifacts \
             --expected-calls "${{ needs.admit-ticket.outputs.calls }}" \
             --expected-recovery-calls "${{ needs.admit-ticket.outputs.maximum_recovery_calls }}" \
             --expected-cost-anomaly-usd "${{ needs.admit-ticket.outputs.cost_anomaly_usd }}"
 
-      - name: Execute explicit V5 production runtime
+      - name: Execute governed NetworkX V6 runtime
         id: execute
         continue-on-error: true
         run: |
@@ -204,9 +204,9 @@ jobs:
           if [[ -n "${{ needs.admit-ticket.outputs.cost_anomaly_usd }}" ]]; then
             args+=(--cost-anomaly-usd "${{ needs.admit-ticket.outputs.cost_anomaly_usd }}")
           fi
-          python open-model-market/v5_production_ticket.py "${args[@]}"
+          python open-model-market/v6_production_ticket.py "${args[@]}"
 
-      - name: Prepare report publication package
+      - name: Prepare deterministic report publication package
         id: prepare_report
         continue-on-error: true
         run: |
@@ -215,11 +215,11 @@ jobs:
             --comments-dir ticket-artifacts/report-comments \
             --run-url "$RUN_URL"
 
-      - name: Audit complete native V5 evidence before publication
+      - name: Audit governed V6 evidence before publication
         id: audit
         continue-on-error: true
         run: |
-          python open-model-market/v5_execution_auditor_integrity.py \
+          python open-model-market/v6_execution_auditor.py \
             --output-dir ticket-artifacts \
             --execute-outcome "${{ steps.execute.outcome }}" \
             --publish-outcome "${{ steps.prepare_report.outcome }}"
@@ -242,14 +242,14 @@ jobs:
       - name: Upload primary ticket artifacts
         id: ticket_artifact
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ticket-result-${{ github.run_id }}
           path: ticket-artifacts/
           if-no-files-found: error
           retention-days: 14
 
-      - name: Independently revalidate uploaded primary artifact
+      - name: Independently revalidate uploaded V6 artifact
         id: independent
         if: always()
         continue-on-error: true
@@ -268,15 +268,14 @@ jobs:
           if [[ -z "$cost_advisory" ]]; then
             cost_advisory="1000000000"
           fi
-          gh api \
-            -H "Accept: application/vnd.github+json" \
+          gh api -H "Accept: application/vnd.github+json" \
             "/repos/$REPOSITORY/actions/artifacts/$PRIMARY_ARTIFACT_ID/zip" \
             > uploaded-primary-artifact.zip
           rm -rf independently-downloaded-primary
           mkdir independently-downloaded-primary
           unzip -q uploaded-primary-artifact.zip -d independently-downloaded-primary
           set +e
-          python open-model-market/v5_independent_artifact_revalidation.py \
+          python open-model-market/v6_independent_artifact_revalidation.py \
             --artifact-dir independently-downloaded-primary \
             --expected-sha "$AUTHORITATIVE_EXECUTION_SHA" \
             --expected-run-id "${{ github.run_id }}" \
@@ -285,14 +284,14 @@ jobs:
             --archive uploaded-primary-artifact.zip \
             --expected-artifact-digest "$PRIMARY_ARTIFACT_DIGEST" \
             --output independent-revalidation.json
-          revalidation_exit=$?
+          exit_code=$?
           set -e
           status="$(jq -r '.status // "FAIL"' independent-revalidation.json 2>/dev/null || printf 'FAIL')"
           echo "status=$status" >> "$GITHUB_OUTPUT"
-          test "$revalidation_exit" -eq 0
+          test "$exit_code" -eq 0
           test "$status" = "PASS"
 
-      - name: Publish report only after audit and artifact freeze
+      - name: Publish report after complete evidence chain
         id: publish
         if: >-
           steps.execute.outcome == 'success' &&
@@ -302,7 +301,7 @@ jobs:
           steps.ticket_artifact.outcome == 'success' &&
           steps.independent.outcome == 'success' &&
           steps.independent.outputs.status == 'PASS'
-        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
+        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333
         env:
           COMMENT_DIR: ticket-artifacts/report-comments
         with:
@@ -310,11 +309,8 @@ jobs:
             const fs = require('fs');
             const path = require('path');
             const files = fs.readdirSync(process.env.COMMENT_DIR)
-              .filter(name => /^report-comment-\d+\.md$/.test(name))
-              .sort();
-            if (files.length === 0) {
-              throw new Error('No audited report comments found');
-            }
+              .filter(name => /^report-comment-\d+\.md$/.test(name)).sort();
+            if (files.length === 0) throw new Error('No audited report comments found');
             for (const name of files) {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
@@ -324,7 +320,7 @@ jobs:
               });
             }
 
-      - name: Render authoritative V5 final status
+      - name: Render authoritative V6 final status
         id: final
         if: always()
         env:
@@ -337,7 +333,7 @@ jobs:
                 "${{ steps.independent.outputs.status }}" != "PASS" ]]; then
             effective_audit_outcome="independent-artifact-revalidation-failed"
           fi
-          python open-model-market/v5_final_status.py \
+          python open-model-market/v6_final_status.py \
             --output-dir ticket-artifacts \
             --run-url "$RUN_URL" \
             --ticket-upload-outcome "${{ steps.ticket_artifact.outcome }}" \
@@ -349,7 +345,7 @@ jobs:
             --independent-revalidation-file independent-revalidation.json \
             | tee final-status.md
 
-      - name: Generate post-upload final attestation
+      - name: Generate V6 final attestation
         id: attest
         if: always()
         env:
@@ -358,7 +354,7 @@ jobs:
           PRIMARY_ARTIFACT_DIGEST: ${{ steps.ticket_artifact.outputs.artifact-digest }}
           AUTHORITATIVE_EXECUTION_SHA: ${{ steps.source.outputs.execution_sha }}
         run: |
-          python open-model-market/v5_final_attestation.py \
+          python open-model-market/v6_final_attestation.py \
             --output-dir ticket-artifacts \
             --primary-artifact-id "$PRIMARY_ARTIFACT_ID" \
             --primary-artifact-digest "$PRIMARY_ARTIFACT_DIGEST" \
@@ -369,43 +365,11 @@ jobs:
             --final-status-file final-status.md \
             --independent-revalidation-file independent-revalidation.json \
             --output final-attestation.json
-          python - <<'PY'
-          import hashlib
-          import json
-          from pathlib import Path
-
-          independent_path = Path("independent-revalidation.json")
-          if not independent_path.is_file():
-              raise SystemExit("independent artifact revalidation is missing")
-          independent = json.loads(independent_path.read_text(encoding="utf-8"))
-          if independent.get("schema_version") != "v5-independent-artifact-revalidation-3":
-              raise SystemExit("independent artifact revalidation schema is not current")
-          final_status = json.loads(
-              Path("ticket-artifacts/final-status.json").read_text(encoding="utf-8")
-          )
-          if final_status.get("status") in {"PASS", "DEGRADED"} and independent.get("status") != "PASS":
-              raise SystemExit("successful final status requires PASS independent revalidation")
-          attestation_path = Path("final-attestation.json")
-          attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
-          attestation["independent_artifact_revalidation"] = {
-              **independent,
-              "evidence_sha256": hashlib.sha256(independent_path.read_bytes()).hexdigest(),
-          }
-          attestation["evidence_chain"] = (
-              "frozen-business-evidence -> primary-artifact -> "
-              "independent-artifact-revalidation -> final-status -> "
-              "final-attestation-artifact"
-          )
-          attestation_path.write_text(
-              json.dumps(attestation, ensure_ascii=False, indent=2),
-              encoding="utf-8",
-          )
-          PY
 
       - name: Upload final attestation artifact
         id: proof_artifact
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: final-attestation-${{ github.run_id }}
           path: |
@@ -417,9 +381,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Publish authoritative V5 final status
+      - name: Publish authoritative V6 final status
         if: always()
-        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
+        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333
         env:
           STATUS_FILE: final-status.md
           FINAL_ARTIFACT_ID: ${{ steps.proof_artifact.outputs.artifact-id }}
@@ -431,17 +395,15 @@ jobs:
             let body = fs.readFileSync(process.env.STATUS_FILE, 'utf8');
             body += `\n- Final attestation Artifact ID: \`${process.env.FINAL_ARTIFACT_ID || 'unavailable'}\``;
             body += `\n- Final attestation Artifact digest: \`${process.env.FINAL_ARTIFACT_DIGEST || 'unavailable'}\``;
-            if (process.env.FINAL_ARTIFACT_URL) {
-              body += `\n- Final attestation Artifact: ${process.env.FINAL_ARTIFACT_URL}`;
-            }
+            if (process.env.FINAL_ARTIFACT_URL) body += `\n- Final attestation Artifact: ${process.env.FINAL_ARTIFACT_URL}`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
               body
-            })
+            });
 
-      - name: Verify authoritative V5 final outcome
+      - name: Verify authoritative V6 final outcome
         if: always()
         run: |
           test "${{ steps.execute.outcome }}" = "success"
@@ -453,7 +415,6 @@ jobs:
           test "${{ steps.independent.outcome }}" = "success"
           test "${{ steps.independent.outputs.status }}" = "PASS"
           test "${{ steps.publish.outcome }}" = "success"
-          test "${{ steps.final.outcome }}" = "success"
+          test "${{ steps.final.outputs.status }}" = "PASS"
           test "${{ steps.attest.outcome }}" = "success"
           test "${{ steps.proof_artifact.outcome }}" = "success"
-          test "${{ steps.final.outputs.status }}" = "PASS"
