@@ -1,0 +1,189 @@
+name: V6 Production Promotion Gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "open-model-market/**"
+      - "tests/**"
+      - ".github/workflows/**"
+      - "requirements*.txt"
+      - "CONSTITUTION.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v6-production-qualification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  zero-cost-qualification:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout pinned source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-runtime.txt
+            requirements-dev.txt
+
+      - name: Install pinned validation dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+
+      - name: Run canonical static and unit gates
+        run: |
+          set -euo pipefail
+          mkdir -p v6-promotion-evidence
+          python -m ruff check \
+            open-model-market/v6_*.py \
+            open-model-market/v5_endpoint_catalog.py \
+            tests/test_v6_*.py \
+            2>&1 | tee v6-promotion-evidence/ruff.log
+          python -m compileall -q open-model-market tests tools \
+            2>&1 | tee v6-promotion-evidence/compileall.log
+          python tests/test_v6_governed_roster.py \
+            2>&1 | tee v6-promotion-evidence/v6-roster.log
+          python tests/test_v6_active_production_contract.py \
+            2>&1 | tee v6-promotion-evidence/v6-contract.log
+          python tests/test_execution_graph_properties.py \
+            2>&1 | tee v6-promotion-evidence/graph-properties.log
+          python tests/test_execution_graph_validator.py \
+            2>&1 | tee v6-promotion-evidence/graph-validator.log
+          python tests/test_openrouter_hard_deadline.py \
+            2>&1 | tee v6-promotion-evidence/http-deadline.log
+          python tests/test_openrouter_response_protocol.py \
+            2>&1 | tee v6-promotion-evidence/http-protocol.log
+          python tests/test_publish_report.py \
+            2>&1 | tee v6-promotion-evidence/publish-report.log
+
+      - name: Verify single governed V6 architecture
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('.')
+          required = (
+              'open-model-market/v6_governed_roster.py',
+              'open-model-market/v6_issue_ticket.py',
+              'open-model-market/v6_ticket_gate.py',
+              'open-model-market/v6_production_ticket.py',
+              'open-model-market/v6_run_evidence.py',
+              'open-model-market/v6_execution_auditor.py',
+              'open-model-market/v6_independent_artifact_revalidation.py',
+              'open-model-market/v6_final_status.py',
+              'open-model-market/v6_final_attestation.py',
+              '.github/workflows/execution-ticket.yml',
+          )
+          removed = (
+              'open-model-market/v5_claude_red_team_policy.py',
+              'open-model-market/v5_production_claude_request.py',
+              'open-model-market/v5_governance_catalog.py',
+              'open-model-market/v5_governance_runtime.py',
+              'open-model-market/v5_gpt_expert_selector.py',
+              'open-model-market/v5_gpt_expert_selector_policy.py',
+              'open-model-market/v5_pipeline.py',
+              'open-model-market/v5_production_governance_policy.py',
+              'open-model-market/v5_production_ticket.py',
+              'open-model-market/v5_production_expert_policy.py',
+              'open-model-market/v5_proposal_materializer.py',
+              'open-model-market/v5_soft_proposal_materializer.py',
+              'open-model-market/v5_soft_resource_governance.py',
+              'open-model-market/v5_free_first_preflight.py',
+              '.github/workflows/promote-v5-production.yml',
+          )
+          missing = [path for path in required if not (root / path).is_file()]
+          residues = [path for path in removed if (root / path).exists()]
+          if missing or residues:
+              raise SystemExit({'missing': missing, 'legacy_residues': residues})
+
+          workflow = (root / '.github/workflows/execution-ticket.yml').read_text('utf-8').lower()
+          sources = '\n'.join(
+              path.read_text('utf-8').lower()
+              for path in sorted((root / 'open-model-market').glob('v6_*.py'))
+          )
+          for marker in (
+              'v6_production_ticket.py',
+              'v6_execution_auditor.py',
+              'v6_independent_artifact_revalidation.py',
+              'model_max_retries: "0"',
+              'ref: production',
+          ):
+              if marker not in workflow:
+                  raise SystemExit(f'missing production marker: {marker}')
+          for marker in (
+              'v5_production_ticket.py',
+              'claude-opus',
+              'gpt-claude',
+              'repository_dispatch',
+              'contents: write',
+              'id-token: write',
+          ):
+              if marker in workflow:
+                  raise SystemExit(f'forbidden production marker: {marker}')
+          for marker in (
+              'from v5_claude_red_team_policy',
+              'import v5_claude_red_team_policy',
+              'v5_production_claude_request',
+              'from v5_governance_runtime',
+              'from v5_gpt_expert_selector',
+              'langchain',
+              'autogen',
+              'crewai',
+              'while true',
+          ):
+              if marker in sources:
+                  raise SystemExit(f'forbidden V6 source marker: {marker}')
+
+          receipt = {
+              'schema_version': 'v6-zero-cost-production-qualification-1',
+              'status': 'PASS',
+              'runtime_version': 'v6-governed-roster-networkx-1',
+              'selection_authority': 'decision-system-governance',
+              'selection_objective': 'lowest-estimated-task-cost-distinct-companies',
+              'orchestration_library': 'networkx==3.6.1',
+              'provider_policy': 'exact-zdr-single-lock-no-fallback',
+              'tools_allowed': False,
+              'claude_mechanism_enabled': False,
+              'governance_model_calls': 0,
+              'model_calls_during_qualification': 0,
+              'model_cost_usd': 0,
+              'production_ref_moved': False,
+              'paid_canary_required_before_production_ref_move': True,
+          }
+          Path('v6-promotion-evidence/qualification.json').write_text(
+              json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
+              'utf-8',
+          )
+          print(json.dumps(receipt, sort_keys=True))
+          PY
+
+      - name: Verify Constitution and dependency boundary
+        run: |
+          set -euo pipefail
+          grep -q 'networkx==3.6.1' requirements-runtime.txt
+          grep -q 'Claude 红队机制、GPT 提案机制、GPT 综合机制以及任何其他治理模型链全部取消' CONSTITUTION.md
+          grep -q '任务级全局 `all-different` 约束' CONSTITUTION.md
+          ! grep -Eiq '^(langchain|autogen|crewai|prefect|dagster)' requirements-runtime.txt
+
+      - name: Upload zero-cost promotion evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: v6-production-qualification-${{ github.run_id }}
+          path: v6-promotion-evidence/
+          if-no-files-found: warn
+          retention-days: 30
