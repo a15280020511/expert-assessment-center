@@ -19,7 +19,9 @@ class RepositoryResidueAuditTests(unittest.TestCase):
             MARKET / "team_policy.json",
         )
         self.assertEqual([], [str(path) for path in forbidden if path.exists()])
-        requirements = (ROOT / "requirements-runtime.txt").read_text(encoding="utf-8").casefold()
+        requirements = (ROOT / "requirements-runtime.txt").read_text(
+            encoding="utf-8"
+        ).casefold()
         for package in ("numpy", "ortools", "scipy", "langchain", "crewai"):
             self.assertNotIn(package, requirements)
         self.assertIn("networkx", requirements)
@@ -47,10 +49,14 @@ class RepositoryResidueAuditTests(unittest.TestCase):
             self.assertNotIn(fragment, text.casefold())
 
     def test_active_orchestrator_is_deterministic_and_bounded(self) -> None:
-        text = (MARKET / "v5_price_ranked_orchestrator.py").read_text(encoding="utf-8")
+        text = (MARKET / "v5_price_ranked_orchestrator.py").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("estimated_call_cost_usd", text)
         self.assertIn("networkx", text)
-        self.assertIn("distinct model companies", text)
+        self.assertIn("flagship_price_ranking", text)
+        self.assertIn("best-ranked-model-per-company", text)
+        self.assertIn("distinct-model-companies", text)
         self.assertIn("MIN_EXPERT_COUNT = 3", text)
         self.assertIn("MAX_EXPERT_COUNT = 6", text)
         self.assertNotIn("request_json", text)
@@ -59,10 +65,18 @@ class RepositoryResidueAuditTests(unittest.TestCase):
         self.assertNotIn("crewai", text.casefold())
 
     def test_active_production_envelope_proves_zero_governance_calls(self) -> None:
-        ticket = (MARKET / "v5_price_ranked_production_ticket.py").read_text(encoding="utf-8")
-        pipeline = (MARKET / "v5_price_ranked_pipeline.py").read_text(encoding="utf-8")
-        evidence = (MARKET / "v5_price_ranked_evidence.py").read_text(encoding="utf-8")
-        auditor = (MARKET / "v5_price_ranked_execution_auditor.py").read_text(encoding="utf-8")
+        ticket = (MARKET / "v5_price_ranked_production_ticket.py").read_text(
+            encoding="utf-8"
+        )
+        pipeline = (MARKET / "v5_price_ranked_pipeline.py").read_text(
+            encoding="utf-8"
+        )
+        evidence = (MARKET / "v5_price_ranked_evidence.py").read_text(
+            encoding="utf-8"
+        )
+        auditor = (
+            MARKET / "v5_price_ranked_execution_auditor.py"
+        ).read_text(encoding="utf-8")
         for text in (ticket, pipeline, evidence, auditor):
             self.assertIn("claude_mechanism_enabled", text)
             self.assertIn("governance_model_calls", text)

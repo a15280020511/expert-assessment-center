@@ -1,9 +1,10 @@
-"""Deterministic low-price expert-team selection and DAG orchestration.
+"""Deterministic flagship-price expert-team selection and DAG orchestration.
 
-The selector reads the validated exact endpoint catalog, ranks eligible
-endpoints by estimated task cost, keeps model companies globally distinct, and
-builds a bounded expert graph. It performs no model call and uses no cross-task
-history.
+The selector first identifies one eligible flagship model per model company:
+the company's best official-intelligence-ranked model, using its cheapest exact
+provider endpoint. It then sorts those company flagships by estimated task cost,
+selects a bounded set from different companies, and builds a finite NetworkX
+expert DAG. It performs no model call and uses no cross-task history.
 """
 from __future__ import annotations
 
@@ -29,7 +30,7 @@ SYNTHESIS_OUTPUT_TOKENS = 6144
 
 
 class PriceRankedOrchestrationError(RuntimeError):
-    """Raised when a valid price-ranked expert graph cannot be built."""
+    """Raised when a valid flagship-price-ranked expert graph cannot be built."""
 
 
 @dataclass(frozen=True)
@@ -169,12 +170,24 @@ def _endpoint_from_row(
     )
 
 
+def _price_key(endpoint: RankedEndpoint) -> tuple[Any, ...]:
+    return (
+        endpoint.estimated_call_cost_usd,
+        endpoint.prompt_price_per_million
+        + endpoint.completion_price_per_million,
+        endpoint.official_rank,
+        endpoint.model,
+        endpoint.provider,
+    )
+
+
 def rank_endpoints(
     catalog: Mapping[str, Any],
     task_envelope: Mapping[str, Any],
     *,
     allow_synthetic_fixture: bool = False,
 ) -> list[RankedEndpoint]:
+    """Return every eligible exact endpoint ordered by estimated task price."""
     rows = catalog.get("endpoints")
     if not isinstance(rows, list) or not rows:
         raise PriceRankedOrchestrationError("eligible endpoint catalog is empty")
@@ -209,30 +222,43 @@ def rank_endpoints(
         raise PriceRankedOrchestrationError(
             "catalog has no eligible endpoint after compatibility exclusions"
         )
-    endpoints.sort(
-        key=lambda item: (
-            item.estimated_call_cost_usd,
-            item.prompt_price_per_million
-            + item.completion_price_per_million,
-            item.official_rank,
-            item.model,
-            item.provider,
-        )
-    )
+    endpoints.sort(key=_price_key)
     return endpoints
 
 
-def _distinct_company_endpoints(
+def _company_flagships(
     ranked: Sequence[RankedEndpoint],
 ) -> list[RankedEndpoint]:
-    selected: list[RankedEndpoint] = []
-    companies: set[str] = set()
+    """Select one flagship exact endpoint per company, then rank by price.
+
+    A company flagship is its eligible model with the best official intelligence
+    rank. When that model has multiple exact providers, the cheapest compatible
+    endpoint is retained. A cheaper but lower-ranked model from the same company
+    can never replace the company's flagship.
+    """
+    by_company: dict[str, list[RankedEndpoint]] = {}
     for endpoint in ranked:
-        if endpoint.company in companies:
-            continue
-        selected.append(endpoint)
-        companies.add(endpoint.company)
-    return selected
+        by_company.setdefault(endpoint.company, []).append(endpoint)
+
+    flagships: list[RankedEndpoint] = []
+    for rows in by_company.values():
+        best_rank = min(row.official_rank for row in rows)
+        best_models = sorted(
+            {
+                row.model
+                for row in rows
+                if row.official_rank == best_rank
+            }
+        )
+        flagship_model = best_models[0]
+        exact_endpoints = [
+            row for row in rows if row.model == flagship_model
+        ]
+        exact_endpoints.sort(key=_price_key)
+        flagships.append(exact_endpoints[0])
+
+    flagships.sort(key=_price_key)
+    return flagships
 
 
 def _role_blueprint(expert_count: int) -> list[dict[str, Any]]:
@@ -319,13 +345,7 @@ def _assign_endpoints(
         for endpoint in chosen
         if endpoint is not synthesis and endpoint is not review
     ]
-    remaining.sort(
-        key=lambda item: (
-            item.estimated_call_cost_usd,
-            item.official_rank,
-            item.model,
-        )
-    )
+    remaining.sort(key=_price_key)
     assigned: list[RankedEndpoint] = []
     cursor = 0
     for role in roles:
@@ -353,7 +373,7 @@ def _output_tokens(endpoint: RankedEndpoint, kind: str) -> int:
 
 
 def _recovery_pool(
-    ranked: Sequence[RankedEndpoint],
+    flagships: Sequence[RankedEndpoint],
     chosen: Sequence[RankedEndpoint],
     roles: Sequence[Mapping[str, Any]],
     assigned: Sequence[RankedEndpoint],
@@ -368,18 +388,17 @@ def _recovery_pool(
     selected_companies = {endpoint.company for endpoint in chosen}
     compatible = [
         endpoint
-        for endpoint in ranked
+        for endpoint in flagships
         if endpoint.company not in selected_companies
         and endpoint.max_completion_tokens >= output_floor
     ]
-    candidates = _distinct_company_endpoints(compatible)
-    if len(candidates) < recovery_calls:
+    if len(compatible) < recovery_calls:
         raise PriceRankedOrchestrationError(
-            "not enough distinct recovery endpoints with provider-native "
-            f"output capacity: need {recovery_calls}, found {len(candidates)}, "
+            "not enough distinct flagship recovery endpoints with provider-native "
+            f"output capacity: need {recovery_calls}, found {len(compatible)}, "
             f"floor {output_floor}"
         )
-    return candidates[:recovery_calls], output_floor
+    return compatible[:recovery_calls], output_floor
 
 
 def _work_items(roles: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -604,17 +623,19 @@ def build_price_ranked_proposal(
         raise PriceRankedOrchestrationError(
             "recovery_calls must be non-negative"
         )
+
     roles = _role_blueprint(expert_count)
-    distinct = _distinct_company_endpoints(ranked)
-    if len(distinct) < expert_count:
+    flagships = _company_flagships(ranked)
+    if len(flagships) < expert_count:
         raise PriceRankedOrchestrationError(
-            "not enough eligible endpoints from distinct model companies: "
-            f"need {expert_count}, found {len(distinct)}"
+            "not enough eligible flagship models from distinct companies: "
+            f"need {expert_count}, found {len(flagships)}"
         )
-    chosen = distinct[:expert_count]
+
+    chosen = flagships[:expert_count]
     assigned = _assign_endpoints(chosen, roles)
     recovery_pool, recovery_output_floor = _recovery_pool(
-        ranked,
+        flagships,
         chosen,
         roles,
         assigned,
@@ -631,19 +652,28 @@ def build_price_ranked_proposal(
         )
     edges = _edges(roles)
     _validate_dag(nodes, edges)
+
     proposal = {
         "work_items": work_items,
         "nodes": nodes,
         "edges": edges,
         "final_nodes": ["expert-final-synthesis"],
     }
+    flagship_rows = [endpoint.audit_row() for endpoint in flagships]
+    selected_rows = [endpoint.audit_row() for endpoint in chosen]
     audit = {
-        "schema_version": "v5-price-ranked-selection-2",
+        "schema_version": "v5-price-ranked-selection-3",
         "status": "PASS",
         "selection_authority": "python-price-ranked-orchestrator",
         "selection_policy": (
-            "eligible-top-intelligence-catalog -> estimated-task-cost-ascending "
-            "-> distinct-model-companies -> recovery-native-capacity"
+            "eligible-official-intelligence-catalog -> "
+            "best-ranked-model-per-company -> cheapest-exact-endpoint -> "
+            "flagship-estimated-task-cost-ascending -> "
+            "distinct-model-companies -> recovery-native-capacity"
+        ),
+        "flagship_definition": (
+            "best official-intelligence-ranked eligible model per company; "
+            "cheapest compatible exact provider endpoint for that model"
         ),
         "expert_count": expert_count,
         "recovery_count": recovery_calls,
@@ -654,10 +684,11 @@ def build_price_ranked_proposal(
             for node in nodes
         },
         "ranked_endpoint_count": len(ranked),
-        "distinct_company_endpoint_count": len(distinct),
-        "cheapest_candidate_set": [
-            endpoint.audit_row() for endpoint in chosen
-        ],
+        "flagship_company_count": len(flagships),
+        "distinct_company_endpoint_count": len(flagships),
+        "flagship_price_ranking": flagship_rows,
+        "selected_flagships": selected_rows,
+        "cheapest_candidate_set": selected_rows,
         "selected_endpoints": [
             endpoint.audit_row() for endpoint in assigned
         ],
