@@ -1,0 +1,183 @@
+name: Validate Governed Expert Team V6
+
+on:
+  push:
+    branches:
+      - refactor/governed-roster-networkx-v6
+      - main
+    paths:
+      - "open-model-market/v6_*.py"
+      - "open-model-market/v5_endpoint_catalog.py"
+      - "open-model-market/execution-ticket.schema.json"
+      - "tests/test_v6_*.py"
+      - ".github/workflows/execution-ticket.yml"
+      - ".github/workflows/v6-governed-roster-validate.yml"
+      - "requirements-runtime.txt"
+      - "CONSTITUTION.md"
+  pull_request:
+    branches: [main]
+    paths:
+      - "open-model-market/v6_*.py"
+      - "open-model-market/v5_endpoint_catalog.py"
+      - "open-model-market/execution-ticket.schema.json"
+      - "tests/test_v6_*.py"
+      - ".github/workflows/execution-ticket.yml"
+      - ".github/workflows/v6-governed-roster-validate.yml"
+      - "requirements-runtime.txt"
+      - "CONSTITUTION.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: expert-v6-governed-roster-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout pinned source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned runtime dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
+          python -m pip check
+
+      - name: Compile V6 and reused runtime modules
+        run: |
+          set -euo pipefail
+          python -m compileall -q \
+            open-model-market/v6_governed_roster.py \
+            open-model-market/v6_issue_ticket.py \
+            open-model-market/v6_ticket_gate.py \
+            open-model-market/v6_production_ticket.py \
+            open-model-market/v6_run_evidence.py \
+            open-model-market/v6_execution_auditor.py \
+            open-model-market/v6_independent_artifact_revalidation.py \
+            open-model-market/v6_final_status.py \
+            open-model-market/v6_final_attestation.py \
+            open-model-market/v5_endpoint_catalog.py \
+            tests/test_v6_governed_roster.py \
+            tests/test_v6_active_production_contract.py
+
+      - name: Validate JSON schema
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from jsonschema import Draft202012Validator
+          schema = json.loads(Path('open-model-market/execution-ticket.schema.json').read_text('utf-8'))
+          Draft202012Validator.check_schema(schema)
+          print('V6_EXECUTION_TICKET_SCHEMA_PASS')
+          PY
+
+      - name: Run governed roster and NetworkX tests
+        run: python tests/test_v6_governed_roster.py
+
+      - name: Run active production contract tests
+        run: python tests/test_v6_active_production_contract.py
+
+      - name: Enforce no governance-model call in active V6 path
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          workflow = Path('.github/workflows/execution-ticket.yml').read_text('utf-8').lower()
+          sources = '\n'.join(
+              path.read_text('utf-8').lower()
+              for path in sorted(Path('open-model-market').glob('v6_*.py'))
+          )
+          forbidden_workflow = (
+              'v5_production_ticket.py',
+              'v5_issue_ticket.py',
+              'v5_ticket_gate.py',
+              'v5_execution_auditor_integrity.py',
+              'v5_independent_artifact_revalidation.py',
+              'claude-opus',
+              'gpt-claude',
+          )
+          for marker in forbidden_workflow:
+              if marker in workflow:
+                  raise SystemExit(f'legacy active workflow marker: {marker}')
+          forbidden_sources = (
+              '/chat/completions',
+              '/responses',
+              'claude-opus',
+              'gpt_proposal',
+              'gpt_synthesis',
+              'while true',
+              'langchain',
+              'autogen',
+              'crewai',
+          )
+          for marker in forbidden_sources:
+              if marker in sources:
+                  raise SystemExit(f'forbidden V6 source marker: {marker}')
+          required = (
+              'networkx',
+              'topological_generations',
+              'governance-signed-roster',
+              'claude_mechanism_enabled',
+              'allow_fallbacks',
+          )
+          for marker in required:
+              if marker not in sources:
+                  raise SystemExit(f'missing V6 contract marker: {marker}')
+          print('V6_ZERO_GOVERNANCE_MODEL_CALL_BOUNDARY_PASS')
+          PY
+
+  workflow-security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout pinned source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Enforce workflow permissions and immutable production checkout
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('.github/workflows/execution-ticket.yml').read_text('utf-8').lower()
+          required = (
+              'contents: read',
+              'issues: write',
+              'actions: read',
+              'ref: production',
+              'test "$main" = "$production"',
+              'model_max_retries: "0"',
+              'v6_ticket_gate.py',
+              'v6_independent_artifact_revalidation.py',
+          )
+          for marker in required:
+              if marker not in text:
+                  raise SystemExit(f'missing workflow safety marker: {marker}')
+          forbidden = (
+              'contents: write',
+              'pull-requests: write',
+              'id-token: write',
+              'repository_dispatch',
+              'allow_fallbacks: true',
+          )
+          for marker in forbidden:
+              if marker in text:
+                  raise SystemExit(f'forbidden workflow marker: {marker}')
+          print('V6_WORKFLOW_SECURITY_PASS')
+          PY
