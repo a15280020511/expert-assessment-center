@@ -72,8 +72,7 @@ jobs:
             open-model-market/v6_final_status.py \
             open-model-market/v6_final_attestation.py \
             open-model-market/v5_endpoint_catalog.py \
-            tests/test_v6_governed_roster.py \
-            tests/test_v6_active_production_contract.py
+            tests
 
       - name: Validate JSON schema
         run: |
@@ -86,11 +85,8 @@ jobs:
           print('V6_EXECUTION_TICKET_SCHEMA_PASS')
           PY
 
-      - name: Run governed roster and NetworkX tests
-        run: python tests/test_v6_governed_roster.py
-
-      - name: Run active production contract tests
-        run: python tests/test_v6_active_production_contract.py
+      - name: Run all governed V6 tests
+        run: python -m unittest discover -s tests -p 'test_v6_*.py' -v
 
       - name: Enforce no governance-model call in active V6 path
         run: |
