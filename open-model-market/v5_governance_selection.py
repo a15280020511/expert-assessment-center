@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 SCHEMA_VERSION = "governance-expert-model-selection-v1"
 SELECTION_AUTHORITY = "decision-system-governance"
