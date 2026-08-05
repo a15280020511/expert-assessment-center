@@ -1,8 +1,8 @@
-"""Soft-resource facade for GPT-authored proposal materialization.
+"""Soft-resource facade for proposal materialization.
 
-The legacy materializer remains the structural validator and native-capacity
-checker. This facade prevents local Token and cost values from becoming request,
-rejection, or artifact gates.
+The structural materializer remains the native-capacity and graph validator.
+This facade prevents local Token and cost advice from becoming request or
+rejection gates while preserving structural validation failures unchanged.
 """
 from __future__ import annotations
 
@@ -131,13 +131,17 @@ def materialize_proposal(
             approved_recovery_calls=approved_recovery_calls,
             cost_anomaly_usd=None,
         )
-    except structural.MaterializationError:
+    except structural.ProposalValidationError:
         raise
     softened_graph = _soft_graph(graph)
     softened_limits = _soft_limits(limits)
     telemetry = dict(audit)
-    risk_cost = float(telemetry.get("risk_adjusted_reserved_cost_usd") or 0.0)
-    advisory = None if cost_anomaly_usd is None else float(cost_anomaly_usd)
+    risk_cost = float(
+        telemetry.get("risk_adjusted_reserved_cost_usd") or 0.0
+    )
+    advisory = (
+        None if cost_anomaly_usd is None else float(cost_anomaly_usd)
+    )
     telemetry.update(
         {
             "resource_governance_mode": "prompt-led-soft-governance",
@@ -169,7 +173,7 @@ def deterministic_violations(
             catalog,
             **limits,
         )
-    except structural.MaterializationError as exc:
+    except structural.ProposalValidationError as exc:
         violation = str(exc)
     except (TypeError, ValueError) as exc:
         violation = f"invalid soft materialization input: {exc}"
