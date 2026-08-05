@@ -82,7 +82,7 @@ class ConstitutionPolicyTests(unittest.TestCase):
     def test_active_governance_has_zero_model_calls(self) -> None:
         self.assertEqual(
             self.policy["schema_version"],
-            "v5-constitutional-policy-6",
+            "v5-constitutional-policy-5",
         )
         chain = self.policy["governance_chain"]
         self.assertEqual(
