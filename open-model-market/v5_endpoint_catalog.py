@@ -1,9 +1,9 @@
-"""Bounded exact endpoint collection for the GPT-led expert catalog.
+"""Bounded exact endpoint collection for expert execution.
 
-Governance model inventories remain direct and unmodified. Non-governance
-expert inventories are intersected with OpenRouter's authenticated ZDR endpoint
-list so GPT can only select exact routes compatible with the request policy and
-account/guardrail privacy restrictions.
+The legacy V5 caller may still exempt governance-only model companies from ZDR
+filtering. The governed V6 roster passes ``enforce_zdr_for_all=True`` because
+all roster models are substantive experts, including OpenAI or Anthropic models.
+No function in this module ranks or substitutes model identities.
 """
 from __future__ import annotations
 
@@ -96,8 +96,9 @@ def fetch_live_endpoint_payloads(
     *,
     maximum_models: int | None = None,
     maximum_workers: int = DEFAULT_ENDPOINT_FETCH_WORKERS,
+    enforce_zdr_for_all: bool = False,
 ) -> dict[str, Mapping[str, Any]]:
-    """Fetch exact endpoint inventories; never score or reorder candidates."""
+    """Fetch exact endpoint inventories without changing model order or identity."""
     if not getattr(run, "api_key", None):
         raise CatalogViewError(
             "OPENROUTER_API_KEY is required to fetch provider endpoints"
@@ -115,7 +116,8 @@ def fetch_live_endpoint_payloads(
     expert_model_ids = {
         str(model.id)
         for model in eligible
-        if canonical_model_company(str(model.id)) not in GOVERNANCE_COMPANIES
+        if enforce_zdr_for_all
+        or canonical_model_company(str(model.id)) not in GOVERNANCE_COMPANIES
     }
     zdr_keys = _fetch_zdr_endpoint_keys(run) if expert_model_ids else frozenset()
 
