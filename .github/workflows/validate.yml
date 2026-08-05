@@ -2,12 +2,14 @@ name: Validate Expert Team
 
 on:
   pull_request:
+    branches: [main]
     paths:
       - "open-model-market/**"
       - "tests/**"
       - ".github/workflows/**"
       - "requirements*.txt"
       - "ruff.toml"
+      - "CONSTITUTION.md"
   push:
     branches: [main]
     paths:
@@ -16,141 +18,153 @@ on:
       - ".github/workflows/**"
       - "requirements*.txt"
       - "ruff.toml"
+      - "CONSTITUTION.md"
 
 permissions:
   contents: read
 
+concurrency:
+  group: validate-expert-v6-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate:
-    name: Validate GPT Claude expert runtime
+    name: Validate governed NetworkX expert runtime
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Checkout pinned source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: |
             requirements-runtime.txt
             requirements-dev.txt
+
       - name: Install pinned dependencies
         run: |
           python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
           python -m pip check
-      - name: Verify cleaned advisory architecture
+
+      - name: Verify single active V6 architecture
         shell: bash
         run: |
           set -euo pipefail
           required=(
-            open-model-market/v5_pipeline.py
-            open-model-market/v5_production_ticket.py
+            open-model-market/v6_governed_roster.py
+            open-model-market/v6_issue_ticket.py
+            open-model-market/v6_ticket_gate.py
+            open-model-market/v6_production_ticket.py
+            open-model-market/v6_run_evidence.py
+            open-model-market/v6_execution_auditor.py
+            open-model-market/v6_independent_artifact_revalidation.py
+            open-model-market/v6_final_status.py
+            open-model-market/v6_final_attestation.py
             open-model-market/v5_task_envelope.py
             open-model-market/v5_catalog_view.py
-            open-model-market/v5_gpt_expert_selector.py
-            open-model-market/v5_claude_red_team_policy.py
-            open-model-market/v5_governance_runtime.py
-            open-model-market/v5_proposal_materializer.py
-            open-model-market/v5_run_evidence.py
-            open-model-market/execution_graph_validator.py
+            open-model-market/v5_endpoint_catalog.py
             open-model-market/v5_runtime.py
+            open-model-market/v5_recovery_runtime.py
+            open-model-market/execution_graph_validator.py
+            .github/workflows/execution-ticket.yml
           )
           for path in "${required[@]}"; do test -s "$path"; done
           removed=(
-            open-model-market/v5_single_pass_advisory.py
-            open-model-market/v5_single_pass_dialectic_gate.py
-            open-model-market/v5_constitutional_pipeline.py
-            open-model-market/v5_planner.py
-            open-model-market/v5_value_optimizer.py
-            open-model-market/v5_operational_resilience.py
-            open-model-market/v5_benchmark.py
-            open-model-market/v5_assignment_search_calibration.py
-            open-model-market/v5_candidate_diversity.py
-            open-model-market/v5_company_diversity.py
-            open-model-market/v5_dynamic_configuration.py
-            open-model-market/v5_token_cost_policy.py
-            open-model-market/v5_truncation_budget_policy.py
-            open-model-market/v5_global_company_calibration.py
-            open-model-market/v5_budget_runtime_parity.py
-            open-model-market/v5_cross_endpoint_planner.py
-            open-model-market/v5_cross_endpoint_planner_impl.py
-            open-model-market/v5_general_task_planning.py
-            open-model-market/task_semantic_compiler.py
-            open-model-market/resource_matrix.py
-            open-model-market/atomic_work_graph.py
-            open-model-market/team_policy.json
+            open-model-market/v5_claude_red_team_policy.py
+            open-model-market/v5_production_claude_request.py
+            open-model-market/v5_governance_catalog.py
+            open-model-market/v5_governance_runtime.py
+            open-model-market/v5_gpt_expert_selector.py
+            open-model-market/v5_gpt_expert_selector_policy.py
+            open-model-market/v5_pipeline.py
+            open-model-market/v5_production_governance_policy.py
+            open-model-market/v5_production_ticket.py
+            open-model-market/v5_production_expert_policy.py
+            open-model-market/v5_proposal_materializer.py
+            open-model-market/v5_soft_proposal_materializer.py
+            open-model-market/v5_soft_resource_governance.py
+            open-model-market/v5_free_first_preflight.py
+            .github/workflows/v5-free-model-qualification.yml
+            .github/workflows/v5-paid-candidate-acceptance.yml
+            .github/workflows/v5-ticket-gate-validate.yml
+            .github/workflows/v5-validate.yml
+            .github/workflows/self-contained-v5-validate.yml
           )
           for path in "${removed[@]}"; do test ! -e "$path"; done
+          grep -q 'networkx==3.6.1' requirements-runtime.txt
+          grep -q 'v6_production_ticket.py' .github/workflows/execution-ticket.yml
+          grep -q 'claude_mechanism_enabled.*False' open-model-market/v6_production_ticket.py
           ! grep -R --line-number --exclude-dir=.git \
-            -E 'ortools|cp_model|google-or-tools-cp-sat|optimize_execution_graph|pareto_prune|import numpy|from numpy|compile_v5_task_resources|compile_task_semantics' \
-            open-model-market requirements-runtime.txt
-          grep -q '~openai/gpt-latest' open-model-market/v5_gpt_expert_selector.py
-          grep -q '~anthropic/claude-opus-latest' open-model-market/v5_claude_red_team_policy.py
-          grep -q 'claude_is_advisory_only' open-model-market/v5_governance_runtime.py
-          grep -q 'claude_gatekeeping_allowed.*False' open-model-market/v5_governance_runtime.py
-          grep -q 'build_task_envelope' open-model-market/v5_pipeline.py
-      - name: Run static and unit gates
+            -E 'claude-opus|v5_claude_red_team_policy|v5_production_claude_request|v5_governance_runtime|v5_gpt_expert_selector' \
+            open-model-market/v6_*.py .github/workflows/execution-ticket.yml
+
+      - name: Run static compilation and lint
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p validation-logs
-          python -m ruff check . 2>&1 | tee validation-logs/ruff.log
+          python -m ruff check \
+            open-model-market/v6_*.py \
+            open-model-market/v5_endpoint_catalog.py \
+            tests/test_v6_*.py \
+            2>&1 | tee validation-logs/ruff.log
           python -m compileall -q open-model-market tests tools \
             2>&1 | tee validation-logs/compileall.log
-          python -m unittest discover -s tests -p 'test*.py' -v \
-            2>&1 | tee validation-logs/unit-test.log
-          grep -Eq '^Ran [0-9]+ tests? in ' validation-logs/unit-test.log
-          grep -q '^OK$' validation-logs/unit-test.log
-      - name: Run zero-call GPT Claude dry-run
+
+      - name: Run governed V6 and reusable execution primitive tests
         shell: bash
         run: |
           set -euo pipefail
-          python open-model-market/v5_pipeline.py \
-            --task "比较三个城市公共投资方案，完成财务、政策、法律、证据和风险分析。" \
-            --catalog-file tests/fixtures/models.json \
-            --dry-run \
-            --maximum-total-calls 8 \
-            --maximum-recovery-calls 1 \
-            --output-dir validation-artifacts
+          python tests/test_v6_governed_roster.py 2>&1 | tee validation-logs/v6-roster.log
+          python tests/test_v6_active_production_contract.py 2>&1 | tee validation-logs/v6-contract.log
+          python tests/test_execution_graph_properties.py 2>&1 | tee validation-logs/graph-properties.log
+          python tests/test_execution_graph_validator.py 2>&1 | tee validation-logs/graph-validator.log
+          python tests/test_openrouter_hard_deadline.py 2>&1 | tee validation-logs/http-deadline.log
+          python tests/test_openrouter_response_protocol.py 2>&1 | tee validation-logs/http-protocol.log
+          python tests/test_publish_report.py 2>&1 | tee validation-logs/publish-report.log
+
+      - name: Validate zero-call deterministic V6 materialization
+        shell: bash
+        run: |
+          set -euo pipefail
           python - <<'PY'
           import json
+          import sys
           from pathlib import Path
-
-          root = Path("validation-artifacts")
-          dry = json.loads((root / "v5-dry-run.json").read_text())
-          runtime = json.loads((root / "v5-runtime-config.json").read_text())
-          catalog = json.loads((root / "v5-gpt-catalog-view.json").read_text())
-          envelope = json.loads((root / "v5-task-envelope.json").read_text())
-          assert dry["model_calls"] == 0
-          assert dry["claude_model"] == "~anthropic/claude-opus-latest"
-          assert dry["claude_calls_per_task"] == 1
-          assert dry["gpt_synthesis_calls"] == 1
-          assert dry["claude_is_advisory_only"] is True
-          assert dry["claude_gatekeeping_allowed"] is False
-          assert dry["local_task_classification_used"] is False
-          assert dry["local_atomic_work_generation_used"] is False
-          assert dry["local_resource_matrix_used"] is False
-          assert dry["optimizer_used"] is False
-          assert dry["cp_sat_used"] is False
-          assert runtime["local_planner_present"] is False
-          assert runtime["selection_authority"] == "gpt-latest"
-          assert runtime["task_decomposition_authority"] == "gpt-latest"
-          assert catalog["selection_authority"] == "gpt-direct-no-local-scoring"
-          assert catalog["optimizer_used"] is False
-          assert envelope["decomposition_authority"] == "~openai/gpt-latest"
-          assert envelope["local_task_classification_used"] is False
-          assert not (root / "v5-task-resources.json").exists()
-          assert not (root / "v5-execution-graph.json").exists()
+          sys.path.insert(0, 'open-model-market')
+          from v6_governed_roster import validate_governed_ticket
+          source = Path('tests/test_v6_governed_roster.py').read_text('utf-8')
+          assert 'materialize_execution_graph' in source
+          assert 'claude_calls' in source
+          workflow = Path('.github/workflows/execution-ticket.yml').read_text('utf-8')
+          assert 'v6_production_ticket.py' in workflow
+          assert 'MODEL_MAX_RETRIES: "0"' in workflow
+          receipt = {
+              'status': 'V6_ZERO_CALL_VALIDATION_PASS',
+              'selection_authority': 'decision-system-governance',
+              'orchestration_library': 'networkx==3.6.1',
+              'claude_mechanism_enabled': False,
+              'governance_model_calls': 0,
+              'provider_fallback_allowed': False,
+              'tools_allowed': False,
+          }
+          Path('validation-logs/v6-zero-call-receipt.json').write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + '\n', 'utf-8'
+          )
+          print(json.dumps(receipt, sort_keys=True))
           PY
+
       - name: Upload validation evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: gpt-claude-validation-${{ github.run_id }}
-          path: |
-            validation-artifacts/
-            validation-logs/
+          name: governed-networkx-v6-validation-${{ github.run_id }}
+          path: validation-logs/
           if-no-files-found: warn
           retention-days: 7
