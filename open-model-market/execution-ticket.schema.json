@@ -1,15 +1,17 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/a15280020511/expert-assessment-center/open-model-market/execution-ticket.schema.json",
-  "title": "V5 Dynamic Expert DAG Execution Ticket",
-  "description": "Execution contract for the GitHub-owned V5 dynamic expert DAG. The approved budget is a hard total paid-call ceiling that includes initial, retry, and replacement calls. GPTs submits and retrieves; GitHub owns planning, model and Provider selection, execution, synthesis, and deterministic acceptance.",
+  "title": "V6 Governance-Signed Expert DAG Execution Ticket",
+  "description": "Execution contract for the governance-selected V6 expert team. The web GPT declares the work plan, the governance center signs the lowest-estimated-cost distinct-company model roster, and the expert center only validates the roster, resolves exact ZDR endpoints, materializes the declared DAG with NetworkX, and executes it.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "task_id",
     "route",
     "task",
-    "approved_budget"
+    "team_plan",
+    "approved_budget",
+    "governance_roster"
   ],
   "properties": {
     "task_id": {
@@ -18,137 +20,100 @@
       "maxLength": 128,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$"
     },
-    "objective": {
-      "description": "Execution and delivery metadata for the GPTs/GitHub control plane. It is stored for audit but is not sent to experts or used for task classification. Put substantive goals in task.question and task.requirements.",
-      "type": "string",
-      "maxLength": 5000
-    },
+    "objective": {"type": "string", "maxLength": 5000},
     "pipeline": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "pipeline_id",
-        "stage_id"
-      ],
+      "required": ["pipeline_id", "stage_id"],
       "properties": {
-        "pipeline_id": {
-          "type": "string",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$"
-        },
-        "stage_id": {
-          "type": "string",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$"
-        },
-        "sequence_reason": {
-          "type": "string",
-          "maxLength": 2000
-        },
+        "pipeline_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$"},
+        "stage_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$"},
+        "sequence_reason": {"type": "string", "maxLength": 2000},
         "upstream_refs": {
           "type": "array",
           "maxItems": 20,
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "center",
-              "task_id",
-              "file",
-              "sha256"
-            ],
+            "required": ["center", "task_id", "file", "sha256"],
             "properties": {
-              "center": {
-                "enum": [
-                  "api",
-                  "compute",
-                  "expert",
-                  "user",
-                  "public_source"
-                ]
-              },
-              "task_id": {
-                "type": "string",
-                "maxLength": 128
-              },
-              "issue_number": {
-                "type": "integer",
-                "minimum": 1
-              },
-              "run_id": {
-                "type": "integer",
-                "minimum": 1
-              },
-              "artifact_id": {
-                "type": "integer",
-                "minimum": 1
-              },
-              "file": {
-                "type": "string",
-                "maxLength": 500
-              },
-              "sha256": {
-                "type": "string",
-                "pattern": "^[0-9a-f]{64}$"
-              },
-              "observed_at": {
-                "type": "string",
-                "maxLength": 100
-              }
+              "center": {"enum": ["api", "compute", "expert", "user", "public_source"]},
+              "task_id": {"type": "string", "maxLength": 128},
+              "issue_number": {"type": "integer", "minimum": 1},
+              "run_id": {"type": "integer", "minimum": 1},
+              "artifact_id": {"type": "integer", "minimum": 1},
+              "file": {"type": "string", "maxLength": 500},
+              "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+              "observed_at": {"type": "string", "maxLength": 100}
             }
           }
         }
       }
     },
-    "route": {
-      "const": "expert-team"
-    },
+    "route": {"const": "expert-team"},
     "task": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "question"
-      ],
+      "required": ["question"],
       "properties": {
-        "question": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 20000
-        },
+        "question": {"type": "string", "minLength": 1, "maxLength": 20000},
         "requirements": {
-          "description": "Substantive requirements sent to the dynamic nodes. GitHub run, Job, Artifact, and acceptance checks do not belong here.",
           "type": "array",
           "maxItems": 20,
+          "items": {"type": "string", "minLength": 1, "maxLength": 2000}
+        },
+        "language": {"type": "string", "maxLength": 64}
+      }
+    },
+    "team_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "work_items", "final_work_id"],
+      "properties": {
+        "schema_version": {"const": "expert-team-plan-v1"},
+        "expected_prompt_tokens_per_call": {"type": "integer", "minimum": 1, "maximum": 2000000},
+        "expected_completion_tokens_per_call": {"type": "integer", "minimum": 1, "maximum": 500000},
+        "work_items": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 8,
           "items": {
-            "type": "string",
-            "maxLength": 2000
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["work_id", "objective", "role", "dependencies", "required_outputs"],
+            "properties": {
+              "work_id": {"type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{1,63}$"},
+              "objective": {"type": "string", "minLength": 1, "maxLength": 2000},
+              "role": {"type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{1,63}$"},
+              "dependencies": {
+                "type": "array",
+                "maxItems": 8,
+                "uniqueItems": true,
+                "items": {"type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{1,63}$"}
+              },
+              "required_outputs": {
+                "type": "array",
+                "maxItems": 16,
+                "uniqueItems": true,
+                "items": {"type": "string", "minLength": 1, "maxLength": 240}
+              }
+            }
           }
         },
-        "language": {
-          "type": "string",
-          "maxLength": 64
-        }
+        "final_work_id": {"type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{1,63}$"}
       }
     },
     "execution_acceptance": {
-      "description": "Deterministic GitHub-side acceptance checks. These labels are stored with the ticket but are not sent to experts as substantive analysis instructions.",
       "type": "array",
       "maxItems": 40,
-      "items": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 500
-      }
+      "items": {"type": "string", "minLength": 1, "maxLength": 500}
     },
     "evidence": {
       "oneOf": [
         {
           "type": "object",
           "additionalProperties": false,
-          "properties": {
-            "note": {
-              "type": "string",
-              "maxLength": 5000
-            }
-          }
+          "properties": {"note": {"type": "string", "maxLength": 5000}}
         },
         {
           "type": "array",
@@ -157,55 +122,16 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "source_level": {
-                "type": "string",
-                "maxLength": 5000
-              },
-              "source": {
-                "type": "string",
-                "maxLength": 5000
-              },
-              "url": {
-                "type": "string",
-                "maxLength": 5000
-              },
-              "note": {
-                "type": "string",
-                "maxLength": 5000
-              },
-              "center": {
-                "type": "string",
-                "enum": [
-                  "api",
-                  "compute",
-                  "expert",
-                  "gpts",
-                  "external"
-                ]
-              },
-              "run_id": {
-                "type": "string",
-                "pattern": "^[0-9]{1,32}$"
-              },
-              "artifact_id": {
-                "type": "string",
-                "pattern": "^[0-9]{1,32}$"
-              },
-              "file": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 512,
-                "pattern": "^[^\\\\]+$"
-              },
-              "sha256": {
-                "type": "string",
-                "pattern": "^[a-fA-F0-9]{64}$"
-              },
-              "observed_at": {
-                "type": "string",
-                "format": "date-time",
-                "maxLength": 64
-              }
+              "source_level": {"type": "string", "maxLength": 5000},
+              "source": {"type": "string", "maxLength": 5000},
+              "url": {"type": "string", "maxLength": 5000},
+              "note": {"type": "string", "maxLength": 5000},
+              "center": {"type": "string", "enum": ["api", "compute", "expert", "gpts", "external"]},
+              "run_id": {"type": "string", "pattern": "^[0-9]{1,32}$"},
+              "artifact_id": {"type": "string", "pattern": "^[0-9]{1,32}$"},
+              "file": {"type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[^\\\\]+$"},
+              "sha256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+              "observed_at": {"type": "string", "format": "date-time", "maxLength": 64}
             }
           }
         }
@@ -214,42 +140,119 @@
     "approved_budget": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "calls",
-        "maximum_recovery_calls",
-        "cost_policy"
-      ],
+      "required": ["calls", "maximum_recovery_calls", "cost_policy"],
       "properties": {
-        "calls": {
-          "description": "Hard ceiling for all paid model calls combined: initial calls + retries + replacements. The runtime must not silently increase this value.",
-          "type": "integer",
-          "minimum": 4,
-          "maximum": 16
-        },
-        "maximum_recovery_calls": {
-          "description": "Recovery calls reserved inside, not in addition to, approved_budget.calls. Production currently uses replacements and no same-endpoint retries.",
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 4
-        },
-        "cost_policy": {
-          "description": "Token and cost are prompt-led advisory telemetry. They cannot reject, stop, degrade, or invalidate an otherwise valid execution.",
-          "enum": [
-            "prompt_led_soft_governance",
-            "unbounded_with_anomaly_guard"
-          ]
-        },
-        "cost_anomaly_usd": {
-          "description": "Optional advisory threshold used only for observability and alerts; crossing it cannot stop execution or invalidate results.",
-          "type": "number",
-          "exclusiveMinimum": 0
-        }
+        "calls": {"type": "integer", "minimum": 2, "maximum": 12},
+        "maximum_recovery_calls": {"type": "integer", "minimum": 0, "maximum": 4},
+        "cost_policy": {"enum": ["prompt_led_soft_governance", "unbounded_with_anomaly_guard"]},
+        "cost_anomaly_usd": {"type": "number", "exclusiveMinimum": 0}
       }
     },
-    "private_output": {
-      "description": "Private delivery is not implemented for this public repository. Omit this field or set it to false.",
-      "const": false,
-      "default": false
+    "governance_roster": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "status",
+        "selection_policy",
+        "governance_repository",
+        "governance_commit_sha",
+        "source_selector_schema_version",
+        "source_catalog_snapshot_sha256",
+        "task_cost_profile",
+        "team_size",
+        "recovery_size",
+        "approved_total_calls",
+        "final_work_id",
+        "team_plan_sha256",
+        "primary_members",
+        "recovery_members",
+        "all_companies_unique",
+        "model_calls_for_selection",
+        "selection_cost_usd",
+        "secret_values_exposed",
+        "roster_sha256"
+      ],
+      "properties": {
+        "schema_version": {"const": "governed-expert-roster-v1"},
+        "status": {"const": "GOVERNED_EXPERT_ROSTER_READY"},
+        "selection_policy": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "governance_repository": {"const": "a15280020511/decision-system-governance"},
+        "governance_commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "source_selector_schema_version": {"type": ["string", "null"], "maxLength": 200},
+        "source_catalog_snapshot_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "task_cost_profile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["expected_prompt_tokens_per_call", "expected_completion_tokens_per_call"],
+          "properties": {
+            "expected_prompt_tokens_per_call": {"type": "integer", "minimum": 1, "maximum": 2000000},
+            "expected_completion_tokens_per_call": {"type": "integer", "minimum": 1, "maximum": 500000}
+          }
+        },
+        "team_size": {"type": "integer", "minimum": 2, "maximum": 8},
+        "recovery_size": {"type": "integer", "minimum": 0, "maximum": 4},
+        "approved_total_calls": {"type": "integer", "minimum": 2, "maximum": 12},
+        "final_work_id": {"type": "string", "minLength": 2, "maxLength": 64},
+        "team_plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "primary_members": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 8,
+          "items": {"$ref": "#/$defs/roster_member"}
+        },
+        "recovery_members": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {"$ref": "#/$defs/roster_member"}
+        },
+        "all_companies_unique": {"const": true},
+        "model_calls_for_selection": {"const": 0},
+        "selection_cost_usd": {"const": 0},
+        "secret_values_exposed": {"const": false},
+        "roster_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "private_output": {"const": false, "default": false}
+  },
+  "$defs": {
+    "roster_member": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "member_id",
+        "kind",
+        "roster_rank",
+        "model_id",
+        "company",
+        "estimated_task_cost_usd",
+        "prompt_usd_per_million",
+        "completion_usd_per_million",
+        "request_usd",
+        "balanced_score",
+        "intelligence_index",
+        "coding_index",
+        "agentic_index",
+        "assigned_work_id",
+        "assigned_role"
+      ],
+      "properties": {
+        "member_id": {"type": "string", "minLength": 1, "maxLength": 64},
+        "kind": {"enum": ["primary", "recovery"]},
+        "roster_rank": {"type": "integer", "minimum": 1, "maximum": 12},
+        "model_id": {"type": "string", "minLength": 3, "maxLength": 256, "pattern": "^[^/]+/.+$"},
+        "company": {"type": "string", "minLength": 1, "maxLength": 128},
+        "estimated_task_cost_usd": {"type": "number", "minimum": 0},
+        "prompt_usd_per_million": {"type": "number", "minimum": 0},
+        "completion_usd_per_million": {"type": "number", "minimum": 0},
+        "request_usd": {"type": ["number", "null"], "minimum": 0},
+        "balanced_score": {"type": "number", "minimum": 0},
+        "intelligence_index": {"type": "number", "minimum": 0},
+        "coding_index": {"type": "number", "minimum": 0},
+        "agentic_index": {"type": "number", "minimum": 0},
+        "assigned_work_id": {"type": ["string", "null"], "maxLength": 64},
+        "assigned_role": {"type": ["string", "null"], "maxLength": 64}
+      }
     }
   }
 }
