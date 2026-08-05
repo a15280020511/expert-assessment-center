@@ -25,24 +25,24 @@ jobs:
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      - name: Checkout frozen production validator
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Checkout frozen V6 production validator
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: production
           persist-credentials: false
 
-      - name: Validate ticket without model access
+      - name: Validate governance-signed ticket without model access
         id: ticket
         continue-on-error: true
         run: |
-          python open-model-market/v5_issue_ticket.py prepare \
+          python open-model-market/v6_issue_ticket.py prepare \
             --event-path "$GITHUB_EVENT_PATH" \
             --output-dir invalid-ticket-artifacts
 
       - name: Render invalid-ticket terminal receipt
         if: steps.ticket.outcome == 'success' && steps.ticket.outputs.accepted != 'true'
         run: |
-          python open-model-market/v5_issue_ticket.py render \
+          python open-model-market/v6_issue_ticket.py render \
             --phase rejected \
             --output-dir invalid-ticket-artifacts \
             --run-url "$RUN_URL" > invalid-ticket-rejection.md
@@ -53,7 +53,7 @@ jobs:
 
       - name: Repair or publish one task-bound trusted zero-call rejection
         if: steps.ticket.outcome == 'success' && steps.ticket.outputs.accepted != 'true'
-        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
+        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333
         env:
           STATUS_FILE: invalid-ticket-rejection.md
         with:
@@ -61,9 +61,7 @@ jobs:
             const fs = require('fs');
             const command = String(context.payload.comment?.body || '').trim();
             const match = command.match(/^\/(?:run|retry)-expert-team\s+([A-Za-z0-9][A-Za-z0-9._:-]{7,127})$/);
-            if (!match) {
-              throw new Error('unable to derive task identity from expert command');
-            }
+            if (!match) throw new Error('unable to derive task identity from expert command');
             const taskId = match[1];
             const raw = fs.readFileSync(process.env.STATUS_FILE, 'utf8');
             if (!raw.trimStart().startsWith('## EXECUTION_REJECTED')) {
@@ -71,7 +69,7 @@ jobs:
             }
             const body = raw.replace(
               /^## EXECUTION_REJECTED\s*/,
-              `## EXECUTION_REJECTED\n\n- Task ID: \`${taskId}\`\n`
+              `## EXECUTION_REJECTED\n\n- Task ID: \`${taskId}\`\n- Runtime: \`v6-governed-roster-networkx-1\`\n- Governance model calls: \`0\`\n- Claude calls: \`0\`\n`
             );
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
@@ -84,9 +82,7 @@ jobs:
               comment.user?.login === 'github-actions[bot]' &&
               comment.body?.trimStart().startsWith('## EXECUTION_REJECTED')
             );
-            if (botRejections.some(comment => comment.body?.includes(taskLine))) {
-              return;
-            }
+            if (botRejections.some(comment => comment.body?.includes(taskLine))) return;
             const unbound = [...botRejections].reverse().find(comment =>
               !/^\s*-\s*Task ID\s*[:：]/m.test(String(comment.body || ''))
             );
@@ -112,3 +108,5 @@ jobs:
           test -z "${OPENROUTER_API_KEY:-}"
           test -z "${ANTHROPIC_API_KEY:-}"
           test -z "${OPENAI_API_KEY:-}"
+          test ! -e open-model-market/v5_claude_red_team_policy.py
+          test ! -e open-model-market/v5_governance_runtime.py
