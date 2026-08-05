@@ -1,4 +1,4 @@
-name: V5 Production Promotion Gate
+name: V5 Production Qualification Gate
 
 on:
   workflow_dispatch:
@@ -7,8 +7,8 @@ on:
     paths:
       - "open-model-market/**"
       - "tests/**"
-      - ".github/workflows/promote-v5-production.yml"
       - "requirements*.txt"
+      - ".github/workflows/promote-v5-production.yml"
 
 permissions:
   contents: read
@@ -18,13 +18,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  constitutional-qualification:
+  qualify:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
@@ -32,28 +34,37 @@ jobs:
           cache-dependency-path: |
             requirements-runtime.txt
             requirements-dev.txt
+
       - name: Install pinned validation dependencies
         run: |
+          set -euo pipefail
           python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
           python -m pip check
+
       - name: Run canonical static and unit gates
         run: |
           set -euo pipefail
-          mkdir -p release-validation-logs
+          mkdir -p release-validation-logs production-validation-artifacts
           python -m ruff check . 2>&1 | tee release-validation-logs/ruff.log
           python -m compileall -q open-model-market tests tools \
             2>&1 | tee release-validation-logs/compileall.log
           python -m unittest discover -s tests -p 'test*.py' -v \
-            2>&1 | tee release-validation-logs/unit-test.log
+            2>&1 | tee release-validation-logs/unit-tests.log
+
       - name: Verify cleaned advisory architecture
-        shell: bash
         run: |
           set -euo pipefail
-          grep -q '~openai/gpt-latest' open-model-market/v5_gpt_expert_selector.py
-          grep -q '~anthropic/claude-opus-latest' open-model-market/v5_claude_red_team_policy.py
-          grep -q 'claude_is_advisory_only' open-model-market/v5_governance_runtime.py
-          grep -q 'claude_gatekeeping_allowed.*False' open-model-market/v5_governance_runtime.py
-          grep -q 'build_task_envelope' open-model-market/v5_pipeline.py
+          grep -q 'SELECTION_AUTHORITY = "decision-system-governance"' \
+            open-model-market/v5_governance_model_plan.py
+          test -f open-model-market/v5_governed_plan_orchestrator.py
+          grep -q 'build_governed_proposal' \
+            open-model-market/v5_price_ranked_pipeline.py
+          ! grep -q 'build_price_ranked_proposal' \
+            open-model-market/v5_price_ranked_pipeline.py
+          ! grep -q 'v5_governance_runtime' \
+            open-model-market/v5_price_ranked_pipeline.py
+          ! grep -q 'v5_claude_red_team_policy' \
+            open-model-market/v5_price_ranked_pipeline.py
           removed=(
             open-model-market/v5_planner.py
             open-model-market/v5_constitutional_pipeline.py
@@ -64,101 +75,90 @@ jobs:
             open-model-market/task_semantic_compiler.py
             open-model-market/resource_matrix.py
             open-model-market/atomic_work_graph.py
-            open-model-market/team_policy.json
-            open-model-market/v5_single_pass_advisory.py
           )
           for path in "${removed[@]}"; do test ! -e "$path"; done
-          ! grep -R --line-number --exclude-dir=.git \
-            -E 'ortools|cp_model|google-or-tools-cp-sat|optimize_execution_graph|pareto_prune|import numpy|from numpy|compile_v5_task_resources|compile_task_semantics' \
-            open-model-market requirements-runtime.txt
+
       - name: Run task-independent advisory matrix
-        shell: bash
         run: |
           set -euo pipefail
-          rm -rf production-validation-artifacts
-          python - <<'PY'
+          PYTHONPATH=open-model-market python - <<'PY'
+          import copy
           import json
           import subprocess
-          import sys
           from pathlib import Path
 
+          from v5_governance_model_plan import plan_sha256, task_sha256
+
           tasks = {
-              "simple": "比较方案A与方案B的成本并给出决策阈值。",
-              "contract": (
-                  "比较两个方案。严格使用以下4个Markdown二级标题，顺序不得改变，"
-                  "每项不得为空：\n1）已知条件\n2）计算与比较\n3）风险与反证\n4）结论与下一步"
-              ),
-              "complex": (
-                  "评估三个候选方案，分别完成定量分析、证据核验、情景推演、"
-                  "独立红队反证和最终综合决策，并说明实施条件。"
-              ),
-              "closed_world": (
-                  "仅依据题面，不得调用外部工具，不得编造。"
-                  "比较方案A与方案B，只接受完整交付。"
-              ),
-              "long": "完成长上下文合同审计。" + "A" * 48000,
+              "simple": "比较A与B，给出结论。",
+              "contract": "比较A与B，并按结论、依据、风险、行动四节输出。",
+              "complex": "比较A与B的成本、风险、执行条件、利益相关方和二阶效应。",
+              "closed_world": "仅依据题面比较A与B，禁止工具，禁止补充外部事实。",
+              "long": "比较A与B。" + "约束条件与现实扰动。" * 2000,
           }
-          root = Path("production-validation-artifacts")
-          for name, task in tasks.items():
-              output = root / name
-              command = [
-                  sys.executable,
-                  "open-model-market/v5_pipeline.py",
-                  "--task", task,
-                  "--catalog-file", "tests/fixtures/models.json",
-                  "--endpoint-file", "tests/fixtures/endpoints.json",
-                  "--dry-run",
-                  "--maximum-total-calls", "8",
-                  "--maximum-recovery-calls", "1",
-                  "--output-dir", str(output),
-              ]
-              completed = subprocess.run(
-                  command,
-                  check=False,
-                  text=True,
-                  capture_output=True,
+          base = json.loads(
+              Path("tests/fixtures/governance-ticket.json").read_text()
+          )
+          summaries = {}
+          for name, question in tasks.items():
+              ticket = copy.deepcopy(base)
+              ticket["task"]["question"] = question
+              plan = ticket["governance_model_plan"]
+              plan["task_sha256"] = task_sha256(ticket)
+              plan["plan_sha256"] = plan_sha256(plan)
+              root = Path("production-validation-artifacts") / name
+              root.mkdir(parents=True, exist_ok=True)
+              ticket_path = root / "ticket.json"
+              ticket_path.write_text(
+                  json.dumps(ticket, ensure_ascii=False, indent=2)
               )
-              if completed.returncode != 0:
-                  raise SystemExit(completed.stdout + "\n" + completed.stderr)
-              dry = json.loads((output / "v5-dry-run.json").read_text())
-              runtime = json.loads(
-                  (output / "v5-runtime-config.json").read_text()
+              subprocess.run(
+                  [
+                      "python", "open-model-market/v5_price_ranked_pipeline.py",
+                      "--task", question,
+                      "--governance-plan-file", str(ticket_path),
+                      "--catalog-file", "tests/fixtures/models.json",
+                      "--endpoint-file", "tests/fixtures/endpoints.json",
+                      "--dry-run",
+                      "--maximum-total-calls", "8",
+                      "--maximum-recovery-calls", "1",
+                      "--output-dir", str(root),
+                  ],
+                  check=True,
               )
-              constraints = json.loads(
-                  (output / "task-constraints.json").read_text()
+              dry = json.loads((root / "v5-dry-run.json").read_text())
+              selection = json.loads(
+                  (root / "v5-price-ranked-selection.json").read_text()
               )
-              envelope = json.loads(
-                  (output / "v5-task-envelope.json").read_text()
-              )
+              runtime = json.loads((root / "v5-runtime-config.json").read_text())
               assert dry["status"] == "validated-not-executed"
               assert dry["model_calls"] == 0
-              assert dry["proposal_request"]["model"] == "~openai/gpt-latest"
-              assert dry["claude_model"] == "~anthropic/claude-opus-latest"
-              assert dry["claude_calls_per_task"] == 1
-              assert dry["claude_is_advisory_only"] is True
-              assert dry["claude_gatekeeping_allowed"] is False
-              assert dry["gpt_synthesis_calls"] == 1
-              assert dry["second_claude_review_allowed"] is False
-              assert dry["local_task_classification_used"] is False
-              assert dry["local_atomic_work_generation_used"] is False
-              assert dry["local_resource_matrix_used"] is False
-              assert dry["local_scoring_used"] is False
-              assert dry["optimizer_used"] is False
-              assert dry["cp_sat_used"] is False
-              assert runtime["final_authority"] == "deterministic-constitutional-validator"
-              assert runtime["task_decomposition_authority"] == "gpt-latest"
+              assert selection["selection_authority"] == "decision-system-governance"
+              assert selection["model_selection_performed_locally"] is False
+              assert selection["model_reranking_performed_locally"] is False
+              assert selection["model_substitution_performed_locally"] is False
+              assert selection["provider_resolution_performed_locally"] is True
               assert runtime["model_loop_allowed"] is False
-              assert constraints["external_tools_allowed"] is False
-              assert constraints["fail_closed"] is True
-              assert envelope["local_task_classification_used"] is False
-              assert not (output / "v5-task-resources.json").exists()
-              assert not (output / "v5-execution-graph.json").exists()
+              assert runtime["governance_model_calls"] == 0
+              assert runtime["local_task_classification_used"] is False
+              assert runtime["optimizer_present"] is False
+              summaries[name] = {
+                  "plan_sha256": plan["plan_sha256"],
+                  "node_count": len(dry["proposal"]["nodes"]),
+              }
+          Path("production-validation-artifacts/matrix-summary.json").write_text(
+              json.dumps(summaries, ensure_ascii=False, indent=2)
+          )
           PY
+
       - name: Enforce fail-closed promotion state
         run: |
-          echo "Zero-cost minimal-envelope qualification passed."
-          echo "Production ref movement remains disabled until explicit acceptance."
+          set -euo pipefail
           test ! -e .release-authorized
+          printf '%s\n' \
+            'Production ref movement remains disabled until explicit acceptance.' \
+            | tee release-validation-logs/promotion-state.log
+
       - name: Upload qualification diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
