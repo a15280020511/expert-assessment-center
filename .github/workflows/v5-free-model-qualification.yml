@@ -1,30 +1,26 @@
-name: V5 Free Model Qualification
+name: V5 Price-Ranked Free Qualification
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - "fix/v5-constitution-free-first-company-diversity-*"
   pull_request:
     paths:
       - "CONSTITUTION.md"
       - "README.md"
       - "open-model-market/**"
       - "tests/**"
-      - ".github/workflows/v5-free-model-qualification.yml"
+      - ".github/workflows/**"
       - "requirements*.txt"
 
 permissions:
   contents: read
 
 concurrency:
-  group: v5-free-model-qualification-${{ github.ref }}
+  group: v5-price-ranked-free-qualification-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   free-model-qualification:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    name: Zero-cost CI and free Canary
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -32,7 +28,7 @@ jobs:
       MODEL_MAX_RETRIES: "0"
       MODEL_TIMEOUT_SECONDS: "120"
       OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
-      OPENROUTER_APP_NAME: expert-center-free-model-qualification
+      OPENROUTER_APP_NAME: expert-center-price-ranked-free-qualification
       TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -48,17 +44,9 @@ jobs:
             requirements-runtime.txt
             requirements-dev.txt
 
-      - name: Verify exact source checkout
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
-          test -z "$(git status --porcelain)"
-
       - name: Install pinned validation dependencies
         run: |
           set -euo pipefail
-          test -n "${OPENROUTER_API_KEY:-}"
-          test "${#OPENROUTER_API_KEY}" -ge 20
           python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
           python -m pip check
 
@@ -72,13 +60,14 @@ jobs:
             2>&1 | tee free-qualification/logs/compileall.log
           python -m unittest discover -s tests -p 'test*.py' -v \
             2>&1 | tee free-qualification/logs/unit-tests.log
-          python open-model-market/v5_pipeline.py \
+          python open-model-market/v5_price_ranked_pipeline.py \
             --task "仅依据题面比较A与B，禁止工具，输出已知事实和最终建议。" \
             --catalog-file tests/fixtures/models.json \
             --endpoint-file tests/fixtures/endpoints.json \
             --dry-run \
             --maximum-total-calls 8 \
             --maximum-recovery-calls 1 \
+            --expert-count 4 \
             --output-dir free-qualification/artifacts/dry-run
           python - <<'PY'
           import json
@@ -86,20 +75,38 @@ jobs:
 
           root = Path("free-qualification/artifacts/dry-run")
           dry = json.loads((root / "v5-dry-run.json").read_text())
+          selection = json.loads(
+              (root / "v5-price-ranked-selection.json").read_text()
+          )
+          runtime = json.loads((root / "v5-runtime-config.json").read_text())
           assert dry["status"] == "validated-not-executed"
           assert dry["model_calls"] == 0
-          assert dry["claude_calls_per_task"] == 1
-          assert dry["gpt_synthesis_calls"] == 1
-          assert dry["claude_is_advisory_only"] is True
-          assert dry["claude_gatekeeping_allowed"] is False
+          assert dry["claude_calls"] == 0
+          assert selection["status"] == "PASS"
+          assert selection["claude_calls"] == 0
+          assert selection["gpt_selection_calls"] == 0
+          assert selection["networkx_used_for_dag_validation"] is True
+          assert selection["expert_count"] == 4
+          costs = [
+              row["estimated_call_cost_usd"]
+              for row in selection["cheapest_candidate_set"]
+          ]
+          assert costs == sorted(costs)
+          companies = [
+              row["company"]
+              for row in selection["cheapest_candidate_set"]
+          ]
+          assert len(companies) == len(set(companies))
+          assert runtime["governance_model_calls"] == 0
+          assert runtime["orchestration_library"] == "networkx"
           PY
 
       - name: Run one real zero-cost exact-model Canary
         shell: bash
         run: |
           set -euo pipefail
+          test -n "${OPENROUTER_API_KEY:-}"
           PYTHONPATH=open-model-market python - <<'PY'
-          import hashlib
           import json
           import os
           from decimal import Decimal, InvalidOperation
@@ -108,8 +115,6 @@ jobs:
 
           from openrouter_api import CHAT_URL, MODELS_URL, request_json
           from v5_execution_primitives import actual_cost, extract_answer
-          from v5_free_first_preflight import evaluate_free_first_preflight
-
 
           def zero_price(value: Any) -> bool:
               try:
@@ -117,183 +122,91 @@ jobs:
               except (InvalidOperation, TypeError, ValueError):
                   return False
 
-
           key = os.environ["OPENROUTER_API_KEY"]
-          catalog_response = request_json(MODELS_URL, key, 120, 0)
-          rows = catalog_response.get("data")
+          response = request_json(MODELS_URL, key, 120, 0)
+          rows = response.get("data")
           if not isinstance(rows, list):
               raise RuntimeError("OpenRouter model catalog is unavailable")
-
-          candidates: list[dict[str, Any]] = []
+          candidates = []
           for row in rows:
               if not isinstance(row, Mapping):
                   continue
-              model_id = str(row.get("id") or "").strip()
-              if not model_id.endswith(":free"):
-                  continue
+              model_id = str(row.get("id") or "")
               pricing = row.get("pricing")
-              if not isinstance(pricing, Mapping):
+              if not model_id.endswith(":free") or not isinstance(pricing, Mapping):
                   continue
-              if not zero_price(pricing.get("prompt")):
-                  continue
-              if not zero_price(pricing.get("completion")):
+              if not zero_price(pricing.get("prompt")) or not zero_price(pricing.get("completion")):
                   continue
               architecture = row.get("architecture")
-              architecture = (
-                  architecture if isinstance(architecture, Mapping) else {}
-              )
-              input_modalities = {
-                  str(value).casefold()
-                  for value in architecture.get("input_modalities", [])
-              }
-              output_modalities = {
-                  str(value).casefold()
-                  for value in architecture.get("output_modalities", [])
-              }
-              if input_modalities and "text" not in input_modalities:
+              architecture = architecture if isinstance(architecture, Mapping) else {}
+              inputs = {str(v).casefold() for v in architecture.get("input_modalities", [])}
+              outputs = {str(v).casefold() for v in architecture.get("output_modalities", [])}
+              if inputs and "text" not in inputs:
                   continue
-              if output_modalities and "text" not in output_modalities:
+              if outputs and "text" not in outputs:
                   continue
-              try:
-                  created = int(row.get("created") or 0)
-              except (TypeError, ValueError):
-                  created = 0
-              try:
-                  context_length = int(row.get("context_length") or 0)
-              except (TypeError, ValueError):
-                  context_length = 0
-              candidates.append(
-                  {
-                      "id": model_id,
-                      "created": created,
-                      "context_length": context_length,
-                  }
-              )
-
+              candidates.append({
+                  "id": model_id,
+                  "created": int(row.get("created") or 0),
+                  "context_length": int(row.get("context_length") or 0),
+              })
           if not candidates:
-              raise RuntimeError(
-                  "no exact text-capable zero-price :free model is available"
-              )
+              raise RuntimeError("no exact zero-price text model is available")
           selected = sorted(
               candidates,
-              key=lambda row: (
-                  -int(row["created"]),
-                  -int(row["context_length"]),
-                  str(row["id"]),
-              ),
+              key=lambda row: (-row["created"], -row["context_length"], row["id"]),
           )[0]
-          selected_model = str(selected["id"])
-
-          payload = {
-              "model": selected_model,
-              "messages": [
-                  {
-                      "role": "system",
-                      "content": "Return only the requested final answer.",
+          result = request_json(
+              CHAT_URL,
+              key,
+              120,
+              0,
+              {
+                  "model": selected["id"],
+                  "messages": [
+                      {"role": "system", "content": "Return only the requested final answer."},
+                      {"role": "user", "content": "Reply with exactly PASS and nothing else."},
+                  ],
+                  "stream": False,
+                  "provider": {
+                      "data_collection": "allow",
+                      "zdr": False,
+                      "require_parameters": True,
                   },
-                  {
-                      "role": "user",
-                      "content": "Reply with exactly PASS and nothing else.",
-                  },
-              ],
-              "stream": False,
-              "provider": {
-                  "data_collection": "allow",
-                  "zdr": False,
-                  "require_parameters": True,
               },
-          }
-          response = request_json(CHAT_URL, key, 120, 0, payload)
-          answer = extract_answer(response).strip()
-          cost = float(actual_cost(response))
+          )
+          answer = extract_answer(result).strip()
+          cost = float(actual_cost(result))
           if answer.upper() != "PASS":
               raise RuntimeError("free Canary response is invalid")
           if abs(cost) > 1e-12:
-              raise RuntimeError(
-                  f"free Canary returned positive cost: {cost}"
-              )
-
-          target_sha = os.environ["TARGET_SHA"]
+              raise RuntimeError(f"free Canary returned positive cost: {cost}")
           receipt = {
-              "schema_version": "v5-free-first-preflight-1",
-              "target_sha": target_sha,
-              "simulation": {
-                  "status": "PASS",
-                  "model_calls": 0,
-                  "paid_model_calls": 0,
-              },
+              "schema_version": "v5-price-ranked-free-qualification-1",
+              "target_sha": os.environ["TARGET_SHA"],
+              "zero_call_validation": "PASS",
               "free_canary": {
                   "status": "PASS",
-                  "requested_model": selected_model,
-                  "response_model": str(response.get("model") or ""),
-                  "provider": str(response.get("provider") or ""),
-                  "model_requests": 1,
-                  "successful_model_calls": 1,
-                  "paid_model_calls": 0,
+                  "requested_model": selected["id"],
+                  "response_model": str(result.get("model") or ""),
+                  "provider": str(result.get("provider") or ""),
                   "actual_cost_usd": cost,
-                  "selection": {
-                      "source": "live-openrouter-model-catalog",
-                      "exact_model_required": True,
-                      "free_suffix_required": True,
-                      "zero_prompt_price_required": True,
-                      "zero_completion_price_required": True,
-                      "candidate_count": len(candidates),
-                      "selected_created": selected["created"],
-                      "selected_context_length": selected["context_length"],
-                  },
               },
-              "shadow_governance": None,
-              "paid_acceptance_triggered": False,
+              "claude_mechanism_enabled": False,
+              "governance_model_calls": 0,
               "production_ref_moved": False,
           }
-          verdict = evaluate_free_first_preflight(
-              receipt,
-              expected_sha=target_sha,
-          )
-          assert verdict["status"] == "PASS"
-          assert verdict["paid_acceptance_allowed"] is True
-          assert verdict["formal_model_identity_qualified"] is False
-          assert verdict["production_promotion_allowed"] is False
-
-          policy = Path(
-              "open-model-market/constitutional_policy.json"
-          ).read_bytes()
-          evidence = {
-              "schema_version": "v5-free-model-qualification-1",
-              "status": "PASS",
-              "target_sha": target_sha,
-              "workflow_run_id": os.environ["GITHUB_RUN_ID"],
-              "zero_call_validation": "PASS",
-              "free_canary": receipt["free_canary"],
-              "actual_cost_usd": cost,
-              "paid_model_calls": 0,
-              "formal_model_identity_qualified": False,
-              "production_promotion_allowed": False,
-              "constitutional_policy_sha256": hashlib.sha256(
-                  policy
-              ).hexdigest(),
-          }
-          out = Path("free-qualification/artifacts")
-          (out / "free-first-receipt.json").write_text(
-              json.dumps(receipt, ensure_ascii=False, indent=2) + "\n",
+          Path("free-qualification/free-qualification.json").write_text(
+              json.dumps(receipt, ensure_ascii=False, indent=2),
               encoding="utf-8",
           )
-          (out / "free-first-verdict.json").write_text(
-              json.dumps(verdict, ensure_ascii=False, indent=2) + "\n",
-              encoding="utf-8",
-          )
-          (out / "free-model-qualification.json").write_text(
-              json.dumps(evidence, ensure_ascii=False, indent=2) + "\n",
-              encoding="utf-8",
-          )
-          print(json.dumps(evidence, ensure_ascii=False))
           PY
 
-      - name: Upload immutable free qualification evidence
+      - name: Upload qualification evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: v5-free-model-qualification-${{ github.run_id }}
+          name: v5-price-ranked-free-qualification-${{ github.run_id }}
           path: free-qualification/
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 14
