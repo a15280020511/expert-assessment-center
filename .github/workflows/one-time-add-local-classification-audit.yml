@@ -1,0 +1,57 @@
+name: One-time Runtime Audit Field Repair
+
+on:
+  push:
+    branches:
+      - feat/execution-only-governance-model-plan
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-time-runtime-audit-field-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.repository == 'a15280020511/expert-assessment-center'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: feat/execution-only-governance-model-plan
+          fetch-depth: 0
+
+      - name: Add explicit disabled-local-classification audit field
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('open-model-market/v5_price_ranked_pipeline.py')
+          text = path.read_text(encoding='utf-8')
+          marker = '        "local_token_ceiling_enforced": False,\n        "optimizer_present": False,'
+          replacement = (
+              '        "local_token_ceiling_enforced": False,\n'
+              '        "local_task_classification_used": False,\n'
+              '        "optimizer_present": False,'
+          )
+          if replacement in text:
+              raise SystemExit(0)
+          if marker not in text:
+              raise SystemExit('runtime config insertion marker not found')
+          path.write_text(text.replace(marker, replacement, 1), encoding='utf-8')
+          PY
+          python -m py_compile open-model-market/v5_price_ranked_pipeline.py
+          grep -q '"local_task_classification_used": False' \
+            open-model-market/v5_price_ranked_pipeline.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add open-model-market/v5_price_ranked_pipeline.py
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'fix: record disabled local task classification'
+          git push origin HEAD:feat/execution-only-governance-model-plan
