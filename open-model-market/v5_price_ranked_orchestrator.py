@@ -8,11 +8,17 @@ history.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any, Mapping, Sequence
 
 import networkx as nx
 
-from v5_catalog_view import GOVERNANCE_COMPANIES
+from v5_catalog_view import (
+    GOVERNANCE_COMPANIES,
+    MAX_VISIBLE_MODELS,
+    MINIMUM_EXPERT_COMPLETION_TOKENS,
+    stable_model_id,
+)
 from v5_model_company import canonical_model_company
 
 MIN_EXPERT_COUNT = 3
@@ -67,8 +73,14 @@ def _non_negative_float(value: Any) -> float:
     try:
         parsed = float(value)
     except (TypeError, ValueError):
-        return 0.0
-    return parsed if parsed >= 0 else 0.0
+        raise PriceRankedOrchestrationError(
+            "catalog endpoint has invalid pricing"
+        ) from None
+    if not math.isfinite(parsed) or parsed < 0:
+        raise PriceRankedOrchestrationError(
+            "catalog endpoint has invalid pricing"
+        )
+    return parsed
 
 
 def _estimated_tokens(task_envelope: Mapping[str, Any]) -> tuple[int, int]:
@@ -94,12 +106,13 @@ def _endpoint_from_row(
     *,
     prompt_tokens: int,
     completion_tokens: int,
+    required_context_tokens: int,
 ) -> RankedEndpoint:
     model = str(row.get("model") or "").strip()
     provider = str(row.get("provider") or "").strip()
-    company = str(row.get("company") or "").strip()
-    if not company and model:
-        company = canonical_model_company(model)
+    raw_company = str(row.get("company") or "").strip()
+    company = canonical_model_company(model)
+    declared_company = canonical_model_company(raw_company) if raw_company else company
     provider_endpoint = str(row.get("provider_endpoint") or "").strip()
     official_rank = _positive_int(row.get("official_intelligence_rank"))
     context_length = _positive_int(row.get("context_length"))
@@ -109,13 +122,18 @@ def _endpoint_from_row(
         row.get("completion_price_per_million")
     )
     if (
-        not model
+        not stable_model_id(model)
         or not provider
+        or not provider_endpoint
         or not company
         or company == "unknown"
+        or declared_company != company
         or official_rank <= 0
+        or official_rank > MAX_VISIBLE_MODELS
         or context_length <= 0
+        or context_length < required_context_tokens
         or max_completion <= 0
+        or max_completion < MINIMUM_EXPERT_COMPLETION_TOKENS
     ):
         raise PriceRankedOrchestrationError(
             "catalog endpoint has incomplete identity or capacity"
@@ -155,12 +173,20 @@ def rank_endpoints(
     rows = catalog.get("endpoints")
     if not isinstance(rows, list) or not rows:
         raise PriceRankedOrchestrationError("eligible endpoint catalog is empty")
+    required_context_tokens = _positive_int(
+        task_envelope.get("required_context_tokens")
+    )
+    if required_context_tokens <= 0:
+        raise PriceRankedOrchestrationError(
+            "task envelope lacks required context capacity"
+        )
     prompt_tokens, completion_tokens = _estimated_tokens(task_envelope)
     endpoints = [
         _endpoint_from_row(
             row,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            required_context_tokens=required_context_tokens,
         )
         for row in rows
         if isinstance(row, Mapping)
@@ -371,15 +397,20 @@ def _nodes(
 ) -> list[dict[str, Any]]:
     nodes: list[dict[str, Any]] = []
     independent_index = 0
-    recovery_by_index: dict[int, RankedEndpoint] = {}
+    recovery_by_index: dict[int, list[RankedEndpoint]] = {}
     priority = [
         index
         for kind in ("synthesis", "review", "independent")
         for index, role in enumerate(roles)
         if role.get("kind") == kind
     ]
-    for index, recovery in zip(priority, recoveries, strict=False):
-        recovery_by_index[index] = recovery
+    if recoveries and not priority:
+        raise PriceRankedOrchestrationError(
+            "recovery endpoints cannot be assigned without expert nodes"
+        )
+    for recovery_index, recovery in enumerate(recoveries):
+        node_index = priority[recovery_index % len(priority)]
+        recovery_by_index.setdefault(node_index, []).append(recovery)
     for index, (role, endpoint) in enumerate(zip(roles, assigned, strict=True)):
         kind = str(role.get("kind") or "")
         if kind == "independent":
@@ -392,12 +423,10 @@ def _nodes(
         else:
             node_id = "expert-final-synthesis"
             work_ids = ["work-final-synthesis"]
-        recovery_rows: list[dict[str, str]] = []
-        fallback = recovery_by_index.get(index)
-        if fallback is not None:
-            recovery_rows.append(
-                {"model": fallback.model, "provider": fallback.provider}
-            )
+        recovery_rows = [
+            {"model": fallback.model, "provider": fallback.provider}
+            for fallback in recovery_by_index.get(index, [])
+        ]
         nodes.append(
             {
                 "node_id": node_id,
@@ -452,8 +481,17 @@ def _validate_dag(
     nodes: Sequence[Mapping[str, Any]],
     edges: Sequence[Mapping[str, Any]],
 ) -> None:
+    node_ids = [str(node["node_id"]) for node in nodes]
+    if len(node_ids) != len(set(node_ids)):
+        raise PriceRankedOrchestrationError("generated expert graph has duplicate nodes")
+    known = set(node_ids)
+    for edge in edges:
+        if str(edge["source"]) not in known or str(edge["target"]) not in known:
+            raise PriceRankedOrchestrationError(
+                "generated expert graph references an unknown node"
+            )
     graph = nx.DiGraph()
-    graph.add_nodes_from(str(node["node_id"]) for node in nodes)
+    graph.add_nodes_from(node_ids)
     graph.add_edges_from(
         (str(edge["source"]), str(edge["target"])) for edge in edges
     )
@@ -461,6 +499,16 @@ def _validate_dag(
         raise PriceRankedOrchestrationError("generated expert graph is cyclic")
     if "expert-final-synthesis" not in graph:
         raise PriceRankedOrchestrationError("final synthesis node is missing")
+    if graph.out_degree("expert-final-synthesis") != 0:
+        raise PriceRankedOrchestrationError("final synthesis node must be a sink")
+    if any(
+        node_id != "expert-final-synthesis"
+        and not nx.has_path(graph, node_id, "expert-final-synthesis")
+        for node_id in node_ids
+    ):
+        raise PriceRankedOrchestrationError(
+            "every expert node must contribute to final synthesis"
+        )
 
 
 def build_price_ranked_proposal(
@@ -478,7 +526,11 @@ def build_price_ranked_proposal(
     )
     distinct = _distinct_company_endpoints(ranked)
     expert_count = int(expert_count)
-    recovery_calls = max(0, int(recovery_calls))
+    recovery_calls = int(recovery_calls)
+    if recovery_calls < 0:
+        raise PriceRankedOrchestrationError(
+            "recovery_calls must be non-negative"
+        )
     required = expert_count + recovery_calls
     if len(distinct) < required:
         raise PriceRankedOrchestrationError(
@@ -491,6 +543,13 @@ def build_price_ranked_proposal(
     assigned = _assign_endpoints(chosen, roles)
     work_items = _work_items(roles)
     nodes = _nodes(roles, assigned, recovery_pool)
+    attached_recovery_count = sum(
+        len(node.get("recovery", [])) for node in nodes
+    )
+    if attached_recovery_count != recovery_calls:
+        raise PriceRankedOrchestrationError(
+            "recovery endpoint attachment count disagrees with reserve"
+        )
     edges = _edges(roles)
     _validate_dag(nodes, edges)
     proposal = {
@@ -509,6 +568,11 @@ def build_price_ranked_proposal(
         ),
         "expert_count": expert_count,
         "recovery_count": recovery_calls,
+        "attached_recovery_count": attached_recovery_count,
+        "recovery_distribution": {
+            str(node["node_id"]): len(node.get("recovery", []))
+            for node in nodes
+        },
         "ranked_endpoint_count": len(ranked),
         "distinct_company_endpoint_count": len(distinct),
         "cheapest_candidate_set": [
