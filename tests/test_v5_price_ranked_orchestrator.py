@@ -149,8 +149,8 @@ class PriceRankedOrchestratorTests(unittest.TestCase):
                     f"p{index}",
                     f"expert-{index}",
                     rank=index,
-                    prompt=0.01 * index,
-                    completion=0.02 * index,
+                    prompt=0.001 * index,
+                    completion=0.002 * index,
                 )
                 for index in range(1, 5)
             ]
@@ -204,8 +204,8 @@ class PriceRankedOrchestratorTests(unittest.TestCase):
                     f"p{index}",
                     f"expert-{index}",
                     rank=index,
-                    prompt=0.01 * index,
-                    completion=0.02 * index,
+                    prompt=0.001 * index,
+                    completion=0.002 * index,
                 )
                 for index in range(1, 5)
             ]
