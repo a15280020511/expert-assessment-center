@@ -111,12 +111,19 @@ def execution_state(comments: Iterable[str]) -> dict[str, Any]:
 
 
 def current_issue_submission_reason(
+    execution: Mapping[str, Any],
     *,
     is_retry: bool,
-    issue_state: str,
-    execution: Mapping[str, Any],
     retry_id: str,
+    issue_state: str = "open",
 ) -> str:
+    """Return a deterministic admission rejection reason.
+
+    ``execution`` remains the first positional argument because the established
+    admission module and its security tests call this hook positionally. The
+    optional issue state defaults to open for that legacy boundary, while direct
+    callers can still fail closed for a known closed Issue.
+    """
     if not is_retry:
         if issue_state == "closed":
             return "Issue is closed; reopen it before first execution"
