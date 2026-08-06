@@ -21,22 +21,22 @@ def load_base():
 def main() -> int:
     load_base().main()
     text = PIPELINE.read_text(encoding="utf-8")
-    text = text.replace("        del args\n", "", 1)
-    old = '''        if run.dry_run and run.catalog_file:
-            payloads: Mapping[str, Any] = {}
-            endpoint_source = "synthetic-fixture-endpoints"
-            synthetic = True
-        else:
+    text = text.replace("    del args\n", "", 1)
+    old = '''    if run.dry_run and run.catalog_file:
+        payloads: Mapping[str, Any] = {}
+        endpoint_source = "synthetic-fixture-endpoints"
+        synthetic = True
+    else:
 '''
-    new = '''        if args.endpoint_file:
-            payloads: Mapping[str, Any] = _load_mapping(Path(args.endpoint_file))
-            endpoint_source = f"fixture:{args.endpoint_file}"
-            synthetic = False
-        elif run.dry_run and run.catalog_file:
-            payloads = {}
-            endpoint_source = "synthetic-fixture-endpoints"
-            synthetic = True
-        else:
+    new = '''    if args.endpoint_file:
+        payloads: Mapping[str, Any] = _load_mapping(Path(args.endpoint_file))
+        endpoint_source = f"fixture:{args.endpoint_file}"
+        synthetic = False
+    elif run.dry_run and run.catalog_file:
+        payloads = {}
+        endpoint_source = "synthetic-fixture-endpoints"
+        synthetic = True
+    else:
 '''
     if old not in text:
         raise RuntimeError("generated endpoint source block is missing")
