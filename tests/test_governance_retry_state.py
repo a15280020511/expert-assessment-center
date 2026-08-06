@@ -28,6 +28,11 @@ def failed(model_calls: int | None) -> str:
     return f"## EXECUTION_FAILED\n\n{line}"
 
 
+def degraded(model_calls: int | None) -> str:
+    line = "" if model_calls is None else f"- Model calls: `{model_calls}`\n"
+    return f"## EXECUTION_DEGRADED\n\n{line}"
+
+
 class GovernanceRetryStateTests(unittest.TestCase):
     def test_explicit_zero_call_failures_use_system_repair_ledger(self) -> None:
         comments: list[str] = []
@@ -40,9 +45,9 @@ class GovernanceRetryStateTests(unittest.TestCase):
         self.assertEqual(state["total_accepted_retry_count"], 4)
         self.assertEqual(
             ledger.current_issue_submission_reason(
+                state,
                 is_retry=True,
                 issue_state="open",
-                execution=state,
                 retry_id="repair-5",
             ),
             "",
@@ -62,12 +67,36 @@ class GovernanceRetryStateTests(unittest.TestCase):
         self.assertIn(
             "maximum 2 business retries",
             ledger.current_issue_submission_reason(
+                state,
                 is_retry=True,
                 issue_state="open",
-                execution=state,
                 retry_id="paid-3",
             ),
         )
+
+    def test_degraded_terminal_is_retryable_and_charged_by_calls(self) -> None:
+        zero_call = ledger.execution_state(
+            [accepted("degraded-zero"), degraded(0)]
+        )
+        self.assertTrue(zero_call["degraded"])
+        self.assertTrue(zero_call["failed"])
+        self.assertEqual(zero_call["system_repair_retry_count"], 1)
+        self.assertEqual(zero_call["business_retry_count"], 0)
+        self.assertEqual(
+            ledger.current_issue_submission_reason(
+                zero_call,
+                is_retry=True,
+                issue_state="open",
+                retry_id="after-degraded-zero",
+            ),
+            "",
+        )
+
+        positive_call = ledger.execution_state(
+            [accepted("degraded-paid"), degraded(2)]
+        )
+        self.assertEqual(positive_call["system_repair_retry_count"], 0)
+        self.assertEqual(positive_call["business_retry_count"], 1)
 
     def test_in_flight_retry_blocks_parallel_submission(self) -> None:
         state = ledger.execution_state([accepted("in-flight")])
@@ -75,9 +104,9 @@ class GovernanceRetryStateTests(unittest.TestCase):
         self.assertIn(
             "already in progress",
             ledger.current_issue_submission_reason(
+                {**state, "failed": True},
                 is_retry=True,
                 issue_state="open",
-                execution={**state, "failed": True},
                 retry_id="parallel",
             ),
         )
@@ -90,9 +119,9 @@ class GovernanceRetryStateTests(unittest.TestCase):
         self.assertIn(
             "zero-call system repair retries",
             ledger.current_issue_submission_reason(
+                state,
                 is_retry=True,
                 issue_state="open",
-                execution=state,
                 retry_id="system-final",
             ),
         )
@@ -102,9 +131,9 @@ class GovernanceRetryStateTests(unittest.TestCase):
         self.assertIn(
             "already been used",
             ledger.current_issue_submission_reason(
+                state,
                 is_retry=True,
                 issue_state="open",
-                execution=state,
                 retry_id="used",
             ),
         )
@@ -114,9 +143,9 @@ class GovernanceRetryStateTests(unittest.TestCase):
         self.assertIn(
             "completed executions",
             ledger.current_issue_submission_reason(
+                completed_state,
                 is_retry=True,
                 issue_state="open",
-                execution=completed_state,
                 retry_id="after-done",
             ),
         )
