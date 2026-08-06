@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT / "open-model-market"))
 from execution_graph import SelectedNode  # noqa: E402
 import v5_runtime  # noqa: E402
 import v5_soft_proposal_materializer as materializer  # noqa: E402
-from v5_provider_lock import canonical_provider_lock  # noqa: E402
+from v5_provider_lock import canonical_provider_lock, provider_routing_is_unrestricted  # noqa: E402
 
 
 class Top50ProviderPoolTests(unittest.TestCase):
@@ -34,8 +34,8 @@ class Top50ProviderPoolTests(unittest.TestCase):
         )
 
     def test_open_route_rejects_every_provider_restriction(self) -> None:
-        self.assertTrue(canonical_provider_lock({}))
-        self.assertTrue(canonical_provider_lock({"provider": {"allow_fallbacks": True}}))
+        self.assertTrue(provider_routing_is_unrestricted({}))
+        self.assertTrue(provider_routing_is_unrestricted({"provider": {"allow_fallbacks": True}}))
         for provider in (
             {"only": ["a"]},
             {"order": ["a", "b"]},
@@ -44,9 +44,22 @@ class Top50ProviderPoolTests(unittest.TestCase):
             {"data_collection": "deny"},
             {"max_price": {"prompt": 1}},
             {"quantizations": ["fp8"]},
+            {"require_parameters": True},
             {"allow_fallbacks": False},
         ):
-            self.assertFalse(canonical_provider_lock({"provider": provider}), provider)
+            self.assertFalse(provider_routing_is_unrestricted({"provider": provider}), provider)
+
+    def test_legacy_exact_lock_remains_validator_compatible_only(self) -> None:
+        legacy = {
+            "provider": {
+                "only": ["primary"],
+                "order": ["primary"],
+                "allow_fallbacks": False,
+                "require_parameters": True,
+            }
+        }
+        self.assertTrue(canonical_provider_lock(legacy))
+        self.assertFalse(provider_routing_is_unrestricted(legacy))
 
     def test_materializer_strips_provider_config(self) -> None:
         request = materializer._open_request(
