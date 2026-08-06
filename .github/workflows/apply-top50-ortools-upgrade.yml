@@ -19,23 +19,24 @@ jobs:
   apply:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: feat/top50-ortools-routing
-          fetch-depth: 0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      - name: Native checkout without marketplace actions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git init .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin feat/top50-ortools-routing
+          git checkout -B feat/top50-ortools-routing FETCH_HEAD
       - name: Apply migration
         run: |
-          python tools/apply_top50_ortools_upgrade.py
-          python tools/refine_top50_provider_pool.py
-          python tools/sync_top50_runtime_contract.py
+          python3 tools/apply_top50_ortools_upgrade.py
+          python3 tools/refine_top50_provider_pool.py
+          python3 tools/sync_top50_runtime_contract.py
       - name: Install runtime dependencies
-        run: python -m pip install -r requirements-runtime.txt
+        run: python3 -m pip install -r requirements-runtime.txt
       - name: Validate changed modules and policy
         run: |
-          python -m py_compile \
+          python3 -m py_compile \
             open-model-market/v5_top50_pool_optimizer.py \
             open-model-market/v5_top50_plan_validation.py \
             open-model-market/v5_provider_lock.py \
@@ -44,8 +45,8 @@ jobs:
             open-model-market/v5_proposal_materializer.py \
             open-model-market/v5_pipeline.py \
             open-model-market/v5_run_evidence.py
-          python -m json.tool open-model-market/constitutional_policy.json >/dev/null
-          PYTHONPATH=open-model-market python - <<'PY'
+          python3 -m json.tool open-model-market/constitutional_policy.json >/dev/null
+          PYTHONPATH=open-model-market python3 - <<'PY'
           import json
           from pathlib import Path
           from v5_provider_lock import canonical_provider_lock
@@ -80,7 +81,7 @@ jobs:
           PY
       - name: Run focused regression tests
         run: |
-          python -m pytest -q \
+          python3 -m pytest -q \
             tests/test_top50_pool_optimizer.py \
             tests/test_top20_pool_selector.py \
             tests/test_v5_soft_proposal_materializer.py \
