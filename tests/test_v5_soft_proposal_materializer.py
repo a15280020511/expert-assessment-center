@@ -93,6 +93,26 @@ class SoftProposalMaterializerTests(unittest.TestCase):
             "v5_soft_proposal_materializer",
         )
 
+    def test_signed_anthropic_recovery_is_not_rejected_as_governance(self):
+        endpoint = {
+            "provider": "anthropic",
+            "provider_endpoint": "anthropic/claude-opus-5@anthropic",
+        }
+        key, resolved, company = soft.structural._exact_endpoint(
+            {("anthropic/claude-opus-5", "anthropic"): endpoint},
+            {
+                "model": "anthropic/claude-opus-5",
+                "provider": "anthropic",
+            },
+            recovery=True,
+        )
+        self.assertEqual(
+            ("anthropic/claude-opus-5", "anthropic"),
+            key,
+        )
+        self.assertIs(endpoint, resolved)
+        self.assertEqual("anthropic", company)
+
     def test_structural_validation_error_is_preserved(self):
         error = soft.structural.ProposalValidationError(
             "recovery output advisory exceeds provider-native capacity"

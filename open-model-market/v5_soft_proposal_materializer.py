@@ -12,6 +12,12 @@ from typing import Any, Mapping
 import v5_proposal_materializer as structural
 from execution_graph import ExecutionGraph, GraphLimits, SelectedNode
 
+# Governance is now the sole model-selection authority. OpenAI and Anthropic
+# are ordinary expert companies when they appear in the immutable signed plan;
+# the former structural exclusion belonged to the retired GPT/Claude governance
+# mechanism and must not override the current governance plan.
+structural.GOVERNANCE_COMPANIES = frozenset()
+
 _TOKEN_KEYS = frozenset(
     {
         "max_tokens",
