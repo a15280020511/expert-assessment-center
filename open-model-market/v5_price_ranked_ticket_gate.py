@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed contract gate for admitted governance-selected tickets."""
+"""Fail-closed contract gate for admitted top-50 OR-Tools tickets."""
 from __future__ import annotations
 
 import argparse
@@ -40,15 +40,13 @@ def main() -> int:
     observed_cost = status.get("cost_anomaly_usd")
     if status.get("accepted") is not True:
         raise RuntimeError("ticket was not accepted")
-    if status.get("runtime_version") != "v5-governance-plan-runtime-1":
-        raise RuntimeError("ticket was not admitted for the governance-plan runtime")
+    if status.get("runtime_version") != "v5-governance-top50-ortools-open-provider-runtime-1":
+        raise RuntimeError("ticket was not admitted for the top-50 open-provider runtime")
     if int(status.get("calls") or 0) != args.expected_calls:
         raise RuntimeError("admitted total-call ceiling changed")
     if int(status.get("maximum_recovery_calls") or 0) != args.expected_recovery_calls:
         raise RuntimeError("admitted recovery reserve changed")
-    if int(status.get("maximum_initial_calls") or 0) != (
-        args.expected_calls - args.expected_recovery_calls
-    ):
+    if int(status.get("maximum_initial_calls") or 0) != args.expected_calls - args.expected_recovery_calls:
         raise RuntimeError("initial expert capacity is inconsistent")
     if args.expected_calls - args.expected_recovery_calls < 3:
         raise RuntimeError("ticket does not leave three initial experts")
@@ -56,19 +54,37 @@ def main() -> int:
         raise RuntimeError("Claude mechanism is not disabled in admission evidence")
     if int(status.get("governance_model_calls") or 0) != 0:
         raise RuntimeError("governance model calls are not zero")
+    if status.get("provider_routing_mode") != "unrestricted-openrouter":
+        raise RuntimeError("Provider routing is not unrestricted")
+    if status.get("provider_restrictions_applied") is not False:
+        raise RuntimeError("Provider restrictions are present in admission evidence")
+    if status.get("provider_fallback_allowed") is not True:
+        raise RuntimeError("Provider fallback is not enabled")
+    if status.get("unrestricted_provider_fallback_allowed") is not True:
+        raise RuntimeError("unrestricted Provider fallback is not enabled")
+    if status.get("openrouter_selects_provider") is not True:
+        raise RuntimeError("OpenRouter is not the Provider routing authority")
+    if status.get("model_substitution_allowed") is not False:
+        raise RuntimeError("model substitution is unexpectedly enabled")
     if expected_cost is None:
         if observed_cost is not None:
             raise RuntimeError("unexpected cost advisory appeared after admission")
-    elif not math.isclose(
-        float(observed_cost), expected_cost, rel_tol=0, abs_tol=1e-12
-    ):
+    elif not math.isclose(float(observed_cost), expected_cost, rel_tol=0, abs_tol=1e-12):
         raise RuntimeError("cost advisory changed after admission")
     route = ticket.get("route")
     if route is not None and str(route) != "expert-team":
         raise RuntimeError("ticket route is not expert-team")
     if not (root / "task.txt").is_file():
         raise RuntimeError("canonical task projection is missing")
-    print(json.dumps({"status": "PASS", "calls": args.expected_calls}))
+    print(
+        json.dumps(
+            {
+                "status": "PASS",
+                "calls": args.expected_calls,
+                "provider_routing_mode": "unrestricted-openrouter",
+            }
+        )
+    )
     return 0
 
 
