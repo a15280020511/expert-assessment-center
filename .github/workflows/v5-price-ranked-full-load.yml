@@ -6,10 +6,12 @@ on:
     paths:
       - "open-model-market/v5_governance_model_plan.py"
       - "open-model-market/v5_governed_plan_orchestrator.py"
+      - "open-model-market/v5_top20_pool_selector.py"
       - "open-model-market/v5_price_ranked_pipeline.py"
       - "tests/test_v5_governance_model_plan.py"
       - "tests/test_v5_governed_plan_orchestrator.py"
       - "tests/test_unique_company_price_ranking.py"
+      - "tests/test_top20_pool_selector.py"
       - "tests/fixtures/governance-ticket.json"
       - ".github/workflows/v5-price-ranked-full-load.yml"
       - "requirements*.txt"
@@ -54,7 +56,8 @@ jobs:
             -m unittest \
             tests.test_v5_governance_model_plan \
             tests.test_v5_governed_plan_orchestrator \
-            tests.test_unique_company_price_ranking -v \
+            tests.test_unique_company_price_ranking \
+            tests.test_top20_pool_selector -v \
             2>&1 | tee full-load-evidence/targeted-tests.log
           coverage report --show-missing --fail-under=85 \
             2>&1 | tee full-load-evidence/coverage.log
