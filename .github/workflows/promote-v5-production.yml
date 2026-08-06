@@ -137,8 +137,12 @@ jobs:
           from pathlib import Path
 
           from tests.test_top50_pool_optimizer import _packet
+          from v5_governance_model_plan import (
+              plan_sha256,
+              task_sha256,
+              validate_governance_model_plan,
+          )
           from v5_top50_pool_optimizer import materialize_top50_selection
-          from v5_top50_plan_validation import validate_top50_contract
 
           tasks = {
               "simple": "比较A与B，给出结论。",
@@ -152,9 +156,12 @@ jobs:
               source = copy.deepcopy(_packet(complex_task=name in {"complex", "long"}))
               source["task"]["question"] = question
               source["approved_budget"] = {"calls": 8, "maximum_recovery_calls": 4}
+              source_plan = source["governance_model_plan"]
+              source_plan["task_sha256"] = task_sha256(source)
+              source_plan["plan_sha256"] = plan_sha256(source_plan)
+
               materialized, receipt = materialize_top50_selection(source)
-              plan = materialized["governance_model_plan"]
-              validate_top50_contract(plan, plan["selected_models"], plan["recovery_models"])
+              plan = validate_governance_model_plan(materialized)
               assert receipt["model_calls"] == 0
               assert plan["task_adaptive_scoring_completed"] is True
               assert plan["selection_principles"] == [
