@@ -2,10 +2,17 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import v5_price_ranked_production_ticket_legacy as _legacy
+from v5_paid_acceptance_free_first_guard import (
+    PaidAcceptanceFreeFirstError,
+    enforce_free_first,
+)
+
+PAID_ACCEPTANCE_APP_NAME = "top50-ortools-paid-candidate-acceptance"
 
 for _name in dir(_legacy):
     if not _name.startswith("__"):
@@ -41,9 +48,43 @@ def _fields(plan: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _enforce_paid_acceptance_free_first(root: Path) -> None:
+    if str(os.environ.get("OPENROUTER_APP_NAME") or "") != PAID_ACCEPTANCE_APP_NAME:
+        return
+    expected_sha = str(os.environ.get("AUTHORITATIVE_EXECUTION_SHA") or "").strip()
+    try:
+        verdict = enforce_free_first(
+            output_dir=root,
+            expected_sha=expected_sha,
+        )
+    except PaidAcceptanceFreeFirstError as exc:
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "free-first-preflight-error.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "v5-paid-acceptance-free-first-error-1",
+                    "status": "FAIL",
+                    "target_sha": expected_sha,
+                    "model_calls": 0,
+                    "paid_model_calls": 0,
+                    "error": str(exc),
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        raise
+    if verdict.get("status") != "PASS" or verdict.get("paid_acceptance_allowed") is not True:
+        raise PaidAcceptanceFreeFirstError("paid acceptance is not authorized by free-first evidence")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _legacy.build_parser().parse_args(argv)
     root = Path(args.output_dir)
+    _enforce_paid_acceptance_free_first(root)
     ticket_path = root / "ticket.json"
     plan: Mapping[str, Any] = {}
     if ticket_path.is_file():
