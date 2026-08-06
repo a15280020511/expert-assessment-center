@@ -3,36 +3,24 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-_RESTRICTIVE_KEYS = {
-    "only",
-    "order",
-    "ignore",
-    "sort",
-    "data_collection",
-    "zdr",
-    "quantizations",
-    "max_price",
-}
-
 
 def canonical_provider_lock(request: Mapping[str, Any]) -> bool:
-    """Validate that a request does not restrict provider choice.
+    """Validate that Provider routing is completely unrestricted.
 
-    The historical function name is preserved for callers. A valid production
-    request either omits ``provider`` entirely or carries only non-routing
-    metadata with fallbacks enabled. Any allowlist/order/privacy/provider-price
-    filter is rejected because it would reduce the server pool.
+    The historical function name is preserved for callers. Production requests
+    should omit ``provider`` entirely. For compatibility, an empty provider
+    object or ``{"allow_fallbacks": true}`` is accepted because neither reduces
+    the Provider set. Every other Provider key is rejected, including future or
+    unknown keys, so new router features cannot silently reintroduce filtering.
     """
     provider = request.get("provider")
     if provider is None:
         return True
     if not isinstance(provider, Mapping):
         return False
-    if any(key in provider for key in _RESTRICTIVE_KEYS):
-        return False
-    if provider.get("allow_fallbacks") is False:
-        return False
-    return True
+    if not provider:
+        return True
+    return set(provider) == {"allow_fallbacks"} and provider.get("allow_fallbacks") is True
 
 
 def provider_routing_is_unrestricted(request: Mapping[str, Any]) -> bool:
