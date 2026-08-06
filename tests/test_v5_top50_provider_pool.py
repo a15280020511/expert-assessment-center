@@ -15,7 +15,7 @@ from v5_provider_lock import canonical_provider_lock  # noqa: E402
 
 
 class Top50ProviderPoolTests(unittest.TestCase):
-    def _node(self, provider: dict) -> SelectedNode:
+    def _node(self, request_config: dict) -> SelectedNode:
         return SelectedNode(
             node_id="n1",
             assigned_work=("analysis",),
@@ -25,124 +25,71 @@ class Top50ProviderPoolTests(unittest.TestCase):
             reasoning_profile={},
             parameter_profile={},
             model="company/model",
-            provider_endpoint="company/model@primary",
+            provider_endpoint="company/model@legacy-primary",
             output_contract={},
             estimated_quality=0.8,
             quality_uncertainty=0.1,
             estimated_cost=0.01,
-            request_config={"provider": provider},
+            request_config=request_config,
         )
 
-    def test_provider_lock_accepts_only_explicit_identical_pool(self) -> None:
-        provider = {
-            "only": ["primary", "secondary"],
-            "order": ["primary", "secondary"],
-            "allow_fallbacks": True,
-            "require_parameters": True,
-        }
-        self.assertTrue(canonical_provider_lock({"provider": provider}))
-        self.assertFalse(
-            canonical_provider_lock(
-                {
-                    "provider": {
-                        "order": ["primary", "secondary"],
-                        "allow_fallbacks": True,
-                        "require_parameters": True,
-                    }
-                }
-            )
-        )
-        self.assertFalse(
-            canonical_provider_lock(
-                {
-                    "provider": {
-                        "only": ["primary", "secondary"],
-                        "order": ["primary"],
-                        "allow_fallbacks": True,
-                        "require_parameters": True,
-                    }
-                }
-            )
-        )
+    def test_open_route_rejects_every_provider_restriction(self) -> None:
+        self.assertTrue(canonical_provider_lock({}))
+        self.assertTrue(canonical_provider_lock({"provider": {"allow_fallbacks": True}}))
+        for provider in (
+            {"only": ["a"]},
+            {"order": ["a", "b"]},
+            {"ignore": ["a"]},
+            {"zdr": True},
+            {"data_collection": "deny"},
+            {"max_price": {"prompt": 1}},
+            {"quantizations": ["fp8"]},
+            {"allow_fallbacks": False},
+        ):
+            self.assertFalse(canonical_provider_lock({"provider": provider}), provider)
 
-    def test_materializer_keeps_primary_first_and_all_qualified_routes(self) -> None:
-        catalog = {
-            "endpoints": [
-                {
-                    "model": "company/model",
-                    "provider": "secondary",
-                    "prompt_price_per_million": 1.0,
-                    "completion_price_per_million": 1.0,
+    def test_materializer_strips_provider_config(self) -> None:
+        request = materializer._open_request(
+            {
+                "provider": {
+                    "only": ["primary"],
+                    "order": ["primary"],
+                    "zdr": True,
+                    "data_collection": "deny",
                 },
-                {
-                    "model": "company/model",
-                    "provider": "primary",
-                    "prompt_price_per_million": 3.0,
-                    "completion_price_per_million": 3.0,
-                },
-                {
-                    "model": "other/model",
-                    "provider": "unrelated",
-                    "prompt_price_per_million": 0.1,
-                    "completion_price_per_million": 0.1,
-                },
-            ]
-        }
-        order = materializer._provider_order(
-            catalog,
-            "company/model",
-            "primary",
+                "reasoning": {"effort": "high"},
+            }
         )
-        self.assertEqual(order, ["primary", "secondary"])
-        request = materializer._pooled_request({}, order)
-        self.assertEqual(request["provider"]["only"], order)
-        self.assertEqual(request["provider"]["order"], order)
-        self.assertTrue(request["provider"]["allow_fallbacks"])
+        self.assertNotIn("provider", request)
+        self.assertEqual(request["reasoning"]["effort"], "high")
 
-    def test_runtime_rejects_unrestricted_or_mismatched_fallback(self) -> None:
-        good = {
-            "only": ["primary", "secondary"],
-            "order": ["primary", "secondary"],
-            "allow_fallbacks": True,
-            "require_parameters": True,
+    def test_runtime_removes_provider_object_even_if_legacy_builder_adds_one(self) -> None:
+        base_payload = {
+            "messages": [{"role": "system", "content": "x"}],
+            "provider": {
+                "only": ["primary"],
+                "order": ["primary"],
+                "allow_fallbacks": False,
+                "require_parameters": True,
+                "zdr": True,
+            },
         }
-        base_payload = {"messages": [{"role": "system", "content": "x"}]}
         with patch.object(
             v5_runtime._legacy.cost_hardening,
             "hardened_build_node_payload",
-            return_value={**base_payload, "provider": good},
+            return_value=base_payload,
         ), patch.object(
             v5_runtime._legacy.dynamic_prompt,
             "dynamic_system_prompt",
             return_value="system",
         ):
             payload = v5_runtime.PromptPolicy().build_payload(
-                self._node(good),
+                self._node({}),
                 "task",
                 [],
             )
-        self.assertEqual(payload["provider"]["only"], good["only"])
-
-        bad = {
-            "order": ["primary", "secondary"],
-            "allow_fallbacks": True,
-            "require_parameters": True,
-        }
-        with patch.object(
-            v5_runtime._legacy.cost_hardening,
-            "hardened_build_node_payload",
-            return_value={**base_payload, "provider": bad},
-        ), patch.object(
-            v5_runtime._legacy.dynamic_prompt,
-            "dynamic_system_prompt",
-            return_value="system",
-        ):
-            with self.assertRaisesRegex(RuntimeError, "provider routing must be"):
-                v5_runtime.PromptPolicy().build_payload(
-                    self._node(bad),
-                    "task",
-                    [],
-                )
+        self.assertNotIn("provider", payload)
+        self.assertEqual(payload["model"] if "model" in payload else "company/model", "company/model")
 
 
 if __name__ == "__main__":
