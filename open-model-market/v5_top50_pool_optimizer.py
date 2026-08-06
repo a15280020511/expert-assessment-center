@@ -117,6 +117,58 @@ def _open_metrics(row: Mapping[str, Any], prices: Mapping[str, int]) -> tuple[in
     return price, popularity, intelligence, 0
 
 
+def _apply_recovery_priority(plan: dict[str, Any]) -> dict[str, Any]:
+    """Order warm recoveries by the same objective used to select recoveries."""
+    candidates = _legacy._rows(
+        plan.get("top50_expert_selectable_candidates"),
+        "top50_expert_selectable_candidates",
+    )
+    recoveries = _legacy._rows(plan.get("recovery_models"), "recovery_models")
+    prices = _legacy._price_ranks(candidates)
+    recoveries.sort(
+        key=lambda row: (
+            _legacy._recovery_cost(row, prices),
+            int(row.get("popularity_rank") or 1_000_000),
+            int(row.get("official_intelligence_rank") or 1_000_000),
+            str(row.get("model") or ""),
+        )
+    )
+    priorities: list[dict[str, Any]] = []
+    priority_by_model: dict[str, int] = {}
+    for slot, row in enumerate(recoveries, 1):
+        row["slot"] = slot
+        model_id = str(row["model"])
+        score = int(_legacy._recovery_cost(row, prices))
+        priority_by_model[model_id] = slot
+        priorities.append(
+            {
+                "priority": slot,
+                "model": model_id,
+                "recovery_objective_score": score,
+            }
+        )
+    plan["recovery_models"] = recoveries
+    plan["warm_recovery_order_basis"] = "same-recovery-objective-as-ortools-selection"
+
+    inventory_value = plan.get("expert_center_top50_inventory")
+    if isinstance(inventory_value, Sequence) and not isinstance(inventory_value, (str, bytes)):
+        inventory: list[dict[str, Any]] = []
+        for row in inventory_value:
+            record = dict(row) if isinstance(row, Mapping) else {}
+            model_id = str(record.get("model") or "")
+            if record.get("standby_state") == "warm-recovery":
+                record["warm_recovery_priority"] = priority_by_model.get(model_id)
+            inventory.append(record)
+        plan["expert_center_top50_inventory"] = inventory
+        plan["expert_center_top50_inventory_sha256"] = _legacy._sha(inventory)
+
+    audit = dict(plan.get("optimizer_audit") or {})
+    audit["warm_recovery_order_basis"] = "same-recovery-objective"
+    audit["warm_recovery_priority"] = priorities
+    plan["optimizer_audit"] = audit
+    return plan
+
+
 _legacy.POOL_SCHEMA_VERSION = POOL_SCHEMA_VERSION
 _legacy.REQUIRED_EVIDENCE = REQUIRED_EVIDENCE
 _legacy._validate_pool = _open_validate_pool
@@ -128,13 +180,14 @@ def materialize_top50_selection(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     _validate_top50_budget(packet)
     materialized, receipt = _legacy.materialize_top50_selection(packet)
-    plan = dict(materialized["governance_model_plan"])
+    plan = _apply_recovery_priority(dict(materialized["governance_model_plan"]))
     audit = dict(plan.get("optimizer_audit") or {})
     constraints = dict(audit.get("constraints") or {})
     constraints["provider_resilience_used"] = False
     constraints["provider_routing_unrestricted"] = True
     constraints["four_primary_calls_reserved"] = True
     constraints["four_warm_recovery_calls_reserved"] = True
+    constraints["warm_recovery_priority_uses_same_objective"] = True
     audit["constraints"] = constraints
     audit["provider_objective_weight"] = 0
     audit["provider_routing_mode"] = "unrestricted-openrouter"
@@ -145,15 +198,18 @@ def materialize_top50_selection(
     plan["provider_restrictions_applied"] = False
     plan["selection_policy"] = (
         "weekly-top50-reasoning -> model-metadata-qualified -> "
-        "ortools-four-active-four-warm-recovery -> all-extra-qualified-models-"
-        "as-ordered-standby -> unrestricted-openrouter-provider-routing"
+        "ortools-four-active-four-warm-recovery -> warm-recovery-order-by-same-objective -> "
+        "all-extra-qualified-models-as-ordered-standby -> unrestricted-openrouter-provider-routing"
     )
     updated_receipt = dict(plan.get("expert_center_selection_receipt") or receipt)
     updated_receipt["optimizer_audit"] = audit
+    updated_receipt["recovery_models"] = [row["model"] for row in plan["recovery_models"]]
+    updated_receipt["inventory_sha256"] = plan.get("expert_center_top50_inventory_sha256", "")
     updated_receipt["provider_routing_mode"] = "unrestricted-openrouter"
     updated_receipt["provider_restrictions_applied"] = False
     updated_receipt["approved_total_calls"] = int(packet["approved_budget"]["calls"])
     updated_receipt["approved_recovery_calls"] = WARM_RECOVERY_COUNT
+    updated_receipt["warm_recovery_order_basis"] = "same-recovery-objective"
     updated_receipt.pop("receipt_sha256", None)
     updated_receipt["receipt_sha256"] = _legacy._sha(updated_receipt)
     plan["expert_center_selection_receipt"] = updated_receipt
