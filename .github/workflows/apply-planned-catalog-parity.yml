@@ -2,19 +2,21 @@ name: Apply Planned Catalog Parity
 
 on:
   push:
-    branches: [fix/planned-catalog-parity]
+    branches:
+      - "fix/planned-catalog-parity"
 
 permissions:
   contents: write
 
 jobs:
   patch:
+    if: ${{ !contains(github.event.head_commit.message, 'fix: resolve only governance-planned live endpoints') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: fix/planned-catalog-parity
+          ref: "fix/planned-catalog-parity"
           fetch-depth: 0
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
@@ -49,17 +51,21 @@ jobs:
           )
           assert "if model_id in expert_model_ids:" in text
           text = text.replace(
-              "if model_id in expert_model_ids:", "if model_id in zdr_model_ids:", 1
+              "if model_id in expert_model_ids:",
+              "if model_id in zdr_model_ids:",
+              1,
           )
           path.write_text(text, encoding="utf-8")
 
           path = Path("open-model-market/v5_price_ranked_pipeline.py")
           text = path.read_text(encoding="utf-8")
+          assert "    MINIMUM_EXPERT_COMPLETION_TOKENS,\n" in text
           text = text.replace(
               "    MINIMUM_EXPERT_COMPLETION_TOKENS,\n",
               "    CatalogViewError,\n    MINIMUM_EXPERT_COMPLETION_TOKENS,\n",
               1,
           )
+          assert 'parser.add_argument("--ranking-limit", type=int, default=150)' in text
           text = text.replace(
               'parser.add_argument("--ranking-limit", type=int, default=150)',
               'parser.add_argument("--ranking-limit", type=int, default=1000)',
@@ -96,10 +102,13 @@ jobs:
                       "governance plan model identities are missing or repeated"
                   )
               eligible_by_id = {
-                  str(getattr(model, "id", "") or ""): model for model in eligible
+                  str(getattr(model, "id", "") or ""): model
+                  for model in eligible
               }
               missing = [
-                  model_id for model_id in planned_ids if model_id not in eligible_by_id
+                  model_id
+                  for model_id in planned_ids
+                  if model_id not in eligible_by_id
               ]
               if missing:
                   raise CatalogViewError(
@@ -117,7 +126,9 @@ jobs:
                   synthetic = True
               else:
                   payloads = fetch_live_endpoint_payloads(
-                      ranked, run, maximum_models=len(ranked)
+                      ranked,
+                      run,
+                      maximum_models=len(ranked),
                   )
                   endpoint_source = "openrouter-live-exact-endpoints"
                   synthetic = False
@@ -145,18 +156,18 @@ jobs:
 
           ''')
           text = text[:start] + function + text[end + 1:]
-          old = textwrap.dedent('''\
-              catalog, catalog_source, endpoint_source = _catalog_state(
-                  args, run, task_envelope
-              )
-          ''')
-          new = textwrap.dedent('''\
-              catalog, catalog_source, endpoint_source = _catalog_state(
-                  args, run, task_envelope, plan
-              )
-          ''')
-          assert old in text
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          call_start = text.index(
+              "catalog, catalog_source, endpoint_source = _catalog_state(",
+              end,
+          )
+          args_start = text.index("args, run, task_envelope", call_start)
+          args_end = args_start + len("args, run, task_envelope")
+          text = (
+              text[:args_start]
+              + "args, run, task_envelope, plan"
+              + text[args_end:]
+          )
+          path.write_text(text, encoding="utf-8")
 
           path = Path("tests/test_v5_endpoint_catalog.py")
           text = path.read_text(encoding="utf-8")
@@ -216,7 +227,10 @@ jobs:
                   {"model": model_id, "company": model_id.split("/", 1)[0]}
                   for model_id in MODEL_IDS
               ]
-              return {"selected_models": rows[:4], "recovery_models": rows[4:]}
+              return {
+                  "selected_models": rows[:4],
+                  "recovery_models": rows[4:],
+              }
 
           class PlannedCatalogScopeTests(unittest.TestCase):
               def test_only_planned_models_are_fetched_in_plan_order(self) -> None:
@@ -229,7 +243,10 @@ jobs:
 
                   def fake_fetch(ranked, _run, **_kwargs):
                       captured.extend(row.id for row in ranked)
-                      return {row.id: {"data": {"endpoints": []}} for row in ranked}
+                      return {
+                          row.id: {"data": {"endpoints": []}}
+                          for row in ranked
+                      }
 
                   args = SimpleNamespace(ranking_limit=1000, endpoint_file=None)
                   run = SimpleNamespace(dry_run=False, catalog_file=None)
@@ -239,27 +256,40 @@ jobs:
                       "fetch_catalog",
                       return_value=(models, "live"),
                   ), patch.object(
-                      pipeline, "fetch_live_endpoint_payloads", side_effect=fake_fetch
+                      pipeline,
+                      "fetch_live_endpoint_payloads",
+                      side_effect=fake_fetch,
                   ), patch.object(
                       pipeline,
                       "compact_endpoint_catalog",
                       return_value={"endpoints": []},
                   ):
                       catalog, source, endpoint_source = pipeline._catalog_state(
-                          args, run, envelope, plan()
+                          args,
+                          run,
+                          envelope,
+                          plan(),
                       )
                   self.assertEqual(captured, MODEL_IDS)
                   self.assertNotIn("unused/cheap", captured)
                   self.assertEqual(source, "live")
-                  self.assertEqual(endpoint_source, "openrouter-live-exact-endpoints")
-                  self.assertEqual(catalog["catalog_scope"], "governance-plan-models-only")
+                  self.assertEqual(
+                      endpoint_source,
+                      "openrouter-live-exact-endpoints",
+                  )
+                  self.assertEqual(
+                      catalog["catalog_scope"],
+                      "governance-plan-models-only",
+                  )
                   self.assertEqual(catalog["planned_model_ids"], MODEL_IDS)
 
               def test_missing_planned_model_fails_closed(self) -> None:
                   models = {
                       model_id: model(model_id, rank)
                       for model_id, rank in zip(
-                          MODEL_IDS[:-1], RANKS[:-1], strict=True
+                          MODEL_IDS[:-1],
+                          RANKS[:-1],
+                          strict=True,
                       )
                   }
                   args = SimpleNamespace(ranking_limit=1000, endpoint_file=None)
@@ -271,9 +301,15 @@ jobs:
                       return_value=(models, "live"),
                   ):
                       with self.assertRaisesRegex(
-                          CatalogViewError, "perplexity/sonar-pro"
+                          CatalogViewError,
+                          "perplexity/sonar-pro",
                       ):
-                          pipeline._catalog_state(args, run, envelope, plan())
+                          pipeline._catalog_state(
+                              args,
+                              run,
+                              envelope,
+                              plan(),
+                          )
 
               def test_all_companies_use_authenticated_zdr_filter(self) -> None:
                   models = [
@@ -326,9 +362,9 @@ jobs:
               unittest.main()
           ''')
           Path("tests/test_v5_planned_catalog_scope.py").write_text(
-              new_test, encoding="utf-8"
+              new_test,
+              encoding="utf-8",
           )
-          Path(".github/workflows/apply-planned-catalog-parity.yml").unlink()
           PY
 
       - name: Run targeted zero-call tests
@@ -340,11 +376,16 @@ jobs:
             tests.test_v5_governed_plan_orchestrator \
             tests.test_v5_governance_model_plan -v
 
-      - name: Commit parity fix
+      - name: Commit source fix
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
+          git add \
+            open-model-market/v5_catalog_view.py \
+            open-model-market/v5_endpoint_catalog.py \
+            open-model-market/v5_price_ranked_pipeline.py \
+            tests/test_v5_endpoint_catalog.py \
+            tests/test_v5_planned_catalog_scope.py
           git commit -m "fix: resolve only governance-planned live endpoints"
           git push origin HEAD:fix/planned-catalog-parity
