@@ -5,6 +5,7 @@ from typing import Any, Mapping, Sequence
 
 import v5_constitutional_runtime_legacy as _legacy
 from execution_graph import SelectedNode
+from v5_provider_lock import canonical_provider_lock
 
 
 def _build_payload(
@@ -76,27 +77,11 @@ def _build_payload(
         }
         payload["messages"] = messages
 
-    provider = payload.get("provider")
-    if not isinstance(provider, Mapping):
-        raise RuntimeError("provider whitelist missing from constitutional request")
-    only = provider.get("only")
-    order = provider.get("order")
-    if (
-        not isinstance(only, list)
-        or not only
-        or not isinstance(order, list)
-        or only != order
-    ):
+    if not canonical_provider_lock(payload):
         raise RuntimeError(
-            "provider.only and provider.order must be the same non-empty audited whitelist"
+            "provider routing must be either one exact locked endpoint or "
+            "one explicit audited same-model provider whitelist"
         )
-    normalized = [str(value).strip() for value in only]
-    if any(not value for value in normalized) or len(normalized) != len(set(normalized)):
-        raise RuntimeError("provider whitelist contains empty or duplicate entries")
-    if provider.get("allow_fallbacks") is not True:
-        raise RuntimeError("audited same-model provider fallback must be enabled")
-    if provider.get("require_parameters") is not True:
-        raise RuntimeError("provider.require_parameters must be true")
     _legacy.assert_request_has_no_tools(
         payload,
         context=f"constitutional node {node.node_id} request",
