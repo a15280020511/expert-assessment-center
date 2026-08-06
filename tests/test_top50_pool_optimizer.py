@@ -9,9 +9,12 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-from v5_governance_model_plan import validate_governance_model_plan
-from v5_top50_plan_validation import validate_top50_contract
-from v5_top50_pool_optimizer import Top50PoolOptimizationError, materialize_top50_selection
+from v5_governance_model_plan import validate_governance_model_plan  # noqa: E402
+from v5_top50_plan_validation import validate_top50_contract  # noqa: E402
+from v5_top50_pool_optimizer import (  # noqa: E402
+    Top50PoolOptimizationError,
+    materialize_top50_selection,
+)
 
 
 PRINCIPLES = [
@@ -195,7 +198,10 @@ class Top50PoolOptimizerTests(unittest.TestCase):
     def test_materialized_plan_passes_full_governance_validation(self) -> None:
         packet, _ = materialize_top50_selection(_packet())
         validated = validate_governance_model_plan(packet)
-        self.assertEqual(validated["plan_sha256"], packet["governance_model_plan"]["plan_sha256"])
+        self.assertEqual(
+            validated["plan_sha256"],
+            packet["governance_model_plan"]["plan_sha256"],
+        )
         self.assertEqual(validated["expert_count"], 4)
         self.assertEqual(validated["recovery_count"], 4)
 
