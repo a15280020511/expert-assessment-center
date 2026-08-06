@@ -1,0 +1,134 @@
+name: Apply Minimal Expert Cleanup Once
+
+on:
+  push:
+    branches:
+      - audit/minimal-expert-runtime-20260806
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    if: ${{ github.actor == github.repository_owner }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout audit branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: audit/minimal-expert-runtime-20260806
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Reassemble and verify cleanup patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t parts < <(find .audit-patch -maxdepth 1 -type f -name 'part-*' | sort -V)
+          test "${#parts[@]}" -eq 18
+          cat "${parts[@]}" | base64 --decode > cleanup.patch.xz
+          echo "9f14beb0237193e614ac023a07e20ddcd082a333858284a22030c2b1f7b3c5e  cleanup.patch.xz" | sha256sum --check --strict
+          xz --decompress --stdout cleanup.patch.xz > cleanup.patch
+          echo "b93e488d99bc646e4cfe4d621d9ad5e601be42954645e166b54bd989aa813bb9  cleanup.patch" | sha256sum --check --strict
+          git apply --check cleanup.patch
+
+      - name: Apply deletion-first refactor
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --index cleanup.patch
+          rm -rf .audit-patch cleanup.patch cleanup.patch.xz
+          rm -f .github/workflows/apply-minimal-expert-cleanup-once.yml
+          git add -A
+          git diff --cached --check
+
+      - name: Install pinned test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt -r requirements-dev.txt
+          python -m pip check
+
+      - name: Verify source and architecture boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q open-model-market tests tools
+          python -m ruff check .
+          python - <<'PY'
+          from pathlib import Path
+
+          root = Path('.')
+          removed = [
+              'open-model-market/model_market.py',
+              'open-model-market/v5_claude_red_team_policy.py',
+              'open-model-market/v5_execution_auditor.py',
+              'open-model-market/v5_execution_auditor_integrity.py',
+              'open-model-market/v5_free_first_preflight.py',
+              'open-model-market/v5_governance_catalog.py',
+              'open-model-market/v5_governance_runtime.py',
+              'open-model-market/v5_gpt_expert_selector.py',
+              'open-model-market/v5_gpt_expert_selector_policy.py',
+              'open-model-market/v5_independent_artifact_revalidation.py',
+              'open-model-market/v5_pipeline.py',
+              'open-model-market/v5_price_ranked_evidence.py',
+              'open-model-market/v5_production_claude_request.py',
+              'open-model-market/v5_production_governance_policy.py',
+              'open-model-market/v5_production_ticket.py',
+              'open-model-market/v5_run_evidence.py',
+              'open-model-market/v5_structured_output_compat.py',
+              'open-model-market/v5_ticket_gate.py',
+              '.github/workflows/v5-free-model-qualification.yml',
+              '.github/workflows/v5-paid-candidate-acceptance.yml',
+              '.github/workflows/v5-price-ranked-full-load.yml',
+              '.github/workflows/v5-price-ranked-paid-candidate-acceptance.yml',
+              '.github/workflows/granular-audit-once.yml',
+              '.github/workflows/export-audit-source-once.yml',
+          ]
+          present = [path for path in removed if (root / path).exists()]
+          if present:
+              raise SystemExit(f'obsolete assets remain: {present}')
+
+          active = '\n'.join(
+              (root / path).read_text(encoding='utf-8')
+              for path in (
+                  'open-model-market/v5_price_ranked_pipeline.py',
+                  'open-model-market/v5_price_ranked_production_ticket.py',
+                  'open-model-market/v5_governed_plan_orchestrator.py',
+                  '.github/workflows/execution-ticket.yml',
+              )
+          )
+          forbidden = (
+              'eligible_models(',
+              'fetch_catalog(',
+              'gpt-direct',
+              'claude_red_team_calls',
+              '--ranking-limit',
+              '--require-live-catalog',
+          )
+          found = [fragment for fragment in forbidden if fragment in active]
+          if found:
+              raise SystemExit(f'active runtime still contains local-selection residue: {found}')
+          for required in (
+              'decision-system-governance',
+              'validate_governance_model_plan',
+              'provider_resolution_only',
+              'networkx',
+          ):
+              if required not in active:
+                  raise SystemExit(f'missing required architecture marker: {required}')
+          print('architecture-boundary: PASS')
+          PY
+
+      - name: Run complete zero-call test suite
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Commit verified cleanup and self-delete
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'refactor: reduce expert center to governance-selected execution'
+          git push origin HEAD:audit/minimal-expert-runtime-20260806
