@@ -17,11 +17,13 @@ FORMAL_STATE_PREFIXES = (
     "EXECUTION_ACCEPTED",
     "EXECUTION_RETRY_ACCEPTED",
     "EXECUTION_COMPLETED",
+    "EXECUTION_DEGRADED",
     "EXECUTION_FAILED",
     "EXECUTION_REJECTED",
 )
 TERMINAL_STATES = {
     "EXECUTION_COMPLETED",
+    "EXECUTION_DEGRADED",
     "EXECUTION_FAILED",
     "EXECUTION_REJECTED",
 }
@@ -85,6 +87,9 @@ def execution_state(comments: Iterable[str]) -> dict[str, Any]:
             # Unknown terminal call counts are charged conservatively as business use.
             business_retry_count += 1
 
+    degraded = any(
+        _formal_state(body) == "EXECUTION_DEGRADED" for body in bodies
+    )
     return {
         "accepted": any(
             _formal_state(body) in {"EXECUTION_ACCEPTED", "EXECUTION_RETRY_ACCEPTED"}
@@ -93,7 +98,9 @@ def execution_state(comments: Iterable[str]) -> dict[str, Any]:
         "completed": any(
             _formal_state(body) == "EXECUTION_COMPLETED" for body in bodies
         ),
-        "failed": any(_formal_state(body) == "EXECUTION_FAILED" for body in bodies),
+        "degraded": degraded,
+        "failed": degraded
+        or any(_formal_state(body) == "EXECUTION_FAILED" for body in bodies),
         "rejected": any(
             _formal_state(body) == "EXECUTION_REJECTED" for body in bodies
         ),
