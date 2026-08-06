@@ -73,6 +73,12 @@ jobs:
           assert selection["model_substitution_performed_locally"] is False
           assert runtime["governance_model_calls"] == 0
           assert runtime["model_loop_allowed"] is False
+          assert runtime["provider_routing_mode"] == "unrestricted-openrouter"
+          assert runtime["provider_restrictions_applied"] is False
+          assert runtime["provider_fallback_allowed"] is True
+          assert runtime["unrestricted_provider_fallback_allowed"] is True
+          assert runtime["provider_lock_required"] is False
+          assert runtime["openrouter_selects_provider"] is True
           assert [node["model"] for node in graph["nodes"]] == [
               row["model"] for row in plan["selected_models"]
           ]
