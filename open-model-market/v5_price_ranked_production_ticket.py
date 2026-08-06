@@ -16,37 +16,26 @@ def _fields(plan: Mapping[str, Any]) -> dict[str, Any]:
     top50 = plan.get("selected_from_top50_reasoning_pool_only") is True
     return {
         "candidate_pool_authority": "decision-system-governance",
-        "selection_authority": (
-            "expert-assessment-center-ortools"
-            if top50
-            else "decision-system-governance"
-        ),
-        "model_assignment_authority": (
-            "expert-assessment-center-ortools"
-            if top50
-            else "decision-system-governance"
-        ),
+        "selection_authority": "expert-assessment-center-ortools" if top50 else "decision-system-governance",
+        "model_assignment_authority": "expert-assessment-center-ortools" if top50 else "decision-system-governance",
         "model_selection_performed_locally": top50,
         "candidate_pool_reranking_performed_locally": False,
         "model_reranking_performed_locally": False,
         "model_substitution_allowed": False,
         "optimizer_used": top50,
         "optimizer": plan.get("optimizer") if top50 else None,
-        "optimizer_optimality_proven": bool(
-            plan.get("optimizer_audit", {}).get("optimality_proven")
-        ) if top50 else False,
-        "provider_resolution_authority": (
-            "expert-runtime-provider-whitelist"
-            if top50
-            else "expert-runtime-exact-endpoint-only"
-        ),
-        "provider_fallback_allowed": top50,
-        "provider_fallback_scope": (
-            "same-model-audited-qualified-provider-whitelist"
-            if top50
-            else "legacy-exact-single-endpoint"
-        ),
-        "unrestricted_provider_fallback_allowed": False,
+        "optimizer_optimality_proven": bool(plan.get("optimizer_audit", {}).get("optimality_proven")) if top50 else False,
+        "provider_resolution_authority": "openrouter-unrestricted",
+        "provider_routing_mode": "unrestricted-openrouter",
+        "provider_restrictions_applied": False,
+        "provider_fallback_allowed": True,
+        "unrestricted_provider_fallback_allowed": True,
+        "provider_only_allowed": False,
+        "provider_order_allowed": False,
+        "provider_zdr_filter_allowed": False,
+        "provider_data_collection_filter_allowed": False,
+        "provider_price_filter_allowed": False,
+        "openrouter_selects_provider": True,
         "orchestration_library": "networkx",
         "optimizer_library": "ortools-cp-sat" if top50 else None,
     }
@@ -75,9 +64,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             if path.name == "production-runtime.json" and fields["optimizer_used"]:
                 document["architecture"] = (
                     "governance-signed-weekly-top50 -> expert-center OR-Tools CP-SAT "
-                    "4-primary+4-warm-recovery assignment -> audited same-model "
-                    "provider whitelist -> NetworkX DAG -> parallel analysis -> "
-                    "cross-review -> final synthesis"
+                    "4-primary+4-warm-recovery assignment -> unrestricted OpenRouter "
+                    "provider routing for each fixed model -> NetworkX DAG -> parallel "
+                    "analysis -> cross-review -> final synthesis"
                 )
             original_write(path, document)
             return
