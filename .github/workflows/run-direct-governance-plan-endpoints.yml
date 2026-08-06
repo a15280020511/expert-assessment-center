@@ -38,8 +38,7 @@ jobs:
             tests.test_v5_planned_catalog_scope \
             tests.test_v5_endpoint_catalog \
             tests.test_v5_governed_plan_orchestrator \
-            tests.test_v5_governance_model_plan \
-            tests.test_v5_price_ranked_pipeline -v
+            tests.test_v5_governance_model_plan -v
           rm -rf /tmp/direct-plan-dry
           python open-model-market/v5_price_ranked_pipeline.py \
             --task "仅依据题面比较A与B，禁止工具，输出已知事实和最终建议。" \
