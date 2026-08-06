@@ -1,0 +1,53 @@
+name: Repair Parity Patch Call
+
+on:
+  push:
+    branches: [fix/planned-catalog-parity]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: fix/planned-catalog-parity
+          fetch-depth: 0
+      - name: Replace brittle call patch
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/apply-planned-catalog-parity.yml')
+          text = path.read_text(encoding='utf-8')
+          start = text.index("          old = textwrap.dedent('''\\\n              catalog, catalog_source")
+          marker = '          path.write_text(text.replace(old, new, 1), encoding="utf-8")\n'
+          finish = text.index(marker, start) + len(marker)
+          replacement = '''          call_start = text.index(
+              "catalog, catalog_source, endpoint_source = _catalog_state(",
+              end,
+          )
+          args_start = text.index("args, run, task_envelope", call_start)
+          args_end = args_start + len("args, run, task_envelope")
+          text = (
+              text[:args_start]
+              + "args, run, task_envelope, plan"
+              + text[args_end:]
+          )
+          path.write_text(text, encoding="utf-8")
+'''
+          path.write_text(text[:start] + replacement + text[finish:], encoding='utf-8')
+          Path('.github/workflows/fix-parity-workflow-call.yml').unlink()
+          PY
+      - name: Commit repaired workflow
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: make planned catalog patch deterministic"
+          git push origin HEAD:fix/planned-catalog-parity
