@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 from openrouter_api import MODELS_URL, request_json
 
 DEFAULT_CONFIG = Path(__file__).with_name("config.json")
-MAX_CATALOG_MODELS = 150
+MAX_CATALOG_MODELS = 1000
 
 
 class ExpertTeamError(RuntimeError):
@@ -110,7 +110,7 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
         or catalog.get("maximum_models", MAX_CATALOG_MODELS)
     )
     if not 1 <= ranking <= MAX_CATALOG_MODELS:
-        raise ExpertTeamError("ranking_limit must be between 1 and 150")
+        raise ExpertTeamError("ranking_limit must be between 1 and 1000")
     completion_advisory = int(
         getattr(args, "max_completion_tokens", None)
         or execution.get("max_completion_tokens", 10_000)

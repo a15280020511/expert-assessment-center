@@ -11,6 +11,7 @@ from typing import Any, Mapping, Sequence
 import model_market
 from artifact_manifest import write_manifest
 from v5_catalog_view import (
+    CatalogViewError,
     MINIMUM_EXPERT_COMPLETION_TOKENS,
     catalog_sha256,
     compact_endpoint_catalog,
@@ -39,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default=str(model_market.DEFAULT_CONFIG))
     parser.add_argument("--catalog-file")
     parser.add_argument("--endpoint-file")
-    parser.add_argument("--ranking-limit", type=int, default=150)
+    parser.add_argument("--ranking-limit", type=int, default=1000)
     parser.add_argument("--maximum-total-calls", type=int, default=8)
     parser.add_argument("--maximum-recovery-calls", type=int, default=1)
     parser.add_argument("--cost-anomaly-usd", type=float)
@@ -128,14 +129,44 @@ def _catalog_state(
     args: argparse.Namespace,
     run: Any,
     task_envelope: Mapping[str, Any],
+    plan: Mapping[str, Any],
 ) -> tuple[Mapping[str, Any], str, str]:
     required_context = int(task_envelope["required_context_tokens"])
     models, catalog_source = model_market.fetch_catalog(run)
-    ranked = eligible_models(
+    eligible = eligible_models(
         models,
         requested_context=required_context,
         maximum_models=int(args.ranking_limit),
+        exclude_governance_companies=False,
     )
+    planned_rows = [
+        *list(plan.get("selected_models") or []),
+        *list(plan.get("recovery_models") or []),
+    ]
+    planned_ids = [
+        str(row.get("model") or "").strip()
+        for row in planned_rows
+        if isinstance(row, Mapping)
+    ]
+    if not planned_ids or len(planned_ids) != len(set(planned_ids)):
+        raise CatalogViewError(
+            "governance plan model identities are missing or repeated"
+        )
+    eligible_by_id = {
+        str(getattr(model, "id", "") or ""): model
+        for model in eligible
+    }
+    missing = [
+        model_id
+        for model_id in planned_ids
+        if model_id not in eligible_by_id
+    ]
+    if missing:
+        raise CatalogViewError(
+            "governance-planned models are not live-eligible: "
+            + ", ".join(missing)
+        )
+    ranked = [eligible_by_id[model_id] for model_id in planned_ids]
     if args.endpoint_file:
         payloads = _load_mapping(Path(args.endpoint_file))
         endpoint_source = f"fixture:{args.endpoint_file}"
@@ -168,10 +199,11 @@ def _catalog_state(
             "model_reranking_performed_locally": False,
             "model_substitution_allowed": False,
             "provider_resolution_only": True,
+            "catalog_scope": "governance-plan-models-only",
+            "planned_model_ids": planned_ids,
         }
     )
     return catalog, catalog_source, endpoint_source
-
 
 def _catalog_snapshot(
     catalog: Mapping[str, Any],
@@ -424,7 +456,7 @@ def main(
 
     task, _, task_envelope = _task_state(args, run, output, plan)
     catalog, catalog_source, endpoint_source = _catalog_state(
-        args, run, task_envelope
+        args, run, task_envelope, plan
     )
     snapshot = _catalog_snapshot(
         catalog, catalog_source, endpoint_source, plan

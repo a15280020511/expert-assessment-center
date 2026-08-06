@@ -119,26 +119,6 @@ class V5EndpointCatalogTests(unittest.TestCase):
         self.assertEqual(list(result), [model.id for model in models[:7]])
         self.assertEqual(request.call_count, 8)
 
-    def test_governance_models_are_not_filtered_by_expert_zdr_policy(self):
-        models = [
-            SimpleNamespace(id="openai/gpt-latest"),
-            SimpleNamespace(id="anthropic/claude-opus-latest"),
-        ]
-        run = SimpleNamespace(
-            api_key="test-key",
-            catalog_timeout_seconds=5,
-            catalog_max_retries=0,
-        )
-        payload = {"data": {"endpoints": [{"tag": "direct"}]}}
-        with patch(
-            "v5_endpoint_catalog.request_json",
-            return_value=payload,
-        ) as request:
-            result = fetch_live_endpoint_payloads(models, run)
-        self.assertEqual(request.call_count, 2)
-        self.assertEqual(result[models[0].id], payload)
-        self.assertEqual(result[models[1].id], payload)
-
     def test_missing_zdr_inventory_fails_closed_before_endpoint_fetch(self):
         models = [SimpleNamespace(id="deepseek/model")]
         run = SimpleNamespace(

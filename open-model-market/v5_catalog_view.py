@@ -18,7 +18,7 @@ from v5_execution_primitives import finite_number
 from v5_model_company import canonical_model_company
 
 ENDPOINTS_URL = "https://openrouter.ai/api/v1/models/{author}/{slug}/endpoints"
-MAX_VISIBLE_MODELS = 150
+MAX_VISIBLE_MODELS = 1000
 MINIMUM_EXPERT_COMPLETION_TOKENS = 256
 FORBIDDEN_MODEL_TERMS = (
     "openrouter/",
