@@ -1,0 +1,99 @@
+name: Apply Unique Company Model Ranking
+
+on:
+  push:
+    branches:
+      - fix/unique-company-model-ranking
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fix/unique-company-model-ranking
+          fetch-depth: 0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.12'
+      - name: Patch plan admission and tests
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path: Path, old: str, new: str, count: int = 1) -> None:
+              text = path.read_text(encoding='utf-8')
+              if text.count(old) < count:
+                  raise SystemExit(f'missing patch target in {path}: {old[:100]!r}')
+              path.write_text(text.replace(old, new, count), encoding='utf-8')
+
+          plan_path = Path('open-model-market/v5_governance_model_plan.py')
+          replace(plan_path,
+              '''def _validate_recovery_identity_rows(\n    recoveries: Sequence[Mapping[str, Any]],\n    *,\n    selected_models: set[str],\n) -> set[str]:\n    models = set(selected_models)\n    recovery_models: set[str] = set()\n''',
+              '''def _validate_recovery_identity_rows(\n    recoveries: Sequence[Mapping[str, Any]],\n    *,\n    selected_models: set[str],\n    selected_companies: set[str],\n) -> set[str]:\n    models = set(selected_models)\n    companies = set(selected_companies)\n    recovery_models: set[str] = set()\n''')
+          replace(plan_path,
+              '''        model, _, _ = _validate_model_row(\n            row,\n            field="recovery_models",\n            index=index,\n        )\n''',
+              '''        model, company, _ = _validate_model_row(\n            row,\n            field="recovery_models",\n            index=index,\n        )\n''')
+          replace(plan_path,
+              '''        if model in models:\n            raise GovernanceModelPlanError(\n                f"selected and recovery model sets overlap or repeat: {model}"\n            )\n        price = _recovery_price(row, index)\n''',
+              '''        if model in models:\n            raise GovernanceModelPlanError(\n                f"selected and recovery model sets overlap or repeat: {model}"\n            )\n        if company in companies:\n            raise GovernanceModelPlanError(\n                f"duplicate or reused model company across full ranking: {company}"\n            )\n        price = _recovery_price(row, index)\n''')
+          replace(plan_path,
+              '''        models.add(model)\n        recovery_models.add(model)\n''',
+              '''        models.add(model)\n        companies.add(company)\n        recovery_models.add(model)\n''')
+          replace(plan_path,
+              '''    selected_models, _ = _validate_selected_identity_rows(selected)\n    _validate_recovery_identity_rows(\n        recoveries,\n        selected_models=selected_models,\n    )\n''',
+              '''    selected_models, selected_companies = _validate_selected_identity_rows(selected)\n    _validate_recovery_identity_rows(\n        recoveries,\n        selected_models=selected_models,\n        selected_companies=selected_companies,\n    )\n''')
+
+          insert_before = '''def _validate_roles(selected: Sequence[Mapping[str, Any]]) -> None:\n'''
+          helper = '''def _validate_price_ranking(\n    plan: Mapping[str, Any],\n    selected: Sequence[Mapping[str, Any]],\n    recoveries: Sequence[Mapping[str, Any]],\n) -> None:\n    ranked_value = plan.get("price_ranked_models")\n    live_contract = plan.get("catalog_fetch_mode") == "live-per-task-no-cross-task-cache"\n    if ranked_value is None and not live_contract:\n        return\n    ranked = _model_rows(ranked_value, "price_ranked_models")\n    expected_count = len(selected) + len(recoveries)\n    if len(ranked) != expected_count:\n        raise GovernanceModelPlanError(\n            "price_ranked_models must cover every selected and recovery model"\n        )\n    expected_pairs = {\n        (str(row.get("model") or ""), str(row.get("company") or ""))\n        for row in [*selected, *recoveries]\n    }\n    seen_models: set[str] = set()\n    seen_companies: set[str] = set()\n    observed_pairs: set[tuple[str, str]] = set()\n    previous_price: float | None = None\n    for index, row in enumerate(ranked):\n        model, company, _ = _validate_model_row(\n            row, field="price_ranked_models", index=index\n        )\n        if row.get("price_rank") != index + 1:\n            raise GovernanceModelPlanError(\n                "price_ranked_models ranks must be contiguous"\n            )\n        if model in seen_models or company in seen_companies:\n            raise GovernanceModelPlanError(\n                "price ranking must contain one model per company"\n            )\n        price = _positive_finite(\n            row.get("price_rank_usd_per_million"),\n            f"price_ranked_models[{index}].price_rank_usd_per_million",\n        )\n        if previous_price is not None and price < previous_price - 1e-12:\n            raise GovernanceModelPlanError(\n                "price_ranked_models must preserve ascending price order"\n            )\n        previous_price = price\n        seen_models.add(model)\n        seen_companies.add(company)\n        observed_pairs.add((model, company))\n    if observed_pairs != expected_pairs:\n        raise GovernanceModelPlanError(\n            "price ranking does not match selected and recovery model identities"\n        )\n\n\n'''
+          replace(plan_path, insert_before, helper + insert_before)
+          replace(plan_path,
+              '''    _validate_model_sets(selected, recoveries)\n    _validate_roles(selected)\n''',
+              '''    _validate_model_sets(selected, recoveries)\n    _validate_price_ranking(plan_value, selected, recoveries)\n    _validate_roles(selected)\n''')
+
+          test_path = Path('tests/test_v5_governance_model_plan.py')
+          text = test_path.read_text(encoding='utf-8')
+          text = text.replace('"gamma/backup-pro",\n            "company": "gamma",', '"epsilon/backup-pro",\n            "company": "epsilon",')
+          text = text.replace('"deepseek/backup-pro",\n            "company": "deepseek",', '"zeta/backup-pro",\n            "company": "zeta",')
+          text = text.replace('"rho/forecast-pro",\n            "company": "rho",', '"eta/forecast-pro",\n            "company": "eta",')
+          text = text.replace(
+              'def test_recovery_company_reuse_is_allowed_for_distinct_models(self) -> None:',
+              'def test_full_ranking_uses_unique_companies(self) -> None:')
+          text = text.replace(
+              '["rho", "gamma", "deepseek", "rho"],',
+              '["rho", "epsilon", "zeta", "eta"],')
+          marker = '''    def test_selected_and_recovery_model_overlap_is_rejected(self) -> None:\n'''
+          extra = '''    def test_recovery_company_reuse_is_rejected(self) -> None:\n        ticket = load_ticket()\n        expand_to_four_recoveries(ticket)\n        ticket["governance_model_plan"]["recovery_models"][3]["company"] = "rho"\n        resign(ticket)\n        with self.assertRaisesRegex(\n            GovernanceModelPlanError,\n            "duplicate or reused model company across full ranking",\n        ):\n            validate_governance_model_plan(ticket)\n\n'''
+          if marker not in text:
+              raise SystemExit('missing test insertion marker')
+          text = text.replace(marker, extra + marker, 1)
+          test_path.write_text(text, encoding='utf-8')
+
+          Path('tests/test_unique_company_price_ranking.py').write_text('''from __future__ import annotations\n\nimport json\nimport sys\nimport unittest\nfrom pathlib import Path\n\nROOT = Path(__file__).resolve().parents[1]\nsys.path.insert(0, str(ROOT / "open-model-market"))\nfrom v5_governance_model_plan import (  # noqa: E402\n    GovernanceModelPlanError,\n    plan_sha256,\n    task_sha256,\n    validate_governance_model_plan,\n)\n\nFIXTURE = ROOT / "tests" / "fixtures" / "governance-ticket.json"\n\n\ndef ticket() -> dict:\n    value = json.loads(FIXTURE.read_text(encoding="utf-8"))\n    plan = value["governance_model_plan"]\n    plan["catalog_fetch_mode"] = "live-per-task-no-cross-task-cache"\n    plan["company_uniqueness_scope"] = "selected-and-recovery"\n    rows = []\n    for rank, row in enumerate(plan["selected_models"] + plan["recovery_models"], 1):\n        rows.append({\n            "price_rank": rank,\n            "slot": rank,\n            "model": row["model"],\n            "company": row["company"],\n            "estimated_task_cost_usd": row["estimated_task_cost_usd"],\n            "price_rank_usd_per_million": row["estimated_task_cost_usd"],\n        })\n    rows.sort(key=lambda row: row["price_rank_usd_per_million"])\n    for rank, row in enumerate(rows, 1):\n        row["price_rank"] = rank\n        row["slot"] = rank\n    plan["price_ranked_models"] = rows\n    plan["task_sha256"] = task_sha256(value)\n    plan["plan_sha256"] = plan_sha256(plan)\n    return value\n\n\nclass UniqueCompanyPriceRankingTests(unittest.TestCase):\n    def test_live_plan_requires_price_ranking(self) -> None:\n        value = ticket()\n        value["governance_model_plan"].pop("price_ranked_models")\n        value["governance_model_plan"]["plan_sha256"] = plan_sha256(value["governance_model_plan"])
+        with self.assertRaisesRegex(GovernanceModelPlanError, "price_ranked_models"):\n            validate_governance_model_plan(value)\n\n    def test_price_ranking_must_be_ascending(self) -> None:\n        value = ticket()\n        rows = value["governance_model_plan"]["price_ranked_models"]\n        rows[0], rows[1] = rows[1], rows[0]\n        for rank, row in enumerate(rows, 1):\n            row["price_rank"] = rank\n        value["governance_model_plan"]["plan_sha256"] = plan_sha256(value["governance_model_plan"])
+        with self.assertRaisesRegex(GovernanceModelPlanError, "ascending price order"):\n            validate_governance_model_plan(value)\n\n\nif __name__ == "__main__":\n    unittest.main()\n''', encoding='utf-8')
+
+          workflow = Path('.github/workflows/apply-unique-company-model-ranking.yml')
+          if workflow.exists():
+              workflow.unlink()
+          PY
+      - name: Commit patch
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: reject company reuse across model ranking'
+          for attempt in 1 2 3; do
+            if git push origin HEAD:fix/unique-company-model-ranking; then
+              exit 0
+            fi
+            git fetch origin fix/unique-company-model-ranking
+            git rebase origin/fix/unique-company-model-ranking
+          done
+          exit 1
