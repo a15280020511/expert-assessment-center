@@ -18,7 +18,12 @@ def _load(path: Path) -> Mapping[str, Any]:
 
 def _optional_float(value: str) -> float | None:
     text = str(value or "").strip()
-    return float(text) if text else None
+    if text.lower() in {"", "none", "null"}:
+        return None
+    number = float(text)
+    if not math.isfinite(number) or number < 0:
+        raise ValueError("cost advisory must be finite and nonnegative")
+    return number
 
 
 def main() -> int:
