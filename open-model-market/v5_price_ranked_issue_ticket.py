@@ -37,12 +37,17 @@ DELEGATION_NOTICE = (
 def _rewrite_outputs(status: Mapping[str, Any]) -> None:
     legacy._rewrite_outputs(status)  # noqa: SLF001
     for key in (
+        "cost_anomaly_usd",
         "model_plan_sha256",
         "selected_expert_count",
         "selected_recovery_count",
         "model_selection_authority",
     ):
-        legacy._write_output(key, status.get(key, ""))  # noqa: SLF001
+        value = status.get(key, "")
+        legacy._write_output(  # noqa: SLF001
+            key,
+            "" if value is None else value,
+        )
 
 
 def _read_original_packet(args: argparse.Namespace, root: Path) -> tuple[dict[str, Any], argparse.Namespace]:
