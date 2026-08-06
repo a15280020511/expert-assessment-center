@@ -1,0 +1,70 @@
+name: Apply Governance Plan Integration Fix Once
+
+on:
+  push:
+    branches:
+      - fix/governance-plan-admission-integration
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-governance-plan-integration-fix-once
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repair branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fix/governance-plan-admission-integration
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply exact repairs, add regression tests, and remove this workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          invalid = Path('.github/workflows/invalid-ticket-rejection.yml')
+          text = invalid.read_text(encoding='utf-8')
+          old_prepare = 'python open-model-market/v5_issue_ticket.py prepare'
+          old_render = 'python open-model-market/v5_issue_ticket.py render'
+          assert text.count(old_prepare) == 1
+          assert text.count(old_render) == 1
+          text = text.replace(old_prepare, 'python open-model-market/v5_price_ranked_issue_ticket.py prepare')
+          text = text.replace(old_render, 'python open-model-market/v5_price_ranked_issue_ticket.py render')
+          invalid.write_text(text, encoding='utf-8')
+
+          ticket = Path('open-model-market/v5_issue_ticket.py')
+          text = ticket.read_text(encoding='utf-8')
+          old = '    text = str(value).replace("\\n", " ").replace("\\r", " ")\n'
+          new = '    text = "" if value is None else str(value).replace("\\n", " ").replace("\\r", " ")\n'
+          assert text.count(old) == 1
+          ticket.write_text(text.replace(old, new), encoding='utf-8')
+
+          gate = Path('open-model-market/v5_price_ranked_ticket_gate.py')
+          text = gate.read_text(encoding='utf-8')
+          old = '''def _optional_float(value: str) -> float | None:\n    text = str(value or "").strip()\n    return float(text) if text else None\n'''
+          new = '''def _optional_float(value: str) -> float | None:\n    text = str(value or "").strip()\n    if text.lower() in {"", "none", "null"}:\n        return None\n    number = float(text)\n    if not math.isfinite(number) or number < 0:\n        raise ValueError("cost advisory must be finite and nonnegative")\n    return number\n'''
+          assert text.count(old) == 1
+          gate.write_text(text.replace(old, new), encoding='utf-8')
+
+          test = Path('tests/test_governance_plan_admission_integration.py')
+          test.write_text('''import importlib.util\nimport os\nimport sys\nimport tempfile\nimport unittest\nfrom pathlib import Path\nfrom unittest import mock\n\nROOT = Path(__file__).resolve().parents[1]\nMARKET = ROOT / "open-model-market"\nsys.path.insert(0, str(MARKET))\n\nimport v5_issue_ticket as legacy  # noqa: E402\nimport v5_price_ranked_ticket_gate as gate  # noqa: E402\n\n\nclass GovernancePlanAdmissionIntegrationTests(unittest.TestCase):\n    def test_invalid_ticket_guard_uses_governed_wrapper(self) -> None:\n        text = (ROOT / ".github/workflows/invalid-ticket-rejection.yml").read_text(\n            encoding="utf-8"\n        )\n        self.assertIn(\n            "python open-model-market/v5_price_ranked_issue_ticket.py prepare", text\n        )\n        self.assertIn(\n            "python open-model-market/v5_price_ranked_issue_ticket.py render", text\n        )\n        self.assertNotIn(\n            "python open-model-market/v5_issue_ticket.py prepare", text\n        )\n        self.assertNotIn(\n            "python open-model-market/v5_issue_ticket.py render", text\n        )\n\n    def test_none_output_is_serialized_as_empty_github_output(self) -> None:\n        with tempfile.TemporaryDirectory() as directory:\n            output = Path(directory) / "github-output.txt"\n            with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(output)}):\n                legacy._write_output("cost_anomaly_usd", None)  # noqa: SLF001\n            self.assertEqual(output.read_text(encoding="utf-8"), "cost_anomaly_usd=\\n")\n\n    def test_optional_cost_sentinels_are_absent(self) -> None:\n        for value in ("", "None", "none", "NULL", " null "):\n            with self.subTest(value=value):\n                self.assertIsNone(gate._optional_float(value))  # noqa: SLF001\n\n    def test_optional_cost_numeric_value_is_preserved(self) -> None:\n        self.assertEqual(gate._optional_float("0.125"), 0.125)  # noqa: SLF001\n\n    def test_optional_cost_rejects_nonfinite_negative_and_garbage(self) -> None:\n        for value in ("nan", "inf", "-0.01", "garbage"):\n            with self.subTest(value=value):\n                with self.assertRaises(ValueError):\n                    gate._optional_float(value)  # noqa: SLF001\n\n\nif __name__ == "__main__":\n    unittest.main()\n''', encoding='utf-8')
+
+          Path('.github/workflows/apply-governance-plan-integration-fix-once.yml').unlink()
+          PY
+          python -m unittest tests.test_governance_plan_admission_integration -v
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix: integrate governance model plans across admission paths"
+          git push origin HEAD:fix/governance-plan-admission-integration
