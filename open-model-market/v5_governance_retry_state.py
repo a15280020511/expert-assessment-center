@@ -143,7 +143,7 @@ def current_issue_submission_reason(
     if issue_state != "open":
         return "Issue must be reopened before a controlled retry"
     if retry_id in set(execution.get("retry_ids") or set()):
-        return "retry_id has already been used for this Issue"
+        return "retry_id was already used for this Issue"
     if int(execution.get("in_flight_retry_count") or 0) > 0:
         return "a controlled retry is already in progress"
     if not execution.get("failed") and not execution.get("rejected"):
