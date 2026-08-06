@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
 from v5_top50_plan_validation import validate_top50_contract
-from v5_top50_pool_optimizer import materialize_top50_selection
+from v5_top50_pool_optimizer import Top50PoolOptimizationError, materialize_top50_selection
 
 
 def _sha(value):
@@ -101,9 +101,12 @@ class Top50PoolOptimizerTests(unittest.TestCase):
         self.assertTrue(plan["optimizer_audit"]["optimality_proven"])
         self.assertFalse(plan["optimizer_audit"]["constraints"]["provider_resilience_used"])
         self.assertTrue(plan["optimizer_audit"]["constraints"]["provider_routing_unrestricted"])
+        self.assertTrue(plan["optimizer_audit"]["constraints"]["four_primary_calls_reserved"])
+        self.assertTrue(plan["optimizer_audit"]["constraints"]["four_warm_recovery_calls_reserved"])
         self.assertEqual(plan["provider_routing_mode"], "unrestricted-openrouter")
         self.assertFalse(plan["provider_restrictions_applied"])
         self.assertEqual(receipt["optimizer_audit"]["optimizer"], "ortools-cp-sat")
+        self.assertEqual(receipt["approved_recovery_calls"], 4)
         validate_top50_contract(plan, plan["selected_models"], plan["recovery_models"])
 
     def test_deterministic_assignment(self) -> None:
@@ -119,6 +122,18 @@ class Top50PoolOptimizerTests(unittest.TestCase):
             [row["model"] for row in first_plan["recovery_models"]],
             [row["model"] for row in second_plan["recovery_models"]],
         )
+
+    def test_less_than_four_recovery_budget_is_rejected_before_solving(self) -> None:
+        packet = _packet()
+        packet["approved_budget"]["maximum_recovery_calls"] = 1
+        with self.assertRaisesRegex(Top50PoolOptimizationError, "must equal four"):
+            materialize_top50_selection(packet)
+
+    def test_less_than_eight_total_calls_is_rejected_before_solving(self) -> None:
+        packet = _packet()
+        packet["approved_budget"]["calls"] = 7
+        with self.assertRaisesRegex(Top50PoolOptimizationError, "between 8 and 16"):
+            materialize_top50_selection(packet)
 
 
 if __name__ == "__main__":
