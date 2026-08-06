@@ -139,9 +139,11 @@ def current_issue_submission_reason(
         return ""
 
     if execution.get("completed"):
-        return "this Issue already completed; successful tasks cannot be retried"
+        return "this Issue already completed; completed executions cannot be retried"
     if issue_state != "open":
         return "Issue must be reopened before a controlled retry"
+    if retry_id in set(execution.get("retry_ids") or set()):
+        return "retry_id has already been used for this Issue"
     if int(execution.get("in_flight_retry_count") or 0) > 0:
         return "a controlled retry is already in progress"
     if not execution.get("failed") and not execution.get("rejected"):
@@ -153,8 +155,6 @@ def current_issue_submission_reason(
             f"maximum {SYSTEM_REPAIR_RETRY_LIMIT} zero-call system repair retries "
             "are allowed per Issue"
         )
-    if retry_id in set(execution.get("retry_ids") or set()):
-        return "retry_id has already been used for this Issue"
     return ""
 
 
