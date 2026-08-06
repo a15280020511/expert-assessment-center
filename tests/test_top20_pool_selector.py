@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import unittest
 
 
 def _load_module(path: Path, name: str):
@@ -124,69 +125,81 @@ def _packet() -> dict:
     }
 
 
-def test_materializer_skips_cheaper_duplicate_company_rows() -> None:
-    module = _load_selector()
-    packet, receipt = module.materialize_top20_selection(_packet())
-    plan = packet["governance_model_plan"]
+class Top20PoolSelectorTests(unittest.TestCase):
+    def test_materializer_skips_cheaper_duplicate_company_rows(self) -> None:
+        module = _load_selector()
+        packet, receipt = module.materialize_top20_selection(_packet())
+        plan = packet["governance_model_plan"]
 
-    assert plan["expert_center_pool_selection_completed"] is True
-    assert plan["selected_from_top20_reasoning_pool_only"] is True
-    assert plan["expert_count"] == 4
-    assert plan["recovery_count"] == 4
-    expected = [
-        "company1/model-1",
-        "company3/model-3",
-        "company4/model-4",
-        "company5/model-5",
-        "company6/model-6",
-        "company7/model-7",
-        "company8/model-8",
-        "company9/model-9",
-    ]
-    assert [row["model"] for row in plan["price_ranked_models"]] == expected
-    assert {row["model"] for row in plan["selected_models"]} == set(expected[:4])
-    assert [row["model"] for row in plan["recovery_models"]] == expected[4:]
-    assert [row["price_rank"] for row in plan["price_ranked_models"]] == list(
-        range(1, 9)
-    )
-    assert len({row["company"] for row in plan["price_ranked_models"]}) == 8
-    assert {row["role_kind"] for row in plan["selected_models"]} == {
-        "independent",
-        "review",
-        "synthesis",
-    }
-    assert receipt["model_calls"] == 0
-    assert plan["plan_sha256"] == module._plan_digest(plan)
+        self.assertTrue(plan["expert_center_pool_selection_completed"])
+        self.assertTrue(plan["selected_from_top20_reasoning_pool_only"])
+        self.assertEqual(plan["expert_count"], 4)
+        self.assertEqual(plan["recovery_count"], 4)
+        expected = [
+            "company1/model-1",
+            "company3/model-3",
+            "company4/model-4",
+            "company5/model-5",
+            "company6/model-6",
+            "company7/model-7",
+            "company8/model-8",
+            "company9/model-9",
+        ]
+        self.assertEqual(
+            [row["model"] for row in plan["price_ranked_models"]], expected
+        )
+        self.assertEqual(
+            {row["model"] for row in plan["selected_models"]}, set(expected[:4])
+        )
+        self.assertEqual(
+            [row["model"] for row in plan["recovery_models"]], expected[4:]
+        )
+        self.assertEqual(
+            [row["price_rank"] for row in plan["price_ranked_models"]],
+            list(range(1, 9)),
+        )
+        self.assertEqual(
+            len({row["company"] for row in plan["price_ranked_models"]}), 8
+        )
+        self.assertEqual(
+            {row["role_kind"] for row in plan["selected_models"]},
+            {"independent", "review", "synthesis"},
+        )
+        self.assertEqual(receipt["model_calls"], 0)
+        self.assertEqual(plan["plan_sha256"], module._plan_digest(plan))
+
+    def test_materialized_plan_passes_direct_top20_execution_contract(self) -> None:
+        selector = _load_selector()
+        validator = _load_validator()
+        packet, _ = selector.materialize_top20_selection(_packet())
+        validated = validator.validate_governance_model_plan(packet)
+        self.assertTrue(validated["selected_from_top20_reasoning_pool_only"])
+        self.assertTrue(
+            all(
+                "flagship_basis" not in row
+                for row in validated["price_ranked_models"]
+            )
+        )
+
+    def test_materializer_rejects_fewer_than_eight_distinct_companies(self) -> None:
+        module = _load_selector()
+        packet = _packet()
+        plan = packet["governance_model_plan"]
+        eligible = plan["expert_selectable_candidates"]
+        for index, row in enumerate(eligible):
+            row["company"] = f"company{index % 7}"
+        plan["expert_selectable_distinct_company_count"] = 7
+        plan["expert_selectable_candidates_sha256"] = _sha(eligible)
+        material = dict(plan)
+        material.pop("plan_sha256", None)
+        plan["plan_sha256"] = _sha(material)
+
+        with self.assertRaisesRegex(
+            module.Top20PoolSelectionError,
+            "fewer than eight distinct-company",
+        ):
+            module.materialize_top20_selection(packet)
 
 
-def test_materialized_plan_passes_direct_top20_execution_contract() -> None:
-    selector = _load_selector()
-    validator = _load_validator()
-    packet, _ = selector.materialize_top20_selection(_packet())
-    validated = validator.validate_governance_model_plan(packet)
-    assert validated["selected_from_top20_reasoning_pool_only"] is True
-    assert all(
-        "flagship_basis" not in row
-        for row in validated["price_ranked_models"]
-    )
-
-
-def test_materializer_rejects_fewer_than_eight_distinct_companies() -> None:
-    module = _load_selector()
-    packet = _packet()
-    plan = packet["governance_model_plan"]
-    eligible = plan["expert_selectable_candidates"]
-    for index, row in enumerate(eligible):
-        row["company"] = f"company{index % 7}"
-    plan["expert_selectable_distinct_company_count"] = 7
-    plan["expert_selectable_candidates_sha256"] = _sha(eligible)
-    material = dict(plan)
-    material.pop("plan_sha256", None)
-    plan["plan_sha256"] = _sha(material)
-
-    try:
-        module.materialize_top20_selection(packet)
-    except module.Top20PoolSelectionError as exc:
-        assert "fewer than eight distinct-company" in str(exc)
-    else:
-        raise AssertionError("seven-company pool must fail closed")
+if __name__ == "__main__":
+    unittest.main()
