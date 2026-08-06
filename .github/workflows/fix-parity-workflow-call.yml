@@ -2,7 +2,8 @@ name: Repair Parity Patch Call
 
 on:
   push:
-    branches: [fix/planned-catalog-parity]
+    branches:
+      - "fix/planned-catalog-parity"
 
 permissions:
   contents: write
@@ -14,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: fix/planned-catalog-parity
+          ref: "fix/planned-catalog-parity"
           fetch-depth: 0
       - name: Replace brittle call patch
         run: |
@@ -22,26 +23,37 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          path = Path('.github/workflows/apply-planned-catalog-parity.yml')
-          text = path.read_text(encoding='utf-8')
-          start = text.index("          old = textwrap.dedent('''\\\n              catalog, catalog_source")
-          marker = '          path.write_text(text.replace(old, new, 1), encoding="utf-8")\n'
-          finish = text.index(marker, start) + len(marker)
-          replacement = '''          call_start = text.index(
-              "catalog, catalog_source, endpoint_source = _catalog_state(",
-              end,
+          target = Path(".github/workflows/apply-planned-catalog-parity.yml")
+          lines = target.read_text(encoding="utf-8").splitlines()
+          start = next(
+              index
+              for index, line in enumerate(lines)
+              if line.startswith("          old = textwrap.dedent(")
           )
-          args_start = text.index("args, run, task_envelope", call_start)
-          args_end = args_start + len("args, run, task_envelope")
-          text = (
-              text[:args_start]
-              + "args, run, task_envelope, plan"
-              + text[args_end:]
+          finish = next(
+              index
+              for index, line in enumerate(lines[start:], start)
+              if "path.write_text(text.replace(old, new, 1)" in line
           )
-          path.write_text(text, encoding="utf-8")
-'''
-          path.write_text(text[:start] + replacement + text[finish:], encoding='utf-8')
-          Path('.github/workflows/fix-parity-workflow-call.yml').unlink()
+          replacement = [
+              "          call_start = text.index(",
+              "              \"catalog, catalog_source, endpoint_source = _catalog_state(\",",
+              "              end,",
+              "          )",
+              "          args_start = text.index(\"args, run, task_envelope\", call_start)",
+              "          args_end = args_start + len(\"args, run, task_envelope\")",
+              "          text = (",
+              "              text[:args_start]",
+              "              + \"args, run, task_envelope, plan\"",
+              "              + text[args_end:]",
+              "          )",
+              "          path.write_text(text, encoding=\"utf-8\")",
+          ]
+          target.write_text(
+              "\n".join(lines[:start] + replacement + lines[finish + 1 :]) + "\n",
+              encoding="utf-8",
+          )
+          Path(".github/workflows/fix-parity-workflow-call.yml").unlink()
           PY
       - name: Commit repaired workflow
         run: |
