@@ -12,6 +12,9 @@ REQUIRED_EVIDENCE = (
     "model-metadata-qualified",
     "unrestricted-openrouter-provider-routing",
 )
+PRIMARY_COUNT = 4
+WARM_RECOVERY_COUNT = 4
+MINIMUM_TOP50_CALLS = PRIMARY_COUNT + WARM_RECOVERY_COUNT
 
 for _name in dir(_legacy):
     if not _name.startswith("__"):
@@ -86,11 +89,25 @@ def _open_validate_pool(
             raise Top50PoolOptimizationError(f"candidate evidence incomplete: {model}")
         seen.add(model)
         companies.add(company)
-    if len(companies) < _legacy.PRIMARY_COUNT + _legacy.RECOVERY_COUNT:
+    if len(companies) < PRIMARY_COUNT + WARM_RECOVERY_COUNT:
         raise Top50PoolOptimizationError("top-50 pool has fewer than eight distinct executable companies")
     if plan.get("top50_expert_selectable_distinct_company_count") != len(companies):
         raise Top50PoolOptimizationError("top-50 distinct-company count mismatch")
     return raw, eligible
+
+
+def _validate_top50_budget(packet: Mapping[str, Any]) -> None:
+    budget = packet.get("approved_budget")
+    if not isinstance(budget, Mapping):
+        raise Top50PoolOptimizationError("approved_budget is required for top-50 assignment")
+    calls = budget.get("calls")
+    recovery = budget.get("maximum_recovery_calls")
+    if isinstance(calls, bool) or not isinstance(calls, int) or not MINIMUM_TOP50_CALLS <= calls <= 16:
+        raise Top50PoolOptimizationError("top-50 approved calls must be between 8 and 16")
+    if recovery != WARM_RECOVERY_COUNT:
+        raise Top50PoolOptimizationError("top-50 maximum_recovery_calls must equal four")
+    if calls - WARM_RECOVERY_COUNT < PRIMARY_COUNT:
+        raise Top50PoolOptimizationError("top-50 budget must leave four primary expert calls")
 
 
 def _open_metrics(row: Mapping[str, Any], prices: Mapping[str, int]) -> tuple[int, int, int, int]:
@@ -109,15 +126,20 @@ _legacy._metrics = _open_metrics
 def materialize_top50_selection(
     packet: Mapping[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    _validate_top50_budget(packet)
     materialized, receipt = _legacy.materialize_top50_selection(packet)
     plan = dict(materialized["governance_model_plan"])
     audit = dict(plan.get("optimizer_audit") or {})
     constraints = dict(audit.get("constraints") or {})
     constraints["provider_resilience_used"] = False
     constraints["provider_routing_unrestricted"] = True
+    constraints["four_primary_calls_reserved"] = True
+    constraints["four_warm_recovery_calls_reserved"] = True
     audit["constraints"] = constraints
     audit["provider_objective_weight"] = 0
     audit["provider_routing_mode"] = "unrestricted-openrouter"
+    audit["approved_total_calls"] = int(packet["approved_budget"]["calls"])
+    audit["approved_recovery_calls"] = WARM_RECOVERY_COUNT
     plan["optimizer_audit"] = audit
     plan["provider_routing_mode"] = "unrestricted-openrouter"
     plan["provider_restrictions_applied"] = False
@@ -130,6 +152,8 @@ def materialize_top50_selection(
     updated_receipt["optimizer_audit"] = audit
     updated_receipt["provider_routing_mode"] = "unrestricted-openrouter"
     updated_receipt["provider_restrictions_applied"] = False
+    updated_receipt["approved_total_calls"] = int(packet["approved_budget"]["calls"])
+    updated_receipt["approved_recovery_calls"] = WARM_RECOVERY_COUNT
     updated_receipt.pop("receipt_sha256", None)
     updated_receipt["receipt_sha256"] = _legacy._sha(updated_receipt)
     plan["expert_center_selection_receipt"] = updated_receipt
