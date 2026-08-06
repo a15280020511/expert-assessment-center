@@ -40,62 +40,80 @@ jobs:
           python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
           python -m pip check
 
-      - name: Verify governance-plan modules and inactive legacy selectors
+      - name: Verify current architecture contract
         run: |
           set -euo pipefail
-          test -f open-model-market/v5_governance_model_plan.py
-          test -f open-model-market/v5_governed_plan_orchestrator.py
-          grep -q 'SELECTION_AUTHORITY = "decision-system-governance"' \
-            open-model-market/v5_governance_model_plan.py
-          grep -q 'model_selection_performed_locally.*False' \
-            open-model-market/v5_price_ranked_pipeline.py
-          grep -q 'model_reranking_performed_locally.*False' \
-            open-model-market/v5_price_ranked_pipeline.py
-          grep -q 'model_substitution_allowed.*False' \
-            open-model-market/v5_price_ranked_pipeline.py
-          ! grep -q 'build_price_ranked_proposal' \
-            open-model-market/v5_price_ranked_pipeline.py
-          ! grep -q 'v5_governance_runtime' \
-            open-model-market/v5_price_ranked_pipeline.py
-          ! grep -q 'v5_claude_red_team_policy' \
-            open-model-market/v5_price_ranked_pipeline.py
+          PYTHONPATH=open-model-market python - <<'PY'
+          import json
+          from pathlib import Path
+          policy = json.loads(Path('open-model-market/constitutional_policy.json').read_text())
+          assert policy['schema_version'] == 'v5-constitutional-policy-8-task-adaptive-value-ortools'
+          assert policy['candidate_pool']['pool_size'] == 50
+          assert policy['candidate_pool']['popularity_period'] == 'week'
+          optimizer = policy['optimizer_runtime']
+          assert optimizer['engine'] == 'ortools-cp-sat'
+          assert optimizer['primary_expert_count'] == 4
+          assert optimizer['warm_recovery_count'] == 4
+          assert optimizer['required_solver_status'] == 'OPTIMAL'
+          assert optimizer['selection_principles'] == [
+              'concrete-problem-concrete-analysis',
+              'dynamic-adaptation',
+              'small-effort-large-return',
+          ]
+          assert optimizer['provider_metric_used'] is False
+          matching = policy['dynamic_task_matching']
+          assert matching['recomputed_from_current_task'] is True
+          assert matching['cross_task_history_allowed'] is False
+          assert matching['keyword_routing_allowed'] is False
+          assert matching['domain_hardcoding_allowed'] is False
+          privacy = policy['expert_endpoint_privacy']
+          assert privacy['provider_routing_mode'] == 'unrestricted-openrouter'
+          assert privacy['provider_allowlist_allowed'] is False
+          assert privacy['provider_order_allowed'] is False
+          assert privacy['openrouter_selects_provider'] is True
+          assert privacy['model_substitution_allowed'] is False
+          source = Path('open-model-market/v5_price_ranked_pipeline.py').read_text()
+          assert 'provider_lock_required=False' in source
+          assert 'fetch_live_endpoint_payloads' not in source
+          PY
 
-      - name: Run targeted governance-plan tests
+      - name: Run current architecture tests
         run: |
           set -euo pipefail
-          python -m unittest \
-            tests.test_v5_governance_model_plan \
-            tests.test_v5_governed_plan_orchestrator \
-            tests.test_v5_repository_residue_audit -v
+          PYTHONPATH=open-model-market python -m unittest -v \
+            tests.test_v5_task_adaptive_scoring \
+            tests.test_top50_pool_optimizer \
+            tests.test_v5_top50_ticket_gate_capacity \
+            tests.test_v5_constitution_policy \
+            tests.test_v5_planned_catalog_scope
 
-      - name: Run governance-plan dry-run
+      - name: Run exact Top50 4+4 zero-call materialization
         run: |
           set -euo pipefail
           rm -rf v5-validation-artifacts
           mkdir -p v5-validation-artifacts
-          cp tests/fixtures/governance-ticket.json v5-validation-artifacts/ticket.json
-          python open-model-market/v5_price_ranked_pipeline.py \
-            --task "仅依据题面比较A与B，禁止工具，输出已知事实和最终建议。" \
-            --governance-plan-file v5-validation-artifacts/ticket.json \
-            --catalog-file tests/fixtures/models.json \
-            --endpoint-file tests/fixtures/endpoints.json \
-            --dry-run \
-            --maximum-total-calls 8 \
-            --maximum-recovery-calls 1 \
-            --output-dir v5-validation-artifacts
-          python - <<'PY'
+          PYTHONPATH=open-model-market:. python - <<'PY'
           import json
           from pathlib import Path
-          root = Path("v5-validation-artifacts")
-          dry = json.loads((root / "v5-dry-run.json").read_text())
-          selection = json.loads((root / "v5-price-ranked-selection.json").read_text())
-          assert dry["status"] == "validated-not-executed"
-          assert dry["model_calls"] == 0
-          assert selection["selection_authority"] == "decision-system-governance"
-          assert selection["model_selection_performed_locally"] is False
-          assert selection["model_reranking_performed_locally"] is False
-          assert selection["model_substitution_performed_locally"] is False
-          assert selection["provider_resolution_performed_locally"] is True
+          from tests.test_top50_pool_optimizer import _packet
+          from v5_governance_model_plan import validate_governance_model_plan
+          from v5_top50_pool_optimizer import materialize_top50_selection
+
+          packet, receipt = materialize_top50_selection(_packet())
+          plan = validate_governance_model_plan(packet)
+          assert receipt['model_calls'] == 0
+          assert len(plan['selected_models']) == 4
+          assert len(plan['recovery_models']) == 4
+          assert len({r['company'] for r in [*plan['selected_models'], *plan['recovery_models']]}) == 8
+          assert plan['optimizer_audit']['optimality_proven'] is True
+          assert plan['task_adaptive_scoring_completed'] is True
+          assert plan['provider_routing_mode'] == 'unrestricted-openrouter'
+          Path('v5-validation-artifacts/materialized-ticket.json').write_text(
+              json.dumps(packet, ensure_ascii=False, indent=2)
+          )
+          Path('v5-validation-artifacts/selection-receipt.json').write_text(
+              json.dumps(receipt, ensure_ascii=False, indent=2)
+          )
           PY
 
       - name: Upload V5 validation evidence
