@@ -1,5 +1,5 @@
 {
-  "schema_version": "v5-constitutional-policy-6-top50-ortools",
+  "schema_version": "v5-constitutional-policy-7-top50-ortools-open-provider",
   "authority": "CONSTITUTION.md",
   "fail_closed": true,
   "free_first_testing": {
@@ -40,20 +40,23 @@
     "daily_or_monthly_can_replace_primary_pool": false,
     "complete_signed_pool_required": true,
     "expert_center_can_select_outside_signed_pool": false,
+    "provider_endpoint_qualification_required": false,
+    "zdr_provider_qualification_required": false,
     "legacy_top20_role": "explicit-rollback-compatibility-only"
   },
   "governance_chain": {
     "sequence": [
       "deterministic_task_envelope",
       "governance_signed_weekly_top50_reasoning_pool",
-      "eligible_exact_endpoint_filter",
+      "model_metadata_filter",
       "expert_center_ortools_cp_sat_assignment",
       "networkx_dag_validation",
-      "expert_execution",
+      "openrouter_unrestricted_provider_execution",
       "audit_artifact_attestation"
     ],
     "candidate_pool_authority": "decision-system-governance",
     "assignment_authority": "expert-assessment-center-ortools-cp-sat",
+    "provider_routing_authority": "openrouter-unrestricted",
     "claude_mechanism_enabled": false,
     "claude_calls_per_task": 0,
     "gpt_selection_calls_per_task": 0,
@@ -79,15 +82,15 @@
       "global_model_uniqueness",
       "global_company_uniqueness",
       "signed_top50_pool_membership",
-      "qualified_endpoint_required",
+      "model_metadata_compatibility",
       "bounded_call_capacity"
     ],
     "objective_components": [
       "estimated_price_rank",
       "weekly_popularity_rank",
-      "reasoning_intelligence_rank",
-      "qualified_provider_resilience"
+      "reasoning_intelligence_rank"
     ],
+    "provider_metric_used": false,
     "non_optimal_action": "fail_closed"
   },
   "degraded_delivery": {
@@ -102,7 +105,8 @@
     "evidence_integrity_required": true,
     "company_uniqueness_required": true,
     "tool_prohibition_required": true,
-    "provider_lock_required": true,
+    "provider_lock_required": false,
+    "unrestricted_provider_routing_required": true,
     "request_and_cost_ledgers_required": true,
     "missing_failed_and_degraded_items_must_be_disclosed": true,
     "automatic_extra_paid_calls_after_threshold_reached": false,
@@ -111,15 +115,15 @@
   },
   "dynamic_task_matching": {
     "required": true,
-    "principle": "current-task-only-weekly-top50-cost-quality-resilience-optimization",
+    "principle": "current-task-only-weekly-top50-cost-quality-optimization",
     "planner": "expert-center-ortools-cp-sat",
     "recomputed_from_current_task": true,
     "cross_task_history_allowed": false,
-    "live_complete_endpoint_catalog_required": true,
+    "live_complete_endpoint_catalog_required": false,
     "weekly_popularity_window": 50,
     "intelligence_rank_is_quality_attribute": true,
     "estimated_task_cost_formula_required": true,
-    "primary_objective": "best_cost_effectiveness_subject_to_capability_privacy_company_and_endpoint_constraints",
+    "primary_objective": "best_cost_effectiveness_subject_to_capability_company_and_model_constraints",
     "team_size": {
       "primary": 4,
       "warm_recovery": 4,
@@ -133,7 +137,7 @@
       "final_synthesis"
     ],
     "dynamically_determined": [
-      "eligible_model_endpoints",
+      "eligible_models",
       "estimated_prompt_tokens",
       "estimated_completion_tokens",
       "estimated_task_cost",
@@ -141,9 +145,10 @@
       "primary_roles",
       "warm_recovery_models",
       "ordered_standby_models",
-      "selected_provider_whitelists",
       "model_company_deduplication"
     ],
+    "provider_selection_dynamically_determined_by_expert_center": false,
+    "provider_selection_delegated_to_openrouter": true,
     "fixed_topology_allowed": true,
     "fixed_role_family_allowed": true,
     "fixed_professional_domain_allowed": false,
@@ -186,7 +191,6 @@
       "current_task_ticket",
       "provided_evidence_bundle",
       "governance_signed_top50_candidate_pool",
-      "current_model_endpoint_catalog",
       "legal_prior_outputs_within_same_task"
     ],
     "external_fact_collection_allowed": false,
@@ -232,7 +236,7 @@
       "timeout",
       "no_model_loop",
       "no_tools",
-      "audited_provider_whitelist"
+      "fixed_model_identity"
     ]
   },
   "expert_endpoint_privacy": {
@@ -240,17 +244,20 @@
       "expert_execution",
       "expert_recovery"
     ],
-    "zdr_required": true,
-    "data_collection": "deny",
-    "live_zdr_endpoint_inventory_required": true,
-    "catalog_and_request_policy_must_match": true,
-    "hardcoded_provider_exclusions_allowed": false,
+    "provider_routing_mode": "unrestricted-openrouter",
+    "zdr_required": false,
+    "data_collection_filter_applied": false,
+    "live_zdr_endpoint_inventory_required": false,
+    "catalog_and_request_provider_policy_must_match": false,
+    "provider_allowlist_allowed": false,
+    "provider_order_allowed": false,
+    "provider_ignore_list_allowed": false,
+    "provider_price_filter_allowed": false,
+    "provider_quantization_filter_allowed": false,
     "provider_fallback_allowed": true,
-    "provider_fallback_scope": "same-model-audited-qualified-provider-whitelist",
-    "unrestricted_provider_fallback_allowed": false,
-    "provider_only_and_order_must_match": true,
-    "primary_provider_must_be_first": true,
-    "missing_or_empty_inventory_action": "fail_closed_before_expert_calls"
+    "unrestricted_provider_fallback_allowed": true,
+    "openrouter_selects_provider": true,
+    "model_substitution_allowed": false
   },
   "failure_evidence": {
     "failed_result_must_be_persisted": true,
@@ -266,8 +273,9 @@
     "remaining_qualified_candidates_role": "ordered-standby",
     "candidates_are_preselected_not_calls": true,
     "actual_recovery_calls_remain_finitely_bounded": true,
+    "provider_routing_mode": "unrestricted-openrouter",
     "provider_fallback_allowed": true,
-    "provider_fallback_scope": "same-model-audited-qualified-provider-whitelist",
+    "unrestricted_provider_fallback_allowed": true,
     "model_recovery_companies_must_be_globally_unique": true,
     "hardcoded_model_or_provider_blacklist_allowed": false,
     "stop_when_degraded_success_threshold_is_reached": true
@@ -291,7 +299,7 @@
     "requires_full_success_not_degraded_success": true,
     "requires_signed_weekly_top50_pool": true,
     "requires_ortools_optimality_proof": true,
-    "requires_audited_provider_whitelists": true,
+    "requires_unrestricted_provider_routing": true,
     "automatic_merge_allowed": false,
     "automatic_production_ref_move_allowed": false
   },
