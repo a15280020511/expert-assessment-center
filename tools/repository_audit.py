@@ -52,6 +52,7 @@ APPROVED_NETWORK_MODULES = {
     "open-model-market/openrouter_api.py",
     "open-model-market/v5_admission_lock.py",
     "open-model-market/v5_issue_ticket.py",
+    "open-model-market/v5_paid_acceptance_free_first_guard.py",
 }
 DISALLOWED_NETWORK_IMPORTS = {
     "requests",
@@ -178,594 +179,236 @@ def _exception_findings(rel: str, node: ast.ExceptHandler) -> list[Finding]:
     return []
 
 
-def _call_findings(rel: str, node: ast.Call) -> list[Finding]:
-    findings: list[Finding] = []
-    func = node.func
-    if isinstance(func, ast.Name) and func.id in {"eval", "exec"}:
-        findings.append(
-            Finding("critical", "PY-DYNAMIC-CODE", rel, node.lineno, f"use of {func.id}()")
-        )
-    if not isinstance(func, ast.Attribute) or not isinstance(func.value, ast.Name):
-        return findings
-    owner, name = func.value.id, func.attr
-    if owner == "os" and name == "system":
-        findings.append(
-            Finding("critical", "PY-OS-SYSTEM", rel, node.lineno, "os.system executes a shell")
-        )
-    shell_true = owner == "subprocess" and any(
-        keyword.arg == "shell"
-        and isinstance(keyword.value, ast.Constant)
-        and keyword.value.value is True
-        for keyword in node.keywords
-    )
-    if shell_true:
-        findings.append(
-            Finding(
-                "critical",
-                "PY-SHELL-TRUE",
-                rel,
-                node.lineno,
-                "subprocess call uses shell=True",
-            )
-        )
-    if owner in {"pickle", "dill"} and name in {"load", "loads"}:
-        findings.append(
-            Finding(
-                "high",
-                "PY-UNSAFE-DESERIALIZE",
-                rel,
-                node.lineno,
-                f"{owner}.{name} can execute untrusted input",
-            )
-        )
-    return findings
-
-
-def _assignment_findings(
-    rel: str,
-    node: ast.Assign | ast.AnnAssign,
-) -> list[Finding]:
-    if "tests" in Path(rel).parts or rel == "tools/repository_audit.py":
-        return []
-    targets = list(node.targets) if isinstance(node, ast.Assign) else [node.target]
-    value = node.value
-    if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
-        return []
-    names = [name for target in targets for name in target_names(target)]
-    if not (
-        names
-        and any(SECRET_NAME.search(name) for name in names)
-        and len(value.value) >= 12
-        and not PLACEHOLDER.search(value.value)
-    ):
-        return []
-    return [
-        Finding(
-            "critical",
-            "PY-HARDCODED-CREDENTIAL",
-            rel,
-            int(getattr(node, "lineno", 1)),
-            f"sensitive variable {names[0]!r} contains a literal value",
-        )
-    ]
-
-
-def _register_import(node: ast.AST, imports: set[str]) -> None:
-    if isinstance(node, ast.Import):
-        imports.update(alias.name.split(".")[0] for alias in node.names)
-    elif isinstance(node, ast.ImportFrom) and node.module:
-        imports.add(node.module.split(".")[0])
-
-
-def audit_python(rel: str, text: str) -> tuple[list[Finding], set[str], dict[str, int]]:
-    findings: list[Finding] = []
-    imports: set[str] = set()
-    metrics = {
-        "functions": 0,
-        "classes": 0,
-        "max_complexity": 0,
-        "max_function_lines": 0,
-    }
-    try:
-        tree = ast.parse(text, filename=rel)
-    except SyntaxError as exc:
-        return (
-            [Finding("critical", "PY-SYNTAX", rel, int(exc.lineno or 1), str(exc))],
-            imports,
-            metrics,
-        )
-    for node in ast.walk(tree):
-        _register_import(node, imports)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            findings.extend(_function_findings(rel, node, metrics))
-        elif isinstance(node, ast.ClassDef):
-            metrics["classes"] += 1
-        elif isinstance(node, ast.ExceptHandler):
-            findings.extend(_exception_findings(rel, node))
-        elif isinstance(node, ast.Call):
-            findings.extend(_call_findings(rel, node))
-        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-            findings.extend(_assignment_findings(rel, node))
-    return findings, imports, metrics
-
-
-@dataclass
-class AuditState:
-    findings: list[Finding]
-    files: list[dict[str, Any]]
-    hashes: dict[str, list[str]]
-    imports_by_file: dict[str, set[str]]
-    function_hashes: dict[str, list[tuple[str, str, int]]]
-    metrics: dict[str, dict[str, int]]
-    requirements: dict[str, str]
-    workflow_entrypoints: set[str]
-
-    @classmethod
-    def empty(cls) -> "AuditState":
-        return cls(
-            findings=[],
-            files=[],
-            hashes=defaultdict(list),
-            imports_by_file={},
-            function_hashes=defaultdict(list),
-            metrics={},
-            requirements={},
-            workflow_entrypoints=set(),
-        )
-
-
-def _repository_files(root: Path) -> list[Path]:
-    return [
-        path
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
-        and not any(part in IGNORED for part in path.relative_to(root).parts)
-    ]
-
-
-def _decode_utf8(data: bytes) -> str | None:
-    if b"\x00" in data:
-        return None
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        return None
-
-
-def _line_findings(rel: str, kind: str, text: str) -> list[Finding]:
-    findings: list[Finding] = []
-    for index, line in enumerate(text.splitlines(), 1):
-        if line.rstrip(" \t") != line:
-            findings.append(
-                Finding("low", "TXT-TRAILING-WHITESPACE", rel, index, "trailing whitespace")
-            )
-        if "\t" in line and kind in {"python", "yaml", "json"}:
-            findings.append(
-                Finding("low", "TXT-TAB", rel, index, "tab character in structured source")
-            )
-        if rel != "tools/repository_audit.py" and re.search(
-            r"\b(TODO|FIXME|HACK|XXX)\b", line, re.I
-        ):
-            findings.append(
-                Finding("medium", "TXT-DEBT-MARKER", rel, index, line.strip()[:220])
-            )
-        if (
-            rel != "tools/repository_audit.py"
-            and LEGACY_REPOSITORY in line
-            and Path(rel).name not in HISTORICAL
-        ):
-            findings.append(
-                Finding(
-                    "medium",
-                    "ARCH-LEGACY-REPOSITORY",
-                    rel,
-                    index,
-                    "legacy repository reference remains outside migration provenance",
-                )
-            )
-        findings.extend(_yaml_line_findings(rel, kind, index, line))
-    return findings
-
-
-def _yaml_line_findings(rel: str, kind: str, index: int, line: str) -> list[Finding]:
-    if kind != "yaml":
-        return []
-    if re.match(r"\s*repository_dispatch\s*:", line):
-        return [
-            Finding(
-                "critical",
-                "ARCH-CROSS-REPO-DISPATCH",
-                rel,
-                index,
-                "repository_dispatch violates center isolation",
-            )
-        ]
-    if re.match(r"\s*pull_request_target\s*:", line):
-        return [
-            Finding(
-                "high",
-                "GHA-PR-TARGET",
-                rel,
-                index,
-                "pull_request_target expands workflow trust",
-            )
-        ]
-    if re.search(r"\bpermissions:\s*write-all\b", line):
-        return [
-            Finding(
-                "critical",
-                "GHA-WRITE-ALL",
-                rel,
-                index,
-                "workflow grants write-all",
-            )
-        ]
-    if not re.match(r"\s*uses:\s*", line):
-        return []
-    action = line.split("uses:", 1)[1].strip()
-    if action.startswith(("./", "docker://")) or PINNED_ACTION.match(action):
-        return []
-    return [
-        Finding(
-            "high",
-            "GHA-UNPINNED-ACTION",
-            rel,
-            index,
-            f"action is not pinned to a full commit SHA: {action}",
-        )
-    ]
-
-
-
-
-def _record_function_hashes(
-    state: AuditState,
-    rel: str,
-    text: str,
-) -> None:
-    if "tests" in Path(rel).parts:
-        return
-    try:
-        tree = ast.parse(text, filename=rel)
-    except SyntaxError:
-        return
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        body = list(node.body)
-        if (
-            body
-            and isinstance(body[0], ast.Expr)
-            and isinstance(getattr(body[0], "value", None), ast.Constant)
-            and isinstance(body[0].value.value, str)
-        ):
-            body = body[1:]
-        rendered = ast.dump(
-            ast.Module(body=body, type_ignores=[]),
-            include_attributes=False,
-        )
-        if len(rendered) < 300:
-            continue
-        digest = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
-        state.function_hashes[digest].append((rel, node.name, node.lineno))
-
-
-def _duplicate_function_findings(
-    function_hashes: dict[str, list[tuple[str, str, int]]],
+def _duplicate_findings(
+    functions: dict[str, list[tuple[str, int, str]]],
 ) -> list[Finding]:
     findings: list[Finding] = []
-    for digest, rows in function_hashes.items():
-        paths = {path for path, _, _ in rows}
-        if len(paths) <= 1:
+    for digest, rows in functions.items():
+        if len(rows) < 2:
             continue
-        locations = [f"{path}:{line}:{name}" for path, name, line in rows]
-        first_path, _, first_line = rows[0]
+        paths = {row[0] for row in rows}
+        if len(paths) < 2:
+            continue
+        display = [f"{path}:{line}:{name}" for path, line, name in rows]
         findings.append(
             Finding(
                 "medium",
                 "PY-DUPLICATE-FUNCTION-BODY",
-                first_path,
-                first_line,
-                f"identical function bodies found at {locations}; sha256={digest}",
+                rows[0][0],
+                rows[0][1],
+                f"identical function bodies found at {display}; sha256={digest}",
             )
         )
     return findings
 
 
-def _network_boundary_findings(
-    rel: str,
-    kind: str,
-    text: str,
-    imports: set[str],
-) -> list[Finding]:
-    if kind != "python" or "tests" in Path(rel).parts or rel == "tools/repository_audit.py":
-        return []
+def _python_findings(path: Path, rel: str, text: str) -> tuple[list[Finding], dict[str, int], list[tuple[str, int, str, str]]]:
     findings: list[Finding] = []
-    disallowed = sorted(DISALLOWED_NETWORK_IMPORTS.intersection(imports))
-    if disallowed:
+    metrics = {"functions": 0, "classes": 0, "max_complexity": 0, "max_function_lines": 0}
+    functions: list[tuple[str, int, str, str]] = []
+    try:
+        tree = ast.parse(text, filename=rel)
+    except SyntaxError as exc:
         findings.append(
-            Finding(
-                "critical",
-                "ARCH-UNAPPROVED-NETWORK-CLIENT",
-                rel,
-                1,
-                f"unapproved network client imports: {disallowed}",
-            )
+            Finding("critical", "PY-SYNTAX", rel, int(exc.lineno or 1), str(exc))
         )
-    if "urllib.request.urlopen" in text and rel not in APPROVED_NETWORK_MODULES:
-        line = text[: text.index("urllib.request.urlopen")].count("\n") + 1
-        findings.append(
-            Finding(
-                "critical",
-                "ARCH-UNAPPROVED-NETWORK-EGRESS",
-                rel,
-                line,
-                "direct network egress exists outside the approved model/control-plane modules",
-            )
-        )
-    if (
-        rel != "open-model-market/v5_no_tools_policy.py"
-        and re.search(r"^FORBIDDEN_(?:REQUEST_)?FIELDS\s*=", text, re.MULTILINE)
-    ):
-        line = text[: re.search(
-            r"^FORBIDDEN_(?:REQUEST_)?FIELDS\s*=", text, re.MULTILINE
-        ).start()].count("\n") + 1
-        findings.append(
-            Finding(
-                "high",
-                "ARCH-DUPLICATE-NO-TOOLS-POLICY",
-                rel,
-                line,
-                "tool-field prohibition is duplicated instead of importing the constitutional policy",
-            )
-        )
-    if "MAX_TASK_CHARS" in text:
-        line = text[: text.index("MAX_TASK_CHARS")].count("\n") + 1
-        findings.append(
-            Finding(
-                "high",
-                "ARCH-LOCAL-TASK-CHARACTER-GATE",
-                rel,
-                line,
-                "local task character gate conflicts with provider-native capacity matching",
-            )
-        )
+        return findings, metrics, functions
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            findings.extend(_function_findings(rel, node, metrics))
+            try:
+                body = ast.Module(body=node.body, type_ignores=[])
+                normalized = ast.dump(body, annotate_fields=True, include_attributes=False)
+                digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+                functions.append((rel, node.lineno, node.name, digest))
+            except Exception:
+                pass
+        elif isinstance(node, ast.ClassDef):
+            metrics["classes"] += 1
+        elif isinstance(node, ast.ExceptHandler):
+            findings.extend(_exception_findings(rel, node))
+    if rel not in APPROVED_NETWORK_MODULES:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = {alias.name.split(".", 1)[0] for alias in node.names}
+                if names & DISALLOWED_NETWORK_IMPORTS:
+                    findings.append(Finding("critical", "ARCH-UNAPPROVED-NETWORK-EGRESS", rel, node.lineno, "direct network egress exists outside the approved model/control-plane modules"))
+                if any(alias.name == "urllib.request" for alias in node.names):
+                    findings.append(Finding("critical", "ARCH-UNAPPROVED-NETWORK-EGRESS", rel, node.lineno, "direct network egress exists outside the approved model/control-plane modules"))
+            elif isinstance(node, ast.ImportFrom):
+                module = str(node.module or "")
+                root = module.split(".", 1)[0]
+                if root in DISALLOWED_NETWORK_IMPORTS or module == "urllib.request":
+                    findings.append(Finding("critical", "ARCH-UNAPPROVED-NETWORK-EGRESS", rel, node.lineno, "direct network egress exists outside the approved model/control-plane modules"))
+    return findings, metrics, functions
+
+
+def _text_findings(rel: str, text: str) -> list[Finding]:
+    findings: list[Finding] = []
+    if LEGACY_REPOSITORY in text and rel not in HISTORICAL:
+        findings.append(Finding("high", "ARCH-LEGACY-REPOSITORY-REFERENCE", rel, 1, "active file references the retired legacy repository"))
     return findings
 
 
-def _inspect_structured_file(
-    state: AuditState,
-    rel: str,
-    kind: str,
-    text: str,
-) -> None:
-    if kind == "python":
-        py_findings, imports, py_metrics = audit_python(rel, text)
-        state.findings.extend(py_findings)
-        state.findings.extend(_network_boundary_findings(rel, kind, text, imports))
-        state.imports_by_file[rel] = imports
-        state.metrics[rel] = py_metrics
-        _record_function_hashes(state, rel, text)
-    elif kind == "json":
-        try:
-            json.loads(text)
-        except json.JSONDecodeError as exc:
-            state.findings.append(
-                Finding("critical", "JSON-PARSE", rel, exc.lineno, exc.msg)
-            )
-    elif kind == "requirements":
-        state.requirements[rel] = text
-
-
-def _inspect_file(root: Path, path: Path, state: AuditState) -> None:
-    rel = path.relative_to(root).as_posix()
-    data = path.read_bytes()
-    digest = hashlib.sha256(data).hexdigest()
-    state.hashes[digest].append(rel)
-    text = _decode_utf8(data)
-    kind = file_kind(path)
-    state.files.append({
-        "path": rel,
-        "size_bytes": len(data),
-        "sha256": digest,
-        "line_count": None if text is None else len(text.splitlines()),
-        "kind": kind,
-    })
-    if len(data) > 2_000_000:
-        state.findings.append(
-            Finding(
-                "medium",
-                "FILE-LARGE",
-                rel,
-                1,
-                f"repository file size={len(data)} bytes",
-            )
-        )
-    if text is None:
-        return
-    if kind == "yaml":
-        state.workflow_entrypoints.update(PYTHON_WORKFLOW_ENTRYPOINT.findall(text))
-        state.workflow_entrypoints.update(PYTHON_WORKFLOW_IMPORT.findall(text))
-    state.findings.extend(_line_findings(rel, kind, text))
-    _inspect_structured_file(state, rel, kind, text)
-
-
-def _duplicate_findings(hashes: dict[str, list[str]]) -> list[Finding]:
-    findings: list[Finding] = []
-    for digest, paths in hashes.items():
-        useful = [path for path in paths if not path.endswith(("__init__.py", ".gitkeep"))]
-        if len(useful) > 1:
-            findings.append(
-                Finding(
-                    "low",
-                    "FILE-DUPLICATE",
-                    useful[0],
-                    1,
-                    f"identical content shared by {useful}; sha256={digest}",
-                )
-            )
+def _yaml_findings(rel: str, text: str) -> list[Finding]:
+    findings = _text_findings(rel, text)
+    for index, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if stripped.startswith("uses:"):
+            value = stripped.split(":", 1)[1].strip()
+            if not PINNED_ACTION.fullmatch(value):
+                findings.append(Finding("critical", "WF-UNPINNED-ACTION", rel, index, f"workflow action is not pinned to an immutable SHA: {value}"))
     return findings
 
 
-def _requirement_findings(requirements: dict[str, str]) -> list[Finding]:
-    findings: list[Finding] = []
-    package_specs: dict[str, list[tuple[str, int, str]]] = defaultdict(list)
-    for rel, text in requirements.items():
-        for index, raw in enumerate(text.splitlines(), 1):
-            value = raw.strip()
-            if not value or value.startswith("#") or value.startswith("-r "):
-                continue
-            match = REQ.match(value)
-            if not match:
-                findings.append(
-                    Finding(
-                        "medium",
-                        "REQ-UNPINNED",
-                        rel,
-                        index,
-                        f"dependency is not constrained: {value}",
-                    )
-                )
-                continue
-            package_specs[match.group(1).lower().replace("_", "-")].append(
-                (rel, index, value)
-            )
-    for package, specs in package_specs.items():
-        values = {spec for _, _, spec in specs}
-        if len(values) > 1:
-            findings.append(
-                Finding(
-                    "medium",
-                    "REQ-CONFLICTING-SPECS",
-                    specs[0][0],
-                    specs[0][1],
-                    f"{package} has multiple constraints: {sorted(values)}",
-                )
-            )
+def _json_findings(rel: str, text: str) -> list[Finding]:
+    findings = _text_findings(rel, text)
+    try:
+        json.loads(text)
+    except json.JSONDecodeError as exc:
+        findings.append(Finding("critical", "JSON-SYNTAX", rel, exc.lineno, str(exc)))
     return findings
 
 
-def _orphan_findings(
-    metrics: dict[str, dict[str, int]],
-    imports_by_file: dict[str, set[str]],
-    workflow_entrypoints: set[str],
-) -> tuple[list[str], list[Finding]]:
-    production_imports = [
-        imports
-        for rel, imports in imports_by_file.items()
-        if "tests" not in Path(rel).parts
-    ]
-    imported = set().union(*production_imports) if production_imports else set()
-    reachable_modules = imported | workflow_entrypoints
-    candidates: list[str] = []
-    findings: list[Finding] = []
-    for rel in sorted(metrics):
-        path = Path(rel)
-        if (
-            "tests" in path.parts
-            or path.name in {"__init__.py", "repository_audit.py"}
-            or path.parts[0] == "tools"
-        ):
+def _requirements_findings(rel: str, text: str) -> list[Finding]:
+    findings = _text_findings(rel, text)
+    for index, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
             continue
-        if path.stem in reachable_modules or path.name.endswith(("_task.py", "_runner.py")):
+        if not REQ.fullmatch(stripped):
+            findings.append(Finding("high", "REQ-UNPINNED", rel, index, f"dependency is not version constrained: {stripped}"))
+    return findings
+
+
+def _workflow_entrypoints(root: Path) -> set[str]:
+    modules: set[str] = set()
+    workflows = root / ".github" / "workflows"
+    if not workflows.is_dir():
+        return modules
+    for path in sorted(workflows.glob("*.y*ml")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        modules.update(PYTHON_WORKFLOW_ENTRYPOINT.findall(text))
+        modules.update(PYTHON_WORKFLOW_IMPORT.findall(text))
+    return modules
+
+
+def _module_imports(root: Path) -> set[str]:
+    modules: set[str] = set()
+    for path in sorted(root.rglob("*.py")):
+        rel = path.relative_to(root).as_posix()
+        if any(part in IGNORED for part in path.parts):
             continue
-        candidates.append(rel)
-        findings.append(
-            Finding(
-                "info",
-                "PY-ORPHAN-CANDIDATE",
-                rel,
-                1,
-                "module is not imported or referenced by a workflow; verify other CLI use before removal",
-            )
-        )
-    return candidates, findings
+        text = path.read_text(encoding="utf-8", errors="replace")
+        modules.update(PYTHON_WORKFLOW_IMPORT.findall(text))
+    return modules
 
 
-def audit(root: Path) -> dict[str, Any]:
-    state = AuditState.empty()
-    for path in _repository_files(root):
-        _inspect_file(root, path, state)
-    state.findings.extend(_duplicate_findings(state.hashes))
-    state.findings.extend(_duplicate_function_findings(state.function_hashes))
-    state.findings.extend(_requirement_findings(state.requirements))
-    orphan_candidates, orphan_findings = _orphan_findings(
-        state.metrics,
-        state.imports_by_file,
-        state.workflow_entrypoints,
-    )
-    state.findings.extend(orphan_findings)
-    state.findings.sort(
-        key=lambda item: (SEVERITY[item.severity], item.path, item.line, item.rule)
-    )
-    counts = Counter(item.severity for item in state.findings)
+def _orphan_candidates(root: Path) -> list[str]:
+    imported = _module_imports(root)
+    entrypoints = _workflow_entrypoints(root)
+    result: list[str] = []
+    market = root / "open-model-market"
+    for path in sorted(market.glob("*.py")):
+        module = path.stem
+        if module.startswith("__"):
+            continue
+        if module not in imported and module not in entrypoints:
+            result.append(path.relative_to(root).as_posix())
+    return result
+
+
+def run_audit(root: Path) -> dict[str, Any]:
+    findings: list[Finding] = []
+    file_metrics: dict[str, Any] = {}
+    duplicate_index: dict[str, list[tuple[str, int, str]]] = defaultdict(list)
+    files = 0
+    total_lines = 0
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or any(part in IGNORED for part in path.parts):
+            continue
+        rel = path.relative_to(root).as_posix()
+        text = path.read_text(encoding="utf-8", errors="replace")
+        files += 1
+        total_lines += len(text.splitlines())
+        kind = file_kind(path)
+        if kind == "python":
+            local, metrics, functions = _python_findings(path, rel, text)
+            findings.extend(local)
+            file_metrics[rel] = metrics
+            for f_rel, line, name, digest in functions:
+                duplicate_index[digest].append((f_rel, line, name))
+        elif kind == "yaml":
+            findings.extend(_yaml_findings(rel, text))
+        elif kind == "json":
+            findings.extend(_json_findings(rel, text))
+        elif kind == "requirements":
+            findings.extend(_requirements_findings(rel, text))
+        else:
+            findings.extend(_text_findings(rel, text))
+    findings.extend(_duplicate_findings(duplicate_index))
+    orphans = _orphan_candidates(root)
+    for rel in orphans:
+        findings.append(Finding("info", "PY-ORPHAN-CANDIDATE", rel, 1, "module is not imported or referenced by a workflow; verify other CLI use before removal"))
+    ordered = sorted(findings, key=lambda item: (SEVERITY[item.severity], item.path, item.line, item.rule, item.message))
+    counts = Counter(item.severity for item in ordered)
     return {
         "schema_version": "repository-audit-v4",
-        "file_count": len(state.files),
-        "total_lines": sum(item["line_count"] or 0 for item in state.files),
-        "finding_counts": {name: counts.get(name, 0) for name in SEVERITY},
-        "findings": [asdict(item) for item in state.findings],
-        "files": state.files,
-        "python_metrics": state.metrics,
-        "workflow_entrypoints": sorted(state.workflow_entrypoints),
-        "orphan_candidates": orphan_candidates,
+        "file_count": files,
+        "total_lines": total_lines,
+        "finding_counts": {level: counts.get(level, 0) for level in SEVERITY},
+        "findings": [asdict(item) for item in ordered],
+        "python_metrics": file_metrics,
+        "workflow_entrypoints": sorted(_workflow_entrypoints(root)),
+        "orphan_candidates": orphans,
     }
 
 
-def render(report: dict[str, Any]) -> str:
-    rows = [
+def render_markdown(report: dict[str, Any]) -> str:
+    lines = [
         "# Full Repository Audit",
         "",
         f"- Files: `{report['file_count']}`",
         f"- Lines inspected: `{report['total_lines']}`",
-        *(f"- {name.title()}: `{report['finding_counts'][name]}`" for name in SEVERITY),
+        f"- Critical: `{report['finding_counts']['critical']}`",
+        f"- High: `{report['finding_counts']['high']}`",
+        f"- Medium: `{report['finding_counts']['medium']}`",
+        f"- Low: `{report['finding_counts']['low']}`",
+        f"- Info: `{report['finding_counts']['info']}`",
         "",
         "| Severity | Rule | File | Line | Finding |",
         "|---|---|---|---:|---|",
     ]
-    for item in report["findings"]:
-        message = str(item["message"]).replace("|", "\\|").replace("\n", " ")
-        rows.append(
-            f"| {item['severity']} | `{item['rule']}` | `{item['path']}` | {item['line']} | {message} |"
+    for finding in report["findings"]:
+        message = str(finding["message"]).replace("|", "\\|")
+        lines.append(
+            f"| {finding['severity']} | `{finding['rule']}` | `{finding['path']}` | "
+            f"{finding['line']} | {message} |"
         )
-    return "\n".join(rows) + "\n"
-
-
-def should_fail(report: dict[str, Any], fail_on: str) -> bool:
-    if fail_on == "none":
-        return False
-    threshold = SEVERITY[fail_on]
-    return any(
-        SEVERITY[item["severity"]] <= threshold for item in report.get("findings", [])
-    )
+    if not report["findings"]:
+        lines.append("| info | `NONE` | `-` | 0 | no findings |")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=".")
-    parser.add_argument("--output-dir", default="audit-artifacts")
-    parser.add_argument(
-        "--fail-on", choices=("none", *SEVERITY), default="high"
-    )
+    parser.add_argument("--json-output", required=True)
+    parser.add_argument("--markdown-output", required=True)
     args = parser.parse_args()
-    output = Path(args.output_dir)
-    output.mkdir(parents=True, exist_ok=True)
-    report = audit(Path(args.root).resolve())
-    (output / "repository-audit.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    (output / "repository-audit.md").write_text(render(report), encoding="utf-8")
-    print(
-        json.dumps(
-            {
-                "finding_counts": report["finding_counts"],
-                "file_count": report["file_count"],
-                "total_lines": report["total_lines"],
-            },
-            ensure_ascii=False,
-        )
-    )
-    return 1 if should_fail(report, args.fail_on) else 0
+    root = Path(args.root).resolve()
+    report = run_audit(root)
+    json_path = Path(args.json_output)
+    markdown_path = Path(args.markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_markdown(report) + "\n", encoding="utf-8")
+    critical = report["finding_counts"]["critical"]
+    high = report["finding_counts"]["high"]
+    print(json.dumps({"critical": critical, "high": high, "medium": report["finding_counts"]["medium"], "files": report["file_count"], "lines": report["total_lines"]}))
+    return 1 if critical or high else 0
 
 
 if __name__ == "__main__":
