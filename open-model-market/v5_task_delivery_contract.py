@@ -15,6 +15,14 @@ for _export_name in dir(_impl):
     if not _export_name.startswith("__"):
         globals()[_export_name] = getattr(_impl, _export_name)
 
+_MUST_CONTAIN_H2_RE = re.compile(
+    r"(?:必须|应当|需要)(?:严格)?包含"
+    r"(?P<count>[零一二三四五六七八九十百0-9]+)个"
+    r"(?:Markdown)?二级标题\s*[：:]\s*"
+    r"(?P<headings>[^\n]+)",
+    re.IGNORECASE,
+)
+
 
 def _heading_list_payload(value: str) -> str:
     """Return only the immediate heading list, before trailing requirements."""
@@ -65,12 +73,41 @@ def _inline_inferred_markdown_headings(task: str) -> list[str]:
     return _impl._valid_heading_sequence(values, len(values))
 
 
+def _must_contain_markdown_headings(task: str) -> list[str]:
+    """Parse concrete Chinese wording such as “必须包含四个二级标题：…”."""
+    match = _MUST_CONTAIN_H2_RE.search(str(task or ""))
+    if not match:
+        return []
+    expected = _impl._chinese_integer(match.group("count"))
+    if expected is None or expected < 2 or expected > 128:
+        return []
+    raw = _heading_list_payload(match.group("headings"))
+    numbered = [
+        sequence
+        for sequence in _impl._numbered_sequences(raw)
+        if len(sequence) == expected
+    ]
+    if numbered:
+        valid = _impl._valid_heading_sequence(numbered[0], expected)
+        if valid:
+            return valid
+    values = [
+        value.strip()
+        for value in re.split(r"[；;、，,]", raw)
+        if value.strip()
+    ]
+    return _impl._valid_heading_sequence(values, expected)
+
+
 def extract_explicit_markdown_contract(task: str) -> dict[str, Any]:
     headings = _inline_delimited_markdown_headings(task)
     policy = "explicit-format-text-only-inline-delimited"
     if not headings:
         headings = _inline_inferred_markdown_headings(task)
         policy = "explicit-format-text-only-inline-inferred-count"
+    if not headings:
+        headings = _must_contain_markdown_headings(task)
+        policy = "explicit-format-text-only-must-contain-h2"
     if not headings:
         return _impl._extract_explicit_markdown_contract_legacy(task)
     return {
