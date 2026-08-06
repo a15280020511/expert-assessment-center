@@ -23,6 +23,11 @@ from v5_model_company import canonical_model_company
 DEFAULT_ENDPOINT_FETCH_WORKERS = 12
 MAX_ENDPOINT_FETCH_WORKERS = 16
 ZDR_ENDPOINTS_URL = "https://openrouter.ai/api/v1/endpoints/zdr"
+_NON_BASELINE_SERVICE_TIERS = ("/flex", "/batch")
+_SERVICE_TIER_VERIFICATION_FIELDS = (
+    "service_tier_compatibility_verified",
+    "model_service_tier_supported",
+)
 
 
 def _zdr_endpoint_keys(payload: Mapping[str, Any]) -> frozenset[tuple[str, str]]:
@@ -58,6 +63,20 @@ def _fetch_zdr_endpoint_keys(run: Any) -> frozenset[tuple[str, str]]:
     return _zdr_endpoint_keys(payload)
 
 
+def _baseline_service_compatible(endpoint: Mapping[str, Any]) -> bool:
+    """Reject unverified service-tier variants that are not model-compatible.
+
+    Provider inventory presence proves routing and privacy eligibility, not that
+    a particular model supports optional Flex or Batch APIs. Such routes enter
+    the executable catalog only when the endpoint payload explicitly carries a
+    model-level compatibility assertion.
+    """
+    provider = provider_slug(endpoint).casefold()
+    if not provider.endswith(_NON_BASELINE_SERVICE_TIERS):
+        return True
+    return any(endpoint.get(field) is True for field in _SERVICE_TIER_VERIFICATION_FIELDS)
+
+
 def _filter_model_payload_to_zdr(
     model_id: str,
     payload: Mapping[str, Any],
@@ -74,18 +93,29 @@ def _filter_model_payload_to_zdr(
         normalized_data["endpoints"] = []
         result["data"] = normalized_data
         return result
-    normalized_data["endpoints"] = [
+    eligible = [
         dict(endpoint)
         for endpoint in endpoints
         if isinstance(endpoint, Mapping)
         and (model_id, provider_slug(endpoint)) in allowed
+        and _baseline_service_compatible(endpoint)
     ]
+    privacy_eligible = [
+        endpoint
+        for endpoint in endpoints
+        if isinstance(endpoint, Mapping)
+        and (model_id, provider_slug(endpoint)) in allowed
+    ]
+    normalized_data["endpoints"] = eligible
     result["data"] = normalized_data
     result["zdr_endpoint_filter"] = {
         "required": True,
         "source": ZDR_ENDPOINTS_URL,
         "unfiltered_endpoint_count": len(endpoints),
-        "eligible_endpoint_count": len(normalized_data["endpoints"]),
+        "privacy_eligible_endpoint_count": len(privacy_eligible),
+        "service_tier_rejected_count": len(privacy_eligible) - len(eligible),
+        "eligible_endpoint_count": len(eligible),
+        "service_tier_policy": "standard-routes-or-explicit-model-level-verification",
     }
     return result
 
