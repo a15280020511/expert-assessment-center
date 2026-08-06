@@ -1,10 +1,10 @@
-"""Top-50 soft materializer with audited same-model provider fallback pools.
+"""Top-50 soft materializer with unrestricted OpenRouter provider routing.
 
-The legacy soft materializer remains the structural authority. This compatibility
-layer only expands each already-selected model's single primary provider into a
-deterministic whitelist of all exact endpoint rows that survived the same live
-catalog qualification. It does not change model identity, company, role, graph,
-or recovery priority.
+The legacy materializer still builds the selected-model graph. This layer strips
+all provider routing preferences from expert and recovery request payloads so
+OpenRouter can choose any currently available provider for the fixed model.
+Model identity, company, role, graph topology and recovery model identity remain
+unchanged.
 """
 from __future__ import annotations
 
@@ -14,97 +14,36 @@ from typing import Any, Mapping
 import v5_soft_proposal_materializer_legacy as _legacy
 from execution_graph import ExecutionGraph, SelectedNode
 
-# Preserve the complete public/private compatibility surface for existing tests
-# and callers, then override only materialize_proposal below.
 for _name in dir(_legacy):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_legacy, _name)
 
 
-def _provider_order(
-    catalog: Mapping[str, Any],
-    model: str,
-    primary: str,
-) -> list[str]:
-    rows = [
-        row
-        for row in catalog.get("endpoints", [])
-        if isinstance(row, Mapping)
-        and str(row.get("model") or "").strip() == model
-        and str(row.get("provider") or "").strip()
-    ]
-    rows.sort(
-        key=lambda row: (
-            0 if str(row.get("provider")) == primary else 1,
-            float(row.get("prompt_price_per_million") or 0.0)
-            + float(row.get("completion_price_per_million") or 0.0),
-            str(row.get("provider") or ""),
-        )
-    )
-    order: list[str] = []
-    for row in rows:
-        provider = str(row.get("provider") or "").strip()
-        if provider and provider not in order:
-            order.append(provider)
-    if primary not in order:
-        raise _legacy.structural.ProposalValidationError(
-            f"primary provider is outside qualified endpoint catalog: {model}@{primary}"
-        )
-    return order
-
-
-def _pooled_request(
-    request: Mapping[str, Any],
-    order: list[str],
-) -> dict[str, Any]:
+def _open_request(request: Mapping[str, Any]) -> dict[str, Any]:
     value = dict(request)
-    value["provider"] = {
-        "only": list(order),
-        "order": list(order),
-        "allow_fallbacks": True,
-        "require_parameters": True,
-    }
+    value.pop("provider", None)
     return value
 
 
-def _pooled_node(
-    node: SelectedNode,
-    catalog: Mapping[str, Any],
-) -> SelectedNode:
-    primary = node.provider_endpoint.rsplit("@", 1)[-1].strip()
-    order = _provider_order(catalog, node.model, primary)
-    return replace(
-        node,
-        request_config=_pooled_request(node.request_config, order),
-    )
+def _open_node(node: SelectedNode) -> SelectedNode:
+    return replace(node, request_config=_open_request(node.request_config))
 
 
-def _pooled_recovery_row(
-    row: Mapping[str, Any],
-    catalog: Mapping[str, Any],
-) -> dict[str, Any]:
+def _open_recovery_row(row: Mapping[str, Any]) -> dict[str, Any]:
     value = dict(row)
-    model = str(value.get("model") or "").strip()
-    endpoint = str(value.get("provider_endpoint") or "").strip()
     request = value.get("request_config")
-    if not model or not endpoint or not isinstance(request, Mapping):
-        return value
-    primary = endpoint.rsplit("@", 1)[-1].strip()
-    order = _provider_order(catalog, model, primary)
-    value["request_config"] = _pooled_request(request, order)
+    if isinstance(request, Mapping):
+        value["request_config"] = _open_request(request)
     return value
 
 
-def _pooled_metadata(
-    graph: ExecutionGraph,
-    catalog: Mapping[str, Any],
-) -> dict[str, Any]:
+def _open_metadata(graph: ExecutionGraph) -> dict[str, Any]:
     metadata = dict(graph.metadata)
     raw_pool = metadata.get("recovery_pool")
     if isinstance(raw_pool, Mapping):
         metadata["recovery_pool"] = {
             str(node_id): [
-                _pooled_recovery_row(row, catalog)
+                _open_recovery_row(row)
                 for row in rows
                 if isinstance(row, Mapping)
             ]
@@ -112,10 +51,13 @@ def _pooled_metadata(
             if isinstance(rows, (list, tuple))
         }
     metadata["provider_routing_policy"] = {
-        "mode": "same-model-audited-qualified-provider-whitelist",
-        "provider_only_and_order_identical": True,
-        "primary_provider_first": True,
-        "unrestricted_fallback_allowed": False,
+        "mode": "unrestricted-openrouter",
+        "provider_only_present": False,
+        "provider_order_present": False,
+        "zdr_filter_present": False,
+        "data_collection_filter_present": False,
+        "provider_price_filter_present": False,
+        "openrouter_selects_provider": True,
         "model_substitution_allowed": False,
     }
     return metadata
@@ -142,19 +84,25 @@ def materialize_proposal(
         approved_recovery_calls=approved_recovery_calls,
         cost_anomaly_usd=cost_anomaly_usd,
     )
-    pooled_graph = replace(
+    open_graph = replace(
         graph,
-        nodes=tuple(_pooled_node(node, catalog) for node in graph.nodes),
-        metadata=_pooled_metadata(graph, catalog),
+        nodes=tuple(_open_node(node) for node in graph.nodes),
+        metadata=_open_metadata(graph),
     )
     telemetry = dict(audit)
     telemetry.update(
         {
+            "provider_routing_mode": "unrestricted-openrouter",
+            "provider_restrictions_applied": False,
             "provider_fallback_allowed": True,
-            "provider_fallback_scope": (
-                "same-model-audited-qualified-provider-whitelist"
-            ),
-            "unrestricted_provider_fallback_allowed": False,
+            "unrestricted_provider_fallback_allowed": True,
+            "model_substitution_allowed": False,
         }
     )
-    return pooled_graph, limits, telemetry
+    return open_graph, limits, telemetry
+
+
+__all__ = [
+    *[name for name in dir(_legacy) if not name.startswith("__")],
+    "materialize_proposal",
+]
