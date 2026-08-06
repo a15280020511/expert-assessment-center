@@ -1,4 +1,4 @@
-name: V5 Governance-Owned Paid Candidate Acceptance
+name: V5 Top-50 OR-Tools Paid Candidate Acceptance
 
 on:
   issue_comment:
@@ -10,11 +10,11 @@ permissions:
   actions: read
 
 concurrency:
-  group: v5-governance-owned-paid-candidate-acceptance
+  group: v5-top50-ortools-paid-candidate-acceptance
   cancel-in-progress: false
 
 jobs:
-  accept-governed-main-candidate:
+  accept-main-candidate:
     if: >-
       github.actor == github.repository_owner &&
       startsWith(github.event.issue.title, '[acceptance]') &&
@@ -31,10 +31,10 @@ jobs:
       MODEL_TIMEOUT_SECONDS: "240"
       PARALLEL_WORKERS: "4"
       OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
-      OPENROUTER_APP_NAME: governance-owned-paid-candidate-acceptance
+      OPENROUTER_APP_NAME: top50-ortools-paid-candidate-acceptance
 
     steps:
-      - name: Validate exact governed candidate command
+      - name: Validate exact candidate command
         id: source
         uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
         with:
@@ -106,10 +106,8 @@ jobs:
           python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
           python -m pip check
 
-      - name: Validate governance-signed acceptance ticket
+      - name: Validate governance-signed weekly top-50 acceptance ticket
         id: ticket
-        env:
-          CANDIDATE_SHA: ${{ steps.source.outputs.candidate_sha }}
         run: |
           set -euo pipefail
           mkdir -p ticket-artifacts
@@ -122,8 +120,7 @@ jobs:
           import v5_price_ranked_issue_ticket
 
           event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
-          raw = str((event.get("issue") or {}).get("body") or "").strip()
-          packet = json.loads(raw)
+          packet = json.loads(str((event.get("issue") or {}).get("body") or "").strip())
           if not isinstance(packet, dict):
               raise SystemExit("acceptance Issue body must be one JSON object")
           plan = packet.get("governance_model_plan")
@@ -133,14 +130,30 @@ jobs:
               raise SystemExit("route must be expert-team")
           if packet.get("private_output") is not False:
               raise SystemExit("private_output must be false")
-          if plan.get("selection_authority") != "decision-system-governance":
-              raise SystemExit("selection authority must be decision-system-governance")
-          if plan.get("model_calls") != 0:
-              raise SystemExit("governance plan must prove zero model calls")
-          if plan.get("expert_center_reranking_allowed") is not False:
-              raise SystemExit("expert center reranking must be disabled")
-          if plan.get("model_substitution_allowed") is not False:
-              raise SystemExit("model substitution must be disabled")
+          expected = {
+              "top50_candidate_pool_authority": "decision-system-governance",
+              "top50_model_assignment_authority": "expert-assessment-center-ortools",
+              "top50_reasoning_pool_period": "week",
+              "top50_reasoning_pool_size": 50,
+              "top50_provider_routing_mode": "unrestricted-openrouter",
+              "top50_provider_restrictions_applied": False,
+              "top50_provider_endpoint_qualification_required": False,
+              "top50_zdr_provider_qualification_required": False,
+              "model_substitution_allowed": False,
+          }
+          for key, value in expected.items():
+              if plan.get(key) != value:
+                  raise SystemExit(f"governance top-50 contract mismatch: {key}")
+          if int(plan.get("top50_model_calls") or 0) != 0:
+              raise SystemExit("governance top-50 plan must prove zero model calls")
+          raw = plan.get("top50_reasoning_models")
+          eligible = plan.get("top50_expert_selectable_candidates")
+          if not isinstance(raw, list) or len(raw) != 50:
+              raise SystemExit("signed top-50 raw pool is incomplete")
+          if not isinstance(eligible, list) or len(eligible) < 8:
+              raise SystemExit("top-50 selectable pool has fewer than eight models")
+          if int(plan.get("top50_expert_selectable_distinct_company_count") or 0) < 8:
+              raise SystemExit("top-50 selectable pool has fewer than eight companies")
 
           budget = packet.get("approved_budget")
           if not isinstance(budget, dict):
@@ -149,8 +162,8 @@ jobs:
           recovery = budget.get("maximum_recovery_calls")
           if not isinstance(calls, int) or not isinstance(recovery, int):
               raise SystemExit("acceptance call budget is invalid")
-          if calls < 4 or calls > 16 or recovery < 0 or recovery > 4:
-              raise SystemExit("acceptance call budget is outside constitutional bounds")
+          if calls < 8 or calls > 16 or recovery < 0 or recovery > 4:
+              raise SystemExit("acceptance call budget is outside top-50 constitutional bounds")
 
           root = Path("ticket-artifacts")
           (root / "governance-acceptance-ticket.json").write_text(
@@ -160,7 +173,7 @@ jobs:
           task_id = str(packet.get("task_id") or "")
           args = argparse.Namespace(
               event_path=None,
-              issue_title="[execution] exact governance-owned main candidate acceptance",
+              issue_title="[execution] exact top-50 OR-Tools main candidate acceptance",
               issue_body=json.dumps(packet, ensure_ascii=False),
               issue_number=int(os.environ["ISSUE_NUMBER"]),
               actor=os.environ["GITHUB_REPOSITORY_OWNER"],
@@ -171,6 +184,9 @@ jobs:
           raise SystemExit(v5_price_ranked_issue_ticket.prepare(args))
           PY
           test "$(jq -r '.accepted' ticket-artifacts/ticket-status.json)" = "true"
+          test "$(jq -r '.optimizer' ticket-artifacts/ticket-status.json)" = "ortools-cp-sat"
+          test "$(jq -r '.optimizer_optimality_proven' ticket-artifacts/ticket-status.json)" = "true"
+          test "$(jq -r '.provider_routing_mode' ticket-artifacts/ticket-status.json)" = "unrestricted-openrouter"
           calls="$(jq -r '.approved_budget.calls' ticket-artifacts/ticket.json)"
           recovery="$(jq -r '.approved_budget.maximum_recovery_calls' ticket-artifacts/ticket.json)"
           anomaly="$(jq -r '.approved_budget.cost_anomaly_usd // empty' ticket-artifacts/ticket.json)"
@@ -186,7 +202,7 @@ jobs:
           echo "recovery=$recovery" >> "$GITHUB_OUTPUT"
           echo "anomaly=$anomaly" >> "$GITHUB_OUTPUT"
 
-      - name: Execute exact candidate with governance-owned runtime
+      - name: Execute exact candidate
         id: execute
         continue-on-error: true
         env:
@@ -213,7 +229,7 @@ jobs:
             --comments-dir ticket-artifacts/report-comments \
             --run-url "$RUN_URL"
 
-      - name: Audit complete governance-owned evidence
+      - name: Audit complete top-50 OR-Tools evidence
         id: audit
         continue-on-error: true
         run: |
@@ -242,7 +258,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: governance-owned-paid-candidate-primary-${{ github.run_id }}
+          name: top50-ortools-paid-candidate-primary-${{ github.run_id }}
           path: ticket-artifacts/
           if-no-files-found: error
           retention-days: 30
@@ -286,7 +302,7 @@ jobs:
           test "$exit_code" -eq 0
           test "$status" = "PASS"
 
-      - name: Generate final governance-owned attestation and receipt
+      - name: Generate final top-50 OR-Tools attestation and receipt
         id: attest
         if: always()
         env:
@@ -334,42 +350,73 @@ jobs:
           runtime = load("production-runtime.json")
           config = load("v5-runtime-config.json")
           selection = load("v5-price-ranked-selection.json")
-          request_audit = load("v5-request-audit.json")
+          request_audit = load("request-audit.json")
           governance = load("v5-governance-calls.json")
           plan = load("governance-model-plan.json")
           ticket = load("ticket.json")
           manifest = load("artifact-manifest.json")
 
-          authority = "decision-system-governance"
+          pool_authority = "decision-system-governance"
+          assignment_authority = "expert-assessment-center-ortools"
           plan_sha = str(plan.get("plan_sha256") or "")
           if runtime.get("runtime_version") != "v5-governance-plan-runtime-1":
               errors.append("wrong-runtime-version")
-          if config.get("selection_authority") != authority:
-              errors.append("runtime-selection-authority-not-governance")
-          if config.get("model_selection_performed_locally") is not False:
-              errors.append("runtime-local-selection-not-disabled")
-          if config.get("model_reranking_performed_locally") is not False:
-              errors.append("runtime-local-reranking-not-disabled")
+          if config.get("candidate_pool_authority") != pool_authority:
+              errors.append("runtime-candidate-pool-authority-mismatch")
+          if config.get("selection_authority") != assignment_authority:
+              errors.append("runtime-selection-authority-not-ortools")
+          if config.get("model_assignment_authority") != assignment_authority:
+              errors.append("runtime-assignment-authority-not-ortools")
+          if config.get("model_selection_performed_locally") is not True:
+              errors.append("runtime-ortools-assignment-not-proven")
+          if config.get("candidate_pool_reranking_performed_locally") is not False:
+              errors.append("runtime-candidate-pool-reranking-detected")
+          if config.get("optimizer") != "ortools-cp-sat":
+              errors.append("runtime-optimizer-not-ortools")
+          if config.get("optimizer_optimality_proven") is not True:
+              errors.append("runtime-optimizer-optimality-not-proven")
+          if config.get("provider_routing_mode") != "unrestricted-openrouter":
+              errors.append("runtime-provider-routing-not-open")
+          if config.get("provider_restrictions_applied") is not False:
+              errors.append("runtime-provider-restrictions-detected")
+          if config.get("unrestricted_provider_fallback_allowed") is not True:
+              errors.append("runtime-unrestricted-provider-fallback-not-proven")
+          if config.get("model_substitution_allowed") is not False:
+              errors.append("runtime-model-substitution-enabled")
           if config.get("governance_model_plan_sha256") != plan_sha:
               errors.append("runtime-plan-digest-mismatch")
           if selection.get("status") != "PASS":
               errors.append("selection-materialization-not-pass")
-          if selection.get("selection_authority") != authority:
-              errors.append("selection-authority-not-governance")
-          if selection.get("model_selection_performed_locally") is not False:
-              errors.append("selection-local-selection-not-disabled")
-          if selection.get("model_reranking_performed_locally") is not False:
-              errors.append("selection-local-reranking-not-disabled")
-          if selection.get("model_substitution_performed_locally") is not False:
-              errors.append("selection-local-substitution-not-disabled")
+          if selection.get("candidate_pool_authority") != pool_authority:
+              errors.append("selection-candidate-pool-authority-mismatch")
+          if selection.get("model_assignment_authority") != assignment_authority:
+              errors.append("selection-assignment-authority-not-ortools")
+          if selection.get("model_selection_performed_locally") is not True:
+              errors.append("selection-ortools-assignment-not-proven")
+          if selection.get("optimizer_used") is not True:
+              errors.append("selection-optimizer-use-not-proven")
+          if selection.get("optimizer_optimality_proven") is not True:
+              errors.append("selection-optimality-not-proven")
           if ticket.get("governance_model_plan", {}).get("plan_sha256") != plan_sha:
               errors.append("ticket-plan-digest-mismatch")
+          if plan.get("selected_from_top50_reasoning_pool_only") is not True:
+              errors.append("execution-plan-not-derived-from-top50")
+          if plan.get("provider_routing_mode") != "unrestricted-openrouter":
+              errors.append("plan-provider-routing-not-open")
+          if plan.get("provider_restrictions_applied") is not False:
+              errors.append("plan-provider-restrictions-detected")
           if request_audit.get("status") != "PASS":
               errors.append("request-audit-not-pass")
           if request_audit.get("external_tools_allowed") is not False:
               errors.append("request-audit-allows-tools")
-          if request_audit.get("provider_fallback_allowed") is not False:
-              errors.append("request-audit-allows-provider-fallback")
+          if request_audit.get("provider_routing_mode") != "unrestricted-openrouter":
+              errors.append("request-audit-provider-routing-not-open")
+          if request_audit.get("provider_restrictions_applied") is not False:
+              errors.append("request-audit-provider-restrictions-detected")
+          if request_audit.get("unrestricted_provider_fallback_allowed") is not True:
+              errors.append("request-audit-unrestricted-provider-fallback-not-proven")
+          if int(request_audit.get("provider_objects_present") or 0) != 0:
+              errors.append("request-audit-provider-object-present")
           if int(governance.get("actual_governance_calls") or 0) != 0:
               errors.append("expert-center-governance-calls-not-zero")
           if not manifest:
@@ -381,13 +428,15 @@ jobs:
               independent = json.loads(independent_path.read_text(encoding="utf-8"))
               if independent.get("status") != "PASS":
                   errors.append("independent-revalidation-not-pass")
+              if independent.get("provider_routing_mode") != "unrestricted-openrouter":
+                  errors.append("independent-provider-routing-not-open")
               independent_sha = hashlib.sha256(independent_path.read_bytes()).hexdigest()
           else:
               errors.append("missing-independent-revalidation")
 
           status = "PASS" if not errors else "FAIL"
           attestation = {
-              "schema_version": "v5-governance-owned-paid-candidate-attestation-1",
+              "schema_version": "v5-top50-ortools-paid-candidate-attestation-2",
               "status": status,
               "candidate_sha": os.environ.get("CANDIDATE_SHA", ""),
               "previous_production_sha": os.environ.get("PREVIOUS_PRODUCTION_SHA", ""),
@@ -395,28 +444,34 @@ jobs:
               "primary_artifact_id": os.environ.get("PRIMARY_ARTIFACT_ID", ""),
               "primary_artifact_digest": os.environ.get("PRIMARY_ARTIFACT_DIGEST", ""),
               "independent_revalidation_sha256": independent_sha,
-              "selection_authority": authority,
-              "model_selection_performed_locally": False,
-              "model_reranking_performed_locally": False,
+              "candidate_pool_authority": pool_authority,
+              "selection_authority": assignment_authority,
+              "model_selection_performed_locally": True,
+              "optimizer": "ortools-cp-sat",
+              "optimizer_optimality_proven": True,
+              "provider_routing_mode": "unrestricted-openrouter",
+              "provider_restrictions_applied": False,
+              "unrestricted_provider_fallback_allowed": True,
+              "model_substitution_allowed": False,
               "orchestration_library": "networkx",
               "governance_model_calls": 0,
               "outcomes": outcomes,
               "errors": errors,
           }
           rendered = json.dumps(attestation, ensure_ascii=False, indent=2)
-          Path("final-governance-owned-attestation.json").write_text(
-              rendered + "\n", encoding="utf-8"
-          )
+          Path("final-top50-ortools-attestation.json").write_text(rendered + "\n", encoding="utf-8")
           receipt = {
-              "schema_version": "v5-governance-owned-paid-candidate-receipt-1",
+              "schema_version": "v5-top50-ortools-paid-candidate-receipt-2",
               "status": status,
               "candidate_sha": attestation["candidate_sha"],
               "production_moved": False,
               "primary_artifact_id": attestation["primary_artifact_id"],
               "primary_artifact_digest": attestation["primary_artifact_digest"],
               "attestation_sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
-              "selection_authority": authority,
-              "model_selection_performed_locally": False,
+              "candidate_pool_authority": pool_authority,
+              "selection_authority": assignment_authority,
+              "optimizer": "ortools-cp-sat",
+              "provider_routing_mode": "unrestricted-openrouter",
               "errors": errors,
           }
           Path("candidate-acceptance-receipt.json").write_text(
@@ -433,9 +488,9 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: governance-owned-paid-candidate-final-${{ github.run_id }}
+          name: top50-ortools-paid-candidate-final-${{ github.run_id }}
           path: |
-            final-governance-owned-attestation.json
+            final-top50-ortools-attestation.json
             candidate-acceptance-receipt.json
             independent-revalidation.json
             checked-out-candidate-sha.txt
@@ -456,11 +511,14 @@ jobs:
           script: |
             const status = process.env.STATUS || 'FAIL';
             const body = [
-              `## GOVERNANCE_OWNED_CANDIDATE_${status}`,
+              `## TOP50_ORTOOLS_CANDIDATE_${status}`,
               '',
               `- Candidate SHA: \`${process.env.CANDIDATE_SHA || ''}\``,
-              '- Selection authority: `decision-system-governance`',
-              '- Expert-center local model selection: `false`',
+              '- Candidate-pool authority: `decision-system-governance`',
+              '- Model assignment: `expert-assessment-center-ortools`',
+              '- OR-Tools optimality: `required`',
+              '- Provider routing: `unrestricted-openrouter`',
+              '- Model substitution: `false`',
               `- Primary Artifact ID: \`${process.env.PRIMARY_ARTIFACT_ID || ''}\``,
               `- Primary Artifact digest: \`${process.env.PRIMARY_ARTIFACT_DIGEST || ''}\``,
               `- Final Artifact ID: \`${process.env.FINAL_ARTIFACT_ID || ''}\``,
@@ -474,7 +532,7 @@ jobs:
               body
             });
 
-      - name: Verify authoritative governance-owned acceptance outcome
+      - name: Verify authoritative acceptance outcome
         if: always()
         run: |
           set -euo pipefail
