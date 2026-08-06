@@ -45,7 +45,7 @@ def _sequence(value: Any) -> Sequence[Any]:
 
 
 def _canonical_length(value: Any) -> int:
-    if value in {None, ""}:
+    if value is None or value == "":
         return 0
     try:
         rendered = json.dumps(
@@ -71,7 +71,7 @@ def _positive_int(value: Any) -> int:
 
 
 def _finite_nonnegative(value: Any) -> float:
-    if isinstance(value, bool) or value in {None, ""}:
+    if isinstance(value, bool) or value is None or value == "":
         return 0.0
     try:
         number = float(value)
@@ -116,6 +116,8 @@ def build_task_demand_profile(
     delivery_item_count = _count_named_outputs(task)
     extra_task_fields = max(0, len(task) - 3)
 
+    # Deliberately conservative character-to-token upper estimate. The score is
+    # for relative planning only; actual Token usage remains provider-audited.
     expected_prompt_tokens = max(
         MIN_PROMPT_TOKENS,
         math.ceil((task_characters + evidence_characters) / 2),
@@ -208,14 +210,11 @@ def role_token_profile(profile: Mapping[str, Any], role_id: str) -> dict[str, in
     elif role_id == "review":
         prompt_tokens = prompt + 2 * completion
         completion_tokens = math.ceil(completion * 1.05)
-    elif role_id == "synthesis":
+    elif role_id in {"synthesis", RECOVERY_ROLE_ID}:
+        # A warm recovery can replace any primary role, including synthesis.
+        # Therefore reserve the heaviest primary role's native capacity.
         prompt_tokens = prompt + 3 * completion
         completion_tokens = math.ceil(completion * 1.20)
-    elif role_id == RECOVERY_ROLE_ID:
-        # Warm recoveries are role-agnostic. Size them for a representative
-        # downstream replacement rather than only a cheap independent slot.
-        prompt_tokens = prompt + 2 * completion
-        completion_tokens = math.ceil(completion * 1.10)
     else:
         raise TaskAdaptiveScoringError(f"unknown role_id: {role_id}")
 
@@ -298,20 +297,16 @@ def _capacity(candidate: Mapping[str, Any], role_tokens: Mapping[str, Any]) -> t
     if maximum_completion and required_completion and maximum_completion < required_completion:
         compatible = False
 
-    # Unknown native limits remain eligible for backward compatibility, but
-    # receive a conservative headroom risk so known-capable models win ties.
-    context_risk = (
-        required_context / context_length if context_length else 1.25
-    )
+    # Unknown native limits remain eligible for rollback-fixture compatibility,
+    # but receive conservative headroom risk so known-capable models win ties.
+    context_risk = required_context / context_length if context_length else 1.25
     completion_risk = (
         required_completion / maximum_completion if maximum_completion else 1.00
     )
     return compatible, float(context_risk + completion_risk)
 
 
-def _rank_map(
-    rows: Sequence[tuple[str, Any]],
-) -> dict[str, int]:
+def _rank_map(rows: Sequence[tuple[str, Any]]) -> dict[str, int]:
     ordered = sorted(rows, key=lambda item: (item[1], item[0]))
     return {model: rank for rank, (model, _) in enumerate(ordered, 1)}
 
