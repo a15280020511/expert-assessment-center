@@ -19,6 +19,14 @@ FLAGSHIP_DEFINITION = (
 COMPANY_MODEL_POLICY = (
     "one-highest-intelligence-verified-reasoning-flagship-per-company-then-price-rank"
 )
+TOP20_POOL_SCHEMA_VERSION = "governance-openrouter-top20-reasoning-pool-v1"
+TOP20_POOL_SOURCE = "openrouter-most-popular-last-week-token-volume"
+TOP20_POOL_SIZE = 20
+TOP20_REQUIRED_EVIDENCE = (
+    "openrouter-top-weekly-reasoning",
+    "live-exact-endpoint-qualified",
+    "authenticated-zdr-endpoint-qualified",
+)
 ALLOWED_FLAGSHIP_BASES = {
     "strict-product-tier",
     "company-local-natural-top-layer",
@@ -318,7 +326,6 @@ def _validate_price_ranking(
         )
 
 
-
 def _validate_live_flagship_row(
     row: Mapping[str, Any],
     *,
@@ -421,6 +428,138 @@ def _validate_live_flagship_contract(
             _validate_live_flagship_row(row, field=field, index=index)
 
 
+def _validate_top20_source_pool(plan: Mapping[str, Any]) -> tuple[set[str], set[str]]:
+    expected = {
+        "top20_reasoning_pool_schema_version": TOP20_POOL_SCHEMA_VERSION,
+        "top20_reasoning_pool_source": TOP20_POOL_SOURCE,
+        "top20_reasoning_pool_size": TOP20_POOL_SIZE,
+        "candidate_pool_authority": "decision-system-governance",
+        "model_assignment_authority": "expert-assessment-center",
+        "expert_center_pool_selection_allowed": True,
+        "expert_center_pool_selection_completed": True,
+        "selected_from_top20_reasoning_pool_only": True,
+        "old_flagship_filter_applied_to_top20_pool": False,
+        "model_calls": 0,
+    }
+    for field, value in expected.items():
+        if plan.get(field) != value:
+            raise GovernanceModelPlanError(
+                f"top-20 governance contract mismatch: {field}"
+            )
+
+    raw = _model_rows(plan.get("top20_reasoning_models"), "top20_reasoning_models")
+    eligible = _model_rows(
+        plan.get("expert_selectable_candidates"),
+        "expert_selectable_candidates",
+    )
+    if len(raw) != TOP20_POOL_SIZE:
+        raise GovernanceModelPlanError("top-20 source pool must contain 20 models")
+    if plan.get("top20_reasoning_pool_sha256") != _sha256(
+        raw, "top20_reasoning_models"
+    ):
+        raise GovernanceModelPlanError("top-20 source pool hash mismatch")
+    if plan.get("expert_selectable_candidates_sha256") != _sha256(
+        eligible, "expert_selectable_candidates"
+    ):
+        raise GovernanceModelPlanError("top-20 selectable candidate hash mismatch")
+
+    raw_models: set[str] = set()
+    raw_companies: set[str] = set()
+    for index, row in enumerate(raw, 1):
+        model = str(row.get("model") or "").strip()
+        company = str(row.get("company") or "").strip().casefold()
+        if row.get("popularity_rank") != index:
+            raise GovernanceModelPlanError(
+                "top-20 source popularity ranks must be contiguous"
+            )
+        if not MODEL_ID_RE.fullmatch(model) or not company or model in raw_models:
+            raise GovernanceModelPlanError("top-20 source pool identity is invalid")
+        if row.get("reasoning_supported") is not True:
+            raise GovernanceModelPlanError("top-20 source pool contains a non-reasoning model")
+        raw_models.add(model)
+        raw_companies.add(company)
+
+    eligible_companies = {
+        str(row.get("company") or "").strip().casefold()
+        for row in eligible
+        if str(row.get("company") or "").strip()
+    }
+    if len(eligible_companies) < 8:
+        raise GovernanceModelPlanError(
+            "top-20 selectable pool has fewer than eight distinct companies"
+        )
+    if plan.get("expert_selectable_distinct_company_count") != len(
+        eligible_companies
+    ):
+        raise GovernanceModelPlanError(
+            "top-20 selectable distinct-company count mismatch"
+        )
+    return raw_models, raw_companies
+
+
+def _validate_top20_execution_row(
+    row: Mapping[str, Any],
+    *,
+    field: str,
+    index: int,
+    raw_models: set[str],
+) -> None:
+    model, _, _ = _validate_model_row(row, field=field, index=index)
+    if model not in raw_models:
+        raise GovernanceModelPlanError(
+            f"{field}[{index}] is outside the frozen top-20 source pool"
+        )
+    if row.get("reasoning_rank_verified") is not True:
+        raise GovernanceModelPlanError(
+            f"{field}[{index}] lacks top-weekly reasoning rank verification"
+        )
+    rank = row.get("popularity_rank")
+    if isinstance(rank, bool) or not isinstance(rank, int) or not 1 <= rank <= 20:
+        raise GovernanceModelPlanError(
+            f"{field}[{index}].popularity_rank is invalid"
+        )
+    endpoint_hash = str(row.get("endpoint_inventory_sha256") or "")
+    if not SHA256_RE.fullmatch(endpoint_hash):
+        raise GovernanceModelPlanError(
+            f"{field}[{index}].endpoint_inventory_sha256 is invalid"
+        )
+    providers = row.get("qualified_provider_count")
+    if isinstance(providers, bool) or not isinstance(providers, int) or providers < 1:
+        raise GovernanceModelPlanError(
+            f"{field}[{index}].qualified_provider_count must be positive"
+        )
+    evidence = str(row.get("selection_evidence") or "")
+    if any(fragment not in evidence for fragment in TOP20_REQUIRED_EVIDENCE):
+        raise GovernanceModelPlanError(
+            f"{field}[{index}] lacks direct top-20 endpoint evidence"
+        )
+
+
+def _validate_top20_contract(
+    plan: Mapping[str, Any],
+    selected: Sequence[Mapping[str, Any]],
+    recoveries: Sequence[Mapping[str, Any]],
+) -> None:
+    raw_models, _ = _validate_top20_source_pool(plan)
+    if len(selected) != 4 or len(recoveries) != 4:
+        raise GovernanceModelPlanError(
+            "top-20 execution plan must contain four active and four recovery models"
+        )
+    ranked = _model_rows(plan.get("price_ranked_models"), "price_ranked_models")
+    for field, rows in (
+        ("selected_models", selected),
+        ("recovery_models", recoveries),
+        ("price_ranked_models", ranked),
+    ):
+        for index, row in enumerate(rows):
+            _validate_top20_execution_row(
+                row,
+                field=field,
+                index=index,
+                raw_models=raw_models,
+            )
+
+
 def _validate_roles(selected: Sequence[Mapping[str, Any]]) -> None:
     role_kinds: list[str] = []
     role_ids: set[str] = set()
@@ -479,7 +618,10 @@ def validate_governance_model_plan(
     )
     _validate_model_sets(selected, recoveries)
     _validate_price_ranking(plan_value, selected, recoveries)
-    _validate_live_flagship_contract(plan_value, selected, recoveries)
+    if plan_value.get("selected_from_top20_reasoning_pool_only") is True:
+        _validate_top20_contract(plan_value, selected, recoveries)
+    else:
+        _validate_live_flagship_contract(plan_value, selected, recoveries)
     _validate_roles(selected)
     _validate_budget(ticket, expert_count, recovery_count)
     return plan_value

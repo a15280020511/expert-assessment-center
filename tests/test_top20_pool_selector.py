@@ -4,15 +4,25 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import unittest
 
 
-def _load_module():
-    path = Path(__file__).resolve().parents[1] / "open-model-market" / "v5_top20_pool_selector.py"
-    spec = importlib.util.spec_from_file_location("v5_top20_pool_selector_test", path)
+def _load_module(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _load_selector():
+    path = Path(__file__).resolve().parents[1] / "open-model-market" / "v5_top20_pool_selector.py"
+    return _load_module(path, "v5_top20_pool_selector_test")
+
+
+def _load_validator():
+    path = Path(__file__).resolve().parents[1] / "open-model-market" / "v5_governance_model_plan.py"
+    return _load_module(path, "v5_governance_model_plan_top20_test")
 
 
 def _canonical(value) -> bytes:
@@ -29,12 +39,17 @@ def _sha(value) -> str:
     return hashlib.sha256(_canonical(value)).hexdigest()
 
 
+def _company(index: int) -> str:
+    return "company1" if index == 2 else f"company{index}"
+
+
 def _candidate(index: int) -> dict:
+    company = _company(index)
     return {
         "slot": index,
         "candidate_price_rank": index,
-        "model": f"company{index}/model-{index}",
-        "company": f"company{index}",
+        "model": f"{company}/model-{index}",
+        "company": company,
         "estimated_task_cost_usd": float(index),
         "price_rank_usd_per_million": float(index),
         "prompt_usd_per_million": float(index) / 3,
@@ -42,21 +57,14 @@ def _candidate(index: int) -> dict:
         "official_intelligence_rank": 100 - index,
         "qualified_provider_count": 1,
         "endpoint_inventory_sha256": f"{index:064x}"[-64:],
-        "flagship_verified": True,
-        "flagship_basis": "strict-product-tier",
-        "company_flagship_method": "fixture",
-        "benchmark_source": "artificial-analysis-via-openrouter",
-        "intelligence_index": float(index),
-        "coding_index": float(index),
-        "agentic_index": float(index),
-        "balanced_score": float(index),
-        "benchmark_evidence_sha256": f"{index + 100:064x}"[-64:],
         "selection_evidence": (
-            "non-search+verified-company-flagship-reasoning+strict-product-tier+"
-            "price-order+live-exact-endpoint-qualified+"
-            "authenticated-zdr-endpoint-qualified+minimum-one-zdr-provider-route"
+            "openrouter-top-weekly-reasoning+live-exact-endpoint-qualified+"
+            "authenticated-zdr-endpoint-qualified"
         ),
         "popularity_rank": index,
+        "reasoning_rank_verified": True,
+        "reasoning_supported": True,
+        "ranking_basis": "openrouter-most-popular-last-week-token-volume",
         "source_pool_schema_version": "governance-openrouter-top20-reasoning-pool-v1",
         "source_pool": "openrouter-most-popular-last-week-token-volume",
         "expert_center_selectable": True,
@@ -64,23 +72,25 @@ def _candidate(index: int) -> dict:
 
 
 def _packet() -> dict:
+    task = {"question": "fixture"}
     raw = [
         {
             "popularity_rank": index,
             "source_rank": index,
-            "model": f"company{index}/model-{index}",
-            "company": f"company{index}",
+            "model": f"{_company(index)}/model-{index}",
+            "company": _company(index),
             "reasoning_supported": True,
         }
         for index in range(1, 21)
     ]
     eligible = [_candidate(index) for index in range(1, 11)]
+    distinct_companies = len({row["company"] for row in eligible})
     plan = {
         "schema_version": "governance-expert-model-plan-v1",
         "selection_authority": "decision-system-governance",
         "model_substitution_allowed": False,
         "expert_center_reranking_allowed": False,
-        "task_sha256": "0" * 64,
+        "task_sha256": _sha(task),
         "top20_reasoning_pool_schema_version": (
             "governance-openrouter-top20-reasoning-pool-v1"
         ),
@@ -93,9 +103,13 @@ def _packet() -> dict:
         "expert_selectable_candidates": eligible,
         "expert_selectable_candidates_sha256": _sha(eligible),
         "expert_selectable_candidate_count": len(eligible),
+        "expert_selectable_distinct_company_count": distinct_companies,
         "candidate_pool_authority": "decision-system-governance",
         "model_assignment_authority": "expert-assessment-center",
         "expert_center_pool_selection_allowed": True,
+        "old_flagship_filter_applied_to_top20_pool": False,
+        "endpoint_qualification_performed_by_governance": True,
+        "model_calls": 0,
         "selected_models": [],
         "recovery_models": [],
         "price_ranked_models": [],
@@ -104,34 +118,88 @@ def _packet() -> dict:
     }
     material = dict(plan)
     plan["plan_sha256"] = _sha(material)
-    return {"task": {"question": "fixture"}, "governance_model_plan": plan}
-
-
-def test_materializer_selects_only_eight_cheapest_distinct_pool_models() -> None:
-    module = _load_module()
-    packet, receipt = module.materialize_top20_selection(_packet())
-    plan = packet["governance_model_plan"]
-
-    assert plan["expert_center_pool_selection_completed"] is True
-    assert plan["selected_from_top20_reasoning_pool_only"] is True
-    assert plan["expert_count"] == 4
-    assert plan["recovery_count"] == 4
-    assert {row["model"] for row in plan["selected_models"]} == {
-        f"company{index}/model-{index}" for index in range(1, 5)
+    return {
+        "task": task,
+        "approved_budget": {"calls": 8, "maximum_recovery_calls": 4},
+        "governance_model_plan": plan,
     }
-    assert [row["model"] for row in plan["recovery_models"]] == [
-        f"company{index}/model-{index}" for index in range(5, 9)
-    ]
-    assert [row["model"] for row in plan["price_ranked_models"]] == [
-        f"company{index}/model-{index}" for index in range(1, 9)
-    ]
-    assert [row["price_rank"] for row in plan["price_ranked_models"]] == list(
-        range(1, 9)
-    )
-    assert {row["role_kind"] for row in plan["selected_models"]} == {
-        "independent",
-        "review",
-        "synthesis",
-    }
-    assert receipt["model_calls"] == 0
-    assert plan["plan_sha256"] == module._plan_digest(plan)
+
+
+class Top20PoolSelectorTests(unittest.TestCase):
+    def test_materializer_skips_cheaper_duplicate_company_rows(self) -> None:
+        module = _load_selector()
+        packet, receipt = module.materialize_top20_selection(_packet())
+        plan = packet["governance_model_plan"]
+
+        self.assertTrue(plan["expert_center_pool_selection_completed"])
+        self.assertTrue(plan["selected_from_top20_reasoning_pool_only"])
+        self.assertEqual(plan["expert_count"], 4)
+        self.assertEqual(plan["recovery_count"], 4)
+        expected = [
+            "company1/model-1",
+            "company3/model-3",
+            "company4/model-4",
+            "company5/model-5",
+            "company6/model-6",
+            "company7/model-7",
+            "company8/model-8",
+            "company9/model-9",
+        ]
+        self.assertEqual(
+            [row["model"] for row in plan["price_ranked_models"]], expected
+        )
+        self.assertEqual(
+            {row["model"] for row in plan["selected_models"]}, set(expected[:4])
+        )
+        self.assertEqual(
+            [row["model"] for row in plan["recovery_models"]], expected[4:]
+        )
+        self.assertEqual(
+            [row["price_rank"] for row in plan["price_ranked_models"]],
+            list(range(1, 9)),
+        )
+        self.assertEqual(
+            len({row["company"] for row in plan["price_ranked_models"]}), 8
+        )
+        self.assertEqual(
+            {row["role_kind"] for row in plan["selected_models"]},
+            {"independent", "review", "synthesis"},
+        )
+        self.assertEqual(receipt["model_calls"], 0)
+        self.assertEqual(plan["plan_sha256"], module._plan_digest(plan))
+
+    def test_materialized_plan_passes_direct_top20_execution_contract(self) -> None:
+        selector = _load_selector()
+        validator = _load_validator()
+        packet, _ = selector.materialize_top20_selection(_packet())
+        validated = validator.validate_governance_model_plan(packet)
+        self.assertTrue(validated["selected_from_top20_reasoning_pool_only"])
+        self.assertTrue(
+            all(
+                "flagship_basis" not in row
+                for row in validated["price_ranked_models"]
+            )
+        )
+
+    def test_materializer_rejects_fewer_than_eight_distinct_companies(self) -> None:
+        module = _load_selector()
+        packet = _packet()
+        plan = packet["governance_model_plan"]
+        eligible = plan["expert_selectable_candidates"]
+        for index, row in enumerate(eligible):
+            row["company"] = f"company{index % 7}"
+        plan["expert_selectable_distinct_company_count"] = 7
+        plan["expert_selectable_candidates_sha256"] = _sha(eligible)
+        material = dict(plan)
+        material.pop("plan_sha256", None)
+        plan["plan_sha256"] = _sha(material)
+
+        with self.assertRaisesRegex(
+            module.Top20PoolSelectionError,
+            "fewer than eight distinct-company",
+        ):
+            module.materialize_top20_selection(packet)
+
+
+if __name__ == "__main__":
+    unittest.main()
