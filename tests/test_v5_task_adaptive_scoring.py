@@ -106,13 +106,18 @@ class TaskAdaptiveScoringTests(unittest.TestCase):
             complex_weights["intelligence"], simple_weights["intelligence"]
         )
 
-    def test_downstream_roles_reserve_more_native_context(self) -> None:
+    def test_downstream_roles_and_recovery_reserve_enough_native_context(self) -> None:
         profile = build_task_demand_profile(_simple_packet(), _candidates())
         evidence = role_token_profile(profile, "evidence")
         review = role_token_profile(profile, "review")
         synthesis = role_token_profile(profile, "synthesis")
+        recovery = role_token_profile(profile, "recovery")
         self.assertLess(evidence["required_context_tokens"], review["required_context_tokens"])
         self.assertLess(review["required_context_tokens"], synthesis["required_context_tokens"])
+        self.assertEqual(
+            recovery["required_context_tokens"], synthesis["required_context_tokens"]
+        )
+        self.assertEqual(recovery["completion_tokens"], synthesis["completion_tokens"])
 
     def test_small_effort_large_return_penalizes_expensive_tiny_gain(self) -> None:
         profile = build_task_demand_profile(_simple_packet(), _candidates())
@@ -133,8 +138,10 @@ class TaskAdaptiveScoringTests(unittest.TestCase):
         profile = build_task_demand_profile(_simple_packet(), candidates)
         evidence = build_role_metrics(candidates, profile, "evidence")
         synthesis = build_role_metrics(candidates, profile, "synthesis")
+        recovery = build_role_metrics(candidates, profile, "recovery")
         self.assertTrue(evidence["cheap/strong-enough"]["compatible"])
         self.assertFalse(synthesis["cheap/strong-enough"]["compatible"])
+        self.assertFalse(recovery["cheap/strong-enough"]["compatible"])
 
 
 if __name__ == "__main__":
