@@ -6,6 +6,7 @@ on:
       - feat/top50-ortools-routing
     paths:
       - tools/apply_top50_ortools_upgrade.py
+      - tools/refine_top50_provider_pool.py
       - .github/workflows/apply-top50-ortools-upgrade.yml
 
 permissions:
@@ -23,7 +24,9 @@ jobs:
         with:
           python-version: '3.11'
       - name: Apply migration
-        run: python tools/apply_top50_ortools_upgrade.py
+        run: |
+          python tools/apply_top50_ortools_upgrade.py
+          python tools/refine_top50_provider_pool.py
       - name: Install runtime dependencies
         run: python -m pip install -r requirements-runtime.txt
       - name: Validate changed modules
@@ -39,7 +42,8 @@ jobs:
           from v5_provider_lock import canonical_provider_lock
           assert canonical_provider_lock({
               'provider': {
-                  'order': ['primary'],
+                  'only': ['primary', 'secondary'],
+                  'order': ['primary', 'secondary'],
                   'allow_fallbacks': True,
                   'require_parameters': True,
               }
@@ -49,6 +53,13 @@ jobs:
                   'only': ['primary'],
                   'order': ['primary'],
                   'allow_fallbacks': False,
+                  'require_parameters': True,
+              }
+          })
+          assert not canonical_provider_lock({
+              'provider': {
+                  'order': ['primary'],
+                  'allow_fallbacks': True,
                   'require_parameters': True,
               }
           })
