@@ -12,7 +12,7 @@ class GovernanceRepairRetryLimitTests(unittest.TestCase):
         wrapper = WRAPPER.read_text(encoding="utf-8")
         ledger = LEDGER.read_text(encoding="utf-8")
         self.assertIn("governance_retry_state.patch(legacy)", wrapper)
-        self.assertIn("BUSINESS_RETRY_LIMIT = 2", ledger)
+        self.assertIn("BUSINESS_RETRY_LIMIT = 3", ledger)
         self.assertIn("SYSTEM_REPAIR_RETRY_LIMIT = 6", ledger)
         self.assertIn("in_flight_retry_count", ledger)
         self.assertNotIn("float('inf')", ledger)

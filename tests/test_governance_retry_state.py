@@ -53,8 +53,8 @@ class GovernanceRetryStateTests(unittest.TestCase):
             "",
         )
 
-    def test_positive_or_unknown_calls_charge_business_retry(self) -> None:
-        state = ledger.execution_state(
+    def test_positive_or_unknown_calls_charge_finite_business_retry(self) -> None:
+        two_attempts = ledger.execution_state(
             [
                 accepted("paid-1"),
                 failed(1),
@@ -62,15 +62,36 @@ class GovernanceRetryStateTests(unittest.TestCase):
                 failed(None),
             ]
         )
-        self.assertEqual(state["business_retry_count"], 2)
-        self.assertEqual(state["system_repair_retry_count"], 0)
-        self.assertIn(
-            "maximum 2 business retries",
+        self.assertEqual(two_attempts["business_retry_count"], 2)
+        self.assertEqual(two_attempts["system_repair_retry_count"], 0)
+        self.assertEqual(
             ledger.current_issue_submission_reason(
-                state,
+                two_attempts,
                 is_retry=True,
                 issue_state="open",
                 retry_id="paid-3",
+            ),
+            "",
+        )
+
+        three_attempts = ledger.execution_state(
+            [
+                accepted("paid-1"),
+                failed(1),
+                accepted("unknown-2"),
+                failed(None),
+                accepted("paid-3"),
+                failed(2),
+            ]
+        )
+        self.assertEqual(three_attempts["business_retry_count"], 3)
+        self.assertIn(
+            "maximum 3 business retries",
+            ledger.current_issue_submission_reason(
+                three_attempts,
+                is_retry=True,
+                issue_state="open",
+                retry_id="paid-4",
             ),
         )
 
