@@ -1,6 +1,7 @@
 """Top-50 evidence facade for zero-governance expert execution."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Mapping
 
 import v5_price_ranked_evidence_legacy as _legacy
@@ -95,12 +96,33 @@ _legacy._request_document = _request_document
 _legacy._selection_document = _selection_document
 _legacy._routing_document = _routing_document
 
+RUNTIME_VERSION = _legacy.RUNTIME_VERSION
 ApprovedContext = _legacy.ApprovedContext
 EvidenceSource = _legacy.EvidenceSource
 PreparedEvidence = _legacy.PreparedEvidence
-build_evidence = _legacy.build_evidence
-main = _legacy.main
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+def normalize_price_ranked_evidence(
+    root: Path,
+    *,
+    approved_total_calls: int,
+    approved_recovery_calls: int,
+    cost_anomaly_usd: float | None,
+    require_report: bool,
+) -> dict[str, Any]:
+    return _legacy.normalize_price_ranked_evidence(
+        root,
+        approved_total_calls=approved_total_calls,
+        approved_recovery_calls=approved_recovery_calls,
+        cost_anomaly_usd=cost_anomaly_usd,
+        require_report=require_report,
+    )
+
+
+__all__ = [
+    "RUNTIME_VERSION",
+    "ApprovedContext",
+    "EvidenceSource",
+    "PreparedEvidence",
+    "normalize_price_ranked_evidence",
+]
