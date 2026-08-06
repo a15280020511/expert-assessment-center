@@ -5,6 +5,7 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - "CONSTITUTION.md"
       - "open-model-market/**"
       - "tests/**"
       - "requirements*.txt"
@@ -52,7 +53,7 @@ jobs:
           python -m unittest discover -s tests -p 'test*.py' -v \
             2>&1 | tee release-validation-logs/unit-tests.log
 
-      - name: Verify top-50 OR-Tools and unrestricted Provider constitution
+      - name: Verify task-adaptive Top-50 OR-Tools and unrestricted Provider constitution
         run: |
           set -euo pipefail
           PYTHONPATH=open-model-market python - <<'PY'
@@ -65,15 +66,31 @@ jobs:
           production_policy = Path("open-model-market/v5_production_expert_policy.py").read_text()
           pipeline = Path("open-model-market/v5_price_ranked_pipeline.py").read_text()
           gate = Path("open-model-market/v5_price_ranked_ticket_gate.py").read_text()
+          validator = Path("open-model-market/v5_top50_plan_validation.py").read_text()
           auditor = Path("open-model-market/v5_price_ranked_execution_auditor.py").read_text()
           independent = Path("open-model-market/v5_price_ranked_independent_revalidation.py").read_text()
 
-          assert policy["schema_version"] == "v5-constitutional-policy-7-top50-ortools-open-provider"
+          assert policy["schema_version"] == "v5-constitutional-policy-8-task-adaptive-value-ortools"
           assert policy["candidate_pool"]["pool_size"] == 50
           assert policy["candidate_pool"]["popularity_period"] == "week"
-          assert policy["optimizer_runtime"]["engine"] == "ortools-cp-sat"
-          assert policy["optimizer_runtime"]["required_solver_status"] == "OPTIMAL"
-          assert policy["optimizer_runtime"]["provider_metric_used"] is False
+          optimizer = policy["optimizer_runtime"]
+          assert optimizer["engine"] == "ortools-cp-sat"
+          assert optimizer["required_solver_status"] == "OPTIMAL"
+          assert optimizer["provider_metric_used"] is False
+          assert optimizer["selection_principles"] == [
+              "concrete-problem-concrete-analysis",
+              "dynamic-adaptation",
+              "small-effort-large-return",
+          ]
+          assert optimizer["task_pressure_changes_role_weights"] is True
+          assert "role_aware_estimated_current_task_cost_rank" in optimizer["objective_components"]
+          assert "marginal_cost_per_relative_quality_rank" in optimizer["objective_components"]
+          matching = policy["dynamic_task_matching"]
+          assert matching["recomputed_from_current_task"] is True
+          assert matching["cross_task_history_allowed"] is False
+          assert matching["keyword_routing_allowed"] is False
+          assert matching["domain_hardcoding_allowed"] is False
+          assert matching["estimated_task_cost_must_include_prompt_and_completion"] is True
           assert policy["governance_chain"]["candidate_pool_authority"] == "decision-system-governance"
           assert policy["governance_chain"]["assignment_authority"] == "expert-assessment-center-ortools-cp-sat"
           privacy = policy["expert_endpoint_privacy"]
@@ -84,6 +101,7 @@ jobs:
           assert privacy["provider_fallback_allowed"] is True
           assert privacy["unrestricted_provider_fallback_allowed"] is True
           assert privacy["model_substitution_allowed"] is False
+          assert policy["production_promotion"]["requires_task_adaptive_value_scoring"] is True
           assert config["provider"]["routing_mode"] == "unrestricted-openrouter"
           assert config["provider"]["explicit_provider_lock_required"] is False
           assert config["provider"]["require_parameters"] is False
@@ -91,29 +109,36 @@ jobs:
           assert 'payload.pop("provider", None)' in production_policy
           assert "EXPERT_ZDR_REQUIRED = False" in production_policy
           assert "provider_lock_required=False" in pipeline
-          for source in (gate, auditor, independent):
+          assert "task_adaptive_scoring_completed" in gate
+          assert "top50_task_adaptive_assignment_required" in validator
+          for source in (gate, validator, auditor, independent):
               assert "unrestricted-openrouter" in source
           PY
 
-      - name: Run top-50/open-provider focused regression gates
+      - name: Run task-adaptive Top-50 focused regression gates
         run: |
           set -euo pipefail
           PYTHONPATH=open-model-market python -m unittest -v \
+            tests.test_v5_task_adaptive_scoring \
             tests.test_top50_pool_optimizer \
+            tests.test_v5_top50_ticket_gate_capacity \
+            tests.test_v5_paid_acceptance_free_first_guard \
             tests.test_v5_top50_provider_pool \
             tests.test_v5_constitution_policy \
             tests.test_v5_production_expert_policy
 
-      - name: Run zero-call dry-run execution matrix
+      - name: Run task-adaptive Top-50 zero-call dry-run matrix
         run: |
           set -euo pipefail
-          PYTHONPATH=open-model-market python - <<'PY'
+          PYTHONPATH=open-model-market:. python - <<'PY'
           import copy
           import json
           import subprocess
           from pathlib import Path
 
-          from v5_governance_model_plan import plan_sha256, task_sha256
+          from tests.test_top50_pool_optimizer import _packet
+          from v5_top50_pool_optimizer import materialize_top50_selection
+          from v5_top50_plan_validation import validate_top50_contract
 
           tasks = {
               "simple": "比较A与B，给出结论。",
@@ -122,18 +147,31 @@ jobs:
               "closed_world": "仅依据题面比较A与B，禁止工具，禁止补充外部事实。",
               "long": "比较A与B。" + "约束条件与现实扰动。" * 2000,
           }
-          base = json.loads(Path("tests/fixtures/governance-ticket.json").read_text())
           summaries = {}
           for name, question in tasks.items():
-              ticket = copy.deepcopy(base)
-              ticket["task"]["question"] = question
-              plan = ticket["governance_model_plan"]
-              plan["task_sha256"] = task_sha256(ticket)
-              plan["plan_sha256"] = plan_sha256(plan)
+              source = copy.deepcopy(_packet(complex_task=name in {"complex", "long"}))
+              source["task"]["question"] = question
+              source["approved_budget"] = {"calls": 8, "maximum_recovery_calls": 4}
+              materialized, receipt = materialize_top50_selection(source)
+              plan = materialized["governance_model_plan"]
+              validate_top50_contract(plan, plan["selected_models"], plan["recovery_models"])
+              assert receipt["model_calls"] == 0
+              assert plan["task_adaptive_scoring_completed"] is True
+              assert plan["selection_principles"] == [
+                  "concrete-problem-concrete-analysis",
+                  "dynamic-adaptation",
+                  "small-effort-large-return",
+              ]
+              assert plan["optimizer_audit"]["optimality_proven"] is True
+              assert plan["provider_routing_mode"] == "unrestricted-openrouter"
+              assert len(plan["selected_models"]) == 4
+              assert len(plan["recovery_models"]) == 4
+              assert len({row["company"] for row in [*plan["selected_models"], *plan["recovery_models"]]}) == 8
+
               root = Path("production-validation-artifacts") / name
               root.mkdir(parents=True, exist_ok=True)
               ticket_path = root / "ticket.json"
-              ticket_path.write_text(json.dumps(ticket, ensure_ascii=False, indent=2))
+              ticket_path.write_text(json.dumps(materialized, ensure_ascii=False, indent=2))
               subprocess.run(
                   [
                       "python", "open-model-market/v5_price_ranked_pipeline.py",
@@ -143,7 +181,7 @@ jobs:
                       "--endpoint-file", "tests/fixtures/endpoints.json",
                       "--dry-run",
                       "--maximum-total-calls", "8",
-                      "--maximum-recovery-calls", "1",
+                      "--maximum-recovery-calls", "4",
                       "--output-dir", str(root),
                   ],
                   check=True,
@@ -162,8 +200,12 @@ jobs:
               assert runtime["openrouter_selects_provider"] is True
               summaries[name] = {
                   "plan_sha256": plan["plan_sha256"],
-                  "node_count": len(dry["proposal"]["nodes"]),
+                  "objective_value": plan["optimizer_audit"]["objective_value"],
+                  "task_pressure": plan["task_demand_profile"]["pressure"]["overall"],
+                  "selected_models": [row["model"] for row in plan["selected_models"]],
+                  "recovery_models": [row["model"] for row in plan["recovery_models"]],
               }
+          assert summaries["long"]["task_pressure"] >= summaries["simple"]["task_pressure"]
           Path("production-validation-artifacts/matrix-summary.json").write_text(
               json.dumps(summaries, ensure_ascii=False, indent=2)
           )
