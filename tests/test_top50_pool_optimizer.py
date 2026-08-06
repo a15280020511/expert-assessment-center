@@ -89,6 +89,27 @@ def _packet() -> dict:
     }
 
 
+def _recovery_score(row: dict, all_candidates: list[dict]) -> int:
+    ordered = sorted(
+        all_candidates,
+        key=lambda item: (
+            float(item["price_rank_usd_per_million"]),
+            int(item["popularity_rank"]),
+            int(item["official_intelligence_rank"]),
+            str(item["model"]),
+        ),
+    )
+    price_rank = {
+        str(item["model"]): index
+        for index, item in enumerate(ordered, 1)
+    }[str(row["model"])]
+    return (
+        45 * price_rank
+        + 30 * int(row["popularity_rank"])
+        + 20 * int(row["official_intelligence_rank"])
+    )
+
+
 class Top50PoolOptimizerTests(unittest.TestCase):
     def test_four_active_four_recovery_and_all_fifty_retained(self) -> None:
         packet, receipt = materialize_top50_selection(_packet())
@@ -103,11 +124,35 @@ class Top50PoolOptimizerTests(unittest.TestCase):
         self.assertTrue(plan["optimizer_audit"]["constraints"]["provider_routing_unrestricted"])
         self.assertTrue(plan["optimizer_audit"]["constraints"]["four_primary_calls_reserved"])
         self.assertTrue(plan["optimizer_audit"]["constraints"]["four_warm_recovery_calls_reserved"])
+        self.assertTrue(plan["optimizer_audit"]["constraints"]["warm_recovery_priority_uses_same_objective"])
         self.assertEqual(plan["provider_routing_mode"], "unrestricted-openrouter")
         self.assertFalse(plan["provider_restrictions_applied"])
         self.assertEqual(receipt["optimizer_audit"]["optimizer"], "ortools-cp-sat")
         self.assertEqual(receipt["approved_recovery_calls"], 4)
+        self.assertEqual(receipt["warm_recovery_order_basis"], "same-recovery-objective")
         validate_top50_contract(plan, plan["selected_models"], plan["recovery_models"])
+
+    def test_warm_recovery_priority_uses_same_recovery_objective(self) -> None:
+        source = _packet()
+        all_candidates = source["governance_model_plan"]["top50_expert_selectable_candidates"]
+        packet, _ = materialize_top50_selection(source)
+        plan = packet["governance_model_plan"]
+        recoveries = plan["recovery_models"]
+        scores = [_recovery_score(row, all_candidates) for row in recoveries]
+        self.assertEqual(scores, sorted(scores))
+        self.assertEqual(
+            [row["recovery_objective_score"] for row in plan["optimizer_audit"]["warm_recovery_priority"]],
+            scores,
+        )
+        warm_inventory = [
+            row
+            for row in plan["expert_center_top50_inventory"]
+            if row["standby_state"] == "warm-recovery"
+        ]
+        self.assertEqual(
+            sorted(row["warm_recovery_priority"] for row in warm_inventory),
+            [1, 2, 3, 4],
+        )
 
     def test_deterministic_assignment(self) -> None:
         first, _ = materialize_top50_selection(_packet())
