@@ -13,6 +13,11 @@ EXPECTED_POOL_SIZE = 20
 EXPECTED_PRIMARY_COUNT = 4
 EXPECTED_RECOVERY_COUNT = 4
 EXPECTED_SELECTION_COUNT = EXPECTED_PRIMARY_COUNT + EXPECTED_RECOVERY_COUNT
+REQUIRED_SELECTION_EVIDENCE = (
+    "openrouter-top-weekly-reasoning",
+    "live-exact-endpoint-qualified",
+    "authenticated-zdr-endpoint-qualified",
+)
 
 
 class Top20PoolSelectionError(RuntimeError):
@@ -69,41 +74,50 @@ def _require_equal(actual: Any, expected: Any, message: str) -> None:
 
 
 def _validate_plan_envelope(plan: Mapping[str, Any]) -> None:
-    _require_equal(
-        plan.get("plan_sha256"),
-        _plan_digest(plan),
-        "governance candidate-pool plan digest mismatch",
+    checks = (
+        (
+            plan.get("plan_sha256"),
+            _plan_digest(plan),
+            "governance candidate-pool plan digest mismatch",
+        ),
+        (
+            plan.get("top20_reasoning_pool_schema_version"),
+            POOL_SCHEMA_VERSION,
+            "top-20 reasoning pool schema is unsupported",
+        ),
+        (
+            plan.get("top20_reasoning_pool_source"),
+            POOL_SOURCE,
+            "top-20 reasoning pool source is invalid",
+        ),
+        (
+            plan.get("top20_reasoning_pool_size"),
+            EXPECTED_POOL_SIZE,
+            "top-20 reasoning pool size is not 20",
+        ),
+        (
+            plan.get("candidate_pool_authority"),
+            "decision-system-governance",
+            "candidate pool authority is invalid",
+        ),
+        (
+            plan.get("model_assignment_authority"),
+            "expert-assessment-center",
+            "model assignment authority is invalid",
+        ),
+        (
+            plan.get("expert_center_pool_selection_allowed"),
+            True,
+            "expert center pool selection is not allowed",
+        ),
+        (
+            plan.get("old_flagship_filter_applied_to_top20_pool"),
+            False,
+            "old flagship filtering must not alter the top-20 candidate pool",
+        ),
     )
-    _require_equal(
-        plan.get("top20_reasoning_pool_schema_version"),
-        POOL_SCHEMA_VERSION,
-        "top-20 reasoning pool schema is unsupported",
-    )
-    _require_equal(
-        plan.get("top20_reasoning_pool_source"),
-        POOL_SOURCE,
-        "top-20 reasoning pool source is invalid",
-    )
-    _require_equal(
-        plan.get("top20_reasoning_pool_size"),
-        EXPECTED_POOL_SIZE,
-        "top-20 reasoning pool size is not 20",
-    )
-    _require_equal(
-        plan.get("candidate_pool_authority"),
-        "decision-system-governance",
-        "candidate pool authority is invalid",
-    )
-    _require_equal(
-        plan.get("model_assignment_authority"),
-        "expert-assessment-center",
-        "model assignment authority is invalid",
-    )
-    _require_equal(
-        plan.get("expert_center_pool_selection_allowed"),
-        True,
-        "expert center pool selection is not allowed",
-    )
+    for actual, expected, message in checks:
+        _require_equal(actual, expected, message)
 
 
 def _validate_pool_hashes(
@@ -126,10 +140,20 @@ def _validate_pool_hashes(
         _sha256(eligible),
         "expert selectable candidate hash mismatch",
     )
-    if len(eligible) < EXPECTED_SELECTION_COUNT:
+    companies = {
+        str(row.get("company") or "").strip().casefold()
+        for row in eligible
+        if str(row.get("company") or "").strip()
+    }
+    if len(companies) < EXPECTED_SELECTION_COUNT:
         raise Top20PoolSelectionError(
-            "fewer than eight selectable models remain in the top-20 pool"
+            "fewer than eight distinct-company selectable models remain in the top-20 pool"
         )
+    _require_equal(
+        plan.get("expert_selectable_distinct_company_count"),
+        len(companies),
+        "expert selectable distinct-company count is inconsistent",
+    )
 
 
 def _validate_raw_pool(raw: list[dict[str, Any]]) -> set[str]:
@@ -157,7 +181,6 @@ def _candidate_identity(
     row: Mapping[str, Any],
     raw_models: set[str],
     seen_models: set[str],
-    seen_companies: set[str],
 ) -> tuple[str, str]:
     model = str(row.get("model") or "").strip()
     company = str(row.get("company") or "").strip().casefold()
@@ -165,9 +188,9 @@ def _candidate_identity(
         raise Top20PoolSelectionError(
             f"selectable model is outside the frozen top-20 pool: {model}"
         )
-    if not company or model in seen_models or company in seen_companies:
+    if not company or model in seen_models:
         raise Top20PoolSelectionError(
-            "selectable candidates must use globally distinct models and companies"
+            "selectable candidates must use valid unique model identities"
         )
     return model, company
 
@@ -178,6 +201,20 @@ def _validate_candidate_qualification(row: Mapping[str, Any], model: str) -> Non
         True,
         f"candidate is not marked selectable: {model}",
     )
+    _require_equal(
+        row.get("reasoning_rank_verified"),
+        True,
+        f"candidate lacks top-weekly reasoning-rank evidence: {model}",
+    )
+    popularity_rank = row.get("popularity_rank")
+    if (
+        isinstance(popularity_rank, bool)
+        or not isinstance(popularity_rank, int)
+        or not 1 <= popularity_rank <= EXPECTED_POOL_SIZE
+    ):
+        raise Top20PoolSelectionError(
+            f"candidate has an invalid popularity rank: {model}"
+        )
     providers = row.get("qualified_provider_count")
     provider_valid = (
         not isinstance(providers, bool)
@@ -186,27 +223,25 @@ def _validate_candidate_qualification(row: Mapping[str, Any], model: str) -> Non
     )
     if not provider_valid:
         raise Top20PoolSelectionError(f"candidate has no qualified provider: {model}")
+    evidence = str(row.get("selection_evidence") or "")
+    if any(fragment not in evidence for fragment in REQUIRED_SELECTION_EVIDENCE):
+        raise Top20PoolSelectionError(
+            f"candidate lacks direct top-20 endpoint evidence: {model}"
+        )
 
 
 def _validate_selectable_candidates(
     eligible: list[dict[str, Any]], raw_models: set[str]
 ) -> None:
     seen_models: set[str] = set()
-    seen_companies: set[str] = set()
     for index, row in enumerate(eligible):
-        model, company = _candidate_identity(
-            row,
-            raw_models,
-            seen_models,
-            seen_companies,
-        )
+        model, _ = _candidate_identity(row, raw_models, seen_models)
         _validate_candidate_qualification(row, model)
         _finite_nonnegative(
             row.get("price_rank_usd_per_million"),
             f"expert_selectable_candidates[{index}].price_rank_usd_per_million",
         )
         seen_models.add(model)
-        seen_companies.add(company)
 
 
 def _validate_pool(
@@ -267,9 +302,23 @@ def _select_rows(eligible: list[dict[str, Any]]) -> list[dict[str, Any]]:
             str(row.get("model") or ""),
         ),
     )
-    selected = ordered[:EXPECTED_SELECTION_COUNT]
+    selected: list[dict[str, Any]] = []
+    seen_models: set[str] = set()
+    seen_companies: set[str] = set()
+    for row in ordered:
+        model = str(row.get("model") or "").strip()
+        company = str(row.get("company") or "").strip().casefold()
+        if not model or not company or model in seen_models or company in seen_companies:
+            continue
+        selected.append(row)
+        seen_models.add(model)
+        seen_companies.add(company)
+        if len(selected) == EXPECTED_SELECTION_COUNT:
+            break
     if len(selected) != EXPECTED_SELECTION_COUNT:
-        raise Top20PoolSelectionError("unable to select four primary and four recovery models")
+        raise Top20PoolSelectionError(
+            "unable to select four primary and four recovery models from eight distinct companies"
+        )
     return selected
 
 
