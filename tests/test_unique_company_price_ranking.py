@@ -43,6 +43,10 @@ def fixture() -> dict:
 def ticket() -> dict:
     value = fixture()
     plan = value["governance_model_plan"]
+    # The generic fixture deliberately uses gamma/fast. This benchmark-specific
+    # test needs a valid non-economy flagship baseline; the Luna case below
+    # remains the explicit economy-tier negative test.
+    plan["selected_models"][0]["model"] = "gamma/pro"
     plan.update(
         {
             "catalog_fetch_mode": "live-per-task-no-cross-task-cache",
