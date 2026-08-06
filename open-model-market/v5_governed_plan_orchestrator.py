@@ -30,27 +30,25 @@ def build_governed_proposal(
     value.update(
         {
             "candidate_pool_authority": "decision-system-governance",
-            "model_assignment_authority": (
-                "expert-assessment-center-ortools" if top50 else "decision-system-governance"
-            ),
+            "model_assignment_authority": "expert-assessment-center-ortools" if top50 else "decision-system-governance",
             "model_selection_performed_locally": top50,
             "candidate_pool_reranking_performed_locally": False,
             "model_substitution_performed_locally": False,
             "optimizer_used": top50,
             "optimizer": plan.get("optimizer") if top50 else None,
-            "optimizer_optimality_proven": bool(
-                plan.get("optimizer_audit", {}).get("optimality_proven")
-            ) if top50 else False,
+            "optimizer_optimality_proven": bool(plan.get("optimizer_audit", {}).get("optimality_proven")) if top50 else False,
+            "provider_routing_mode": "unrestricted-openrouter",
+            "provider_restrictions_applied": False,
+            "openrouter_selects_provider": True,
+            "resolved_endpoint_is_execution_constraint": False,
             "provider_resolution_policy": (
-                "fixed governance/expert-assigned model -> cheapest qualified primary "
-                "endpoint -> all same-model qualified endpoints retained as audited whitelist"
+                "catalog endpoint is a non-binding compatibility/cost hint only; "
+                "runtime removes provider routing fields and OpenRouter freely "
+                "selects any available provider for the fixed model"
             ),
         }
     )
     return proposal, value
 
 
-__all__ = [
-    "GovernedPlanOrchestrationError",
-    "build_governed_proposal",
-]
+__all__ = ["GovernedPlanOrchestrationError", "build_governed_proposal"]
