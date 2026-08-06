@@ -9,6 +9,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
+from v5_governance_model_plan import validate_governance_model_plan
 from v5_top50_plan_validation import validate_top50_contract
 from v5_top50_pool_optimizer import Top50PoolOptimizationError, materialize_top50_selection
 
@@ -22,11 +23,40 @@ PRINCIPLES = [
 
 def _sha(value):
     return hashlib.sha256(
-        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
     ).hexdigest()
 
 
+def _plan_sha(plan: dict) -> str:
+    material = dict(plan)
+    material.pop("plan_sha256", None)
+    return _sha(material)
+
+
 def _packet(*, complex_task: bool = False) -> dict:
+    if complex_task:
+        task = {
+            "question": "X" * 12000,
+            "requirements": [f"requirement-{index}" for index in range(12)],
+            "required_outputs": [f"field-{index}" for index in range(8)],
+            "language": "zh-CN",
+        }
+        evidence = [{"text": "E" * 1200} for _ in range(8)]
+        acceptance = [f"accept-{index}" for index in range(8)]
+    else:
+        task = {
+            "question": "比较A和B并给出建议。",
+            "requirements": ["给出最终建议"],
+            "language": "zh-CN",
+        }
+        evidence = []
+        acceptance = ["包含最终建议"]
+
     raw = []
     candidates = []
     for rank in range(1, 51):
@@ -72,7 +102,11 @@ def _packet(*, complex_task: bool = False) -> dict:
             }
         )
     plan = {
-        "plan_sha256": "source-plan",
+        "schema_version": "governance-expert-model-plan-v1",
+        "selection_authority": "decision-system-governance",
+        "model_substitution_allowed": False,
+        "expert_center_reranking_allowed": False,
+        "task_sha256": _sha(task),
         "required_context_tokens": 8192,
         "top50_reasoning_pool_schema_version": "governance-openrouter-top50-reasoning-pool-v2-open-provider",
         "top50_reasoning_pool_source": "openrouter-most-popular-last-week-token-volume",
@@ -100,25 +134,10 @@ def _packet(*, complex_task: bool = False) -> dict:
     }
     plan["top50_reasoning_pool_sha256"] = _sha(raw)
     plan["top50_expert_selectable_candidates_sha256"] = _sha(candidates)
-    if complex_task:
-        task = {
-            "question": "X" * 12000,
-            "requirements": [f"requirement-{index}" for index in range(12)],
-            "required_outputs": [f"field-{index}" for index in range(8)],
-            "language": "zh-CN",
-        }
-        evidence = [{"text": "E" * 1200} for _ in range(8)]
-        acceptance = [f"accept-{index}" for index in range(8)]
-    else:
-        task = {
-            "question": "比较A和B并给出建议。",
-            "requirements": ["给出最终建议"],
-            "language": "zh-CN",
-        }
-        evidence = []
-        acceptance = ["包含最终建议"]
+    plan["plan_sha256"] = _plan_sha(plan)
     return {
         "task_id": "test-top50-optimizer",
+        "route": "expert-team",
         "task": task,
         "evidence": evidence,
         "execution_acceptance": acceptance,
@@ -134,14 +153,27 @@ class Top50PoolOptimizerTests(unittest.TestCase):
         self.assertEqual(len(plan["selected_models"]), 4)
         self.assertEqual(len(plan["recovery_models"]), 4)
         self.assertEqual(len(plan["expert_center_top50_inventory"]), 50)
-        companies = {row["company"] for row in [*plan["selected_models"], *plan["recovery_models"]]}
+        companies = {
+            row["company"]
+            for row in [*plan["selected_models"], *plan["recovery_models"]]
+        }
         self.assertEqual(len(companies), 8)
         self.assertTrue(plan["optimizer_audit"]["optimality_proven"])
-        self.assertFalse(plan["optimizer_audit"]["constraints"]["provider_resilience_used"])
-        self.assertTrue(plan["optimizer_audit"]["constraints"]["provider_routing_unrestricted"])
-        self.assertTrue(plan["optimizer_audit"]["constraints"]["four_primary_calls_reserved"])
-        self.assertTrue(plan["optimizer_audit"]["constraints"]["four_warm_recovery_calls_reserved"])
-        self.assertTrue(plan["optimizer_audit"]["constraints"]["dynamic_role_weights_used"])
+        self.assertFalse(
+            plan["optimizer_audit"]["constraints"]["provider_resilience_used"]
+        )
+        self.assertTrue(
+            plan["optimizer_audit"]["constraints"]["provider_routing_unrestricted"]
+        )
+        self.assertTrue(
+            plan["optimizer_audit"]["constraints"]["four_primary_calls_reserved"]
+        )
+        self.assertTrue(
+            plan["optimizer_audit"]["constraints"]["four_warm_recovery_calls_reserved"]
+        )
+        self.assertTrue(
+            plan["optimizer_audit"]["constraints"]["dynamic_role_weights_used"]
+        )
         self.assertTrue(plan["optimizer_audit"]["constraints"]["marginal_return_used"])
         self.assertTrue(plan["task_adaptive_scoring_completed"])
         self.assertEqual(plan["selection_principles"], PRINCIPLES)
@@ -154,7 +186,18 @@ class Top50PoolOptimizerTests(unittest.TestCase):
             receipt["warm_recovery_order_basis"],
             "same-task-adaptive-recovery-objective",
         )
-        validate_top50_contract(plan, plan["selected_models"], plan["recovery_models"])
+        validate_top50_contract(
+            plan,
+            plan["selected_models"],
+            plan["recovery_models"],
+        )
+
+    def test_materialized_plan_passes_full_governance_validation(self) -> None:
+        packet, _ = materialize_top50_selection(_packet())
+        validated = validate_governance_model_plan(packet)
+        self.assertEqual(validated["plan_sha256"], packet["governance_model_plan"]["plan_sha256"])
+        self.assertEqual(validated["expert_count"], 4)
+        self.assertEqual(validated["recovery_count"], 4)
 
     def test_deterministic_assignment(self) -> None:
         first, _ = materialize_top50_selection(_packet())
@@ -184,10 +227,14 @@ class Top50PoolOptimizerTests(unittest.TestCase):
             simple_audit["task_demand_profile"]["pressure"]["overall"],
         )
         simple_synthesis = next(
-            row for row in simple_audit["role_assignments"] if row["role_id"] == "synthesis"
+            row
+            for row in simple_audit["role_assignments"]
+            if row["role_id"] == "synthesis"
         )
         complex_synthesis = next(
-            row for row in complex_audit["role_assignments"] if row["role_id"] == "synthesis"
+            row
+            for row in complex_audit["role_assignments"]
+            if row["role_id"] == "synthesis"
         )
         self.assertLess(
             complex_synthesis["weights"]["task_cost"],
