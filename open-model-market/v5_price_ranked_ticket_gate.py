@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed contract gate for admitted price-ranked tickets."""
+"""Fail-closed contract gate for admitted governance-selected tickets."""
 from __future__ import annotations
 
 import argparse
@@ -40,8 +40,8 @@ def main() -> int:
     observed_cost = status.get("cost_anomaly_usd")
     if status.get("accepted") is not True:
         raise RuntimeError("ticket was not accepted")
-    if status.get("runtime_version") != "v5-price-ranked-runtime-1":
-        raise RuntimeError("ticket was not admitted for the price-ranked runtime")
+    if status.get("runtime_version") != "v5-governance-plan-runtime-1":
+        raise RuntimeError("ticket was not admitted for the governance-plan runtime")
     if int(status.get("calls") or 0) != args.expected_calls:
         raise RuntimeError("admitted total-call ceiling changed")
     if int(status.get("maximum_recovery_calls") or 0) != args.expected_recovery_calls:
