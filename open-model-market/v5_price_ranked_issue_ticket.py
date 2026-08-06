@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+import v5_governance_retry_state as governance_retry_state
 import v5_issue_ticket as legacy
 from v5_governance_model_plan import (
     GovernanceModelPlanError,
@@ -24,9 +25,7 @@ LEGACY_GOVERNANCE_RESERVE_REASON = (
     "approved recovery calls must leave at least one initial expert call "
     "after three governance calls"
 )
-LEGACY_RETRY_LIMIT = legacy.MAXIMUM_RETRIES_PER_ISSUE
-GOVERNANCE_REPAIR_RETRY_LIMIT = 4
-legacy.MAXIMUM_RETRIES_PER_ISSUE = GOVERNANCE_REPAIR_RETRY_LIMIT
+governance_retry_state.patch(legacy)
 
 DELEGATION_NOTICE = (
     "委托边界：具体模型由治理中心在下发任务前选定并写入不可变模型计划；"
@@ -142,6 +141,12 @@ def _postprocess(root: Path, packet: Mapping[str, Any]) -> dict[str, Any]:
                     "expert_center_model_reranking_allowed": False,
                     "model_substitution_allowed": False,
                     "provider_resolution_only": True,
+                    "business_retry_limit": (
+                        governance_retry_state.BUSINESS_RETRY_LIMIT
+                    ),
+                    "system_repair_retry_limit": (
+                        governance_retry_state.SYSTEM_REPAIR_RETRY_LIMIT
+                    ),
                     "call_policy": (
                         "approved-total-includes-experts-and-recovery-only"
                     ),
