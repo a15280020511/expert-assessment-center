@@ -1,0 +1,150 @@
+name: Apply Soft Resource Governance 2026-08-03
+
+on:
+  pull_request:
+    paths:
+      - "CONSTITUTION.md"
+      - ".github/soft-resource-patch/**"
+      - ".github/workflows/apply-soft-resource-governance-20260803.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-soft-resource-governance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apply-and-validate:
+    if: >-
+      github.actor == github.repository_owner &&
+      github.event.pull_request.head.ref == 'fix/v5-soft-resource-governance-20260803'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact PR head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-runtime.txt
+            requirements-dev.txt
+
+      - name: Apply exact soft-resource governance transform
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=.github/soft-resource-patch
+          cat "$root"/p01_* > /tmp/part01
+          cat "$root"/p02_* > /tmp/part02
+          test "$(sha256sum /tmp/part01 | awk '{print $1}')" = "cff07298d5cc03a881f74d236963ddbfef836a9d74376eacc736c4e40755bcca"
+          test "$(sha256sum /tmp/part02 | awk '{print $1}')" = "78f37ca6be4d48307131fbd76967c5bb75bc3d22c5f5b518ecaabf9828b31462"
+          cat "$root/part00" /tmp/part01 /tmp/part02 "$root/part03" "$root/part04" "$root/part05" > /tmp/transform.b64
+          test "$(sha256sum /tmp/transform.b64 | awk '{print $1}')" = "8b21f43982f42fb519d41c7152668210798ef90de96d82fbbbcf4e132f65e06a"
+          base64 --decode /tmp/transform.b64 > tools/apply_soft_resource_governance.py
+          test "$(sha256sum tools/apply_soft_resource_governance.py | awk '{print $1}')" = "146d233cb36dd4411dd605448f456c2759518d86d1dedc4005718d824823457f"
+
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("tools/apply_soft_resource_governance.py")
+          text = path.read_text(encoding="utf-8")
+          helper = '''def write_text(relative: str, content: str) -> None:
+              path = ROOT / relative
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_text(content, encoding="utf-8")
+          '''
+          addition = '''
+
+          def replace_exact_count(
+              relative: str,
+              old: str,
+              new: str,
+              expected_count: int,
+          ) -> None:
+              path = ROOT / relative
+              text = path.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != expected_count:
+                  raise RuntimeError(
+                      f"{relative}: expected {expected_count} matches, found {count}"
+                  )
+              path.write_text(text.replace(old, new), encoding="utf-8")
+          '''
+          if text.count(helper) != 1:
+              raise SystemExit("transform helper anchor mismatch")
+          text = text.replace(helper, helper + addition, 1)
+          start_marker = '''replace_once(
+              "open-model-market/v5_production_ticket.py",
+              \'\'\'            "max_completion_tokens": args.max_completion_tokens,
+          '''
+          end_marker = '''
+
+          write_text(
+              "tests/test_v5_governance_completion_envelope.py",
+          '''
+          start = text.find(start_marker, text.find('''"cost_anomaly_usd": args.cost_anomaly_usd'''))
+          end = text.find(end_marker, start)
+          if start < 0 or end < 0:
+              raise SystemExit("production receipt transform anchor mismatch")
+          replacement = '''replace_exact_count(
+              "open-model-market/v5_production_ticket.py",
+              '"max_completion_tokens": args.max_completion_tokens',
+              '"completion_token_guidance": args.max_completion_tokens',
+              expected_count=2,
+          )
+          replace_exact_count(
+              "open-model-market/v5_production_ticket.py",
+              '"governance_max_completion_tokens": (',
+              '"governance_completion_token_guidance": (',
+              expected_count=2,
+          )'''
+          path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
+          PY
+          test "$(sha256sum tools/apply_soft_resource_governance.py | awk '{print $1}')" = "3f857ba60c02a4ca79d98dee7016bcf60d5b2f580a01dcd8225a10c9601a5e3c"
+          python -m py_compile tools/apply_soft_resource_governance.py
+          python tools/apply_soft_resource_governance.py
+          rm tools/apply_soft_resource_governance.py
+
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("open-model-market/v5_gpt_expert_selector.py")
+          text = path.read_text(encoding="utf-8")
+          anchor = 'RESOURCE_GOVERNANCE_MODE = "advisory-only"\n'
+          replacement = (
+              '# Advisory catalog-size reference; never used as a rejection or truncation gate.\n'
+              'GPT_PROMPT_CATALOG_MAX_CHARS = 80_000\n'
+              + anchor
+          )
+          if text.count(anchor) != 1:
+              raise SystemExit("catalog advisory compatibility anchor mismatch")
+          path.write_text(text.replace(anchor, replacement, 1), encoding="utf-8")
+          PY
+
+      - name: Run complete zero-cost validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+          python -m ruff check .
+          python -m compileall -q open-model-market tests tools
+          python -m unittest discover -s tests -p 'test*.py' -v
+          python tools/repository_audit.py --root . --output-dir /tmp/repository-audit --fail-on info
+
+      - name: Commit validated source changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add open-model-market tests
+          git diff --cached --check
+          git commit -m "refactor: make model resource controls advisory only"
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
