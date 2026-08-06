@@ -1,10 +1,8 @@
 """Production expert request policy and complete failed-result persistence.
 
-Expert endpoint selection is restricted to the same ZDR/data-collection policy
-that is placed on every expert request. Failed execution results are returned to
-the pipeline after all runtime and constitutional artifacts are written, so the
-pipeline can merge governance and expert ledgers before the production wrapper
-raises the authoritative failure.
+Provider routing is completely open. The production prompt policy does not add
+ZDR, data-collection, provider allowlists/orders, provider price constraints or
+other routing filters. Model identity remains fixed by the expert plan.
 """
 from __future__ import annotations
 
@@ -21,12 +19,12 @@ from v5_soft_resource_governance import (
 )
 from v5_task_constraints import TaskConstraints
 
-EXPERT_DATA_COLLECTION_POLICY = "deny"
-EXPERT_ZDR_REQUIRED = True
+EXPERT_DATA_COLLECTION_POLICY = None
+EXPERT_ZDR_REQUIRED = False
 
 
 class ProductionExpertPromptPolicy(SoftResourcePromptPolicy):
-    """Apply an explicit, auditable privacy contract to expert requests."""
+    """Preserve unrestricted provider routing on production expert requests."""
 
     def build_payload(
         self,
@@ -35,13 +33,7 @@ class ProductionExpertPromptPolicy(SoftResourcePromptPolicy):
         upstream: Sequence[Mapping[str, Any]],
     ) -> dict[str, Any]:
         payload = super().build_payload(node, original_task, upstream)
-        provider = payload.get("provider")
-        if not isinstance(provider, Mapping):
-            raise RuntimeError("provider lock missing from production expert request")
-        locked = dict(provider)
-        locked["data_collection"] = EXPERT_DATA_COLLECTION_POLICY
-        locked["zdr"] = EXPERT_ZDR_REQUIRED
-        payload["provider"] = locked
+        payload.pop("provider", None)
         assert_request_has_no_tools(
             payload,
             context=f"production expert {node.node_id} request",
@@ -82,25 +74,10 @@ class EvidenceCompleteExecutionEngine(SoftResourceExecutionEngine):
 
     @staticmethod
     def _actual_cost(response: Mapping[str, Any]) -> float:
-        """Compatibility bridge for constitutional quality-failure evidence.
-
-        The native runtime's authoritative accounting primitive is
-        ``extract_actual_cost``. The constitutional normalizer historically
-        called ``self._actual_cost`` only on its quality-failure branch. Keeping
-        this bridge in the production engine preserves one accounting function
-        without duplicating any parsing or price logic.
-        """
         return extract_actual_cost(response)
 
     @staticmethod
     def _raise_failed_result(result: Mapping[str, Any]) -> None:
-        """Defer authoritative failure to the production wrapper.
-
-        The pipeline still receives a failed result, merges the governance and
-        expert request ledgers, writes the final result and manifest, and then
-        ``v5_production_ticket.py`` raises because the normalized result is not
-        successful. No failed result can be mistaken for production success.
-        """
         del result
 
     @classmethod
@@ -110,7 +87,6 @@ class EvidenceCompleteExecutionEngine(SoftResourceExecutionEngine):
         root: Path | None,
         reason: str,
     ) -> None:
-        """Persist constitutional failure without aborting artifact assembly."""
         result.update(
             {
                 "status": "failed",
@@ -132,7 +108,6 @@ class EvidenceCompleteExecutionEngine(SoftResourceExecutionEngine):
 def install_production_expert_policy(
     runtime: ProductionRuntime,
 ) -> ProductionRuntime:
-    """Install the production-only prompt and evidence-complete engine."""
     runtime.prompt_policy = ProductionExpertPromptPolicy()
     runtime.execution_engine = EvidenceCompleteExecutionEngine(
         runtime.config,
