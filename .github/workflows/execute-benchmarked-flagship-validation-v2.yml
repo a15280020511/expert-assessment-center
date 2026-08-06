@@ -1,0 +1,83 @@
+name: Execute Benchmarked Flagship Validation V2
+
+on:
+  push:
+    branches:
+      - fix/validate-benchmarked-reasoning-flagships
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fix/validate-benchmarked-reasoning-flagships
+          persist-credentials: true
+          fetch-depth: 0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install pinned test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+      - name: Apply validation patch
+        run: python tools/_apply_benchmarked_flagship_validation.py
+      - name: Replace legacy fixture identities
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/test_unique_company_price_ranking.py")
+          text = path.read_text(encoding="utf-8")
+          marker = '    plan = value["governance_model_plan"]\n'
+          replacement = '''    plan = value["governance_model_plan"]
+              primary = (
+                  ("gamma/reasoning-pro", "gamma"),
+                  ("deepseek/reasoning-pro", "deepseek"),
+                  ("beta/reasoning-max", "beta"),
+                  ("tau/reasoning-ultra", "tau"),
+              )
+              for row, (model_id, company) in zip(
+                  plan["selected_models"], primary, strict=True
+              ):
+                  row["model"] = model_id
+                  row["company"] = company
+              plan["recovery_models"][0]["model"] = "rho/reasoning-pro"
+              plan["recovery_models"][0]["company"] = "rho"
+          '''
+          if text.count(marker) != 2:
+              raise SystemExit("ticket plan markers changed")
+          first = text.index('def ticket() -> dict:')
+          position = text.index(marker, first)
+          text = text[:position] + replacement + text[position + len(marker):]
+          path.write_text(text, encoding="utf-8")
+          PY
+      - name: Run zero-call target tests
+        run: |
+          set -euo pipefail
+          python -m unittest \
+            tests.test_unique_company_price_ranking \
+            tests.test_v5_governance_model_plan \
+            tests.test_v5_governed_plan_orchestrator -v
+      - name: Remove temporary files and commit
+        run: |
+          set -euo pipefail
+          rm -f \
+            tools/_apply_benchmarked_flagship_validation.py \
+            .github/workflows/apply-benchmarked-flagship-validation.yml \
+            .github/workflows/execute-benchmarked-flagship-validation.yml \
+            .github/workflows/execute-benchmarked-flagship-validation-v2.yml
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: validate benchmarked reasoning flagships"
+          git push origin HEAD:fix/validate-benchmarked-reasoning-flagships
