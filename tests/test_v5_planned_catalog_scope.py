@@ -155,6 +155,7 @@ class PlannedCatalogScopeTests(unittest.TestCase):
     def test_default_matches_governance_rank_ceiling(self) -> None:
         args = pipeline.build_parser().parse_args(["--task", "test"])
         self.assertEqual(args.ranking_limit, 1000)
+        self.assertEqual(pipeline.model_market.MAX_CATALOG_MODELS, 1000)
 
 
 if __name__ == "__main__":
