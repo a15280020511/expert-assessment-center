@@ -1,4 +1,4 @@
-name: V5 Price-Ranked Paid Candidate Acceptance
+name: V5 Governance-Owned Paid Candidate Acceptance
 
 on:
   issue_comment:
@@ -10,15 +10,15 @@ permissions:
   actions: read
 
 concurrency:
-  group: v5-price-ranked-paid-candidate-acceptance
+  group: v5-governance-owned-paid-candidate-acceptance
   cancel-in-progress: false
 
 jobs:
-  accept-price-ranked-main-candidate:
+  accept-governed-main-candidate:
     if: >-
       github.actor == github.repository_owner &&
       startsWith(github.event.issue.title, '[acceptance]') &&
-      startsWith(github.event.comment.body, '/accept-price-main ')
+      startsWith(github.event.comment.body, '/accept-governed-main ')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -31,21 +31,18 @@ jobs:
       MODEL_TIMEOUT_SECONDS: "240"
       PARALLEL_WORKERS: "4"
       OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
-      OPENROUTER_APP_NAME: price-ranked-paid-candidate-acceptance
-      MAXIMUM_TOTAL_CALLS: "10"
-      MAXIMUM_RECOVERY_CALLS: "3"
-      COST_ADVISORY_USD: "1.0"
+      OPENROUTER_APP_NAME: governance-owned-paid-candidate-acceptance
 
     steps:
-      - name: Validate exact price-ranked candidate command
+      - name: Validate exact governed candidate command
         id: source
         uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
         with:
           script: |
             const body = String(context.payload.comment?.body || '').trim();
-            const match = body.match(/^\/accept-price-main ([0-9a-f]{40})$/);
+            const match = body.match(/^\/accept-governed-main ([0-9a-f]{40})$/);
             if (!match) {
-              core.setFailed('command must be /accept-price-main <40-character-main-sha>');
+              core.setFailed('command must be /accept-governed-main <40-character-main-sha>');
               return;
             }
             const candidate = match[1];
@@ -109,92 +106,103 @@ jobs:
           python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
           python -m pip check
 
-      - name: Create isolated price-ranked acceptance ticket
+      - name: Validate governance-signed acceptance ticket
+        id: ticket
         env:
           CANDIDATE_SHA: ${{ steps.source.outputs.candidate_sha }}
         run: |
           set -euo pipefail
+          mkdir -p ticket-artifacts
           PYTHONPATH=open-model-market python - <<'PY'
           import argparse
           import json
           import os
+          from pathlib import Path
 
           import v5_price_ranked_issue_ticket
 
-          candidate = os.environ["CANDIDATE_SHA"]
-          task_id = f"price-acceptance-{candidate[:16]}"
-          packet = {
-              "task_id": task_id,
-              "route": "expert-team",
-              "objective": "One explicit paid acceptance of the exact price-ranked main candidate.",
-              "task": {
-                  "question": (
-                      "某机构只能选择一个实施方案。已知方案A成本100万元、交付30天、"
-                      "失败概率12%；方案B成本140万元、交付20天、失败概率7%；"
-                      "方案C成本220万元、交付10天、失败概率4%。仅依据题面比较成本、"
-                      "时效和风险，给出条件化选择。"
-                  ),
-                  "requirements": [
-                      "严格使用四个Markdown二级标题：已知条件、计算与比较、风险与反证、结论与下一步。",
-                      "明确区分题面事实、推断和建议，不得引入题面外事实。",
-                      "禁止工具、搜索、联网、插件、MCP、代码执行和外部数据调用。",
-                      "只复用题面数字进行排序和条件化比较，不得编造外部数据。",
-                      "完整交付优先，删除重复和无关扩展。"
-                  ],
-                  "language": "zh-CN"
-              },
-              "execution_acceptance": [
-                  "exact candidate SHA",
-                  "price-ranked runtime success",
-                  "distinct model companies",
-                  "NetworkX DAG",
-                  "zero governance model calls",
-                  "request and response no-tools boundary",
-                  "independent primary Artifact revalidation PASS",
-                  "final price-ranked Attestation PASS"
-              ],
-              "approved_budget": {
-                  "calls": 10,
-                  "maximum_recovery_calls": 3,
-                  "cost_policy": "prompt_led_soft_governance",
-                  "cost_anomaly_usd": 1.0
-              },
-              "private_output": False
-          }
+          event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
+          raw = str((event.get("issue") or {}).get("body") or "").strip()
+          packet = json.loads(raw)
+          if not isinstance(packet, dict):
+              raise SystemExit("acceptance Issue body must be one JSON object")
+          plan = packet.get("governance_model_plan")
+          if not isinstance(plan, dict):
+              raise SystemExit("governance_model_plan is required")
+          if packet.get("route") != "expert-team":
+              raise SystemExit("route must be expert-team")
+          if packet.get("private_output") is not False:
+              raise SystemExit("private_output must be false")
+          if plan.get("selection_authority") != "decision-system-governance":
+              raise SystemExit("selection authority must be decision-system-governance")
+          if plan.get("model_calls") != 0:
+              raise SystemExit("governance plan must prove zero model calls")
+          if plan.get("expert_center_reranking_allowed") is not False:
+              raise SystemExit("expert center reranking must be disabled")
+          if plan.get("model_substitution_allowed") is not False:
+              raise SystemExit("model substitution must be disabled")
+
+          budget = packet.get("approved_budget")
+          if not isinstance(budget, dict):
+              raise SystemExit("approved_budget is required")
+          calls = budget.get("calls")
+          recovery = budget.get("maximum_recovery_calls")
+          if not isinstance(calls, int) or not isinstance(recovery, int):
+              raise SystemExit("acceptance call budget is invalid")
+          if calls < 4 or calls > 16 or recovery < 0 or recovery > 4:
+              raise SystemExit("acceptance call budget is outside constitutional bounds")
+
+          root = Path("ticket-artifacts")
+          (root / "governance-acceptance-ticket.json").write_text(
+              json.dumps(packet, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          task_id = str(packet.get("task_id") or "")
           args = argparse.Namespace(
               event_path=None,
-              issue_title="[execution] exact price-ranked main candidate acceptance",
+              issue_title="[execution] exact governance-owned main candidate acceptance",
               issue_body=json.dumps(packet, ensure_ascii=False),
               issue_number=int(os.environ["ISSUE_NUMBER"]),
               actor=os.environ["GITHUB_REPOSITORY_OWNER"],
               author_association="OWNER",
               comment_body=f"/run-expert-team {task_id}",
-              output_dir="ticket-artifacts"
+              output_dir=str(root),
           )
           raise SystemExit(v5_price_ranked_issue_ticket.prepare(args))
           PY
           test "$(jq -r '.accepted' ticket-artifacts/ticket-status.json)" = "true"
-          test "$(jq -r '.task_id' ticket-artifacts/ticket-status.json)" = "price-acceptance-${CANDIDATE_SHA:0:16}"
-          python open-model-market/v5_price_ranked_ticket_gate.py \
-            --output-dir ticket-artifacts \
-            --expected-calls "$MAXIMUM_TOTAL_CALLS" \
-            --expected-recovery-calls "$MAXIMUM_RECOVERY_CALLS" \
-            --expected-cost-anomaly-usd "$COST_ADVISORY_USD"
+          calls="$(jq -r '.approved_budget.calls' ticket-artifacts/ticket.json)"
+          recovery="$(jq -r '.approved_budget.maximum_recovery_calls' ticket-artifacts/ticket.json)"
+          anomaly="$(jq -r '.approved_budget.cost_anomaly_usd // empty' ticket-artifacts/ticket.json)"
+          gate=(python open-model-market/v5_price_ranked_ticket_gate.py
+            --output-dir ticket-artifacts
+            --expected-calls "$calls"
+            --expected-recovery-calls "$recovery")
+          if [ -n "$anomaly" ]; then
+            gate+=(--expected-cost-anomaly-usd "$anomaly")
+          fi
+          "${gate[@]}"
+          echo "calls=$calls" >> "$GITHUB_OUTPUT"
+          echo "recovery=$recovery" >> "$GITHUB_OUTPUT"
+          echo "anomaly=$anomaly" >> "$GITHUB_OUTPUT"
 
-      - name: Execute exact candidate with price-ranked runtime
+      - name: Execute exact candidate with governance-owned runtime
         id: execute
         continue-on-error: true
         env:
           AUTHORITATIVE_EXECUTION_SHA: ${{ steps.source.outputs.candidate_sha }}
         run: |
           task="$(cat ticket-artifacts/task.txt)"
-          python open-model-market/v5_price_ranked_production_ticket.py \
-            --task "$task" \
-            --output-dir ticket-artifacts \
-            --maximum-total-calls "$MAXIMUM_TOTAL_CALLS" \
-            --maximum-recovery-calls "$MAXIMUM_RECOVERY_CALLS" \
-            --cost-anomaly-usd "$COST_ADVISORY_USD" \
-            --require-live-catalog
+          command=(python open-model-market/v5_price_ranked_production_ticket.py
+            --task "$task"
+            --output-dir ticket-artifacts
+            --maximum-total-calls "${{ steps.ticket.outputs.calls }}"
+            --maximum-recovery-calls "${{ steps.ticket.outputs.recovery }}"
+            --require-live-catalog)
+          if [ -n "${{ steps.ticket.outputs.anomaly }}" ]; then
+            command+=(--cost-anomaly-usd "${{ steps.ticket.outputs.anomaly }}")
+          fi
+          "${command[@]}"
 
       - name: Prepare report package
         id: prepare_report
@@ -205,7 +213,7 @@ jobs:
             --comments-dir ticket-artifacts/report-comments \
             --run-url "$RUN_URL"
 
-      - name: Audit complete price-ranked evidence
+      - name: Audit complete governance-owned evidence
         id: audit
         continue-on-error: true
         run: |
@@ -234,7 +242,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: price-ranked-paid-candidate-primary-${{ github.run_id }}
+          name: governance-owned-paid-candidate-primary-${{ github.run_id }}
           path: ticket-artifacts/
           if-no-files-found: error
           retention-days: 30
@@ -250,8 +258,6 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          test -n "$PRIMARY_ARTIFACT_ID"
-          test -n "$PRIMARY_ARTIFACT_DIGEST"
           gh api \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
@@ -261,15 +267,18 @@ jobs:
           mkdir independently-downloaded-primary
           unzip -q uploaded-primary-artifact.zip -d independently-downloaded-primary
           set +e
-          python open-model-market/v5_price_ranked_independent_revalidation.py \
-            --artifact-dir independently-downloaded-primary \
-            --expected-sha "$CANDIDATE_SHA" \
-            --expected-run-id "${{ github.run_id }}" \
-            --maximum-calls "$MAXIMUM_TOTAL_CALLS" \
-            --cost-advisory-usd "$COST_ADVISORY_USD" \
-            --archive uploaded-primary-artifact.zip \
-            --expected-artifact-digest "$PRIMARY_ARTIFACT_DIGEST" \
-            --output independent-revalidation.json
+          command=(python open-model-market/v5_price_ranked_independent_revalidation.py
+            --artifact-dir independently-downloaded-primary
+            --expected-sha "$CANDIDATE_SHA"
+            --expected-run-id "${{ github.run_id }}"
+            --maximum-calls "${{ steps.ticket.outputs.calls }}"
+            --archive uploaded-primary-artifact.zip
+            --expected-artifact-digest "$PRIMARY_ARTIFACT_DIGEST"
+            --output independent-revalidation.json)
+          if [ -n "${{ steps.ticket.outputs.anomaly }}" ]; then
+            command+=(--cost-advisory-usd "${{ steps.ticket.outputs.anomaly }}")
+          fi
+          "${command[@]}"
           exit_code=$?
           set -e
           status="$(jq -r '.status // "FAIL"' independent-revalidation.json 2>/dev/null || printf 'FAIL')"
@@ -277,7 +286,7 @@ jobs:
           test "$exit_code" -eq 0
           test "$status" = "PASS"
 
-      - name: Generate final price-ranked attestation and receipt
+      - name: Generate final governance-owned attestation and receipt
         id: attest
         if: always()
         env:
@@ -300,9 +309,6 @@ jobs:
           from pathlib import Path
 
           root = Path("ticket-artifacts")
-          def load(name):
-              return json.loads((root / name).read_text(encoding="utf-8"))
-
           errors = []
           outcomes = {
               "execute": os.environ.get("EXECUTE_OUTCOME", ""),
@@ -310,7 +316,7 @@ jobs:
               "audit": os.environ.get("AUDIT_OUTCOME", ""),
               "manifest": os.environ.get("MANIFEST_OUTCOME", ""),
               "upload": os.environ.get("UPLOAD_OUTCOME", ""),
-              "independent": os.environ.get("INDEPENDENT_OUTCOME", "")
+              "independent": os.environ.get("INDEPENDENT_OUTCOME", ""),
           }
           for key, value in outcomes.items():
               if value != "success":
@@ -318,67 +324,70 @@ jobs:
           if os.environ.get("INDEPENDENT_STATUS") != "PASS":
               errors.append("independent-status-not-pass")
 
-          required = [
-              "production-runtime.json",
-              "v5-runtime-config.json",
-              "v5-price-ranked-selection.json",
-              "v5-request-audit.json",
-              "v5-governance-calls.json",
-              "artifact-manifest.json"
-          ]
-          for name in required:
-              if not (root / name).is_file():
+          def load(name):
+              path = root / name
+              if not path.is_file():
                   errors.append(f"missing:{name}")
+                  return {}
+              return json.loads(path.read_text(encoding="utf-8"))
 
-          if not errors:
-              runtime = load("production-runtime.json")
-              runtime_config = load("v5-runtime-config.json")
-              selection = load("v5-price-ranked-selection.json")
-              request_audit = load("v5-request-audit.json")
-              governance = load("v5-governance-calls.json")
-              if runtime.get("runtime_version") != "v5-price-ranked-runtime-1":
-                  errors.append("wrong-runtime-version")
-              if runtime.get("entrypoint") != "v5_price_ranked_production_ticket.py":
-                  errors.append("wrong-runtime-entrypoint")
-              if runtime.get("selection_authority") != "python-price-ranked-orchestrator":
-                  errors.append("wrong-selection-authority")
-              if runtime.get("orchestration_library") != "networkx":
-                  errors.append("networkx-not-active")
-              if runtime_config.get("governance_model_calls") != 0:
-                  errors.append("runtime-governance-calls-not-zero")
-              if runtime_config.get("claude_mechanism_enabled") is not False:
-                  errors.append("claude-mechanism-not-disabled")
-              if selection.get("status") != "PASS":
-                  errors.append("selection-not-pass")
-              companies = [
-                  str(row.get("company") or "")
-                  for row in selection.get("cheapest_candidate_set", [])
-              ]
-              if len(companies) < 3 or len(companies) != len(set(companies)):
-                  errors.append("selected-companies-not-distinct")
-              costs = [
-                  float(row.get("estimated_call_cost_usd") or 0.0)
-                  for row in selection.get("cheapest_candidate_set", [])
-              ]
-              if costs != sorted(costs):
-                  errors.append("candidate-cost-order-invalid")
-              if request_audit.get("status") != "PASS":
-                  errors.append("request-audit-not-pass")
-              if governance.get("actual_governance_calls") != 0:
-                  errors.append("actual-governance-calls-not-zero")
-              if governance.get("claude_mechanism_enabled") is not False:
-                  errors.append("governance-claude-flag-invalid")
+          runtime = load("production-runtime.json")
+          config = load("v5-runtime-config.json")
+          selection = load("v5-price-ranked-selection.json")
+          request_audit = load("v5-request-audit.json")
+          governance = load("v5-governance-calls.json")
+          plan = load("governance-model-plan.json")
+          ticket = load("ticket.json")
+          manifest = load("artifact-manifest.json")
+
+          authority = "decision-system-governance"
+          plan_sha = str(plan.get("plan_sha256") or "")
+          if runtime.get("runtime_version") != "v5-governance-plan-runtime-1":
+              errors.append("wrong-runtime-version")
+          if config.get("selection_authority") != authority:
+              errors.append("runtime-selection-authority-not-governance")
+          if config.get("model_selection_performed_locally") is not False:
+              errors.append("runtime-local-selection-not-disabled")
+          if config.get("model_reranking_performed_locally") is not False:
+              errors.append("runtime-local-reranking-not-disabled")
+          if config.get("governance_model_plan_sha256") != plan_sha:
+              errors.append("runtime-plan-digest-mismatch")
+          if selection.get("status") != "PASS":
+              errors.append("selection-materialization-not-pass")
+          if selection.get("selection_authority") != authority:
+              errors.append("selection-authority-not-governance")
+          if selection.get("model_selection_performed_locally") is not False:
+              errors.append("selection-local-selection-not-disabled")
+          if selection.get("model_reranking_performed_locally") is not False:
+              errors.append("selection-local-reranking-not-disabled")
+          if selection.get("model_substitution_performed_locally") is not False:
+              errors.append("selection-local-substitution-not-disabled")
+          if ticket.get("governance_model_plan", {}).get("plan_sha256") != plan_sha:
+              errors.append("ticket-plan-digest-mismatch")
+          if request_audit.get("status") != "PASS":
+              errors.append("request-audit-not-pass")
+          if request_audit.get("external_tools_allowed") is not False:
+              errors.append("request-audit-allows-tools")
+          if request_audit.get("provider_fallback_allowed") is not False:
+              errors.append("request-audit-allows-provider-fallback")
+          if int(governance.get("actual_governance_calls") or 0) != 0:
+              errors.append("expert-center-governance-calls-not-zero")
+          if not manifest:
+              errors.append("manifest-not-readable")
 
           independent_path = Path("independent-revalidation.json")
           independent_sha = ""
           if independent_path.is_file():
+              independent = json.loads(independent_path.read_text(encoding="utf-8"))
+              if independent.get("status") != "PASS":
+                  errors.append("independent-revalidation-not-pass")
               independent_sha = hashlib.sha256(independent_path.read_bytes()).hexdigest()
           else:
               errors.append("missing-independent-revalidation")
 
           status = "PASS" if not errors else "FAIL"
           attestation = {
-              "schema_version": "v5-price-ranked-paid-candidate-attestation-1",
+              "schema_version": "v5-governance-owned-paid-candidate-attestation-1",
               "status": status,
               "candidate_sha": os.environ.get("CANDIDATE_SHA", ""),
               "previous_production_sha": os.environ.get("PREVIOUS_PRODUCTION_SHA", ""),
@@ -386,30 +395,33 @@ jobs:
               "primary_artifact_id": os.environ.get("PRIMARY_ARTIFACT_ID", ""),
               "primary_artifact_digest": os.environ.get("PRIMARY_ARTIFACT_DIGEST", ""),
               "independent_revalidation_sha256": independent_sha,
-              "selection_authority": "python-price-ranked-orchestrator",
+              "selection_authority": authority,
+              "model_selection_performed_locally": False,
+              "model_reranking_performed_locally": False,
               "orchestration_library": "networkx",
-              "claude_mechanism_enabled": False,
               "governance_model_calls": 0,
               "outcomes": outcomes,
-              "errors": errors
+              "errors": errors,
           }
           rendered = json.dumps(attestation, ensure_ascii=False, indent=2)
-          Path("final-price-ranked-attestation.json").write_text(rendered, encoding="utf-8")
+          Path("final-governance-owned-attestation.json").write_text(
+              rendered + "\n", encoding="utf-8"
+          )
           receipt = {
-              "schema_version": "v5-price-ranked-paid-candidate-receipt-1",
+              "schema_version": "v5-governance-owned-paid-candidate-receipt-1",
               "status": status,
               "candidate_sha": attestation["candidate_sha"],
               "production_moved": False,
               "primary_artifact_id": attestation["primary_artifact_id"],
               "primary_artifact_digest": attestation["primary_artifact_digest"],
               "attestation_sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
-              "actual_governance_calls": 0,
-              "claude_mechanism_enabled": False,
-              "errors": errors
+              "selection_authority": authority,
+              "model_selection_performed_locally": False,
+              "errors": errors,
           }
           Path("candidate-acceptance-receipt.json").write_text(
-              json.dumps(receipt, ensure_ascii=False, indent=2),
-              encoding="utf-8"
+              json.dumps(receipt, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
           )
           print(json.dumps(receipt, ensure_ascii=False))
           PY
@@ -421,46 +433,39 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: price-ranked-paid-candidate-final-${{ github.run_id }}
+          name: governance-owned-paid-candidate-final-${{ github.run_id }}
           path: |
+            final-governance-owned-attestation.json
+            candidate-acceptance-receipt.json
+            independent-revalidation.json
             checked-out-candidate-sha.txt
             previous-production-sha.txt
-            independently-downloaded-primary/
-            independent-revalidation.json
-            uploaded-primary-artifact.zip
-            final-price-ranked-attestation.json
-            candidate-acceptance-receipt.json
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 90
 
-      - name: Publish authoritative price-ranked acceptance status
+      - name: Publish candidate acceptance receipt
         if: always()
         uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
         env:
-          RECEIPT_FILE: candidate-acceptance-receipt.json
+          STATUS: ${{ steps.attest.outputs.status }}
+          CANDIDATE_SHA: ${{ steps.source.outputs.candidate_sha }}
+          PRIMARY_ARTIFACT_ID: ${{ steps.ticket_artifact.outputs.artifact-id }}
+          PRIMARY_ARTIFACT_DIGEST: ${{ steps.ticket_artifact.outputs.artifact-digest }}
           FINAL_ARTIFACT_ID: ${{ steps.final_artifact.outputs.artifact-id }}
-          RUN_URL: ${{ env.RUN_URL }}
         with:
           script: |
-            const fs = require('fs');
-            let receipt = {status: 'FAIL', errors: ['receipt-missing']};
-            if (fs.existsSync(process.env.RECEIPT_FILE)) {
-              receipt = JSON.parse(fs.readFileSync(process.env.RECEIPT_FILE, 'utf8'));
-            }
+            const status = process.env.STATUS || 'FAIL';
             const body = [
-              `## PRICE_RANKED_CANDIDATE_${receipt.status}`,
+              `## GOVERNANCE_OWNED_CANDIDATE_${status}`,
               '',
-              `- Candidate SHA: \`${receipt.candidate_sha || ''}\``,
-              `- Run: ${process.env.RUN_URL}`,
-              `- Primary Artifact ID: \`${receipt.primary_artifact_id || ''}\``,
-              `- Primary Artifact Digest: \`${receipt.primary_artifact_digest || ''}\``,
-              `- Final Evidence Artifact ID: \`${process.env.FINAL_ARTIFACT_ID || ''}\``,
-              `- Selection: \`python-price-ranked-orchestrator\``,
-              `- Orchestration: \`networkx\``,
-              `- Claude mechanism: \`disabled\``,
-              `- Governance model calls: \`0\``,
-              `- Production moved: \`false\``,
-              `- Errors: \`${JSON.stringify(receipt.errors || [])}\``
+              `- Candidate SHA: \`${process.env.CANDIDATE_SHA || ''}\``,
+              '- Selection authority: `decision-system-governance`',
+              '- Expert-center local model selection: `false`',
+              `- Primary Artifact ID: \`${process.env.PRIMARY_ARTIFACT_ID || ''}\``,
+              `- Primary Artifact digest: \`${process.env.PRIMARY_ARTIFACT_DIGEST || ''}\``,
+              `- Final Artifact ID: \`${process.env.FINAL_ARTIFACT_ID || ''}\``,
+              '- Production moved: `false`',
+              `- Run: \`${process.env.RUN_URL}\``
             ].join('\n');
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -469,10 +474,17 @@ jobs:
               body
             });
 
-      - name: Verify authoritative price-ranked acceptance outcome
+      - name: Verify authoritative governance-owned acceptance outcome
         if: always()
         run: |
           set -euo pipefail
-          test -f candidate-acceptance-receipt.json
-          test "$(jq -r '.status' candidate-acceptance-receipt.json)" = "PASS"
+          test "${{ steps.execute.outcome }}" = "success"
+          test "${{ steps.prepare_report.outcome }}" = "success"
+          test "${{ steps.audit.outcome }}" = "success"
+          test "${{ steps.manifest.outcome }}" = "success"
+          test "${{ steps.ticket_artifact.outcome }}" = "success"
+          test "${{ steps.independent.outcome }}" = "success"
+          test "${{ steps.independent.outputs.status }}" = "PASS"
           test "${{ steps.attest.outputs.status }}" = "PASS"
+          test "${{ steps.final_artifact.outcome }}" = "success"
+          test "$(jq -r '.status' candidate-acceptance-receipt.json)" = "PASS"
