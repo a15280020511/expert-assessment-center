@@ -85,19 +85,25 @@ def _recovery(model: str) -> dict[str, object]:
     }
 
 
+def _original_recovery_assignments() -> dict[str, list[dict[str, object]]]:
+    # Mapping insertion order is intentionally opposite to governance priority.
+    return {
+        "independent-1": [_recovery("moonshotai/kimi-k3")],
+        "independent-2": [_recovery("anthropic/claude-opus-5")],
+        "review": [_recovery("nvidia/nemotron-3-ultra")],
+        "final": [_recovery("z-ai/glm-5.2")],
+    }
+
+
 class GlobalRecoveryPoolContractTests(unittest.TestCase):
     def test_materializer_recovers_governance_round_robin_order(self):
         graph = _graph()
-        # Mapping insertion order is intentionally the opposite of governance
-        # priority. The governed orchestrator assigned the signed sequence as:
+        # The governed orchestrator assigned the signed sequence as:
         # final -> review -> independent-1 -> independent-2.
-        original = {
-            "independent-1": [_recovery("moonshotai/kimi-k3")],
-            "independent-2": [_recovery("anthropic/claude-opus-5")],
-            "review": [_recovery("nvidia/nemotron-3-ultra")],
-            "final": [_recovery("z-ai/glm-5.2")],
-        }
-        ordered = materializer._unique_recovery_candidates(graph, original)
+        ordered = materializer._unique_recovery_candidates(
+            graph,
+            _original_recovery_assignments(),
+        )
         self.assertEqual(
             [
                 "z-ai/glm-5.2",
@@ -107,6 +113,48 @@ class GlobalRecoveryPoolContractTests(unittest.TestCase):
             ],
             [row["model"] for row in ordered],
         )
+        self.assertEqual(
+            ["final", "review", "independent-1", "independent-2"],
+            [row["governance_recovery_owner_node_id"] for row in ordered],
+        )
+
+    def test_priority_protection_prevents_lower_tier_starvation(self):
+        graph = _graph()
+        shared = materializer._shared_recovery_pool(
+            graph,
+            _original_recovery_assignments(),
+        )
+        models = {
+            node_id: [str(row["model"]) for row in rows]
+            for node_id, rows in shared.items()
+        }
+        self.assertEqual(
+            [
+                "z-ai/glm-5.2",
+                "nvidia/nemotron-3-ultra",
+                "moonshotai/kimi-k3",
+                "anthropic/claude-opus-5",
+            ],
+            models["final"],
+        )
+        self.assertEqual(
+            [
+                "nvidia/nemotron-3-ultra",
+                "moonshotai/kimi-k3",
+                "anthropic/claude-opus-5",
+            ],
+            models["review"],
+        )
+        self.assertEqual(
+            ["moonshotai/kimi-k3", "anthropic/claude-opus-5"],
+            models["independent-1"],
+        )
+        self.assertEqual(
+            ["anthropic/claude-opus-5"],
+            models["independent-2"],
+        )
+        self.assertNotIn("z-ai/glm-5.2", models["independent-1"])
+        self.assertNotIn("nvidia/nemotron-3-ultra", models["independent-1"])
 
     def test_replacement_identity_and_company_are_consumed_once(self):
         graph = _graph()
