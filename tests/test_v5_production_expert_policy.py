@@ -50,14 +50,14 @@ class ProductionExpertPolicyTests(unittest.TestCase):
             build_runtime(config, retry_policy=retry)
         )
 
-    def test_expert_request_has_exact_privacy_contract(self) -> None:
+    def test_expert_request_has_audited_provider_pool_privacy_contract(self) -> None:
         base = {
             "model": "deepseek/model",
             "messages": [{"role": "user", "content": "task"}],
             "provider": {
-                "only": ["deepseek"],
-                "order": ["deepseek"],
-                "allow_fallbacks": False,
+                "only": ["deepseek", "deepinfra"],
+                "order": ["deepseek", "deepinfra"],
+                "allow_fallbacks": True,
                 "require_parameters": True,
             },
         }
@@ -74,9 +74,9 @@ class ProductionExpertPolicyTests(unittest.TestCase):
         self.assertTrue(EXPERT_ZDR_REQUIRED)
         self.assertEqual("deny", provider["data_collection"])
         self.assertIs(True, provider["zdr"])
-        self.assertEqual(["deepseek"], provider["only"])
-        self.assertEqual(["deepseek"], provider["order"])
-        self.assertIs(False, provider["allow_fallbacks"])
+        self.assertEqual(["deepseek", "deepinfra"], provider["only"])
+        self.assertEqual(["deepseek", "deepinfra"], provider["order"])
+        self.assertIs(True, provider["allow_fallbacks"])
 
     def test_tool_fields_remain_forbidden_after_privacy_policy(self) -> None:
         base = {
@@ -195,7 +195,7 @@ class ProductionExpertPolicyTests(unittest.TestCase):
         )
         self.assertIn("unsupported-evidence-or-quantity", report)
 
-    def test_installer_replaces_prompt_and_engine_without_fallback(self) -> None:
+    def test_installer_replaces_prompt_and_engine_without_model_retry(self) -> None:
         runtime = self._installed_runtime()
         self.assertIsInstance(runtime, ProductionRuntime)
         self.assertIsInstance(runtime.prompt_policy, ProductionExpertPromptPolicy)
@@ -221,7 +221,12 @@ class ProductionExpertPolicyTests(unittest.TestCase):
         self.assertTrue(privacy["live_zdr_endpoint_inventory_required"])
         self.assertTrue(privacy["catalog_and_request_policy_must_match"])
         self.assertFalse(privacy["hardcoded_provider_exclusions_allowed"])
-        self.assertFalse(privacy["provider_fallback_allowed"])
+        self.assertTrue(privacy["provider_fallback_allowed"])
+        self.assertEqual(
+            "same-model-audited-qualified-provider-whitelist",
+            privacy["provider_fallback_scope"],
+        )
+        self.assertFalse(privacy["unrestricted_provider_fallback_allowed"])
         evidence = policy["failure_evidence"]
         self.assertTrue(evidence["failed_result_must_be_persisted"])
         self.assertTrue(evidence["governance_and_expert_ledgers_must_be_merged"])
