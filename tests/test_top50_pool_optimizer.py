@@ -15,12 +15,7 @@ from v5_top50_pool_optimizer import materialize_top50_selection
 
 def _sha(value):
     return hashlib.sha256(
-        json.dumps(
-            value,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
 
 
@@ -39,6 +34,7 @@ def _packet() -> dict:
                 "reasoning_supported": True,
                 "pool_source": "openrouter-most-popular-last-week-token-volume",
                 "popularity_period": "week",
+                "provider_routing_mode": "unrestricted-openrouter",
             }
         )
         candidates.append(
@@ -52,28 +48,23 @@ def _packet() -> dict:
                 "completion_usd_per_million": float(rank) * 2 / 3,
                 "official_intelligence_rank": 51 - rank,
                 "popularity_rank": rank,
-                "qualified_provider_count": 1 + rank % 5,
-                "endpoint_inventory_sha256": f"{rank:064x}"[-64:],
                 "required_context_tokens": 8192,
-                "minimum_completion_tokens": 1024,
                 "reasoning_rank_verified": True,
                 "reasoning_supported": True,
                 "selection_evidence": (
                     "openrouter-top-weekly-reasoning+"
-                    "live-exact-endpoint-qualified+"
-                    "authenticated-zdr-endpoint-qualified"
+                    "model-metadata-qualified+"
+                    "unrestricted-openrouter-provider-routing"
                 ),
                 "expert_center_selectable": True,
+                "provider_routing_mode": "unrestricted-openrouter",
+                "provider_restrictions_applied": False,
             }
         )
     plan = {
         "plan_sha256": "source-plan",
-        "top50_reasoning_pool_schema_version": (
-            "governance-openrouter-top50-reasoning-pool-v1"
-        ),
-        "top50_reasoning_pool_source": (
-            "openrouter-most-popular-last-week-token-volume"
-        ),
+        "top50_reasoning_pool_schema_version": "governance-openrouter-top50-reasoning-pool-v2-open-provider",
+        "top50_reasoning_pool_source": "openrouter-most-popular-last-week-token-volume",
         "top50_reasoning_pool_period": "week",
         "top50_reasoning_pool_size": 50,
         "top50_reasoning_models": raw,
@@ -82,6 +73,10 @@ def _packet() -> dict:
         "top50_candidate_pool_authority": "decision-system-governance",
         "top50_model_assignment_authority": "expert-assessment-center-ortools",
         "expert_center_top50_pool_selection_allowed": True,
+        "top50_provider_routing_mode": "unrestricted-openrouter",
+        "top50_provider_restrictions_applied": False,
+        "top50_provider_endpoint_qualification_required": False,
+        "top50_zdr_provider_qualification_required": False,
         "top50_old_flagship_filter_applied": False,
         "top50_model_calls": 0,
     }
@@ -101,18 +96,15 @@ class Top50PoolOptimizerTests(unittest.TestCase):
         self.assertEqual(len(plan["selected_models"]), 4)
         self.assertEqual(len(plan["recovery_models"]), 4)
         self.assertEqual(len(plan["expert_center_top50_inventory"]), 50)
-        companies = {
-            row["company"]
-            for row in [*plan["selected_models"], *plan["recovery_models"]]
-        }
+        companies = {row["company"] for row in [*plan["selected_models"], *plan["recovery_models"]]}
         self.assertEqual(len(companies), 8)
         self.assertTrue(plan["optimizer_audit"]["optimality_proven"])
+        self.assertFalse(plan["optimizer_audit"]["constraints"]["provider_resilience_used"])
+        self.assertTrue(plan["optimizer_audit"]["constraints"]["provider_routing_unrestricted"])
+        self.assertEqual(plan["provider_routing_mode"], "unrestricted-openrouter")
+        self.assertFalse(plan["provider_restrictions_applied"])
         self.assertEqual(receipt["optimizer_audit"]["optimizer"], "ortools-cp-sat")
-        validate_top50_contract(
-            plan,
-            plan["selected_models"],
-            plan["recovery_models"],
-        )
+        validate_top50_contract(plan, plan["selected_models"], plan["recovery_models"])
 
     def test_deterministic_assignment(self) -> None:
         first, _ = materialize_top50_selection(_packet())
