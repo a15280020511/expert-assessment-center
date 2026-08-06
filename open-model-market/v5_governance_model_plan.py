@@ -135,53 +135,101 @@ def _validated_counts(
     return expert_count, recovery_count
 
 
-def _validate_identity_rows(
-    rows: Sequence[Mapping[str, Any]],
+def _validate_model_row(
+    row: Mapping[str, Any],
     *,
     field: str,
-    selected_companies: set[str] | None = None,
+    index: int,
+) -> tuple[str, str, float]:
+    model = str(row.get("model") or "").strip()
+    company = str(row.get("company") or "").strip()
+    if not MODEL_ID_RE.fullmatch(model):
+        raise GovernanceModelPlanError(f"{field}[{index}].model is invalid")
+    if not company:
+        raise GovernanceModelPlanError(f"{field}[{index}].company is missing")
+    estimated_cost = _positive_finite(
+        row.get("estimated_task_cost_usd"),
+        f"{field}[{index}].estimated_task_cost_usd",
+    )
+    return model, company, estimated_cost
+
+
+def _validate_selected_identity_rows(
+    selected: Sequence[Mapping[str, Any]],
 ) -> tuple[set[str], set[str]]:
     models: set[str] = set()
-    companies = set(selected_companies or ())
-    new_companies: set[str] = set()
-    for index, row in enumerate(rows):
-        model = str(row.get("model") or "").strip()
-        company = str(row.get("company") or "").strip()
-        if not MODEL_ID_RE.fullmatch(model):
-            raise GovernanceModelPlanError(f"{field}[{index}].model is invalid")
-        if not company:
-            raise GovernanceModelPlanError(f"{field}[{index}].company is missing")
+    companies: set[str] = set()
+    for index, row in enumerate(selected):
+        model, company, _ = _validate_model_row(
+            row,
+            field="selected_models",
+            index=index,
+        )
         if model in models:
-            raise GovernanceModelPlanError(f"duplicate model in {field}: {model}")
+            raise GovernanceModelPlanError(
+                f"duplicate model in selected_models: {model}"
+            )
         if company in companies:
             raise GovernanceModelPlanError(
-                f"duplicate or reused model company in {field}: {company}"
+                f"duplicate or reused model company in selected_models: {company}"
             )
-        _positive_finite(
-            row.get("estimated_task_cost_usd"),
-            f"{field}[{index}].estimated_task_cost_usd",
-        )
         models.add(model)
         companies.add(company)
-        new_companies.add(company)
-    return models, new_companies
+    return models, companies
+
+
+def _recovery_price(row: Mapping[str, Any], index: int) -> float:
+    value = row.get("price_rank_usd_per_million")
+    if value is None:
+        value = row.get("estimated_task_cost_usd")
+    return _positive_finite(
+        value,
+        f"recovery_models[{index}].price_rank_usd_per_million",
+    )
+
+
+def _validate_recovery_identity_rows(
+    recoveries: Sequence[Mapping[str, Any]],
+    *,
+    selected_models: set[str],
+) -> set[str]:
+    models = set(selected_models)
+    recovery_models: set[str] = set()
+    previous_price: float | None = None
+    for index, row in enumerate(recoveries):
+        model, _, _ = _validate_model_row(
+            row,
+            field="recovery_models",
+            index=index,
+        )
+        if row.get("slot") != index + 1:
+            raise GovernanceModelPlanError(
+                "recovery model slots must be contiguous"
+            )
+        if model in models:
+            raise GovernanceModelPlanError(
+                f"selected and recovery model sets overlap or repeat: {model}"
+            )
+        price = _recovery_price(row, index)
+        if previous_price is not None and price < previous_price - 1e-12:
+            raise GovernanceModelPlanError(
+                "recovery models must preserve governance price order"
+            )
+        previous_price = price
+        models.add(model)
+        recovery_models.add(model)
+    return recovery_models
 
 
 def _validate_model_sets(
     selected: Sequence[Mapping[str, Any]],
     recoveries: Sequence[Mapping[str, Any]],
 ) -> None:
-    selected_models, selected_companies = _validate_identity_rows(
-        selected,
-        field="selected_models",
-    )
-    recovery_models, _ = _validate_identity_rows(
+    selected_models, _ = _validate_selected_identity_rows(selected)
+    _validate_recovery_identity_rows(
         recoveries,
-        field="recovery_models",
-        selected_companies=selected_companies,
+        selected_models=selected_models,
     )
-    if selected_models & recovery_models:
-        raise GovernanceModelPlanError("selected and recovery model sets overlap")
 
 
 def _validate_roles(selected: Sequence[Mapping[str, Any]]) -> None:

@@ -30,6 +30,52 @@ def resign(ticket: dict) -> None:
     plan["plan_sha256"] = plan_sha256(plan)
 
 
+def expand_to_four_recoveries(ticket: dict) -> None:
+    plan = ticket["governance_model_plan"]
+    plan["recovery_models"] = [
+        {
+            "slot": 1,
+            "model": "rho/forecast",
+            "company": "rho",
+            "estimated_task_cost_usd": 0.05,
+            "prompt_usd_per_million": 0.05,
+            "completion_usd_per_million": 0.15,
+            "selection_evidence": "test-qualified-flagship",
+        },
+        {
+            "slot": 2,
+            "model": "gamma/backup-pro",
+            "company": "gamma",
+            "estimated_task_cost_usd": 0.06,
+            "prompt_usd_per_million": 0.06,
+            "completion_usd_per_million": 0.18,
+            "selection_evidence": "test-qualified-flagship",
+        },
+        {
+            "slot": 3,
+            "model": "deepseek/backup-pro",
+            "company": "deepseek",
+            "estimated_task_cost_usd": 0.07,
+            "prompt_usd_per_million": 0.07,
+            "completion_usd_per_million": 0.21,
+            "selection_evidence": "test-qualified-flagship",
+        },
+        {
+            "slot": 4,
+            "model": "rho/forecast-pro",
+            "company": "rho",
+            "estimated_task_cost_usd": 0.08,
+            "prompt_usd_per_million": 0.08,
+            "completion_usd_per_million": 0.24,
+            "selection_evidence": "test-qualified-flagship",
+        },
+    ]
+    plan["recovery_count"] = 4
+    ticket["approved_budget"]["calls"] = 8
+    ticket["approved_budget"]["maximum_recovery_calls"] = 4
+    resign(ticket)
+
+
 class GovernanceModelPlanTests(unittest.TestCase):
     def test_valid_fixture_passes(self) -> None:
         ticket = load_ticket()
@@ -60,12 +106,67 @@ class GovernanceModelPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(GovernanceModelPlanError, "digest mismatch"):
             validate_governance_model_plan(ticket)
 
-    def test_duplicate_company_is_rejected_after_valid_resign(self) -> None:
+    def test_duplicate_primary_company_is_rejected_after_valid_resign(self) -> None:
         ticket = load_ticket()
         selected = ticket["governance_model_plan"]["selected_models"]
         selected[1]["company"] = selected[0]["company"]
         resign(ticket)
         with self.assertRaisesRegex(GovernanceModelPlanError, "duplicate or reused"):
+            validate_governance_model_plan(ticket)
+
+    def test_recovery_company_reuse_is_allowed_for_distinct_models(self) -> None:
+        ticket = load_ticket()
+        expand_to_four_recoveries(ticket)
+        plan = validate_governance_model_plan(ticket)
+        self.assertEqual(plan["recovery_count"], 4)
+        self.assertEqual(
+            [row["company"] for row in plan["recovery_models"]],
+            ["rho", "gamma", "deepseek", "rho"],
+        )
+        all_models = [
+            row["model"]
+            for row in plan["selected_models"] + plan["recovery_models"]
+        ]
+        self.assertEqual(len(all_models), len(set(all_models)))
+
+    def test_selected_and_recovery_model_overlap_is_rejected(self) -> None:
+        ticket = load_ticket()
+        expand_to_four_recoveries(ticket)
+        selected_model = ticket["governance_model_plan"]["selected_models"][0][
+            "model"
+        ]
+        ticket["governance_model_plan"]["recovery_models"][1]["model"] = (
+            selected_model
+        )
+        resign(ticket)
+        with self.assertRaisesRegex(
+            GovernanceModelPlanError,
+            "overlap or repeat",
+        ):
+            validate_governance_model_plan(ticket)
+
+    def test_recovery_price_order_is_rejected(self) -> None:
+        ticket = load_ticket()
+        expand_to_four_recoveries(ticket)
+        ticket["governance_model_plan"]["recovery_models"][2][
+            "estimated_task_cost_usd"
+        ] = 0.055
+        resign(ticket)
+        with self.assertRaisesRegex(
+            GovernanceModelPlanError,
+            "preserve governance price order",
+        ):
+            validate_governance_model_plan(ticket)
+
+    def test_recovery_slots_must_be_contiguous(self) -> None:
+        ticket = load_ticket()
+        expand_to_four_recoveries(ticket)
+        ticket["governance_model_plan"]["recovery_models"][2]["slot"] = 7
+        resign(ticket)
+        with self.assertRaisesRegex(
+            GovernanceModelPlanError,
+            "recovery model slots must be contiguous",
+        ):
             validate_governance_model_plan(ticket)
 
     def test_role_order_is_rejected_after_valid_resign(self) -> None:
