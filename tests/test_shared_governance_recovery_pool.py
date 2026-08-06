@@ -50,7 +50,7 @@ def node(node_id: str, work: str, role: str, effort: str) -> SelectedNode:
 
 
 class SharedGovernanceRecoveryPoolTests(unittest.TestCase):
-    def test_one_approved_recovery_is_available_to_every_node(self) -> None:
+    def test_one_synthesis_recovery_is_protected_from_lower_tiers(self) -> None:
         independent = node("independent", "work-independent", "analysis", "medium")
         review = node("review", "work-review", "review", "none")
         synthesis = node("synthesis", "work-synthesis", "synthesis", "high")
@@ -107,49 +107,60 @@ class SharedGovernanceRecoveryPoolTests(unittest.TestCase):
 
         softened = _soft_graph(graph)
         pool = softened.metadata["recovery_pool"]
+        policy = softened.metadata["recovery_pool_policy"]
         self.assertEqual(set(pool), {"independent", "review", "synthesis"})
-        self.assertTrue(all(len(rows) == 1 for rows in pool.values()))
+        self.assertEqual(pool["independent"], [])
+        self.assertEqual(pool["review"], [])
+        self.assertEqual(len(pool["synthesis"]), 1)
+        self.assertEqual(policy["candidate_count"], 1)
         self.assertEqual(
-            softened.metadata["recovery_pool_policy"]["candidate_count"], 1
+            policy["availability_policy"],
+            "governance-priority-protected-suffix",
+        )
+        self.assertEqual(
+            policy["candidate_owners"],
+            [
+                {
+                    "model": "google/gemini-2.5-pro",
+                    "owner_node_id": "synthesis",
+                }
+            ],
         )
 
-        independent_recovery = pool["independent"][0]
-        self.assertEqual(independent_recovery["model"], "google/gemini-2.5-pro")
-        self.assertEqual(independent_recovery["assigned_work"], ["work-independent"])
+        synthesis_recovery = pool["synthesis"][0]
         self.assertEqual(
-            independent_recovery["output_contract"],
-            independent.output_contract,
+            synthesis_recovery["model"], "google/gemini-2.5-pro"
         )
         self.assertEqual(
-            independent_recovery["request_config"]["provider"]["only"],
+            synthesis_recovery["assigned_work"], ["work-synthesis"]
+        )
+        self.assertEqual(
+            synthesis_recovery["output_contract"], synthesis.output_contract
+        )
+        self.assertEqual(
+            synthesis_recovery["request_config"]["provider"]["only"],
             ["vertex"],
         )
         self.assertEqual(
-            independent_recovery["request_config"]["reasoning"]["effort"],
-            "medium",
+            synthesis_recovery["request_config"]["reasoning"]["effort"],
+            "high",
         )
-        self.assertNotIn("max_tokens", independent_recovery["request_config"])
+        self.assertNotIn("max_tokens", synthesis_recovery["request_config"])
         self.assertEqual(
-            independent_recovery["parameter_profile"]["supported_parameters"],
+            synthesis_recovery["parameter_profile"]["supported_parameters"],
             ["reasoning", "temperature"],
         )
         self.assertEqual(
-            independent_recovery["parameter_profile"][
+            synthesis_recovery["parameter_profile"][
                 "recommended_output_allowance_tokens"
             ],
             4096,
         )
-
-        review_recovery = pool["review"][0]
-        self.assertNotIn("reasoning", review_recovery["request_config"])
-        self.assertFalse(
-            review_recovery["output_contract"]["final_delivery_node"]
+        self.assertTrue(
+            synthesis_recovery["parameter_profile"][
+                "governance_priority_protected"
+            ]
         )
-
-        identifiers = {
-            rows[0]["candidate_id"] for rows in pool.values()
-        }
-        self.assertEqual(len(identifiers), 3)
 
 
 if __name__ == "__main__":
