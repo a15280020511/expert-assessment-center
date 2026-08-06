@@ -32,10 +32,18 @@
     "parallel_workers": 4
   },
   "provider": {
+    "routing_mode": "unrestricted-openrouter",
+    "openrouter_selects_provider": true,
+    "provider_restrictions_applied": false,
     "allow_fallbacks": true,
-    "require_parameters": true,
-    "explicit_provider_lock_required": true,
-    "same_model_qualified_fallback_only": true,
-    "fallback_scope": "audited-qualified-provider-whitelist"
+    "unrestricted_fallbacks": true,
+    "require_parameters": false,
+    "explicit_provider_lock_required": false,
+    "provider_allowlist_allowed": false,
+    "provider_order_allowed": false,
+    "zdr_filter_allowed": false,
+    "data_collection_filter_allowed": false,
+    "provider_price_filter_allowed": false,
+    "model_substitution_allowed": false
   }
 }
