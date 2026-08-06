@@ -64,23 +64,52 @@ def _recovery_identity(row: Mapping[str, Any]) -> tuple[str, str]:
     )
 
 
+def _recovery_rows(value: Any) -> tuple[Mapping[str, Any], ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(row for row in value if isinstance(row, Mapping))
+
+
 def _unique_recovery_candidates(
     value: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for rows in value.values():
-        if not isinstance(rows, list):
-            continue
-        for row in rows:
-            if not isinstance(row, Mapping):
-                continue
+        for row in _recovery_rows(rows):
             identity = _recovery_identity(row)
             if not all(identity) or identity in seen:
                 continue
             seen.add(identity)
             candidates.append(dict(row))
     return candidates
+
+
+def _soft_recovery_placeholder(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve non-executable compatibility metadata only at its source node."""
+    softened = dict(row)
+    request = row.get("request_config")
+    if isinstance(request, Mapping):
+        softened["request_config"] = _soft_request_config(request)
+    profile = row.get("parameter_profile")
+    if isinstance(profile, Mapping):
+        softened["parameter_profile"] = {
+            **dict(profile),
+            "recommended_output_allowance_is_advisory": True,
+            "local_token_ceiling_enforced": False,
+        }
+    return softened
+
+
+def _local_recovery_placeholders(
+    value: Mapping[str, Any],
+    node_id: str,
+) -> list[dict[str, Any]]:
+    return [
+        _soft_recovery_placeholder(row)
+        for row in _recovery_rows(value.get(node_id))
+        if not all(_recovery_identity(row))
+    ]
 
 
 def _adapt_recovery_candidate(
@@ -143,15 +172,17 @@ def _shared_recovery_pool(
     The runtime budget controller remains the sole authority for how many
     recovery calls may actually be reserved. Repeating candidate metadata per
     node changes availability only; it does not increase the admitted call
-    ceiling or create local model selection.
+    ceiling or create local model selection. Incomplete compatibility rows are
+    softened but remain local and cannot become executable shared candidates.
     """
     candidates = _unique_recovery_candidates(value)
-    if not candidates:
-        return {node.node_id: [] for node in graph.nodes}
     return {
         node.node_id: [
-            _adapt_recovery_candidate(candidate, node)
-            for candidate in candidates
+            *(
+                _adapt_recovery_candidate(candidate, node)
+                for candidate in candidates
+            ),
+            *_local_recovery_placeholders(value, node.node_id),
         ]
         for node in graph.nodes
     }
@@ -168,6 +199,7 @@ def _soft_graph(graph: ExecutionGraph) -> ExecutionGraph:
             "candidate_count": len(_unique_recovery_candidates(recovery_pool)),
             "call_ceiling_authority": "runtime-global-recovery-budget",
             "local_model_selection_performed": False,
+            "incomplete_placeholders_shared": False,
         }
     metadata["resource_governance"] = {
         "mode": "prompt-led-soft-governance",
