@@ -1,5 +1,5 @@
 {
-  "schema_version": "v5-constitutional-policy-7-top50-ortools-open-provider",
+  "schema_version": "v5-constitutional-policy-8-task-adaptive-value-ortools",
   "authority": "CONSTITUTION.md",
   "fail_closed": true,
   "free_first_testing": {
@@ -49,7 +49,8 @@
       "deterministic_task_envelope",
       "governance_signed_weekly_top50_reasoning_pool",
       "model_metadata_filter",
-      "expert_center_ortools_cp_sat_assignment",
+      "current_task_structural_demand_profile",
+      "expert_center_task_adaptive_ortools_cp_sat_assignment",
       "networkx_dag_validation",
       "openrouter_unrestricted_provider_execution",
       "audit_artifact_attestation"
@@ -76,6 +77,11 @@
     "primary_expert_count": 4,
     "warm_recovery_count": 4,
     "remaining_qualified_candidates_role": "ordered-standby",
+    "selection_principles": [
+      "concrete-problem-concrete-analysis",
+      "dynamic-adaptation",
+      "small-effort-large-return"
+    ],
     "hard_constraints": [
       "four_role_slots_complete",
       "four_warm_recovery_slots",
@@ -83,13 +89,19 @@
       "global_company_uniqueness",
       "signed_top50_pool_membership",
       "model_metadata_compatibility",
+      "task_role_native_capacity_compatibility",
       "bounded_call_capacity"
     ],
     "objective_components": [
-      "estimated_price_rank",
+      "role_aware_estimated_current_task_cost_rank",
+      "dynamic_local_reasoning_intelligence_rank",
       "weekly_popularity_rank",
-      "reasoning_intelligence_rank"
+      "task_specific_native_capacity_headroom_rank",
+      "marginal_cost_per_relative_quality_rank"
     ],
+    "task_pressure_changes_role_weights": true,
+    "simple_task_bias": "lower_cost_and_higher_marginal_return",
+    "complex_task_bias": "higher_reasoning_quality_and_capacity_headroom",
     "provider_metric_used": false,
     "non_optimal_action": "fail_closed"
   },
@@ -115,7 +127,12 @@
   },
   "dynamic_task_matching": {
     "required": true,
-    "principle": "current-task-only-weekly-top50-cost-quality-optimization",
+    "principles": [
+      "concrete_problem_concrete_analysis",
+      "dynamic_adaptation",
+      "small_effort_large_return"
+    ],
+    "principle": "current-task-only-dynamic-cost-quality-capacity-marginal-return-optimization",
     "planner": "expert-center-ortools-cp-sat",
     "recomputed_from_current_task": true,
     "cross_task_history_allowed": false,
@@ -123,7 +140,17 @@
     "weekly_popularity_window": 50,
     "intelligence_rank_is_quality_attribute": true,
     "estimated_task_cost_formula_required": true,
-    "primary_objective": "best_cost_effectiveness_subject_to_capability_company_and_model_constraints",
+    "estimated_task_cost_must_include_prompt_and_completion": true,
+    "task_profile_source": "current-ticket-structural-signals-only",
+    "task_profile_signals": [
+      "task_volume",
+      "evidence_volume",
+      "explicit_requirement_count",
+      "acceptance_count",
+      "delivery_shape",
+      "role_specific_prompt_and_completion_load"
+    ],
+    "primary_objective": "maximize_current_task_return_per_cost_subject_to_capability_company_model_and_capacity_constraints",
     "team_size": {
       "primary": 4,
       "warm_recovery": 4,
@@ -140,7 +167,12 @@
       "eligible_models",
       "estimated_prompt_tokens",
       "estimated_completion_tokens",
-      "estimated_task_cost",
+      "role_specific_required_context",
+      "role_specific_estimated_task_cost",
+      "role_specific_cost_weight",
+      "role_specific_intelligence_weight",
+      "capacity_headroom_weight",
+      "marginal_return_rank",
       "primary_models",
       "primary_roles",
       "warm_recovery_models",
@@ -273,6 +305,7 @@
     "remaining_qualified_candidates_role": "ordered-standby",
     "candidates_are_preselected_not_calls": true,
     "actual_recovery_calls_remain_finitely_bounded": true,
+    "warm_recovery_order_uses_same_task_adaptive_objective": true,
     "provider_routing_mode": "unrestricted-openrouter",
     "provider_fallback_allowed": true,
     "unrestricted_provider_fallback_allowed": true,
@@ -299,6 +332,7 @@
     "requires_full_success_not_degraded_success": true,
     "requires_signed_weekly_top50_pool": true,
     "requires_ortools_optimality_proof": true,
+    "requires_task_adaptive_value_scoring": true,
     "requires_unrestricted_provider_routing": true,
     "automatic_merge_allowed": false,
     "automatic_production_ref_move_allowed": false
