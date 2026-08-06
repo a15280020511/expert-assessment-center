@@ -9,6 +9,7 @@ from typing import Any, Mapping, Sequence
 
 POOL_SCHEMA_VERSION = "governance-openrouter-top20-reasoning-pool-v1"
 POOL_SOURCE = "openrouter-most-popular-last-week-token-volume"
+STANDBY_SCHEMA_VERSION = "expert-center-top20-standby-inventory-v1"
 EXPECTED_POOL_SIZE = 20
 EXPECTED_PRIMARY_COUNT = 4
 EXPECTED_RECOVERY_COUNT = 4
@@ -373,14 +374,59 @@ def _materialize_price_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return ranked
 
 
+def _standby_inventory(
+    raw: list[dict[str, Any]],
+    eligible: list[dict[str, Any]],
+    selected_models: list[dict[str, Any]],
+    recovery_models: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Retain every frozen top-20 model in explicit expert-center state."""
+    eligible_by_model = {
+        str(row.get("model") or "").strip(): _without_assignment(row)
+        for row in eligible
+    }
+    active = {str(row.get("model") or "").strip() for row in selected_models}
+    warm_recovery = {
+        str(row.get("model") or "").strip() for row in recovery_models
+    }
+    inventory: list[dict[str, Any]] = []
+    for standby_slot, raw_row in enumerate(raw, 1):
+        model = str(raw_row.get("model") or "").strip()
+        qualified = eligible_by_model.get(model)
+        if model in active:
+            state = "active"
+        elif model in warm_recovery:
+            state = "warm-recovery"
+        elif qualified is not None:
+            state = "extended-standby"
+        else:
+            state = "ineligible-standby"
+        record = dict(raw_row)
+        record.update(
+            {
+                "standby_slot": standby_slot,
+                "standby_state": state,
+                "execution_eligible": qualified is not None,
+                "assigned_for_current_run": state == "active",
+                "callable_under_current_recovery_ceiling": state == "warm-recovery",
+                "retained_by_expert_center": True,
+            }
+        )
+        if qualified is not None:
+            record["qualified_candidate"] = qualified
+        inventory.append(record)
+    return inventory
+
+
 def _selection_receipt(
     source_plan: Mapping[str, Any],
     selected_models: list[dict[str, Any]],
     recovery_models: list[dict[str, Any]],
     price_ranked_models: list[dict[str, Any]],
+    standby_inventory: list[dict[str, Any]],
 ) -> dict[str, Any]:
     receipt = {
-        "schema_version": "expert-center-top20-pool-selection-receipt-v1",
+        "schema_version": "expert-center-top20-pool-selection-receipt-v2",
         "candidate_pool_plan_sha256": source_plan["plan_sha256"],
         "candidate_pool_sha256": source_plan["top20_reasoning_pool_sha256"],
         "selectable_candidates_sha256": source_plan[
@@ -388,11 +434,19 @@ def _selection_receipt(
         ],
         "selection_policy": (
             "top20-reasoning-only -> governance-qualified -> distinct-company -> "
-            "combined-token-price-ascending -> four-primary-four-recovery"
+            "combined-token-price-ascending -> four-primary-four-warm-recovery -> "
+            "retain-all-remaining-models-as-explicit-standby"
         ),
         "selected_models": [row["model"] for row in selected_models],
         "recovery_models": [row["model"] for row in recovery_models],
         "price_ranked_models": [row["model"] for row in price_ranked_models],
+        "top20_inventory_models": [row["model"] for row in standby_inventory],
+        "top20_inventory_states": [
+            {"model": row["model"], "state": row["standby_state"]}
+            for row in standby_inventory
+        ],
+        "top20_inventory_count": len(standby_inventory),
+        "standby_inventory_sha256": _sha256(standby_inventory),
         "model_calls": 0,
     }
     receipt["receipt_sha256"] = _sha256(receipt)
@@ -406,7 +460,7 @@ def materialize_top20_selection(
     if not isinstance(plan_value, Mapping):
         raise Top20PoolSelectionError("governance_model_plan is missing")
     source_plan = dict(plan_value)
-    _, eligible = _validate_pool(source_plan)
+    raw, eligible = _validate_pool(source_plan)
     selected_eight = _select_rows(eligible)
     primary_rows = [dict(row) for row in selected_eight[:EXPECTED_PRIMARY_COUNT]]
     recovery_rows = [dict(row) for row in selected_eight[EXPECTED_PRIMARY_COUNT:]]
@@ -414,7 +468,22 @@ def materialize_top20_selection(
     selected_models = _assign_primary_roles(primary_rows)
     recovery_models = _materialize_recovery_rows(recovery_rows)
     price_ranked_models = _materialize_price_rows(selected_eight)
+    standby_inventory = _standby_inventory(
+        raw,
+        eligible,
+        selected_models,
+        recovery_models,
+    )
     source_plan_sha256 = str(source_plan.get("plan_sha256") or "")
+    state_counts = {
+        state: sum(1 for row in standby_inventory if row["standby_state"] == state)
+        for state in (
+            "active",
+            "warm-recovery",
+            "extended-standby",
+            "ineligible-standby",
+        )
+    }
 
     derived = dict(source_plan)
     derived.update(
@@ -431,6 +500,20 @@ def materialize_top20_selection(
             "model_assignment_authority": "expert-assessment-center",
             "candidate_pool_authority": "decision-system-governance",
             "selected_from_top20_reasoning_pool_only": True,
+            "all_top20_models_received_by_expert_center": True,
+            "expert_center_top20_inventory_schema_version": STANDBY_SCHEMA_VERSION,
+            "expert_center_top20_inventory": standby_inventory,
+            "expert_center_top20_inventory_sha256": _sha256(standby_inventory),
+            "expert_center_top20_inventory_count": len(standby_inventory),
+            "expert_center_standby_model_count": (
+                len(standby_inventory) - EXPECTED_PRIMARY_COUNT
+            ),
+            "expert_center_top20_inventory_state_counts": state_counts,
+            "standby_inventory_policy": (
+                "all-frozen-top20-models-retained -> four-active -> four-warm-recovery -> "
+                "remaining-qualified-models-extended-standby -> "
+                "unqualified-models-retained-with-ineligible-state"
+            ),
             "role_assignment_policy": (
                 "top20-pool-price-minimal-distinct-company-set -> "
                 "official-intelligence-rank-ascending -> strongest-final-synthesis -> "
@@ -449,6 +532,7 @@ def materialize_top20_selection(
         selected_models,
         recovery_models,
         price_ranked_models,
+        standby_inventory,
     )
     derived["expert_center_selection_receipt"] = receipt
     material = dict(derived)
