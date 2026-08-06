@@ -77,6 +77,13 @@ def validate_top50_contract(
         "top50_reasoning_pool_period": "week",
         "top50_reasoning_pool_size": 50,
         "top50_candidate_pool_authority": "decision-system-governance",
+        "top50_model_assignment_authority": "expert-assessment-center-ortools",
+        "top50_task_adaptive_assignment_required": True,
+        "top50_assignment_recomputed_from_current_task": True,
+        "top50_cross_task_history_allowed": False,
+        "top50_semantic_keyword_routing_allowed": False,
+        "top50_domain_hardcoding_allowed": False,
+        "top50_provider_metric_allowed_in_assignment": False,
         "model_assignment_authority": "expert-assessment-center-ortools",
         "expert_center_top50_pool_selection_allowed": True,
         "expert_center_top50_optimization_completed": True,
@@ -91,6 +98,8 @@ def validate_top50_contract(
     for field, value in expected.items():
         if plan.get(field) != value:
             raise Top50PlanValidationError(f"top-50 execution contract mismatch: {field}")
+    if plan.get("top50_model_assignment_principles") != SELECTION_PRINCIPLES:
+        raise Top50PlanValidationError("signed governance assignment principles are missing")
     if plan.get("selection_principles") != SELECTION_PRINCIPLES:
         raise Top50PlanValidationError("task-adaptive selection principles are missing")
     if len(selected) != 4 or len(recoveries) != 4:
