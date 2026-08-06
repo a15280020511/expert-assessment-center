@@ -19,7 +19,7 @@ def _sha(value):
     ).hexdigest()
 
 
-def _packet() -> dict:
+def _packet(*, complex_task: bool = False) -> dict:
     raw = []
     candidates = []
     for rank in range(1, 51):
@@ -46,8 +46,11 @@ def _packet() -> dict:
                 "price_rank_usd_per_million": float(rank),
                 "prompt_usd_per_million": float(rank) / 3,
                 "completion_usd_per_million": float(rank) * 2 / 3,
+                "request_usd": 0.0,
                 "official_intelligence_rank": 51 - rank,
                 "popularity_rank": rank,
+                "context_length": 262144,
+                "max_completion_tokens": 32768,
                 "required_context_tokens": 8192,
                 "reasoning_rank_verified": True,
                 "reasoning_supported": True,
@@ -63,6 +66,7 @@ def _packet() -> dict:
         )
     plan = {
         "plan_sha256": "source-plan",
+        "required_context_tokens": 8192,
         "top50_reasoning_pool_schema_version": "governance-openrouter-top50-reasoning-pool-v2-open-provider",
         "top50_reasoning_pool_source": "openrouter-most-popular-last-week-token-volume",
         "top50_reasoning_pool_period": "week",
@@ -82,32 +86,31 @@ def _packet() -> dict:
     }
     plan["top50_reasoning_pool_sha256"] = _sha(raw)
     plan["top50_expert_selectable_candidates_sha256"] = _sha(candidates)
+    if complex_task:
+        task = {
+            "question": "X" * 12000,
+            "requirements": [f"requirement-{index}" for index in range(12)],
+            "required_outputs": [f"field-{index}" for index in range(8)],
+            "language": "zh-CN",
+        }
+        evidence = [{"text": "E" * 1200} for _ in range(8)]
+        acceptance = [f"accept-{index}" for index in range(8)]
+    else:
+        task = {
+            "question": "比较A和B并给出建议。",
+            "requirements": ["给出最终建议"],
+            "language": "zh-CN",
+        }
+        evidence = []
+        acceptance = ["包含最终建议"]
     return {
         "task_id": "test-top50-optimizer",
+        "task": task,
+        "evidence": evidence,
+        "execution_acceptance": acceptance,
         "approved_budget": {"calls": 8, "maximum_recovery_calls": 4},
         "governance_model_plan": plan,
     }
-
-
-def _recovery_score(row: dict, all_candidates: list[dict]) -> int:
-    ordered = sorted(
-        all_candidates,
-        key=lambda item: (
-            float(item["price_rank_usd_per_million"]),
-            int(item["popularity_rank"]),
-            int(item["official_intelligence_rank"]),
-            str(item["model"]),
-        ),
-    )
-    price_rank = {
-        str(item["model"]): index
-        for index, item in enumerate(ordered, 1)
-    }[str(row["model"])]
-    return (
-        45 * price_rank
-        + 30 * int(row["popularity_rank"])
-        + 20 * int(row["official_intelligence_rank"])
-    )
 
 
 class Top50PoolOptimizerTests(unittest.TestCase):
@@ -124,35 +127,26 @@ class Top50PoolOptimizerTests(unittest.TestCase):
         self.assertTrue(plan["optimizer_audit"]["constraints"]["provider_routing_unrestricted"])
         self.assertTrue(plan["optimizer_audit"]["constraints"]["four_primary_calls_reserved"])
         self.assertTrue(plan["optimizer_audit"]["constraints"]["four_warm_recovery_calls_reserved"])
-        self.assertTrue(plan["optimizer_audit"]["constraints"]["warm_recovery_priority_uses_same_objective"])
+        self.assertTrue(plan["optimizer_audit"]["constraints"]["dynamic_role_weights_used"])
+        self.assertTrue(plan["optimizer_audit"]["constraints"]["marginal_return_used"])
+        self.assertTrue(plan["task_adaptive_scoring_completed"])
+        self.assertEqual(
+            plan["selection_principles"],
+            [
+                "concrete-problem-concrete-analysis",
+                "dynamic-adaptation",
+                "small-effort-large-return",
+            ],
+        )
         self.assertEqual(plan["provider_routing_mode"], "unrestricted-openrouter")
         self.assertFalse(plan["provider_restrictions_applied"])
         self.assertEqual(receipt["optimizer_audit"]["optimizer"], "ortools-cp-sat")
         self.assertEqual(receipt["approved_recovery_calls"], 4)
-        self.assertEqual(receipt["warm_recovery_order_basis"], "same-recovery-objective")
+        self.assertEqual(
+            receipt["warm_recovery_order_basis"],
+            "same-task-adaptive-recovery-objective",
+        )
         validate_top50_contract(plan, plan["selected_models"], plan["recovery_models"])
-
-    def test_warm_recovery_priority_uses_same_recovery_objective(self) -> None:
-        source = _packet()
-        all_candidates = source["governance_model_plan"]["top50_expert_selectable_candidates"]
-        packet, _ = materialize_top50_selection(source)
-        plan = packet["governance_model_plan"]
-        recoveries = plan["recovery_models"]
-        scores = [_recovery_score(row, all_candidates) for row in recoveries]
-        self.assertEqual(scores, sorted(scores))
-        self.assertEqual(
-            [row["recovery_objective_score"] for row in plan["optimizer_audit"]["warm_recovery_priority"]],
-            scores,
-        )
-        warm_inventory = [
-            row
-            for row in plan["expert_center_top50_inventory"]
-            if row["standby_state"] == "warm-recovery"
-        ]
-        self.assertEqual(
-            sorted(row["warm_recovery_priority"] for row in warm_inventory),
-            [1, 2, 3, 4],
-        )
 
     def test_deterministic_assignment(self) -> None:
         first, _ = materialize_top50_selection(_packet())
@@ -166,6 +160,54 @@ class Top50PoolOptimizerTests(unittest.TestCase):
         self.assertEqual(
             [row["model"] for row in first_plan["recovery_models"]],
             [row["model"] for row in second_plan["recovery_models"]],
+        )
+        self.assertEqual(
+            first_plan["optimizer_audit"]["objective_value"],
+            second_plan["optimizer_audit"]["objective_value"],
+        )
+
+    def test_complex_task_changes_dynamic_weights(self) -> None:
+        simple, _ = materialize_top50_selection(_packet())
+        complex_, _ = materialize_top50_selection(_packet(complex_task=True))
+        simple_audit = simple["governance_model_plan"]["optimizer_audit"]
+        complex_audit = complex_["governance_model_plan"]["optimizer_audit"]
+        self.assertGreater(
+            complex_audit["task_demand_profile"]["pressure"]["overall"],
+            simple_audit["task_demand_profile"]["pressure"]["overall"],
+        )
+        simple_synthesis = next(
+            row for row in simple_audit["role_assignments"] if row["role_id"] == "synthesis"
+        )
+        complex_synthesis = next(
+            row for row in complex_audit["role_assignments"] if row["role_id"] == "synthesis"
+        )
+        self.assertLess(
+            complex_synthesis["weights"]["task_cost"],
+            simple_synthesis["weights"]["task_cost"],
+        )
+        self.assertGreater(
+            complex_synthesis["weights"]["intelligence"],
+            simple_synthesis["weights"]["intelligence"],
+        )
+
+    def test_warm_recovery_priority_uses_same_dynamic_objective(self) -> None:
+        packet, _ = materialize_top50_selection(_packet())
+        plan = packet["governance_model_plan"]
+        rows = plan["recovery_models"]
+        scores = [row["task_adaptive_objective_score"] for row in rows]
+        self.assertEqual(scores, sorted(scores))
+        self.assertEqual(
+            [row["warm_recovery_priority"] for row in rows],
+            [1, 2, 3, 4],
+        )
+        warm_inventory = [
+            row
+            for row in plan["expert_center_top50_inventory"]
+            if row["standby_state"] == "warm-recovery"
+        ]
+        self.assertEqual(
+            sorted(row["warm_recovery_priority"] for row in warm_inventory),
+            [1, 2, 3, 4],
         )
 
     def test_less_than_four_recovery_budget_is_rejected_before_solving(self) -> None:
