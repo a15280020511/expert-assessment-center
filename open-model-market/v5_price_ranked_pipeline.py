@@ -1,13 +1,16 @@
-"""Production pipeline facade for signed top-50 + expert OR-Tools assignment.
+"""Production pipeline facade for signed Top-50 + Expert OR-Tools assignment.
 
-Governance signs model candidates, the expert center assigns models with CP-SAT,
-and OpenRouter selects the actual provider without any provider routing filter.
+Governance signs model candidates, the Expert Center assigns fixed model
+identities with CP-SAT, and OpenRouter selects the actual Provider without any
+Provider routing filter. Live catalog validation therefore checks model-level
+existence/capacity only; Provider endpoint inventory is not an eligibility gate.
 """
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import v5_catalog_view as catalog_view
 import v5_price_ranked_pipeline_legacy as _legacy
 from v5_json_io import load_json_or_default, write_json
 
@@ -57,8 +60,102 @@ def _provider_fields() -> dict[str, Any]:
     }
 
 
+def _planned_ids(plan: Mapping[str, Any]) -> list[str]:
+    ids: list[str] = []
+    for field in ("selected_models", "recovery_models"):
+        rows = plan.get(field)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if isinstance(row, Mapping):
+                model = str(row.get("model") or "").strip()
+                if model and model not in ids:
+                    ids.append(model)
+    return ids
+
+
+def _candidate_map(plan: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    result: dict[str, Mapping[str, Any]] = {}
+    for field in (
+        "top50_expert_selectable_candidates",
+        "selected_models",
+        "recovery_models",
+    ):
+        rows = plan.get(field)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            model = str(row.get("model") or "").strip()
+            if model and model not in result:
+                result[model] = row
+    return result
+
+
+def _open_endpoint_payloads(
+    model_ids: Sequence[str],
+    plan: Mapping[str, Any],
+    catalog: Mapping[str, Any],
+) -> dict[str, Mapping[str, Any]]:
+    """Build non-binding endpoint-shaped metadata from model-level facts only."""
+    candidates = _candidate_map(plan)
+    model_rows = catalog.get("data") if isinstance(catalog.get("data"), list) else []
+    model_map = {
+        str(row.get("id") or "").strip(): row
+        for row in model_rows
+        if isinstance(row, Mapping) and str(row.get("id") or "").strip()
+    }
+    payloads: dict[str, Mapping[str, Any]] = {}
+    for model_id in model_ids:
+        candidate = candidates.get(model_id, {})
+        model_row = model_map.get(model_id, {})
+        top_provider = (
+            model_row.get("top_provider")
+            if isinstance(model_row.get("top_provider"), Mapping)
+            else {}
+        )
+        context_length = int(
+            candidate.get("context_length")
+            or model_row.get("context_length")
+            or 0
+        )
+        max_completion_tokens = int(
+            candidate.get("max_completion_tokens")
+            or top_provider.get("max_completion_tokens")
+            or 0
+        )
+        supported = model_row.get("supported_parameters")
+        if not isinstance(supported, list):
+            supported = ["reasoning", "max_tokens"]
+        pricing = model_row.get("pricing")
+        if not isinstance(pricing, Mapping):
+            pricing = {
+                "prompt": float(candidate.get("prompt_usd_per_million") or 0.0) / 1_000_000,
+                "completion": float(candidate.get("completion_usd_per_million") or 0.0) / 1_000_000,
+            }
+        payloads[model_id] = {
+            "data": {
+                "endpoints": [
+                    {
+                        "tag": "openrouter-unrestricted",
+                        "provider_name": "OpenRouter unrestricted routing",
+                        "context_length": context_length,
+                        "max_completion_tokens": max_completion_tokens,
+                        "supported_parameters": list(supported),
+                        "pricing": dict(pricing),
+                        "uptime": 1.0,
+                        "is_free": False,
+                        "is_quantized": False,
+                        "routing_constraint": False,
+                    }
+                ]
+            }
+        }
+    return payloads
+
+
 _original_task_state = _legacy._task_state
-_original_catalog_state = _legacy._catalog_state
 _original_catalog_snapshot = _legacy._catalog_snapshot
 _original_runtime_config = _legacy._runtime_config
 _original_zero_governance = _legacy._zero_local_governance_artifacts
@@ -75,25 +172,90 @@ def _task_state(args: Any, run: Any, output: Path, plan: Mapping[str, Any]):
     return task, digest, value
 
 
-def _catalog_state(args: Any, run: Any, task_envelope: Mapping[str, Any], plan: Mapping[str, Any]):
-    catalog, catalog_source, endpoint_source = _original_catalog_state(args, run, task_envelope, plan)
+def _catalog_state(
+    args: Any,
+    run: Any,
+    task_envelope: Mapping[str, Any],
+    plan: Mapping[str, Any],
+):
+    model_ids = _planned_ids(plan)
+    if not model_ids:
+        raise RuntimeError("governance plan has no assigned models")
+
+    if args.catalog_file:
+        catalog_path = Path(args.catalog_file)
+        if not catalog_path.is_file():
+            raise RuntimeError(f"catalog file does not exist: {catalog_path}")
+        raw_catalog = catalog_view.load_catalog_file(catalog_path)
+        catalog_source = str(catalog_path)
+    else:
+        raw_catalog = catalog_view.fetch_live_model_catalog(run)
+        catalog_source = catalog_view.OPENROUTER_MODELS_API
+
+    planned_catalog = catalog_view.planned_live_model_catalog(
+        raw_catalog,
+        model_ids,
+    )
+    if args.endpoint_file:
+        endpoint_path = Path(args.endpoint_file)
+        if not endpoint_path.is_file():
+            raise RuntimeError(f"endpoint file does not exist: {endpoint_path}")
+        endpoint_payloads = catalog_view.load_endpoint_file(endpoint_path)
+        endpoint_source = str(endpoint_path)
+    else:
+        endpoint_payloads = _open_endpoint_payloads(
+            model_ids,
+            plan,
+            planned_catalog,
+        )
+        endpoint_source = "model-metadata-derived-openrouter-unrestricted"
+
+    catalog = catalog_view.compact_endpoint_catalog(
+        planned_catalog,
+        endpoint_payloads,
+        task_envelope,
+        model_ids=model_ids,
+        allow_synthetic_endpoints=bool(args.allow_synthetic_endpoints),
+    )
     value = dict(catalog)
     value.update(_assignment_fields(plan))
     value.update(_provider_fields())
     value["catalog_scope"] = "governance-signed-top50-assigned-models-only"
-    value["endpoint_catalog_role"] = "availability-and-telemetry-only-not-routing-restriction"
+    value["endpoint_catalog_role"] = "non-binding-availability-and-capacity-metadata-only"
+    value["live_provider_endpoint_inventory_required"] = False
     return value, catalog_source, endpoint_source
 
 
-def _catalog_snapshot(catalog: Mapping[str, Any], catalog_source: str, endpoint_source: str, plan: Mapping[str, Any]):
-    value = dict(_original_catalog_snapshot(catalog, catalog_source, endpoint_source, plan))
+def _catalog_snapshot(
+    catalog: Mapping[str, Any],
+    catalog_source: str,
+    endpoint_source: str,
+    plan: Mapping[str, Any],
+):
+    value = dict(
+        _original_catalog_snapshot(catalog, catalog_source, endpoint_source, plan)
+    )
     value.update(_assignment_fields(plan))
     value.update(_provider_fields())
+    value["live_provider_endpoint_inventory_required"] = False
     return value
 
 
-def _runtime_config(args: Any, *, total_calls: int, recovery_calls: int, plan: Mapping[str, Any]):
-    value = dict(_original_runtime_config(args, total_calls=total_calls, recovery_calls=recovery_calls, plan=plan))
+def _runtime_config(
+    args: Any,
+    *,
+    total_calls: int,
+    recovery_calls: int,
+    plan: Mapping[str, Any],
+):
+    value = dict(
+        _original_runtime_config(
+            args,
+            total_calls=total_calls,
+            recovery_calls=recovery_calls,
+            plan=plan,
+        )
+    )
     value.update(_assignment_fields(plan))
     value.update(_provider_fields())
     value.update(
@@ -107,7 +269,11 @@ def _runtime_config(args: Any, *, total_calls: int, recovery_calls: int, plan: M
     return value
 
 
-def _zero_local_governance_artifacts(output: Path, plan: Mapping[str, Any], materialization_audit: Mapping[str, Any]):
+def _zero_local_governance_artifacts(
+    output: Path,
+    plan: Mapping[str, Any],
+    materialization_audit: Mapping[str, Any],
+):
     ledger = dict(_original_zero_governance(output, plan, materialization_audit))
     fields = _assignment_fields(plan)
     ledger.update(fields)
@@ -162,18 +328,39 @@ def _request_audit(output: Path, *, approved_total_calls: int) -> None:
     raw = load_json_or_default(path, {})
     document = dict(raw) if isinstance(raw, Mapping) else {}
     rows = document.get("requests") if isinstance(document.get("requests"), list) else []
-    restricted = [row for row in rows if isinstance(row, Mapping) and "provider" in row]
+    restricted = [
+        row
+        for row in rows
+        if isinstance(row, Mapping) and "provider" in row
+    ]
     document.update(_provider_fields())
     document["provider_objects_present"] = len(restricted)
     document["provider_routing_open"] = not restricted
-    document["status"] = "PASS" if document.get("status") == "PASS" and not restricted else "FAIL"
+    document["status"] = (
+        "PASS"
+        if document.get("status") == "PASS" and not restricted
+        else "FAIL"
+    )
     write_json(path, document)
     if restricted:
-        raise RuntimeError("provider routing restriction detected in production request audit")
+        raise RuntimeError(
+            "provider routing restriction detected in production request audit"
+        )
 
 
-def _finalize_result(result: dict[str, Any], *, total_calls: int, plan: Mapping[str, Any], selection_audit: Mapping[str, Any]) -> None:
-    _original_finalize_result(result, total_calls=total_calls, plan=plan, selection_audit=selection_audit)
+def _finalize_result(
+    result: dict[str, Any],
+    *,
+    total_calls: int,
+    plan: Mapping[str, Any],
+    selection_audit: Mapping[str, Any],
+) -> None:
+    _original_finalize_result(
+        result,
+        total_calls=total_calls,
+        plan=plan,
+        selection_audit=selection_audit,
+    )
     result.update(_assignment_fields(plan))
     result.update(_provider_fields())
     result["selection_audit"] = dict(selection_audit)
@@ -207,7 +394,11 @@ def _rewrite_static_artifacts(output: Path) -> None:
         write_json(graph_path, graph)
 
 
-def main(argv: Sequence[str] | None = None, *, expert_call_fn: Any | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    expert_call_fn: Any | None = None,
+) -> int:
     args = _legacy.build_parser().parse_args(argv)
     result = _legacy.main(argv, expert_call_fn=expert_call_fn)
     _rewrite_static_artifacts(Path(args.output_dir))
