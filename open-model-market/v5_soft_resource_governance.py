@@ -16,6 +16,7 @@ from v5_constitutional_runtime import (
     ConstitutionalExecutionEngine,
     ConstitutionalPromptPolicy,
 )
+from v5_model_company import canonical_model_company
 from v5_runtime import (
     BudgetController,
     FailureCategory,
@@ -90,10 +91,106 @@ class SoftResourcePromptPolicy(ConstitutionalPromptPolicy):
 
 
 class SoftResourceBudgetController(BudgetController):
-    """Semantic alias for the constitutionally soft base controller."""
+    """Soft budget ledger plus a global use-once recovery identity guard."""
+
+    def __init__(self, config: RuntimeConfig, graph: ExecutionGraph) -> None:
+        super().__init__(config, graph)
+        self.replacement_identities_reserved: set[tuple[str, str]] = set()
+        self.replacement_companies_reserved: set[str] = set()
+
+    def reserve_replacement_identity(
+        self,
+        model: str,
+        provider_endpoint: str,
+        node_id: str,
+    ) -> tuple[bool, str]:
+        identity = (str(model).strip(), str(provider_endpoint).strip())
+        company = canonical_model_company(identity[0])
+        with self._lock:
+            reason = ""
+            if not all(identity) or company == "unknown":
+                reason = "invalid-recovery-candidate-identity"
+            elif identity in self.replacement_identities_reserved:
+                reason = "recovery-candidate-already-consumed"
+            elif company in self.replacement_companies_reserved:
+                reason = "recovery-company-already-consumed"
+            if reason:
+                self.denials.append(
+                    {
+                        "node_id": node_id,
+                        "kind": "replacement-identity",
+                        "model": identity[0],
+                        "provider_endpoint": identity[1],
+                        "company": company,
+                        "reason": reason,
+                    }
+                )
+                return False, reason
+            self.replacement_identities_reserved.add(identity)
+            self.replacement_companies_reserved.add(company)
+            return True, ""
+
+    def snapshot(self) -> dict[str, Any]:
+        value = dict(super().snapshot())
+        with self._lock:
+            value["global_recovery_identity_guard"] = {
+                "status": "PASS",
+                "policy": "each-governance-approved-recovery-model-and-company-once",
+                "reserved_identities": [
+                    {"model": model, "provider_endpoint": endpoint}
+                    for model, endpoint in sorted(
+                        self.replacement_identities_reserved
+                    )
+                ],
+                "reserved_companies": sorted(
+                    self.replacement_companies_reserved
+                ),
+                "duplicate_calls_allowed": False,
+            }
+        return value
+
 
 class SoftResourceExecutionEngine(ConstitutionalExecutionEngine):
     """Run the constitutional engine without token or cost rejection gates."""
+
+    def _recorded_call(
+        self,
+        selected: SelectedNode,
+        attempts: list[Any],
+        original_task: str,
+        upstream: Sequence[Mapping[str, Any]],
+        run: Any,
+        call_fn: Callable[
+            [Any, Mapping[str, Any]],
+            tuple[Mapping[str, Any], float],
+        ],
+        budget: BudgetController,
+        node: SelectedNode,
+        kind: str,
+    ) -> Any:
+        if kind == "replacement" and isinstance(
+            budget, SoftResourceBudgetController
+        ):
+            if not budget.endpoint_available(node.provider_endpoint):
+                return None
+            allowed, _ = budget.reserve_replacement_identity(
+                node.model,
+                node.provider_endpoint,
+                selected.node_id,
+            )
+            if not allowed:
+                return None
+        return super()._recorded_call(
+            selected,
+            attempts,
+            original_task,
+            upstream,
+            run,
+            call_fn,
+            budget,
+            node,
+            kind,
+        )
 
     def _preflight(
         self,
@@ -114,6 +211,7 @@ class SoftResourceExecutionEngine(ConstitutionalExecutionEngine):
                 "cost_threshold_role": "advisory-telemetry-only",
                 "token_limit_enforced_by_runtime": False,
                 "resource_governance_mode": "prompt-led-soft-governance",
+                "global_recovery_identity_guard_required": True,
             }
         )
         return value
@@ -165,6 +263,7 @@ class SoftResourceExecutionEngine(ConstitutionalExecutionEngine):
             "local_token_ceiling_enforced": False,
             "cost_threshold_can_stop_execution": False,
             "cost_and_token_usage_audited": True,
+            "global_recovery_identity_guard": True,
         }
         result = quality_integrity.enforce_result_integrity(result)
         if root is not None:
