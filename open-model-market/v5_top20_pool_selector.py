@@ -368,31 +368,52 @@ def _role_cost(role: str, penalties: Mapping[str, int]) -> int:
     return base + 5 * int(penalties["intelligence"])
 
 
-def _optimize_active_team(
+def _assignment_variables(
+    model: cp_model.CpModel,
     eligible: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, dict[str, int]]]:
-    penalties = _candidate_penalties(eligible)
-    model = cp_model.CpModel()
-    variables: dict[tuple[int, str], Any] = {}
-    for index, _ in enumerate(eligible):
-        for role in ROLE_ORDER:
-            variables[(index, role)] = model.NewBoolVar(f"assign_{index}_{role}")
+) -> dict[tuple[int, str], Any]:
+    return {
+        (index, role): model.NewBoolVar(f"assign_{index}_{role}")
+        for index in range(len(eligible))
+        for role in ROLE_ORDER
+    }
 
-    for role in ROLE_ORDER:
-        model.Add(sum(variables[(index, role)] for index in range(len(eligible))) == 1)
-    for index in range(len(eligible)):
-        model.Add(sum(variables[(index, role)] for role in ROLE_ORDER) <= 1)
 
+def _company_indices(eligible: list[dict[str, Any]]) -> dict[str, list[int]]:
     companies: dict[str, list[int]] = {}
     for index, row in enumerate(eligible):
         companies.setdefault(str(row["company"]).casefold(), []).append(index)
-    for indices in companies.values():
+    return companies
+
+
+def _add_assignment_constraints(
+    model: cp_model.CpModel,
+    variables: Mapping[tuple[int, str], Any],
+    eligible: list[dict[str, Any]],
+) -> None:
+    for role in ROLE_ORDER:
         model.Add(
-            sum(variables[(index, role)] for index in indices for role in ROLE_ORDER)
+            sum(variables[(index, role)] for index in range(len(eligible))) == 1
+        )
+    for index in range(len(eligible)):
+        model.Add(sum(variables[(index, role)] for role in ROLE_ORDER) <= 1)
+    for indices in _company_indices(eligible).values():
+        model.Add(
+            sum(
+                variables[(index, role)]
+                for index in indices
+                for role in ROLE_ORDER
+            )
             <= 1
         )
 
-    objective_terms = []
+
+def _assignment_objective_terms(
+    eligible: list[dict[str, Any]],
+    penalties: Mapping[str, Mapping[str, int]],
+    variables: Mapping[tuple[int, str], Any],
+) -> list[Any]:
+    terms: list[Any] = []
     for index, row in enumerate(eligible):
         model_id = str(row["model"])
         for role_index, role in enumerate(ROLE_ORDER):
@@ -401,19 +422,24 @@ def _optimize_active_team(
                 + int(penalties[model_id]["tie_break"]) * 10
                 + role_index
             )
-            objective_terms.append(deterministic_cost * variables[(index, role)])
-    model.Minimize(sum(objective_terms))
+            terms.append(deterministic_cost * variables[(index, role)])
+    return terms
 
+
+def _configured_solver() -> cp_model.CpSolver:
     solver = cp_model.CpSolver()
     solver.parameters.num_search_workers = 1
     solver.parameters.random_seed = 0
     solver.parameters.max_time_in_seconds = 10.0
-    status = solver.Solve(model)
-    if status not in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
-        raise Top50PoolOptimizationError(
-            "OR-Tools could not form a four-role distinct-company expert team"
-        )
+    return solver
 
+
+def _extract_assignments(
+    solver: cp_model.CpSolver,
+    variables: Mapping[tuple[int, str], Any],
+    eligible: list[dict[str, Any]],
+    penalties: Mapping[str, Mapping[str, int]],
+) -> list[dict[str, Any]]:
     templates = _roles()
     assigned_by_role: dict[str, dict[str, Any]] = {}
     for index, row in enumerate(eligible):
@@ -431,11 +457,18 @@ def _optimize_active_team(
         raise Top50PoolOptimizationError(
             "OR-Tools returned an incomplete expert role assignment"
         )
-
     selected = [assigned_by_role[role] for role in ROLE_ORDER]
     for slot, row in enumerate(selected, 1):
         row["slot"] = slot
-    audit = {
+    return selected
+
+
+def _optimizer_audit(
+    solver: cp_model.CpSolver,
+    status: int,
+    selected: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
         "optimizer": "ortools-cp-sat",
         "ortools_version": package_version("ortools"),
         "solver_status": solver.StatusName(status),
@@ -465,7 +498,24 @@ def _optimize_active_team(
             ],
         },
     }
-    return selected, audit, penalties
+
+
+def _optimize_active_team(
+    eligible: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, dict[str, int]]]:
+    penalties = _candidate_penalties(eligible)
+    model = cp_model.CpModel()
+    variables = _assignment_variables(model, eligible)
+    _add_assignment_constraints(model, variables, eligible)
+    model.Minimize(sum(_assignment_objective_terms(eligible, penalties, variables)))
+    solver = _configured_solver()
+    status = solver.Solve(model)
+    if status not in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
+        raise Top50PoolOptimizationError(
+            "OR-Tools could not form a four-role distinct-company expert team"
+        )
+    selected = _extract_assignments(solver, variables, eligible, penalties)
+    return selected, _optimizer_audit(solver, status, selected), penalties
 
 
 def _recovery_rows(
