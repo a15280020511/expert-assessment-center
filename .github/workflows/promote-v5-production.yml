@@ -9,6 +9,7 @@ on:
       - "tests/**"
       - "requirements*.txt"
       - ".github/workflows/promote-v5-production.yml"
+      - ".github/workflows/v5-price-ranked-paid-candidate-acceptance.yml"
 
 permissions:
   contents: read
@@ -51,34 +52,59 @@ jobs:
           python -m unittest discover -s tests -p 'test*.py' -v \
             2>&1 | tee release-validation-logs/unit-tests.log
 
-      - name: Verify cleaned advisory architecture
+      - name: Verify top-50 OR-Tools and unrestricted Provider constitution
         run: |
           set -euo pipefail
-          grep -q 'SELECTION_AUTHORITY = "decision-system-governance"' \
-            open-model-market/v5_governance_model_plan.py
-          test -f open-model-market/v5_governed_plan_orchestrator.py
-          grep -q 'build_governed_proposal' \
-            open-model-market/v5_price_ranked_pipeline.py
-          ! grep -q 'build_price_ranked_proposal' \
-            open-model-market/v5_price_ranked_pipeline.py
-          ! grep -q 'v5_governance_runtime' \
-            open-model-market/v5_price_ranked_pipeline.py
-          ! grep -q 'v5_claude_red_team_policy' \
-            open-model-market/v5_price_ranked_pipeline.py
-          removed=(
-            open-model-market/v5_planner.py
-            open-model-market/v5_constitutional_pipeline.py
-            open-model-market/v5_value_optimizer.py
-            open-model-market/v5_cross_endpoint_planner.py
-            open-model-market/v5_operational_resilience.py
-            open-model-market/v5_general_task_planning.py
-            open-model-market/task_semantic_compiler.py
-            open-model-market/resource_matrix.py
-            open-model-market/atomic_work_graph.py
-          )
-          for path in "${removed[@]}"; do test ! -e "$path"; done
+          PYTHONPATH=open-model-market python - <<'PY'
+          import json
+          from pathlib import Path
 
-      - name: Run task-independent advisory matrix
+          policy = json.loads(Path("open-model-market/constitutional_policy.json").read_text())
+          config = json.loads(Path("open-model-market/config.json").read_text())
+          requirements = Path("requirements-runtime.txt").read_text()
+          production_policy = Path("open-model-market/v5_production_expert_policy.py").read_text()
+          pipeline = Path("open-model-market/v5_price_ranked_pipeline.py").read_text()
+          gate = Path("open-model-market/v5_price_ranked_ticket_gate.py").read_text()
+          auditor = Path("open-model-market/v5_price_ranked_execution_auditor.py").read_text()
+          independent = Path("open-model-market/v5_price_ranked_independent_revalidation.py").read_text()
+
+          assert policy["schema_version"] == "v5-constitutional-policy-7-top50-ortools-open-provider"
+          assert policy["candidate_pool"]["pool_size"] == 50
+          assert policy["candidate_pool"]["popularity_period"] == "week"
+          assert policy["optimizer_runtime"]["engine"] == "ortools-cp-sat"
+          assert policy["optimizer_runtime"]["required_solver_status"] == "OPTIMAL"
+          assert policy["optimizer_runtime"]["provider_metric_used"] is False
+          assert policy["governance_chain"]["candidate_pool_authority"] == "decision-system-governance"
+          assert policy["governance_chain"]["assignment_authority"] == "expert-assessment-center-ortools-cp-sat"
+          privacy = policy["expert_endpoint_privacy"]
+          assert privacy["provider_routing_mode"] == "unrestricted-openrouter"
+          assert privacy["zdr_required"] is False
+          assert privacy["provider_allowlist_allowed"] is False
+          assert privacy["provider_order_allowed"] is False
+          assert privacy["provider_fallback_allowed"] is True
+          assert privacy["unrestricted_provider_fallback_allowed"] is True
+          assert privacy["model_substitution_allowed"] is False
+          assert config["provider"]["routing_mode"] == "unrestricted-openrouter"
+          assert config["provider"]["explicit_provider_lock_required"] is False
+          assert config["provider"]["require_parameters"] is False
+          assert "ortools==9.15.6755" in requirements
+          assert 'payload.pop("provider", None)' in production_policy
+          assert "EXPERT_ZDR_REQUIRED = False" in production_policy
+          assert "provider_lock_required=False" in pipeline
+          for source in (gate, auditor, independent):
+              assert "unrestricted-openrouter" in source
+          PY
+
+      - name: Run top-50/open-provider focused regression gates
+        run: |
+          set -euo pipefail
+          PYTHONPATH=open-model-market python -m unittest -v \
+            tests.test_top50_pool_optimizer \
+            tests.test_v5_top50_provider_pool \
+            tests.test_v5_constitution_policy \
+            tests.test_v5_production_expert_policy
+
+      - name: Run zero-call dry-run execution matrix
         run: |
           set -euo pipefail
           PYTHONPATH=open-model-market python - <<'PY'
@@ -96,9 +122,7 @@ jobs:
               "closed_world": "仅依据题面比较A与B，禁止工具，禁止补充外部事实。",
               "long": "比较A与B。" + "约束条件与现实扰动。" * 2000,
           }
-          base = json.loads(
-              Path("tests/fixtures/governance-ticket.json").read_text()
-          )
+          base = json.loads(Path("tests/fixtures/governance-ticket.json").read_text())
           summaries = {}
           for name, question in tasks.items():
               ticket = copy.deepcopy(base)
@@ -109,9 +133,7 @@ jobs:
               root = Path("production-validation-artifacts") / name
               root.mkdir(parents=True, exist_ok=True)
               ticket_path = root / "ticket.json"
-              ticket_path.write_text(
-                  json.dumps(ticket, ensure_ascii=False, indent=2)
-              )
+              ticket_path.write_text(json.dumps(ticket, ensure_ascii=False, indent=2))
               subprocess.run(
                   [
                       "python", "open-model-market/v5_price_ranked_pipeline.py",
@@ -127,21 +149,17 @@ jobs:
                   check=True,
               )
               dry = json.loads((root / "v5-dry-run.json").read_text())
-              selection = json.loads(
-                  (root / "v5-price-ranked-selection.json").read_text()
-              )
               runtime = json.loads((root / "v5-runtime-config.json").read_text())
               assert dry["status"] == "validated-not-executed"
               assert dry["model_calls"] == 0
-              assert selection["selection_authority"] == "decision-system-governance"
-              assert selection["model_selection_performed_locally"] is False
-              assert selection["model_reranking_performed_locally"] is False
-              assert selection["model_substitution_performed_locally"] is False
-              assert selection["provider_resolution_performed_locally"] is True
-              assert runtime["model_loop_allowed"] is False
               assert runtime["governance_model_calls"] == 0
-              assert runtime["local_task_classification_used"] is False
-              assert runtime["optimizer_present"] is False
+              assert runtime["model_loop_allowed"] is False
+              assert runtime["provider_routing_mode"] == "unrestricted-openrouter"
+              assert runtime["provider_restrictions_applied"] is False
+              assert runtime["provider_fallback_allowed"] is True
+              assert runtime["unrestricted_provider_fallback_allowed"] is True
+              assert runtime["provider_lock_required"] is False
+              assert runtime["openrouter_selects_provider"] is True
               summaries[name] = {
                   "plan_sha256": plan["plan_sha256"],
                   "node_count": len(dry["proposal"]["nodes"]),
@@ -156,7 +174,7 @@ jobs:
           set -euo pipefail
           test ! -e .release-authorized
           printf '%s\n' \
-            'Production ref movement remains disabled until explicit acceptance.' \
+            'Production ref movement remains disabled until explicit paid acceptance and independent revalidation.' \
             | tee release-validation-logs/promotion-state.log
 
       - name: Upload qualification diagnostics
