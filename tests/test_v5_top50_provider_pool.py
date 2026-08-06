@@ -137,7 +137,7 @@ class Top50ProviderPoolTests(unittest.TestCase):
             "dynamic_system_prompt",
             return_value="system",
         ):
-            with self.assertRaisesRegex(RuntimeError, "audited whitelist"):
+            with self.assertRaisesRegex(RuntimeError, "provider routing must be"):
                 v5_runtime.PromptPolicy().build_payload(
                     self._node(bad),
                     "task",
