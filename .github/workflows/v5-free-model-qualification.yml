@@ -1,7 +1,9 @@
-name: V5 Governance-Plan Zero-Call Qualification
+name: V5 Top-50 OR-Tools Zero-Call Qualification
 
 on:
   workflow_dispatch:
+  issue_comment:
+    types: [created]
   pull_request:
     paths:
       - "CONSTITUTION.md"
@@ -13,18 +15,27 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 concurrency:
-  group: v5-governance-plan-zero-call-${{ github.ref }}
+  group: v5-top50-zero-call-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  governance-plan-qualification:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+  top50-zero-call-qualification:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'issue_comment' &&
+       github.actor == github.repository_owner &&
+       startsWith(github.event.issue.title, '[qualification]') &&
+       github.event.comment.body == '/qualify-current-main')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -49,55 +60,69 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p free-qualification/logs free-qualification/artifacts/dry-run
+          mkdir -p free-qualification/logs free-qualification/artifacts
           python -m ruff check . 2>&1 | tee free-qualification/logs/ruff.log
           python -m compileall -q open-model-market tests tools \
             2>&1 | tee free-qualification/logs/compileall.log
           python -m unittest discover -s tests -p 'test*.py' -v \
             2>&1 | tee free-qualification/logs/unit-tests.log
-          cp tests/fixtures/governance-ticket.json \
-            free-qualification/artifacts/dry-run/ticket.json
-          python open-model-market/v5_price_ranked_pipeline.py \
-            --task "仅依据题面比较A与B，禁止工具，输出已知事实和最终建议。" \
-            --governance-plan-file free-qualification/artifacts/dry-run/ticket.json \
-            --catalog-file tests/fixtures/models.json \
-            --endpoint-file tests/fixtures/endpoints.json \
-            --dry-run \
-            --maximum-total-calls 8 \
-            --maximum-recovery-calls 1 \
-            --output-dir free-qualification/artifacts/dry-run
-          python - <<'PY'
+
+      - name: Re-run Top-50 focused contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p 'test_top50_pool_optimizer.py' -v \
+            2>&1 | tee free-qualification/logs/top50-optimizer.log
+          python -m unittest discover -s tests -p 'test_v5_top50_provider_pool.py' -v \
+            2>&1 | tee free-qualification/logs/top50-provider.log
+          python -m unittest discover -s tests -p 'test_v5_top50_ticket_gate_capacity.py' -v \
+            2>&1 | tee free-qualification/logs/top50-capacity.log
+
+      - name: Verify constitutional machine contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=open-model-market python - <<'PY'
           import json
           from pathlib import Path
 
-          root = Path("free-qualification/artifacts/dry-run")
-          ticket = json.loads((root / "ticket.json").read_text())
-          plan = ticket["governance_model_plan"]
-          dry = json.loads((root / "v5-dry-run.json").read_text())
-          selection = json.loads(
-              (root / "v5-price-ranked-selection.json").read_text()
-          )
-          runtime = json.loads((root / "v5-runtime-config.json").read_text())
-          graph = json.loads((root / "v5-execution-graph.json").read_text())
-          assert dry["status"] == "validated-not-executed"
-          assert dry["model_calls"] == 0
-          assert selection["status"] == "PASS"
-          assert selection["selection_authority"] == "decision-system-governance"
-          assert selection["plan_sha256"] == plan["plan_sha256"]
-          assert selection["model_selection_performed_locally"] is False
-          assert selection["model_reranking_performed_locally"] is False
-          assert selection["model_substitution_performed_locally"] is False
-          assert selection["provider_resolution_performed_locally"] is True
-          assert selection["networkx_used_for_dag_validation"] is True
-          assert runtime["selection_authority"] == "decision-system-governance"
-          assert runtime["model_selection_performed_locally"] is False
-          assert runtime["model_reranking_performed_locally"] is False
-          assert runtime["model_substitution_allowed"] is False
-          assert runtime["governance_model_calls"] == 0
-          assert runtime["orchestration_library"] == "networkx"
-          planned = [row["model"] for row in plan["selected_models"]]
-          executed = [row["model"] for row in graph["nodes"]]
-          assert executed == planned
+          policy = json.loads(Path('open-model-market/constitutional_policy.json').read_text())
+          pool = policy['candidate_pool']
+          optimizer = policy['optimizer_runtime']
+          privacy = policy['expert_endpoint_privacy']
+          promotion = policy['production_promotion']
+          deps = Path('requirements-runtime.txt').read_text()
+
+          assert pool['authority'] == 'decision-system-governance'
+          assert pool['source'] == 'openrouter-most-popular-last-week-token-volume'
+          assert pool['popularity_period'] == 'week'
+          assert pool['pool_size'] == 50
+          assert pool['expert_center_can_select_outside_signed_pool'] is False
+
+          assert optimizer['engine'] == 'ortools-cp-sat'
+          assert optimizer['required_version'] == '9.15.6755'
+          assert optimizer['required_solver_status'] == 'OPTIMAL'
+          assert optimizer['primary_expert_count'] == 4
+          assert optimizer['warm_recovery_count'] == 4
+          assert optimizer['provider_metric_used'] is False
+          assert optimizer['model_calls'] == 0
+          assert optimizer['network_access'] is False
+
+          assert privacy['provider_routing_mode'] == 'unrestricted-openrouter'
+          assert privacy['provider_allowlist_allowed'] is False
+          assert privacy['provider_order_allowed'] is False
+          assert privacy['provider_fallback_allowed'] is True
+          assert privacy['unrestricted_provider_fallback_allowed'] is True
+          assert privacy['openrouter_selects_provider'] is True
+          assert privacy['model_substitution_allowed'] is False
+
+          assert promotion['requires_signed_weekly_top50_pool'] is True
+          assert promotion['requires_ortools_optimality_proof'] is True
+          assert promotion['requires_unrestricted_provider_routing'] is True
+
+          assert 'ortools==9.15.6755' in deps
+          assert 'networkx==3.6.1' in deps
+          assert 'jsonschema==4.26.0' in deps
           PY
 
       - name: Write zero-call qualification receipt
@@ -105,30 +130,35 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
+          import hashlib
           import json
           import os
           from pathlib import Path
 
-          root = Path("free-qualification/artifacts/dry-run")
-          plan = json.loads((root / "governance-model-plan.json").read_text())
+          policy_path = Path('open-model-market/constitutional_policy.json')
+          policy_sha = hashlib.sha256(policy_path.read_bytes()).hexdigest()
           receipt = {
-              "schema_version": "v5-governance-plan-zero-call-qualification-1",
-              "target_sha": os.environ["TARGET_SHA"],
-              "status": "PASS",
-              "model_calls": 0,
-              "selection_authority": "decision-system-governance",
-              "governance_model_plan_sha256": plan["plan_sha256"],
-              "model_selection_performed_locally": False,
-              "model_reranking_performed_locally": False,
-              "model_substitution_allowed": False,
-              "provider_resolution_only": True,
-              "claude_mechanism_enabled": False,
-              "governance_model_calls_in_expert_center": 0,
-              "production_ref_moved": False,
+              'schema_version': 'v5-top50-ortools-zero-call-qualification-1',
+              'target_sha': os.environ['TARGET_SHA'],
+              'status': 'PASS',
+              'model_calls': 0,
+              'candidate_pool_authority': 'decision-system-governance',
+              'model_assignment_authority': 'expert-assessment-center-ortools',
+              'candidate_pool_size': 50,
+              'popularity_period': 'week',
+              'optimizer': 'ortools-cp-sat',
+              'optimizer_required_status': 'OPTIMAL',
+              'primary_expert_count': 4,
+              'warm_recovery_count': 4,
+              'provider_routing_mode': 'unrestricted-openrouter',
+              'provider_restrictions_applied': False,
+              'model_substitution_allowed': False,
+              'constitutional_policy_sha256': policy_sha,
+              'production_ref_moved': False,
           }
-          Path("free-qualification/free-qualification.json").write_text(
-              json.dumps(receipt, ensure_ascii=False, indent=2),
-              encoding="utf-8",
+          Path('free-qualification/free-qualification.json').write_text(
+              json.dumps(receipt, ensure_ascii=False, indent=2) + '\n',
+              encoding='utf-8',
           )
           PY
 
@@ -136,7 +166,29 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: v5-governance-plan-zero-call-${{ github.run_id }}
+          name: v5-top50-ortools-zero-call-${{ github.run_id }}
           path: free-qualification/
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
+
+      - name: Publish qualification receipt to Issue
+        if: always() && github.event_name == 'issue_comment'
+        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
+        with:
+          script: |
+            const body = [
+              '## TOP50_ZERO_CALL_QUALIFICATION',
+              '',
+              `- Target SHA: \`${process.env.TARGET_SHA}\``,
+              `- Job status: \`${{ job.status }}\``,
+              '- Model calls: `0`',
+              '- Team computation: `OR-Tools CP-SAT / 4 primary + 4 warm recovery`',
+              '- Provider routing: `unrestricted-openrouter`',
+              `- Run: \`${process.env.RUN_URL}\``
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
