@@ -1,0 +1,160 @@
+name: V5 Zero-Cost Free Model Canary
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["V5 Top-50 OR-Tools Zero-Call Qualification"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: v5-zero-cost-free-canary-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  free-model-canary:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      TARGET_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      ZERO_CALL_RUN_ID: ${{ github.event.workflow_run.id || '' }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact free-first policy
+        run: |
+          set -euo pipefail
+          test -n "${OPENROUTER_API_KEY:-}"
+          test "${#OPENROUTER_API_KEY}" -ge 20
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          policy = json.loads(Path('open-model-market/constitutional_policy.json').read_text())
+          free = policy['free_first_testing']
+          assert free['free_model_required_before_paid'] is True
+          assert free['free_model_actual_cost_usd'] == 0.0
+          assert free['automatic_paid_full_task_retry_allowed'] is False
+          assert free['free_evidence_can_qualify_formal_model_identity'] is False
+          assert free['free_evidence_can_move_production'] is False
+          PY
+
+      - name: Execute exactly one zero-cost free-model Canary
+        id: canary
+        run: |
+          set -euo pipefail
+          mkdir -p free-canary
+          python - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          endpoint = 'https://openrouter.ai/api/v1/chat/completions'
+          payload = {
+              'model': 'openrouter/free',
+              'messages': [
+                  {
+                      'role': 'user',
+                      'content': 'Synthetic connectivity canary. Reply with the single token CANARY_OK.',
+                  }
+              ],
+              'max_tokens': 16,
+          }
+          request = urllib.request.Request(
+              endpoint,
+              data=json.dumps(payload).encode('utf-8'),
+              headers={
+                  'Authorization': f"Bearer {os.environ['OPENROUTER_API_KEY']}",
+                  'Content-Type': 'application/json',
+                  'HTTP-Referer': 'https://github.com/' + os.environ['GITHUB_REPOSITORY'],
+                  'X-Title': 'expert-center-zero-cost-free-canary',
+              },
+              method='POST',
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=120) as response:
+                  raw = response.read()
+          except urllib.error.HTTPError as exc:
+              detail = exc.read().decode('utf-8', errors='replace')[:2000]
+              raise SystemExit(f'free Canary HTTP {exc.code}: {detail}') from exc
+          value = json.loads(raw)
+          if not isinstance(value, dict):
+              raise SystemExit('free Canary response is not a JSON object')
+          choices = value.get('choices')
+          if not isinstance(choices, list) or len(choices) != 1:
+              raise SystemExit('free Canary must return exactly one choice')
+          message = choices[0].get('message') if isinstance(choices[0], dict) else None
+          content = str((message or {}).get('content') or '').strip()
+          if not content:
+              raise SystemExit('free Canary returned empty content')
+          usage = value.get('usage')
+          if not isinstance(usage, dict):
+              raise SystemExit('free Canary usage accounting is missing')
+          cost_raw = usage.get('cost')
+          if isinstance(cost_raw, bool) or not isinstance(cost_raw, (int, float)):
+              raise SystemExit('free Canary usage.cost is missing or non-numeric')
+          cost = float(cost_raw)
+          if cost != 0.0:
+              raise SystemExit(f'free Canary incurred non-zero cost: {cost}')
+          actual_model = str(value.get('model') or '').strip()
+          if not actual_model:
+              raise SystemExit('free Canary did not disclose routed model identity')
+
+          receipt = {
+              'schema_version': 'v5-zero-cost-free-model-canary-1',
+              'status': 'PASS',
+              'target_sha': os.environ['TARGET_SHA'],
+              'zero_call_qualification_run_id': os.environ.get('ZERO_CALL_RUN_ID', ''),
+              'model_requests': 1,
+              'successful_model_calls': 1,
+              'paid_model_calls': 0,
+              'actual_cost_usd': cost,
+              'requested_model': 'openrouter/free',
+              'actual_model': actual_model,
+              'provider_object_present': False,
+              'external_tools_allowed': False,
+              'synthetic_prompt_only': True,
+              'formal_model_identity_qualified': False,
+              'production_ref_moved': False,
+          }
+          Path('free-canary/free-canary.json').write_text(
+              json.dumps(receipt, ensure_ascii=False, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          Path('free-canary/response-metadata.json').write_text(
+              json.dumps(
+                  {
+                      'id': value.get('id'),
+                      'model': actual_model,
+                      'usage': usage,
+                  },
+                  ensure_ascii=False,
+                  indent=2,
+              ) + '\n',
+              encoding='utf-8',
+          )
+          print(json.dumps(receipt, ensure_ascii=False))
+          PY
+
+      - name: Upload zero-cost Canary evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: v5-zero-cost-free-canary-${{ github.run_id }}
+          path: free-canary/
+          if-no-files-found: error
+          retention-days: 30
