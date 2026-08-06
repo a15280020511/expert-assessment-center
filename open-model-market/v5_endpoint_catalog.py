@@ -12,13 +12,11 @@ from typing import Any, Mapping, Sequence
 
 from openrouter_api import OpenRouterRequestError, request_json
 from v5_catalog_view import (
-    GOVERNANCE_COMPANIES,
     CatalogViewError,
     _provider_slug as provider_slug,
     endpoint_url,
     stable_model_id,
 )
-from v5_model_company import canonical_model_company
 
 DEFAULT_ENDPOINT_FETCH_WORKERS = 12
 MAX_ENDPOINT_FETCH_WORKERS = 16
@@ -142,12 +140,8 @@ def fetch_live_endpoint_payloads(
     if not eligible:
         return {}
 
-    expert_model_ids = {
-        str(model.id)
-        for model in eligible
-        if canonical_model_company(str(model.id)) not in GOVERNANCE_COMPANIES
-    }
-    zdr_keys = _fetch_zdr_endpoint_keys(run) if expert_model_ids else frozenset()
+    zdr_model_ids = {str(model.id) for model in eligible}
+    zdr_keys = _fetch_zdr_endpoint_keys(run)
 
     timeout = int(getattr(run, "catalog_timeout_seconds", 30))
     retries = int(getattr(run, "catalog_max_retries", 1))
@@ -174,7 +168,7 @@ def fetch_live_endpoint_payloads(
                 "error": str(exc),
                 "data": {"endpoints": []},
             }
-        if model_id in expert_model_ids:
+        if model_id in zdr_model_ids:
             payload = _filter_model_payload_to_zdr(model_id, payload, zdr_keys)
         return model_id, payload
 
