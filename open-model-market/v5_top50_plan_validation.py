@@ -1,4 +1,4 @@
-"""Validate expert-center OR-Tools plans derived from an open-provider top-50 pool."""
+"""Validate task-adaptive expert-center OR-Tools plans from an open-provider Top-50 pool."""
 from __future__ import annotations
 
 import hashlib
@@ -7,6 +7,12 @@ from typing import Any, Mapping, Sequence
 
 POOL_SCHEMA_VERSION = "governance-openrouter-top50-reasoning-pool-v2-open-provider"
 POOL_SOURCE = "openrouter-most-popular-last-week-token-volume"
+TASK_SCORING_SCHEMA_VERSION = "v5-task-adaptive-value-scoring-1"
+SELECTION_PRINCIPLES = [
+    "concrete-problem-concrete-analysis",
+    "dynamic-adaptation",
+    "small-effort-large-return",
+]
 REQUIRED_EVIDENCE = (
     "openrouter-top-weekly-reasoning",
     "model-metadata-qualified",
@@ -48,6 +54,16 @@ def _execution_row(row: Mapping[str, Any], field: str, index: int, raw_models: s
     evidence = str(row.get("selection_evidence") or "")
     if any(fragment not in evidence for fragment in REQUIRED_EVIDENCE):
         raise Top50PlanValidationError(f"{field}[{index}] evidence is incomplete")
+    if field in {"selected_models", "recovery_models"}:
+        if row.get("task_adaptive_capacity_compatible") is not True:
+            raise Top50PlanValidationError(f"{field}[{index}] is not task-capacity compatible")
+        score = row.get("task_adaptive_objective_score")
+        if isinstance(score, bool) or not isinstance(score, int) or score < 0:
+            raise Top50PlanValidationError(f"{field}[{index}] lacks task-adaptive objective score")
+        if not isinstance(row.get("task_adaptive_ranks"), Mapping):
+            raise Top50PlanValidationError(f"{field}[{index}] lacks task-adaptive ranks")
+        if not isinstance(row.get("task_adaptive_weights"), Mapping):
+            raise Top50PlanValidationError(f"{field}[{index}] lacks task-adaptive weights")
 
 
 def validate_top50_contract(
@@ -67,14 +83,34 @@ def validate_top50_contract(
         "selected_from_top50_reasoning_pool_only": True,
         "all_top50_models_received_by_expert_center": True,
         "optimizer": "ortools-cp-sat",
+        "task_adaptive_scoring_completed": True,
+        "task_adaptive_scoring_schema_version": TASK_SCORING_SCHEMA_VERSION,
         "provider_routing_mode": "unrestricted-openrouter",
         "provider_restrictions_applied": False,
     }
     for field, value in expected.items():
         if plan.get(field) != value:
             raise Top50PlanValidationError(f"top-50 execution contract mismatch: {field}")
+    if plan.get("selection_principles") != SELECTION_PRINCIPLES:
+        raise Top50PlanValidationError("task-adaptive selection principles are missing")
     if len(selected) != 4 or len(recoveries) != 4:
         raise Top50PlanValidationError("top-50 plan must contain four active and four warm recovery models")
+
+    profile = plan.get("task_demand_profile")
+    if not isinstance(profile, Mapping):
+        raise Top50PlanValidationError("task demand profile is missing")
+    if profile.get("schema_version") != TASK_SCORING_SCHEMA_VERSION:
+        raise Top50PlanValidationError("task demand profile schema is invalid")
+    if profile.get("principles") != SELECTION_PRINCIPLES:
+        raise Top50PlanValidationError("task demand profile principles are invalid")
+    for field in (
+        "semantic_keyword_routing_used",
+        "domain_hardcoding_used",
+        "cross_task_history_used",
+        "provider_metric_used",
+    ):
+        if profile.get(field) is not False:
+            raise Top50PlanValidationError(f"task demand profile violates {field}")
 
     raw = _rows(plan.get("top50_reasoning_models"), "top50_reasoning_models")
     eligible = _rows(plan.get("top50_expert_selectable_candidates"), "top50_expert_selectable_candidates")
@@ -108,8 +144,24 @@ def validate_top50_contract(
         raise Top50PlanValidationError("OR-Tools optimality proof is missing")
     if audit.get("provider_routing_mode") != "unrestricted-openrouter":
         raise Top50PlanValidationError("optimizer provider routing mode is not open")
+    if audit.get("selection_principles") != SELECTION_PRINCIPLES:
+        raise Top50PlanValidationError("optimizer selection principles are missing")
+    if audit.get("task_adaptive_scoring_schema_version") != TASK_SCORING_SCHEMA_VERSION:
+        raise Top50PlanValidationError("optimizer task-adaptive schema is invalid")
     if constraints.get("provider_resilience_used") is not False:
         raise Top50PlanValidationError("provider resilience must not affect model assignment")
+    for field in (
+        "task_role_native_capacity_compatibility",
+        "dynamic_role_weights_used",
+        "marginal_return_used",
+        "warm_recovery_priority_uses_same_objective",
+    ):
+        if constraints.get(field) is not True:
+            raise Top50PlanValidationError(f"optimizer constraint evidence missing: {field}")
+    if constraints.get("semantic_keyword_routing_used") is not False:
+        raise Top50PlanValidationError("semantic keyword routing must remain disabled")
+    if constraints.get("cross_task_history_used") is not False:
+        raise Top50PlanValidationError("cross-task history must remain disabled")
 
 
 __all__ = ["Top50PlanValidationError", "validate_top50_contract"]
