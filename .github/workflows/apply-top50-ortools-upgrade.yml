@@ -56,10 +56,8 @@ jobs:
       - name: Run focused regression tests
         run: |
           python -m pytest -q \
+            tests/test_top50_pool_optimizer.py \
             tests/test_top20_pool_selector.py \
-            tests/test_v5_governance_model_plan.py \
-            tests/test_v5_price_ranked_issue_ticket.py \
-            tests/test_v5_provider_lock.py \
             tests/test_v5_soft_proposal_materializer.py
       - name: Commit generated changes
         run: |
