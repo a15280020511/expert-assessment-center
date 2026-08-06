@@ -48,8 +48,6 @@ def _sha(value) -> str:
 
 
 def _company(index: int) -> str:
-    # Several models from company1 prove the optimizer enforces active diversity
-    # while retaining same-company alternatives in recovery inventory.
     return "company1" if index in {1, 2, 3} else f"company{index}"
 
 
@@ -162,42 +160,50 @@ class Top50PoolOptimizerTests(unittest.TestCase):
         self.assertEqual(plan["expert_count"], 4)
         self.assertEqual(plan["recovery_count"], 4)
         self.assertEqual(len(plan["selected_models"]), 4)
+        self.assertEqual(len(plan["recovery_models"]), 4)
         self.assertEqual(
             len({row["company"] for row in plan["selected_models"]}), 4
+        )
+        self.assertEqual(
+            len({row["company"] for row in plan["recovery_models"]}), 4
         )
         self.assertEqual(
             [row["role_id"] for row in plan["selected_models"]],
             ["evidence", "options", "review", "synthesis"],
         )
-        self.assertEqual(
-            len(plan["recovery_models"]),
-            len(plan["expert_selectable_candidates"]) - 4,
-        )
-        self.assertEqual(plan["recovery_inventory_count"], len(plan["recovery_models"]))
+        self.assertEqual(plan["recovery_inventory_count"], 4)
+        self.assertEqual(plan["total_qualified_recovery_inventory_count"], 26)
+        self.assertEqual(plan["extended_recovery_model_count"], 22)
+        self.assertEqual(len(plan["extended_recovery_models"]), 22)
         self.assertEqual(plan["expert_center_top50_inventory_count"], 50)
         self.assertEqual(len(plan["expert_center_top50_inventory"]), 50)
         self.assertEqual(receipt["top50_inventory_count"], 50)
+        self.assertEqual(receipt["total_qualified_recovery_inventory_count"], 26)
         self.assertEqual(receipt["model_calls"], 0)
         self.assertEqual(plan["plan_sha256"], module._plan_digest(plan))
 
-    def test_all_qualified_nonactive_models_are_ordered_recovery(self) -> None:
+    def test_all_qualified_nonactive_models_are_ordered_recovery_inventory(self) -> None:
         module = _load_selector()
         packet, _ = module.materialize_top50_selection(_packet())
         plan = packet["governance_model_plan"]
         selected_models = {row["model"] for row in plan["selected_models"]}
-        recovery_models = [row["model"] for row in plan["recovery_models"]]
+        warm = list(plan["recovery_models"])
+        extended = list(plan["extended_recovery_models"])
+        all_recoveries = [*warm, *extended]
         eligible_models = {
             row["model"] for row in plan["expert_selectable_candidates"]
         }
-        self.assertEqual(set(recovery_models), eligible_models - selected_models)
         self.assertEqual(
-            [row["recovery_priority"] for row in plan["recovery_models"]],
-            list(range(1, len(recovery_models) + 1)),
+            {row["model"] for row in all_recoveries},
+            eligible_models - selected_models,
         )
+        ordered = sorted(all_recoveries, key=lambda row: row["recovery_priority"])
         self.assertEqual(
-            sum(row["warm_recovery"] for row in plan["recovery_models"]),
-            4,
+            [row["recovery_priority"] for row in ordered],
+            list(range(1, len(ordered) + 1)),
         )
+        self.assertTrue(all(row["warm_recovery"] for row in warm))
+        self.assertTrue(all(not row["warm_recovery"] for row in extended))
 
     def test_materialized_plan_passes_top50_execution_contract(self) -> None:
         selector = _load_selector()
