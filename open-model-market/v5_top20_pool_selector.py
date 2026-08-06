@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Optimize an expert team from a frozen governance top-50 reasoning pool.
 
-The historical filename and public function aliases are retained for production
-entrypoint compatibility. Governance owns and hashes the ranking. The expert
-center uses OR-Tools CP-SAT to assign four active roles inside the frozen pool,
-then keeps every remaining qualified model as an ordered recovery candidate and
-every unqualified ranked model as explicit standby evidence.
+The historical filename and public aliases are retained for compatibility.
+Governance owns the immutable popularity ranking. The expert center uses
+OR-Tools CP-SAT to assign four active roles, exposes only the ticket-approved
+number of warm replacements to the current execution graph, and retains every
+other qualified model as ordered extended recovery inventory.
 """
 from __future__ import annotations
 
@@ -22,31 +22,29 @@ POOL_SOURCE = "openrouter-most-popular-last-week-token-volume"
 STANDBY_SCHEMA_VERSION = "expert-center-top50-standby-inventory-v1"
 EXPECTED_POOL_SIZE = 50
 EXPECTED_PRIMARY_COUNT = 4
+ROLE_ORDER = ("evidence", "options", "review", "synthesis")
 REQUIRED_SELECTION_EVIDENCE = (
     "openrouter-top-weekly-reasoning",
     "live-exact-endpoint-qualified",
     "authenticated-zdr-endpoint-qualified",
 )
-ROLE_ORDER = ("evidence", "options", "review", "synthesis")
 
 
 class Top50PoolOptimizationError(RuntimeError):
-    """Raised when the expert center cannot optimize safely inside the pool."""
+    """Raised when a safe deterministic assignment cannot be formed."""
 
 
-# Backward-compatible public name imported by the production admission wrapper.
 Top20PoolSelectionError = Top50PoolOptimizationError
 
 
 def _stable_bytes(value: Any) -> bytes:
-    serialized = json.dumps(
+    return json.dumps(
         value,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
         allow_nan=False,
-    )
-    return serialized.encode("utf-8")
+    ).encode("utf-8")
 
 
 def _sha256(value: Any) -> str:
@@ -71,7 +69,7 @@ def _finite_nonnegative(value: Any, field: str) -> float:
     return number
 
 
-def _positive_int(value: Any, field: str, default: int = 0) -> int:
+def _nonnegative_int(value: Any, field: str) -> int:
     if isinstance(value, bool):
         raise Top50PoolOptimizationError(f"{field} must be an integer")
     try:
@@ -80,7 +78,7 @@ def _positive_int(value: Any, field: str, default: int = 0) -> int:
         raise Top50PoolOptimizationError(f"{field} must be an integer") from exc
     if parsed < 0:
         raise Top50PoolOptimizationError(f"{field} must be nonnegative")
-    return parsed if parsed or default == 0 else default
+    return parsed
 
 
 def _rows(value: Any, field: str) -> list[dict[str, Any]]:
@@ -101,11 +99,7 @@ def _require_equal(actual: Any, expected: Any, message: str) -> None:
 
 def _validate_plan_envelope(plan: Mapping[str, Any]) -> None:
     checks = (
-        (
-            plan.get("plan_sha256"),
-            _plan_digest(plan),
-            "governance candidate-pool plan digest mismatch",
-        ),
+        (plan.get("plan_sha256"), _plan_digest(plan), "candidate plan digest mismatch"),
         (
             plan.get("top50_reasoning_pool_schema_version"),
             POOL_SCHEMA_VERSION,
@@ -139,7 +133,7 @@ def _validate_plan_envelope(plan: Mapping[str, Any]) -> None:
         (
             plan.get("old_flagship_filter_applied_to_top50_pool"),
             False,
-            "old flagship filtering must not alter the top-50 candidate pool",
+            "old flagship filter altered the top-50 pool",
         ),
     )
     for actual, expected, message in checks:
@@ -151,7 +145,7 @@ def _validate_pool_hashes(
     raw: list[dict[str, Any]],
     eligible: list[dict[str, Any]],
 ) -> None:
-    _require_equal(len(raw), EXPECTED_POOL_SIZE, "top-50 reasoning pool is incomplete")
+    _require_equal(len(raw), 50, "top-50 reasoning pool is incomplete")
     _require_equal(
         plan.get("top50_reasoning_pool_sha256"),
         _sha256(raw),
@@ -167,7 +161,7 @@ def _validate_pool_hashes(
         for row in eligible
         if str(row.get("company") or "").strip()
     }
-    if len(companies) < EXPECTED_PRIMARY_COUNT:
+    if len(companies) < 4:
         raise Top50PoolOptimizationError(
             "fewer than four distinct-company selectable models remain in the top-50 pool"
         )
@@ -179,7 +173,7 @@ def _validate_pool_hashes(
 
 
 def _validate_raw_pool(raw: list[dict[str, Any]]) -> set[str]:
-    raw_models: set[str] = set()
+    models: set[str] = set()
     for rank, row in enumerate(raw, 1):
         model = str(row.get("model") or "").strip()
         company = str(row.get("company") or "").strip().casefold()
@@ -188,69 +182,60 @@ def _validate_raw_pool(raw: list[dict[str, Any]]) -> set[str]:
             rank,
             "top-50 popularity ranks must be contiguous",
         )
-        if not model or model in raw_models or not company:
-            raise Top50PoolOptimizationError(
-                "top-50 pool contains an invalid identity"
-            )
+        if not model or model in models or not company:
+            raise Top50PoolOptimizationError("top-50 pool identity is invalid")
         _require_equal(
             row.get("reasoning_supported"),
             True,
             "top-50 pool contains a non-reasoning model",
         )
-        raw_models.add(model)
-    return raw_models
+        models.add(model)
+    return models
 
 
-def _validate_candidate_qualification(
-    row: Mapping[str, Any], model: str, raw_models: set[str]
-) -> None:
-    if model not in raw_models:
+def _validate_candidate(
+    row: Mapping[str, Any], raw_models: set[str], index: int
+) -> str:
+    model = str(row.get("model") or "").strip()
+    company = str(row.get("company") or "").strip().casefold()
+    if not model or not company or model not in raw_models:
         raise Top50PoolOptimizationError(
-            f"selectable model is outside the frozen top-50 pool: {model}"
+            f"selectable candidate identity is invalid: {model}"
         )
     _require_equal(
         row.get("expert_center_selectable"),
         True,
-        f"candidate is not marked selectable: {model}",
+        f"candidate is not selectable: {model}",
     )
     _require_equal(
         row.get("reasoning_rank_verified"),
         True,
-        f"candidate lacks top-weekly reasoning-rank evidence: {model}",
+        f"candidate lacks reasoning-rank evidence: {model}",
     )
     rank = row.get("popularity_rank")
     if isinstance(rank, bool) or not isinstance(rank, int) or not 1 <= rank <= 50:
-        raise Top50PoolOptimizationError(
-            f"candidate has an invalid popularity rank: {model}"
-        )
+        raise Top50PoolOptimizationError(f"candidate popularity rank is invalid: {model}")
     providers = row.get("qualified_provider_count")
     if isinstance(providers, bool) or not isinstance(providers, int) or providers < 1:
-        raise Top50PoolOptimizationError(
-            f"candidate has no qualified provider: {model}"
-        )
+        raise Top50PoolOptimizationError(f"candidate has no qualified provider: {model}")
     evidence = str(row.get("selection_evidence") or "")
     if any(fragment not in evidence for fragment in REQUIRED_SELECTION_EVIDENCE):
-        raise Top50PoolOptimizationError(
-            f"candidate lacks direct top-50 endpoint evidence: {model}"
-        )
+        raise Top50PoolOptimizationError(f"candidate endpoint evidence is incomplete: {model}")
+    _finite_nonnegative(
+        row.get("price_rank_usd_per_million"),
+        f"expert_selectable_candidates[{index}].price_rank_usd_per_million",
+    )
+    return model
 
 
-def _validate_selectable_candidates(
+def _validate_eligible(
     eligible: list[dict[str, Any]], raw_models: set[str]
 ) -> None:
     seen: set[str] = set()
     for index, row in enumerate(eligible):
-        model = str(row.get("model") or "").strip()
-        company = str(row.get("company") or "").strip().casefold()
-        if not model or not company or model in seen:
-            raise Top50PoolOptimizationError(
-                "selectable candidates must use valid unique model identities"
-            )
-        _validate_candidate_qualification(row, model, raw_models)
-        _finite_nonnegative(
-            row.get("price_rank_usd_per_million"),
-            f"expert_selectable_candidates[{index}].price_rank_usd_per_million",
-        )
+        model = _validate_candidate(row, raw_models, index)
+        if model in seen:
+            raise Top50PoolOptimizationError("selectable candidate models are repeated")
         seen.add(model)
 
 
@@ -265,7 +250,7 @@ def _validate_pool(
     )
     _validate_pool_hashes(plan, raw, eligible)
     raw_models = _validate_raw_pool(raw)
-    _validate_selectable_candidates(eligible, raw_models)
+    _validate_eligible(eligible, raw_models)
     return raw, eligible
 
 
@@ -335,18 +320,17 @@ def _candidate_penalties(
     result: dict[str, dict[str, int]] = {}
     for index, row in enumerate(eligible):
         model = str(row["model"])
-        base = (
-            38 * price[model]
-            + 30 * intelligence[model]
-            + 18 * providers[model]
-            + 14 * popularity[model]
-        )
         result[model] = {
             "price": price[model],
             "intelligence": intelligence[model],
             "provider_redundancy": providers[model],
             "popularity": popularity[model],
-            "base": base,
+            "base": (
+                38 * price[model]
+                + 30 * intelligence[model]
+                + 18 * providers[model]
+                + 14 * popularity[model]
+            ),
             "tie_break": index,
         }
     return result
@@ -369,8 +353,7 @@ def _role_cost(role: str, penalties: Mapping[str, int]) -> int:
 
 
 def _assignment_variables(
-    model: cp_model.CpModel,
-    eligible: list[dict[str, Any]],
+    model: cp_model.CpModel, eligible: list[dict[str, Any]]
 ) -> dict[tuple[int, str], Any]:
     return {
         (index, role): model.NewBoolVar(f"assign_{index}_{role}")
@@ -380,13 +363,13 @@ def _assignment_variables(
 
 
 def _company_indices(eligible: list[dict[str, Any]]) -> dict[str, list[int]]:
-    companies: dict[str, list[int]] = {}
+    result: dict[str, list[int]] = {}
     for index, row in enumerate(eligible):
-        companies.setdefault(str(row["company"]).casefold(), []).append(index)
-    return companies
+        result.setdefault(str(row["company"]).casefold(), []).append(index)
+    return result
 
 
-def _add_assignment_constraints(
+def _add_constraints(
     model: cp_model.CpModel,
     variables: Mapping[tuple[int, str], Any],
     eligible: list[dict[str, Any]],
@@ -408,7 +391,7 @@ def _add_assignment_constraints(
         )
 
 
-def _assignment_objective_terms(
+def _objective_terms(
     eligible: list[dict[str, Any]],
     penalties: Mapping[str, Mapping[str, int]],
     variables: Mapping[tuple[int, str], Any],
@@ -417,16 +400,16 @@ def _assignment_objective_terms(
     for index, row in enumerate(eligible):
         model_id = str(row["model"])
         for role_index, role in enumerate(ROLE_ORDER):
-            deterministic_cost = (
+            cost = (
                 _role_cost(role, penalties[model_id]) * 1000
                 + int(penalties[model_id]["tie_break"]) * 10
                 + role_index
             )
-            terms.append(deterministic_cost * variables[(index, role)])
+            terms.append(cost * variables[(index, role)])
     return terms
 
 
-def _configured_solver() -> cp_model.CpSolver:
+def _solver() -> cp_model.CpSolver:
     solver = cp_model.CpSolver()
     solver.parameters.num_search_workers = 1
     solver.parameters.random_seed = 0
@@ -434,18 +417,18 @@ def _configured_solver() -> cp_model.CpSolver:
     return solver
 
 
-def _extract_assignments(
+def _selected_rows(
     solver: cp_model.CpSolver,
     variables: Mapping[tuple[int, str], Any],
     eligible: list[dict[str, Any]],
     penalties: Mapping[str, Mapping[str, int]],
 ) -> list[dict[str, Any]]:
     templates = _roles()
-    assigned_by_role: dict[str, dict[str, Any]] = {}
+    assigned: dict[str, dict[str, Any]] = {}
     for index, row in enumerate(eligible):
         for role in ROLE_ORDER:
             if solver.Value(variables[(index, role)]):
-                assigned_by_role[role] = {
+                assigned[role] = {
                     **_without_assignment(row),
                     **templates[role],
                     "optimizer_role": role,
@@ -453,20 +436,16 @@ def _extract_assignments(
                         role, penalties[str(row["model"])]
                     ),
                 }
-    if set(assigned_by_role) != set(ROLE_ORDER):
-        raise Top50PoolOptimizationError(
-            "OR-Tools returned an incomplete expert role assignment"
-        )
-    selected = [assigned_by_role[role] for role in ROLE_ORDER]
+    if set(assigned) != set(ROLE_ORDER):
+        raise Top50PoolOptimizationError("OR-Tools returned an incomplete assignment")
+    selected = [assigned[role] for role in ROLE_ORDER]
     for slot, row in enumerate(selected, 1):
         row["slot"] = slot
     return selected
 
 
 def _optimizer_audit(
-    solver: cp_model.CpSolver,
-    status: int,
-    selected: list[dict[str, Any]],
+    solver: cp_model.CpSolver, status: int, selected: list[dict[str, Any]]
 ) -> dict[str, Any]:
     return {
         "optimizer": "ortools-cp-sat",
@@ -506,37 +485,37 @@ def _optimize_active_team(
     penalties = _candidate_penalties(eligible)
     model = cp_model.CpModel()
     variables = _assignment_variables(model, eligible)
-    _add_assignment_constraints(model, variables, eligible)
-    model.Minimize(sum(_assignment_objective_terms(eligible, penalties, variables)))
-    solver = _configured_solver()
+    _add_constraints(model, variables, eligible)
+    model.Minimize(sum(_objective_terms(eligible, penalties, variables)))
+    solver = _solver()
     status = solver.Solve(model)
     if status not in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
         raise Top50PoolOptimizationError(
-            "OR-Tools could not form a four-role distinct-company expert team"
+            "OR-Tools could not form a distinct-company four-role team"
         )
-    selected = _extract_assignments(solver, variables, eligible, penalties)
+    selected = _selected_rows(solver, variables, eligible, penalties)
     return selected, _optimizer_audit(solver, status, selected), penalties
 
 
-def _recovery_rows(
+def _ordered_recoveries(
     eligible: list[dict[str, Any]],
     selected: list[dict[str, Any]],
     penalties: Mapping[str, Mapping[str, int]],
     recovery_call_ceiling: int,
 ) -> list[dict[str, Any]]:
     selected_models = {str(row["model"]) for row in selected}
-    selected_companies = {str(row["company"]).casefold() for row in selected}
+    active_companies = {str(row["company"]).casefold() for row in selected}
     remaining = [row for row in eligible if str(row["model"]) not in selected_models]
     remaining.sort(
         key=lambda row: (
-            str(row["company"]).casefold() in selected_companies,
+            str(row["company"]).casefold() in active_companies,
             int(penalties[str(row["model"])]["base"]),
             int(row.get("popularity_rank") or 1_000_000),
             int(row.get("official_intelligence_rank") or 1_000_000),
             str(row.get("model") or ""),
         )
     )
-    result: list[dict[str, Any]] = []
+    records: list[dict[str, Any]] = []
     for priority, row in enumerate(remaining, 1):
         record = _without_assignment(row)
         record.update(
@@ -548,37 +527,61 @@ def _recovery_rows(
                 ),
                 "warm_recovery": priority <= recovery_call_ceiling,
                 "company_conflicts_with_active": (
-                    str(row["company"]).casefold() in selected_companies
+                    str(row["company"]).casefold() in active_companies
                 ),
                 "approved_standby": True,
             }
         )
-        result.append(record)
-    return result
+        records.append(record)
+    return records
+
+
+def _runtime_recovery_rows(
+    all_recoveries: list[dict[str, Any]], recovery_call_ceiling: int
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    used_companies: set[str] = set()
+    for candidate in all_recoveries:
+        company = str(candidate.get("company") or "").casefold()
+        if not company or company in used_companies:
+            continue
+        record = dict(candidate)
+        record["slot"] = len(rows) + 1
+        rows.append(record)
+        used_companies.add(company)
+        if len(rows) == recovery_call_ceiling:
+            break
+    if len(rows) != recovery_call_ceiling:
+        raise Top50PoolOptimizationError(
+            "not enough distinct-company warm recovery candidates for the approved reserve"
+        )
+    return rows
 
 
 def _inventory(
     raw: list[dict[str, Any]],
     eligible: list[dict[str, Any]],
     selected: list[dict[str, Any]],
-    recoveries: list[dict[str, Any]],
-    recovery_call_ceiling: int,
+    all_recoveries: list[dict[str, Any]],
+    warm_models: set[str],
 ) -> list[dict[str, Any]]:
     eligible_by_model = {
         str(row["model"]): _without_assignment(row) for row in eligible
     }
     active = {str(row["model"]) for row in selected}
-    priority = {str(row["model"]): int(row["recovery_priority"]) for row in recoveries}
+    priorities = {
+        str(row["model"]): int(row["recovery_priority"]) for row in all_recoveries
+    }
     inventory: list[dict[str, Any]] = []
     for slot, raw_row in enumerate(raw, 1):
         model = str(raw_row["model"])
         qualified = eligible_by_model.get(model)
-        recovery_priority = priority.get(model)
+        priority = priorities.get(model)
         if model in active:
             state = "active"
-        elif recovery_priority is not None and recovery_priority <= recovery_call_ceiling:
+        elif model in warm_models:
             state = "warm-recovery"
-        elif recovery_priority is not None:
+        elif priority is not None:
             state = "extended-recovery"
         else:
             state = "ineligible-standby"
@@ -589,7 +592,7 @@ def _inventory(
                 "standby_state": state,
                 "execution_eligible": qualified is not None,
                 "assigned_for_current_run": state == "active",
-                "recovery_priority": recovery_priority,
+                "recovery_priority": priority,
                 "retained_by_expert_center": True,
             }
         )
@@ -600,44 +603,47 @@ def _inventory(
 
 
 def _price_ranked_rows(
-    selected: list[dict[str, Any]], recoveries: list[dict[str, Any]]
+    selected: list[dict[str, Any]], warm_recoveries: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    rows = [*_without_roles(selected), *[_without_assignment(row) for row in recoveries]]
+    source = [
+        *[_without_assignment(row) for row in selected],
+        *[_without_assignment(row) for row in warm_recoveries],
+    ]
     ranked: list[dict[str, Any]] = []
-    for rank, row in enumerate(rows, 1):
+    for rank, row in enumerate(source, 1):
         record = dict(row)
-        record["price_rank"] = rank
         record["slot"] = rank
+        record["price_rank"] = rank
         ranked.append(record)
     return ranked
-
-
-def _without_roles(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [_without_assignment(row) for row in rows]
 
 
 def _selection_receipt(
     source_plan: Mapping[str, Any],
     selected: list[dict[str, Any]],
-    recoveries: list[dict[str, Any]],
+    warm_recoveries: list[dict[str, Any]],
+    extended_recoveries: list[dict[str, Any]],
     inventory: list[dict[str, Any]],
     optimizer_audit: Mapping[str, Any],
     recovery_call_ceiling: int,
 ) -> dict[str, Any]:
     receipt = {
-        "schema_version": "expert-center-top50-ortools-selection-receipt-v1",
+        "schema_version": "expert-center-top50-ortools-selection-receipt-v2",
         "candidate_pool_plan_sha256": source_plan["plan_sha256"],
         "candidate_pool_sha256": source_plan["top50_reasoning_pool_sha256"],
         "selectable_candidates_sha256": source_plan[
             "expert_selectable_candidates_sha256"
         ],
         "selection_policy": (
-            "frozen-top50-reasoning-pool -> ortools-cp-sat-four-role-team -> "
-            "all-remaining-qualified-models-ordered-recovery -> retain-all-fifty"
+            "frozen-top50 -> ortools-four-role-team -> distinct-company-warm-"
+            "recovery-within-call-ceiling -> all-other-qualified-models-extended-recovery"
         ),
         "selected_models": [row["model"] for row in selected],
-        "recovery_models": [row["model"] for row in recoveries],
-        "recovery_inventory_count": len(recoveries),
+        "recovery_models": [row["model"] for row in warm_recoveries],
+        "extended_recovery_models": [row["model"] for row in extended_recoveries],
+        "total_qualified_recovery_inventory_count": (
+            len(warm_recoveries) + len(extended_recoveries)
+        ),
         "recovery_call_ceiling": recovery_call_ceiling,
         "top50_inventory_models": [row["model"] for row in inventory],
         "top50_inventory_count": len(inventory),
@@ -659,26 +665,25 @@ def materialize_top50_selection(
     raw, eligible = _validate_pool(source_plan)
     budget = packet.get("approved_budget")
     budget = budget if isinstance(budget, Mapping) else {}
-    recovery_call_ceiling = _positive_int(
+    recovery_call_ceiling = _nonnegative_int(
         budget.get("maximum_recovery_calls", 4),
         "approved_budget.maximum_recovery_calls",
     )
 
     selected, optimizer_audit, penalties = _optimize_active_team(eligible)
-    recoveries = _recovery_rows(
-        eligible,
-        selected,
-        penalties,
-        recovery_call_ceiling,
+    all_recoveries = _ordered_recoveries(
+        eligible, selected, penalties, recovery_call_ceiling
     )
+    warm_recoveries = _runtime_recovery_rows(
+        all_recoveries, recovery_call_ceiling
+    )
+    warm_models = {str(row["model"]) for row in warm_recoveries}
+    extended_recoveries = [
+        row for row in all_recoveries if str(row["model"]) not in warm_models
+    ]
     inventory = _inventory(
-        raw,
-        eligible,
-        selected,
-        recoveries,
-        recovery_call_ceiling,
+        raw, eligible, selected, all_recoveries, warm_models
     )
-    price_ranked_models = _price_ranked_rows(selected, recoveries)
     state_counts = {
         state: sum(1 for row in inventory if row["standby_state"] == state)
         for state in (
@@ -693,12 +698,14 @@ def materialize_top50_selection(
     derived.update(
         {
             "selected_models": selected,
-            "recovery_models": recoveries,
-            "price_ranked_models": price_ranked_models,
+            "recovery_models": warm_recoveries,
+            "extended_recovery_models": extended_recoveries,
+            "price_ranked_models": _price_ranked_rows(selected, warm_recoveries),
             "expert_count": EXPECTED_PRIMARY_COUNT,
-            # This is the approved number of replacement calls, not inventory size.
             "recovery_count": recovery_call_ceiling,
-            "recovery_inventory_count": len(recoveries),
+            "recovery_inventory_count": len(warm_recoveries),
+            "total_qualified_recovery_inventory_count": len(all_recoveries),
+            "extended_recovery_model_count": len(extended_recoveries),
             "expert_center_pool_selection_completed": True,
             "expert_center_reranking_allowed": True,
             "expert_center_reranking_scope": "frozen-top50-pool-only",
@@ -717,8 +724,8 @@ def materialize_top50_selection(
             "expert_center_top50_inventory_count": len(inventory),
             "expert_center_top50_inventory_state_counts": state_counts,
             "standby_inventory_policy": (
-                "all-frozen-top50-models-retained -> four-active -> all-other-"
-                "qualified-models-ordered-recovery -> ineligible-models-retained"
+                "all-frozen-top50-retained -> four-active -> approved-distinct-company-"
+                "warm-recovery -> all-other-qualified-models-extended-recovery"
             ),
             "optimizer_used": True,
             "optimizer_library": "ortools",
@@ -729,7 +736,7 @@ def materialize_top50_selection(
                 "hard-constraint"
             ),
             "company_uniqueness_scope": (
-                "active-team-hard-unique; recovery-actual-calls-use-once-guarded"
+                "active-and-warm-recovery-hard-unique; extended-inventory-use-once-guarded"
             ),
             "model_substitution_allowed": False,
             "unapproved_model_substitution_allowed": False,
@@ -738,7 +745,8 @@ def materialize_top50_selection(
     receipt = _selection_receipt(
         source_plan,
         selected,
-        recoveries,
+        warm_recoveries,
+        extended_recoveries,
         inventory,
         optimizer_audit,
         recovery_call_ceiling,
@@ -753,7 +761,6 @@ def materialize_top50_selection(
     return materialized_packet, receipt
 
 
-# Backward-compatible production entrypoint name.
 def materialize_top20_selection(
     packet: Mapping[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
