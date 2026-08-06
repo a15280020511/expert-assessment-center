@@ -11,8 +11,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-import v5_paid_acceptance_free_first_guard as guard
-import v5_price_ranked_production_ticket as production_ticket
+import v5_paid_acceptance_free_first_guard as guard  # noqa: E402
+import v5_price_ranked_production_ticket as production_ticket  # noqa: E402
 
 
 SHA = "a" * 40
@@ -116,7 +116,10 @@ class PaidAcceptanceFreeFirstGuardTests(unittest.TestCase):
     def test_legacy_zero_call_receipt_is_rejected(self) -> None:
         receipt = _zero_call()
         receipt["schema_version"] = "v5-top50-ortools-zero-call-qualification-1"
-        with self.assertRaisesRegex(guard.PaidAcceptanceFreeFirstError, "schema_version"):
+        with self.assertRaisesRegex(
+            guard.PaidAcceptanceFreeFirstError,
+            "schema_version",
+        ):
             guard._validate_zero_call_receipt(receipt, SHA)
 
     def test_missing_free_canary_fails_closed(self) -> None:
@@ -125,7 +128,10 @@ class PaidAcceptanceFreeFirstGuardTests(unittest.TestCase):
             "_find_free_canary",
             side_effect=guard.PaidAcceptanceFreeFirstError("missing"),
         ):
-            with self.assertRaisesRegex(guard.PaidAcceptanceFreeFirstError, "missing"):
+            with self.assertRaisesRegex(
+                guard.PaidAcceptanceFreeFirstError,
+                "missing",
+            ):
                 guard.enforce_free_first(
                     output_dir=Path(tmp),
                     expected_sha=SHA,
@@ -167,7 +173,10 @@ class PaidAcceptanceFreeFirstGuardTests(unittest.TestCase):
             clear=True,
         ):
             root = Path(tmp)
-            with self.assertRaisesRegex(guard.PaidAcceptanceFreeFirstError, "no evidence"):
+            with self.assertRaisesRegex(
+                guard.PaidAcceptanceFreeFirstError,
+                "no evidence",
+            ):
                 production_ticket._enforce_paid_acceptance_free_first(root)
             error = json.loads((root / "free-first-preflight-error.json").read_text())
             self.assertEqual(error["status"], "FAIL")
