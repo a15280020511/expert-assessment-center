@@ -1,190 +1,159 @@
 from __future__ import annotations
 
-import hashlib
+import copy
+import importlib.util
 import json
+from pathlib import Path
 import sys
 import unittest
-from pathlib import Path
+
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "open-model-market"))
-from v5_governance_model_plan import (  # noqa: E402
-    BENCHMARK_SOURCE,
-    FLAGSHIP_DEFINITION,
-    GovernanceModelPlanError,
-    plan_sha256,
-    task_sha256,
-    validate_governance_model_plan,
+MARKET = ROOT / "open-model-market"
+if str(MARKET) not in sys.path:
+    sys.path.insert(0, str(MARKET))
+
+
+def load_module(filename: str, name: str):
+    spec = importlib.util.spec_from_file_location(name, MARKET / filename)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+plan_module = load_module(
+    "v5_governance_model_plan.py",
+    "v5_governance_model_plan_unique_company_test",
 )
-
-FIXTURE = ROOT / "tests" / "fixtures" / "governance-ticket.json"
-
-
-def digest(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+GovernanceModelPlanError = plan_module.GovernanceModelPlanError
+validate_governance_model_plan = plan_module.validate_governance_model_plan
+plan_sha256 = plan_module.plan_sha256
 
 
-def recovery(slot: int, company: str, cost: float) -> dict:
-    return {
-        "slot": slot,
-        "model": f"{company}/reasoning-pro",
-        "company": company,
-        "estimated_task_cost_usd": cost,
-        "prompt_usd_per_million": cost / 3,
-        "completion_usd_per_million": cost * 2 / 3,
-    }
-
-
-def enrich_row(row: dict, *, natural_top: bool = False) -> None:
-    basis = (
-        "company-local-natural-top-layer"
-        if natural_top
-        else "strict-product-tier"
+def fixture() -> dict:
+    return json.loads(
+        (ROOT / "tests" / "fixtures" / "governance-ticket.json").read_text(
+            encoding="utf-8"
+        )
     )
-    model = row["model"]
-    row.update(
+
+
+def ticket() -> dict:
+    value = fixture()
+    plan = value["governance_model_plan"]
+    plan.update(
         {
-            "price_rank_usd_per_million": row["estimated_task_cost_usd"],
-            "flagship_verified": True,
-            "flagship_basis": basis,
-            "company_flagship_method": "fixture-company-top",
-            "benchmark_source": BENCHMARK_SOURCE,
-            "intelligence_index": 50.0,
-            "coding_index": 50.0,
-            "agentic_index": 50.0,
-            "balanced_score": 50.0,
-            "benchmark_evidence_sha256": digest(model + "-benchmark"),
-            "endpoint_inventory_sha256": digest(model + "-endpoint"),
-            "qualified_provider_count": 1,
-            "selection_evidence": (
-                "non-search+verified-company-flagship-reasoning+"
-                f"{basis}+price-order+live-exact-endpoint-qualified+"
-                "authenticated-zdr-endpoint-qualified+"
-                "minimum-one-zdr-provider-route"
+            "catalog_fetch_mode": "live-per-task-no-cross-task-cache",
+            "reasoning_model_required": True,
+            "flagship_definition": (
+                "strict-product-tier-or-benchmarked-company-natural-top-layer"
             ),
+            "benchmark_source": "artificial-analysis-via-openrouter",
+            "company_model_policy": (
+                "one-highest-intelligence-verified-reasoning-flagship-per-company-then-price-rank"
+            ),
+            "company_uniqueness_scope": "selected-and-recovery",
+            "price_rank_basis": (
+                "prompt_usd_per_million + completion_usd_per_million"
+            ),
+            "endpoint_qualification_performed_by_governance": True,
+            "model_calls": 0,
         }
     )
+    for index, row in enumerate(
+        [*plan["selected_models"], *plan["recovery_models"]], 1
+    ):
+        row.update(
+            {
+                "flagship_verified": True,
+                "flagship_basis": "strict-product-tier",
+                "benchmark_source": "artificial-analysis-via-openrouter",
+                "intelligence_index": 80.0 - index,
+                "coding_index": 70.0 - index,
+                "agentic_index": 60.0 - index,
+                "balanced_score": 75.0 - index,
+                "benchmark_evidence_sha256": f"{index:064x}"[-64:],
+                "qualified_provider_count": 1,
+                "endpoint_inventory_sha256": f"{index + 20:064x}"[-64:],
+                "selection_evidence": (
+                    "non-search+verified-company-flagship-reasoning+"
+                    "strict-product-tier+price-order+live-exact-endpoint-qualified+"
+                    "authenticated-zdr-endpoint-qualified"
+                ),
+            }
+        )
+    plan["price_ranked_models"] = []
+    for price_rank, row in enumerate(
+        [*plan["selected_models"], *plan["recovery_models"]], 1
+    ):
+        ranked = copy.deepcopy(row)
+        ranked.pop("role_id", None)
+        ranked.pop("role_kind", None)
+        ranked.pop("role", None)
+        ranked["price_rank"] = price_rank
+        ranked["slot"] = price_rank
+        ranked["price_rank_usd_per_million"] = float(price_rank)
+        plan["price_ranked_models"].append(ranked)
+    for index, row in enumerate(plan["recovery_models"], 1):
+        row["slot"] = index
+        row["price_rank_usd_per_million"] = float(len(plan["selected_models"]) + index)
+    plan["plan_sha256"] = plan_sha256(plan)
+    return value
 
 
 def resign(value: dict) -> None:
     plan = value["governance_model_plan"]
-    plan["task_sha256"] = task_sha256(value)
     plan["plan_sha256"] = plan_sha256(plan)
-
-
-def ticket() -> dict:
-    value = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    plan = value["governance_model_plan"]
-    primary = (
-        ("gamma/reasoning-pro", "gamma"),
-        ("deepseek/reasoning-pro", "deepseek"),
-        ("beta/reasoning-max", "beta"),
-        ("tau/reasoning-ultra", "tau"),
-    )
-    for row, (model_id, company) in zip(
-        plan["selected_models"], primary, strict=True
-    ):
-        row["model"] = model_id
-        row["company"] = company
-    plan["recovery_models"][0]["model"] = "rho/reasoning-pro"
-    plan["recovery_models"][0]["company"] = "rho"
-    plan["recovery_models"].extend(
-        [
-            recovery(2, "epsilon", 0.06),
-            recovery(3, "zeta", 0.07),
-            recovery(4, "eta", 0.08),
-        ]
-    )
-    plan["recovery_count"] = 4
-    value["approved_budget"]["calls"] = 8
-    value["approved_budget"]["maximum_recovery_calls"] = 4
-    plan["catalog_fetch_mode"] = "live-per-task-no-cross-task-cache"
-    plan["company_uniqueness_scope"] = "selected-and-recovery"
-    plan["company_model_policy"] = (
-        "one-highest-intelligence-verified-reasoning-flagship-"
-        "per-company-then-price-rank"
-    )
-    plan["flagship_definition"] = FLAGSHIP_DEFINITION
-    plan["reasoning_model_required"] = True
-    plan["benchmark_source"] = BENCHMARK_SOURCE
-    plan["price_rank_basis"] = (
-        "prompt_usd_per_million + completion_usd_per_million"
-    )
-    plan["endpoint_qualification_performed_by_governance"] = True
-    plan["model_calls"] = 0
-    all_rows = plan["selected_models"] + plan["recovery_models"]
-    for index, row in enumerate(all_rows):
-        enrich_row(row, natural_top=index in {1, 5})
-    ranked = [dict(row) for row in all_rows]
-    ranked.sort(key=lambda row: row["price_rank_usd_per_million"])
-    for rank, row in enumerate(ranked, 1):
-        row["price_rank"] = rank
-        row["slot"] = rank
-        row.pop("role_id", None)
-        row.pop("role_kind", None)
-        row.pop("role", None)
-    plan["price_ranked_models"] = ranked
-    resign(value)
-    return value
 
 
 class UniqueCompanyPriceRankingTests(unittest.TestCase):
     def test_valid_benchmarked_reasoning_flagship_plan_passes(self) -> None:
-        validate_governance_model_plan(ticket())
+        value = ticket()
+        self.assertEqual(validate_governance_model_plan(value), value["governance_model_plan"])
 
     def test_live_plan_requires_price_ranking(self) -> None:
         value = ticket()
         value["governance_model_plan"].pop("price_ranked_models")
         resign(value)
-        with self.assertRaisesRegex(
-            GovernanceModelPlanError, "price_ranked_models"
-        ):
+        with self.assertRaisesRegex(GovernanceModelPlanError, "price_ranked_models"):
             validate_governance_model_plan(value)
 
     def test_price_ranking_must_be_ascending(self) -> None:
         value = ticket()
-        rows = value["governance_model_plan"]["price_ranked_models"]
-        rows[0], rows[1] = rows[1], rows[0]
-        for rank, row in enumerate(rows, 1):
-            row["price_rank"] = rank
+        ranked = value["governance_model_plan"]["price_ranked_models"]
+        ranked[0]["price_rank_usd_per_million"] = 100.0
         resign(value)
-        with self.assertRaisesRegex(
-            GovernanceModelPlanError, "ascending price order"
-        ):
+        with self.assertRaisesRegex(GovernanceModelPlanError, "ascending price order"):
             validate_governance_model_plan(value)
 
     def test_live_plan_requires_reasoning_models(self) -> None:
         value = ticket()
         value["governance_model_plan"]["reasoning_model_required"] = False
         resign(value)
-        with self.assertRaisesRegex(
-            GovernanceModelPlanError, "reasoning_model_required"
-        ):
+        with self.assertRaisesRegex(GovernanceModelPlanError, "reasoning_model_required"):
             validate_governance_model_plan(value)
 
     def test_luna_is_rejected_even_with_forged_evidence(self) -> None:
         value = ticket()
-        plan = value["governance_model_plan"]
-        old_model = plan["selected_models"][0]["model"]
-        for row in plan["selected_models"] + plan["price_ranked_models"]:
-            if row["model"] == old_model:
-                row["model"] = "openai/gpt-5.6-luna-pro"
-                row["company"] = "openai"
+        value["governance_model_plan"]["selected_models"][0]["model"] = (
+            "openai/gpt-5.6-luna"
+        )
+        value["governance_model_plan"]["price_ranked_models"][0]["model"] = (
+            "openai/gpt-5.6-luna"
+        )
         resign(value)
-        with self.assertRaisesRegex(
-            GovernanceModelPlanError, "economy-tier model"
-        ):
+        with self.assertRaisesRegex(GovernanceModelPlanError, "economy-tier"):
             validate_governance_model_plan(value)
 
     def test_invalid_flagship_basis_is_rejected(self) -> None:
         value = ticket()
-        value["governance_model_plan"]["selected_models"][0][
-            "flagship_basis"
-        ] = "name-contains-pro"
+        value["governance_model_plan"]["selected_models"][0]["flagship_basis"] = (
+            "company-marketing-label"
+        )
         resign(value)
-        with self.assertRaisesRegex(
-            GovernanceModelPlanError, "flagship_basis is invalid"
-        ):
+        with self.assertRaisesRegex(GovernanceModelPlanError, "flagship_basis is invalid"):
             validate_governance_model_plan(value)
 
     def test_missing_benchmark_hash_is_rejected(self) -> None:
@@ -211,7 +180,7 @@ class UniqueCompanyPriceRankingTests(unittest.TestCase):
 
     def test_missing_reasoning_flagship_evidence_is_rejected(self) -> None:
         value = ticket()
-        value["governance_model_plan"]["price_ranked_models"][0][
+        value["governance_model_plan"]["selected_models"][0][
             "selection_evidence"
         ] = "authenticated-zdr-endpoint-qualified"
         resign(value)
