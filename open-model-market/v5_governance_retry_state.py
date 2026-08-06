@@ -139,7 +139,7 @@ def current_issue_submission_reason(
         return ""
 
     if execution.get("completed"):
-        return "completed executions cannot be retried"
+        return "this Issue already completed; successful tasks cannot be retried"
     if issue_state != "open":
         return "Issue must be reopened before a controlled retry"
     if int(execution.get("in_flight_retry_count") or 0) > 0:
