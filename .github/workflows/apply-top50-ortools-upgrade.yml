@@ -5,6 +5,8 @@ on:
     branches:
       - feat/top50-ortools-routing
     paths:
+      - CONSTITUTION.md
+      - open-model-market/constitutional_policy.json
       - tools/apply_top50_ortools_upgrade.py
       - tools/refine_top50_provider_pool.py
       - .github/workflows/apply-top50-ortools-upgrade.yml
@@ -29,7 +31,7 @@ jobs:
           python tools/refine_top50_provider_pool.py
       - name: Install runtime dependencies
         run: python -m pip install -r requirements-runtime.txt
-      - name: Validate changed modules
+      - name: Validate changed modules and policy
         run: |
           python -m py_compile \
             open-model-market/v5_top50_pool_optimizer.py \
@@ -38,8 +40,16 @@ jobs:
             open-model-market/v5_governance_model_plan.py \
             open-model-market/v5_price_ranked_issue_ticket.py \
             open-model-market/v5_proposal_materializer.py
+          python -m json.tool open-model-market/constitutional_policy.json >/dev/null
           PYTHONPATH=open-model-market python - <<'PY'
+          import json
+          from pathlib import Path
           from v5_provider_lock import canonical_provider_lock
+          policy = json.loads(Path('open-model-market/constitutional_policy.json').read_text())
+          assert policy['candidate_pool']['pool_size'] == 50
+          assert policy['candidate_pool']['popularity_period'] == 'week'
+          assert policy['optimizer_runtime']['engine'] == 'ortools-cp-sat'
+          assert policy['expert_endpoint_privacy']['provider_fallback_scope'] == 'same-model-audited-qualified-provider-whitelist'
           assert canonical_provider_lock({
               'provider': {
                   'only': ['primary', 'secondary'],
