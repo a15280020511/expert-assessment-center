@@ -24,6 +24,9 @@ LEGACY_GOVERNANCE_RESERVE_REASON = (
     "approved recovery calls must leave at least one initial expert call "
     "after three governance calls"
 )
+LEGACY_RETRY_LIMIT = legacy.MAXIMUM_RETRIES_PER_ISSUE
+GOVERNANCE_REPAIR_RETRY_LIMIT = 4
+legacy.MAXIMUM_RETRIES_PER_ISSUE = GOVERNANCE_REPAIR_RETRY_LIMIT
 
 DELEGATION_NOTICE = (
     "委托边界：具体模型由治理中心在下发任务前选定并写入不可变模型计划；"
