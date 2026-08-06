@@ -77,7 +77,7 @@ def _recovery_rows(value: Any) -> tuple[Mapping[str, Any], ...]:
 
 
 def _recovery_priority_node_ids(graph: ExecutionGraph) -> tuple[str, ...]:
-    """Recover the immutable governance assignment priority without ranking.
+    """Recover the immutable governance recovery priority without ranking.
 
     The governed orchestrator distributes the already price-ranked recovery
     list round-robin to synthesis, review, then independent nodes. Reversing
@@ -91,30 +91,31 @@ def _recovery_priority_node_ids(graph: ExecutionGraph) -> tuple[str, ...]:
         for node in graph.nodes
         if node.node_id not in final_ids and "cross_review" in node.functions
     ]
+    review_ids = set(reviews)
     remaining = [
         node.node_id
         for node in graph.nodes
-        if node.node_id not in final_ids and node.node_id not in set(reviews)
+        if node.node_id not in final_ids and node.node_id not in review_ids
     ]
     return tuple([*finals, *reviews, *remaining])
 
 
-def _governance_ordered_recovery_rows(
+def _governance_ordered_recovery_assignments(
     graph: ExecutionGraph,
     value: Mapping[str, Any],
-) -> tuple[Mapping[str, Any], ...]:
+) -> tuple[tuple[str, Mapping[str, Any]], ...]:
     priority = _recovery_priority_node_ids(graph)
     rows_by_node = {
         node_id: _recovery_rows(value.get(node_id))
         for node_id in priority
     }
     maximum = max((len(rows) for rows in rows_by_node.values()), default=0)
-    ordered: list[Mapping[str, Any]] = []
+    ordered: list[tuple[str, Mapping[str, Any]]] = []
     for depth in range(maximum):
         for node_id in priority:
             rows = rows_by_node[node_id]
             if depth < len(rows):
-                ordered.append(rows[depth])
+                ordered.append((node_id, rows[depth]))
     return tuple(ordered)
 
 
@@ -124,12 +125,17 @@ def _unique_recovery_candidates(
 ) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
-    for row in _governance_ordered_recovery_rows(graph, value):
+    for owner_node_id, row in _governance_ordered_recovery_assignments(
+        graph, value
+    ):
         identity = _recovery_identity(row)
         if not all(identity) or identity in seen:
             continue
         seen.add(identity)
-        candidates.append(dict(row))
+        candidate = dict(row)
+        candidate["governance_recovery_owner_node_id"] = owner_node_id
+        candidate["governance_recovery_sequence"] = len(candidates)
+        candidates.append(candidate)
     return candidates
 
 
@@ -191,6 +197,7 @@ def _adapt_recovery_candidate(
             "recommended_output_allowance_is_advisory": True,
             "local_token_ceiling_enforced": False,
             "shared_recovery_pool": True,
+            "governance_priority_protected": True,
         }
     )
     adapted["parameter_profile"] = profile
@@ -211,23 +218,51 @@ def _adapt_recovery_candidate(
     return adapted
 
 
+def _priority_protected_candidates(
+    graph: ExecutionGraph,
+    candidates: list[dict[str, Any]],
+    node_id: str,
+) -> list[dict[str, Any]]:
+    """Return the signed-order suffix available to one priority tier.
+
+    A lower-priority node cannot consume a candidate assigned to a higher
+    future tier. A higher-priority node may use its own candidate and then any
+    still-unused lower-tier candidates. The runtime global identity guard still
+    guarantees use-once semantics under concurrency.
+    """
+    priority = _recovery_priority_node_ids(graph)
+    rank = {candidate_node_id: index for index, candidate_node_id in enumerate(priority)}
+    node_rank = rank.get(node_id, len(priority))
+    return [
+        candidate
+        for candidate in candidates
+        if rank.get(
+            str(candidate.get("governance_recovery_owner_node_id") or ""),
+            len(priority),
+        )
+        >= node_rank
+    ]
+
+
 def _shared_recovery_pool(
     graph: ExecutionGraph,
     value: Mapping[str, Any],
 ) -> dict[str, list[dict[str, Any]]]:
-    """Expose approved recovery candidates to every node as one global pool.
+    """Expose one priority-protected governance recovery pool per node.
 
-    The candidate list preserves the immutable governance price order. The
-    runtime budget controller remains the sole authority for how many recovery
-    calls may actually be reserved, and its global identity guard ensures each
-    approved model/company is consumed at most once in the run.
+    The immutable governance order is preserved. Final synthesis sees the full
+    sequence; review cannot consume the final-synthesis reserve; independent
+    nodes cannot consume reserves assigned to synthesis or review. The runtime
+    identity guard ensures each approved model/company is called at most once.
     """
     candidates = _unique_recovery_candidates(graph, value)
     return {
         node.node_id: [
             *(
                 _adapt_recovery_candidate(candidate, node)
-                for candidate in candidates
+                for candidate in _priority_protected_candidates(
+                    graph, candidates, node.node_id
+                )
             ),
             *_local_recovery_placeholders(value, node.node_id),
         ]
@@ -246,9 +281,22 @@ def _soft_graph(graph: ExecutionGraph) -> ExecutionGraph:
             "mode": "shared-governance-approved-candidates",
             "candidate_count": len(candidates),
             "candidate_order": [row["model"] for row in candidates],
+            "candidate_owners": [
+                {
+                    "model": row["model"],
+                    "owner_node_id": row[
+                        "governance_recovery_owner_node_id"
+                    ],
+                }
+                for row in candidates
+            ],
             "order_source": (
                 "inverse-round-robin-over-immutable-governance-assignments"
             ),
+            "priority_policy": (
+                "final-synthesis -> cross-review -> independent-analysis"
+            ),
+            "availability_policy": "governance-priority-protected-suffix",
             "call_ceiling_authority": "runtime-global-recovery-budget",
             "global_candidate_identity_guard_required": True,
             "local_model_selection_performed": False,
@@ -320,6 +368,7 @@ def materialize_proposal(
             "request_token_fields_removed_before_artifact": True,
             "recovery_pool_mode": "shared-governance-approved-candidates",
             "recovery_order_preserved_from_governance_assignments": True,
+            "recovery_priority_protection_enabled": True,
         }
     )
     return softened_graph, softened_limits, telemetry
