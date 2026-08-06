@@ -88,7 +88,7 @@ def revalidate(
     expected_sha: str,
     expected_run_id: str,
     maximum_calls: int,
-    cost_advisory_usd: float,
+    cost_advisory_usd: float | None,
     archive: Path,
     expected_artifact_digest: str,
 ) -> dict[str, Any]:
@@ -126,6 +126,9 @@ def revalidate(
     if diagnosis.get("status") != "PASS":
         failures.extend(str(row) for row in diagnosis.get("failures", []))
     failures = list(dict.fromkeys(failures))
+    advisory = (
+        None if cost_advisory_usd is None else float(cost_advisory_usd)
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "status": "PASS" if not failures else "FAIL",
@@ -146,9 +149,9 @@ def revalidate(
         "maximum_calls": int(maximum_calls),
         "observed_calls": int(summary.get("call_count") or 0),
         "actual_cost_usd": actual_cost,
-        "cost_advisory_usd": float(cost_advisory_usd),
-        "cost_advisory_exceeded": (
-            actual_cost > float(cost_advisory_usd) + 1e-12
+        "cost_advisory_usd": advisory,
+        "cost_advisory_exceeded": bool(
+            advisory is not None and actual_cost > advisory + 1e-12
         ),
         "cost_threshold_can_invalidate_result": False,
         "claude_mechanism_enabled": False,
@@ -164,7 +167,7 @@ def main() -> int:
     parser.add_argument("--expected-sha", required=True)
     parser.add_argument("--expected-run-id", required=True)
     parser.add_argument("--maximum-calls", type=int, required=True)
-    parser.add_argument("--cost-advisory-usd", type=float, required=True)
+    parser.add_argument("--cost-advisory-usd", type=float, default=None)
     parser.add_argument("--archive", required=True)
     parser.add_argument("--expected-artifact-digest", required=True)
     parser.add_argument("--output", required=True)

@@ -91,9 +91,12 @@ def providers_from_requests(
 
 
 def models_from_graph(graph: Mapping[str, Any]) -> tuple[str, ...]:
-    """Extract selected model IDs from the materialized graph."""
-    models = {
-        str(row.get("model") or "").strip()
-        for row in mapping_rows(graph.get("nodes"))
-    }
-    return tuple(sorted(model for model in models if model))
+    """Extract unique selected model IDs in materialized graph order."""
+    models: list[str] = []
+    seen: set[str] = set()
+    for row in mapping_rows(graph.get("nodes")):
+        model = str(row.get("model") or "").strip()
+        if model and model not in seen:
+            seen.add(model)
+            models.append(model)
+    return tuple(models)
