@@ -1,422 +1,106 @@
-"""Normalize zero-governance price-ranked execution evidence."""
+"""Top-50 evidence facade for zero-governance expert execution."""
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Mapping
 
-from artifact_manifest import write_manifest
-from v5_json_io import load_json_or_default, write_json
-from v5_price_ranked_support import (
-    canonical_json_sha,
-    load_mapping,
-    mapping_rows,
-    models_from_graph,
-    providers_from_requests,
-    report_text,
-)
-from v5_provider_lock import canonical_provider_lock
+import v5_price_ranked_evidence_legacy as _legacy
 
-RUNTIME_VERSION = "v5-price-ranked-runtime-1"
+for _name in dir(_legacy):
+    if not _name.startswith("__"):
+        globals()[_name] = getattr(_legacy, _name)
+
+_original_request_document = _legacy._request_document
+_original_selection_document = _legacy._selection_document
+_original_routing_document = _legacy._routing_document
 
 
-@dataclass(frozen=True)
-class ApprovedContext:
-    total_calls: int
-    recovery_calls: int
-    cost_anomaly_usd: float | None
-
-    @classmethod
-    def build(
-        cls,
-        total_calls: int,
-        recovery_calls: int,
-        cost_anomaly_usd: float | None,
-    ) -> "ApprovedContext":
-        total = int(total_calls)
-        recovery = int(recovery_calls)
-        if not 4 <= total <= 16:
-            raise ValueError("approved total calls must be between 4 and 16")
-        if not 0 <= recovery < total:
-            raise ValueError("approved recovery reserve is invalid")
-        return cls(total, recovery, cost_anomaly_usd)
-
-    @property
-    def initial_calls(self) -> int:
-        return self.total_calls - self.recovery_calls
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "maximum_total_calls": self.total_calls,
-            "governance_calls_reserved": 0,
-            "maximum_expert_calls": self.total_calls,
-            "maximum_recovery_calls": self.recovery_calls,
-            "maximum_expert_initial_calls": self.initial_calls,
-            "cost_anomaly_usd": self.cost_anomaly_usd,
-        }
+def _top50(source: Any) -> bool:
+    ticket = source.ticket if isinstance(source.ticket, Mapping) else {}
+    return (
+        ticket.get("optimizer") == "ortools-cp-sat"
+        or int(ticket.get("top50_reasoning_pool_size") or 0) == 50
+    )
 
 
-@dataclass(frozen=True)
-class EvidenceSource:
-    runtime: Mapping[str, Any]
-    runtime_config: Mapping[str, Any]
-    catalog: Mapping[str, Any]
-    graph: Mapping[str, Any]
-    summary: Mapping[str, Any]
-    selection: Mapping[str, Any]
-    request_audit: Mapping[str, Any]
-    governance: Mapping[str, Any]
-    ticket: Mapping[str, Any]
-    nodes: tuple[Mapping[str, Any], ...]
-    requests: tuple[Mapping[str, Any], ...]
-    graph_nodes: tuple[Mapping[str, Any], ...]
-    report: str
-
-    @classmethod
-    def from_root(cls, root: Path) -> "EvidenceSource":
-        graph = load_mapping(root, "v5-execution-graph.json")
-        request_audit = load_mapping(root, "v5-request-audit.json")
-        return cls(
-            runtime=load_mapping(root, "production-runtime.json"),
-            runtime_config=load_mapping(root, "v5-runtime-config.json"),
-            catalog=load_mapping(root, "catalog-snapshot.json"),
-            graph=graph,
-            summary=load_mapping(root, "v5-execution-summary.json"),
-            selection=load_mapping(root, "v5-price-ranked-selection.json"),
-            request_audit=request_audit,
-            governance=load_mapping(root, "v5-governance-calls.json"),
-            ticket=load_mapping(root, "ticket-status.json"),
-            nodes=mapping_rows(
-                load_json_or_default(root / "v5-node-results.json", [])
+def _request_document(source: Any, approved: Any) -> dict[str, Any]:
+    value = dict(_original_request_document(source, approved))
+    fallback_allowed = any(
+        isinstance(row, Mapping)
+        and isinstance(row.get("provider"), Mapping)
+        and row["provider"].get("allow_fallbacks") is True
+        for row in source.requests
+    )
+    value.update(
+        {
+            "provider_fallback_allowed": fallback_allowed,
+            "provider_fallback_scope": (
+                "same-model-audited-qualified-provider-whitelist"
+                if fallback_allowed
+                else "legacy-exact-single-endpoint"
             ),
-            requests=mapping_rows(request_audit.get("requests")),
-            graph_nodes=mapping_rows(graph.get("nodes")),
-            report=report_text(root),
-        )
-
-
-@dataclass(frozen=True)
-class PreparedEvidence:
-    budget: Mapping[str, Any]
-    call_count: int
-    actual_cost: float
-    answer: str
-    providers: tuple[str, ...]
-    expert_models: tuple[str, ...]
-    cost_exceeded: bool
-    evidence_input_sha: str
-
-
-def _validate_zero_governance(source: EvidenceSource) -> None:
-    if source.runtime.get("runtime_version") != RUNTIME_VERSION:
-        raise RuntimeError("price-ranked production runtime envelope is missing")
-    if source.runtime_config.get("claude_mechanism_enabled") is not False:
-        raise RuntimeError("Claude mechanism is not explicitly disabled")
-    if int(source.governance.get("actual_governance_calls") or 0) != 0:
-        raise RuntimeError("governance model calls must equal zero")
-    if int(source.governance.get("claude_red_team_calls") or 0) != 0:
-        raise RuntimeError("Claude calls must equal zero")
-    if source.selection.get("claude_calls") not in {0, None}:
-        raise RuntimeError("selection evidence reports a Claude call")
-
-
-def _validate_execution(
-    source: EvidenceSource,
-    approved: ApprovedContext,
-    require_report: bool,
-) -> tuple[Mapping[str, Any], int, float, str]:
-    if not 3 <= len(source.graph_nodes) <= min(6, approved.initial_calls):
-        raise RuntimeError("expert graph size violates approved price-ranked bounds")
-    if source.selection.get("status") != "PASS":
-        raise RuntimeError("price-ranked selection audit did not pass")
-    if source.request_audit.get("status") != "PASS":
-        raise RuntimeError("complete request audit did not pass")
-    if any(not canonical_provider_lock(row) for row in source.requests):
-        raise RuntimeError("one or more expert requests lacks an exact provider lock")
-    raw_budget = source.summary.get("execution_budget")
-    budget = dict(raw_budget) if isinstance(raw_budget, Mapping) else {}
-    call_count = int(budget.get("calls_reserved") or len(source.requests))
-    if len(source.requests) != call_count:
-        raise RuntimeError("request audit and expert call ledger disagree")
-    if call_count > approved.total_calls:
-        raise RuntimeError("approved total model-call ceiling exceeded")
-    actual_cost = float(source.summary.get("actual_cost_usd") or 0.0)
-    if not math.isfinite(actual_cost) or actual_cost < 0:
-        raise RuntimeError("actual execution cost is invalid")
-    answer = str(source.summary.get("final_answer") or "").strip()
-    if require_report and (not source.report.strip() or not answer):
-        raise RuntimeError("price-ranked runtime did not produce a final report")
-    return budget, call_count, actual_cost, answer
-
-
-def _input_payload(
-    source: EvidenceSource,
-    approved: ApprovedContext,
-) -> dict[str, Any]:
-    return {
-        "runtime": source.runtime,
-        "runtime_config": source.runtime_config,
-        "catalog": source.catalog,
-        "graph": source.graph,
-        "nodes": source.nodes,
-        "summary": source.summary,
-        "selection": source.selection,
-        "request_audit": source.request_audit,
-        "governance": source.governance,
-        "ticket": source.ticket,
-        "approved": approved.to_dict(),
-        "report": source.report,
-    }
-
-
-def _prepare(
-    source: EvidenceSource,
-    approved: ApprovedContext,
-    require_report: bool,
-) -> PreparedEvidence:
-    _validate_zero_governance(source)
-    budget, call_count, actual_cost, answer = _validate_execution(
-        source,
-        approved,
-        require_report,
+            "unrestricted_provider_fallback_allowed": False,
+            "provider_lock_contract": (
+                "legacy-exact-single-endpoint-or-audited-same-model-provider-pool"
+            ),
+        }
     )
-    cost_exceeded = bool(
-        approved.cost_anomaly_usd is not None
-        and actual_cost > float(approved.cost_anomaly_usd) + 1e-12
+    return value
+
+
+def _selection_document(source: Any, prepared: Any) -> dict[str, Any]:
+    value = dict(_original_selection_document(source, prepared))
+    active = _top50(source)
+    value.update(
+        {
+            "candidate_pool_authority": "decision-system-governance",
+            "selection_authority": (
+                "expert-assessment-center-ortools"
+                if active
+                else "decision-system-governance"
+            ),
+            "model_assignment_authority": (
+                "expert-assessment-center-ortools"
+                if active
+                else "decision-system-governance"
+            ),
+            "model_selection_performed_locally": active,
+            "candidate_pool_reranking_performed_locally": False,
+            "optimizer_used": active,
+            "optimizer": "ortools-cp-sat" if active else None,
+            "optimizer_optimality_proven": bool(
+                source.ticket.get("optimizer_optimality_proven")
+            ) if active else False,
+        }
     )
-    return PreparedEvidence(
-        budget=budget,
-        call_count=call_count,
-        actual_cost=actual_cost,
-        answer=answer,
-        providers=providers_from_requests(source.requests),
-        expert_models=models_from_graph(source.graph),
-        cost_exceeded=cost_exceeded,
-        evidence_input_sha=canonical_json_sha(_input_payload(source, approved)),
-    )
-
-
-def _request_document(
-    source: EvidenceSource,
-    approved: ApprovedContext,
-) -> dict[str, Any]:
-    return {
-        **source.request_audit,
-        "runtime_version": RUNTIME_VERSION,
-        "status": "PASS",
-        "request_count": len(source.requests),
-        "approved_total_call_ceiling": approved.total_calls,
-        "governance_request_count": 0,
-        "expert_request_count": len(source.requests),
-        "provider_locks_valid": True,
-        "external_tools_allowed": False,
-        "provider_fallback_allowed": False,
-        "claude_mechanism_enabled": False,
-    }
-
-
-def _ledger_document(
-    source: EvidenceSource,
-    approved: ApprovedContext,
-    prepared: PreparedEvidence,
-) -> dict[str, Any]:
-    budget = prepared.budget
-    return {
-        "version": 5,
-        "runtime_version": RUNTIME_VERSION,
-        "summary": {
-            "call_count": prepared.call_count,
-            "governance_calls": 0,
-            "expert_calls": prepared.call_count,
-            "approved_total_call_ceiling": approved.total_calls,
-            "approved_recovery_call_ceiling": approved.recovery_calls,
-            "provider_actual_cost_usd": round(prepared.actual_cost, 8),
-            "conservative_cost_usd": round(prepared.actual_cost, 8),
-            "cost_anomaly_usd": approved.cost_anomaly_usd,
-            "cost_advisory_usd": approved.cost_anomaly_usd,
-            "cost_advisory_exceeded": prepared.cost_exceeded,
-            "cost_threshold_can_invalidate_result": False,
-            "substantive_providers": list(prepared.providers),
-            "substantive_provider_count": len(prepared.providers),
-            "replacement_calls": int(budget.get("replacements_reserved") or 0),
-            "retry_calls": int(budget.get("retries_reserved") or 0),
-            "recovery_calls": int(budget.get("recovery_calls_reserved") or 0),
-        },
-        "governance": source.governance,
-        "node_results": list(source.nodes),
-    }
-
-
-def _selection_document(
-    source: EvidenceSource,
-    prepared: PreparedEvidence,
-) -> dict[str, Any]:
-    return {
-        "version": 5,
-        "runtime_version": RUNTIME_VERSION,
-        "selection_authority": "python-price-ranked-orchestrator",
-        "selection_policy": "estimated-task-cost-ascending-distinct-companies",
-        "claude_mechanism_enabled": False,
-        "claude_calls": 0,
-        "gpt_selection_calls": 0,
-        "expert_models": list(prepared.expert_models),
-        "node_count": len(source.graph_nodes),
-        "catalog_snapshot_id": source.catalog.get("catalog_snapshot_id"),
-        "networkx_used": True,
-        "optimizer_used": False,
-        "agent_framework_used": False,
-        "cross_task_history_used": False,
-    }
+    return value
 
 
 def _routing_document() -> dict[str, Any]:
-    return {
-        "version": 5,
-        "runtime_version": RUNTIME_VERSION,
-        "status": "PASS",
-        "mode": "price-ranked-networkx-dag",
-        "topology": "parallel-independent-analysis -> cross-review -> final-synthesis",
-        "claude_mechanism_enabled": False,
-        "model_loop_allowed": False,
-    }
-
-
-def _summary_document(
-    source: EvidenceSource,
-    approved: ApprovedContext,
-    prepared: PreparedEvidence,
-) -> dict[str, Any]:
-    return {
-        **source.summary,
-        "runtime_version": RUNTIME_VERSION,
-        "approved_budget": approved.to_dict(),
-        "catalog_snapshot_id": source.catalog.get("catalog_snapshot_id"),
-        "evidence_input_sha256": prepared.evidence_input_sha,
-        "governance": {
-            "actual_calls": 0,
-            "reserved_calls": 0,
-            "claude_mechanism_enabled": False,
-        },
-        "resource_governance": {
-            "mode": "prompt-led-soft-governance",
-            "cost_advisory_usd": approved.cost_anomaly_usd,
-            "cost_advisory_exceeded": prepared.cost_exceeded,
-            "cost_threshold_can_invalidate_result": False,
-            "local_token_ceiling_enforced": False,
-        },
-    }
-
-
-def _result_document(
-    source: EvidenceSource,
-    approved: ApprovedContext,
-    prepared: PreparedEvidence,
-) -> dict[str, Any]:
-    return {
-        "version": 5,
-        "runtime_version": RUNTIME_VERSION,
-        "status": str(source.summary.get("status") or "failed"),
-        "completion_mode": str(source.summary.get("completion_mode") or "none"),
-        "quality_status": str(source.summary.get("quality_status") or "failed"),
-        "quality_integrity": source.summary.get("quality_integrity"),
-        "final_answer": prepared.answer,
-        "actual_cost_usd": round(prepared.actual_cost, 8),
-        "executor": source.summary.get("executor"),
-        "work_coverage": source.summary.get("work_coverage"),
-        "degradation": source.summary.get("degradation"),
-        "execution_budget": prepared.budget,
-        "approved_budget": approved.to_dict(),
-        "governance": {
-            "actual_calls": 0,
-            "reserved_calls": 0,
-            "claude_mechanism_enabled": False,
-        },
-        "catalog_snapshot_id": source.catalog.get("catalog_snapshot_id"),
-        "node_count": len(source.graph_nodes),
-        "model_count": len(prepared.expert_models),
-        "provider_count": len(prepared.providers),
-        "selection_authority": "python-price-ranked-orchestrator",
-        "production_entrypoint": True,
-        "fallback_used": False,
-        "legacy_runtime_present": False,
-        "claude_mechanism_enabled": False,
-        "cross_task_history_used": False,
-        "ticket_task_id": source.ticket.get("task_id"),
-        "evidence_input_sha256": prepared.evidence_input_sha,
-    }
-
-
-def _documents(
-    source: EvidenceSource,
-    approved: ApprovedContext,
-    prepared: PreparedEvidence,
-) -> dict[str, dict[str, Any]]:
-    return {
-        "request-audit.json": _request_document(source, approved),
-        "call-ledger.json": _ledger_document(source, approved, prepared),
-        "model-selection.json": _selection_document(source, prepared),
-        "task-routing.json": _routing_document(),
-        "execution-summary.json": _summary_document(source, approved, prepared),
-        "expert-team-result.json": _result_document(source, approved, prepared),
-    }
-
-
-def _write_bundle(
-    root: Path,
-    source: EvidenceSource,
-    approved: ApprovedContext,
-    prepared: PreparedEvidence,
-    documents: Mapping[str, Mapping[str, Any]],
-) -> None:
-    bundle = {
-        "schema_version": "v5-evidence-bundle-3",
-        "runtime_version": RUNTIME_VERSION,
-        "input_sha256": prepared.evidence_input_sha,
-        "approved": approved.to_dict(),
-        "catalog_snapshot_id": source.catalog.get("catalog_snapshot_id"),
-        "generated_documents": {
-            name: canonical_json_sha(document)
-            for name, document in sorted(documents.items())
-        },
-        "business_evidence_frozen": True,
-        "governance_model_calls": 0,
-        "claude_mechanism_enabled": False,
-        "post_upload_fields_pending": [
-            "primary_artifact_id",
-            "primary_artifact_digest",
-            "primary_artifact_url",
-        ],
-    }
-    write_json(root / "evidence-bundle.json", bundle)
-
-
-def normalize_price_ranked_evidence(
-    root: Path,
-    *,
-    approved_total_calls: int,
-    approved_recovery_calls: int,
-    cost_anomaly_usd: float | None,
-    require_report: bool,
-) -> dict[str, Any]:
-    approved = ApprovedContext.build(
-        approved_total_calls,
-        approved_recovery_calls,
-        cost_anomaly_usd,
+    value = dict(_original_routing_document())
+    value.update(
+        {
+            "mode": "signed-candidate-pool-ortools-networkx-dag",
+            "candidate_pool_authority": "decision-system-governance",
+            "model_assignment_authority": "expert-assessment-center-ortools",
+            "provider_fallback_scope": (
+                "same-model-audited-qualified-provider-whitelist"
+            ),
+            "unrestricted_provider_fallback_allowed": False,
+        }
     )
-    source = EvidenceSource.from_root(root)
-    prepared = _prepare(source, approved, require_report)
-    documents = _documents(source, approved, prepared)
-    for name, document in documents.items():
-        write_json(root / name, document)
-    if source.report.strip():
-        (root / "expert-team-report.md").write_text(
-            source.report,
-            encoding="utf-8",
-        )
-    _write_bundle(root, source, approved, prepared, documents)
-    write_manifest(root)
-    return documents["expert-team-result.json"]
+    return value
 
 
-__all__ = ["RUNTIME_VERSION", "normalize_price_ranked_evidence"]
+_legacy._request_document = _request_document
+_legacy._selection_document = _selection_document
+_legacy._routing_document = _routing_document
+
+ApprovedContext = _legacy.ApprovedContext
+EvidenceSource = _legacy.EvidenceSource
+PreparedEvidence = _legacy.PreparedEvidence
+build_evidence = _legacy.build_evidence
+main = _legacy.main
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
