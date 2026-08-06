@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Admission wrapper for governance-selected expert models.
+"""Admission wrapper for governance-frozen top-20 reasoning pools.
 
-The legacy ticket validator remains responsible for authorization, duplicate
-protection and task projection. This wrapper removes the governance model plan
-before legacy schema validation, then validates and restores it as an immutable
-execution contract.
+The governance center freezes the live OpenRouter top-weekly reasoning pool and
+qualifies selectable endpoints. This wrapper deterministically assigns four
+primary and four recovery models inside that pool, then validates the resulting
+immutable execution plan with the existing production contract.
 """
 from __future__ import annotations
 
@@ -20,6 +20,10 @@ from v5_governance_model_plan import (
     GovernanceModelPlanError,
     validate_governance_model_plan,
 )
+from v5_top20_pool_selector import (
+    Top20PoolSelectionError,
+    materialize_top20_selection,
+)
 
 LEGACY_GOVERNANCE_RESERVE_REASON = (
     "approved recovery calls must leave at least one initial expert call "
@@ -28,9 +32,10 @@ LEGACY_GOVERNANCE_RESERVE_REASON = (
 governance_retry_state.patch(legacy)
 
 DELEGATION_NOTICE = (
-    "委托边界：具体模型由治理中心在下发任务前选定并写入不可变模型计划；"
-    "专家团中心只校验计划、解析所选模型的精确Provider端点并执行。"
-    "专家团中心禁止重新排名、替换、补选或自行选择任何模型。"
+    "委托边界：治理中心每次实时冻结OpenRouter过去一周Token使用量最高的前20个推理模型，"
+    "并完成模型、ZDR和精确Provider端点资格检查；专家团中心只能在该冻结候选池内，"
+    "按不同公司和价格从低到高选择4个主模型与4个顺序替补。"
+    "禁止越池选模、网络搜索、未经批准的替换或Provider fallback。"
     "NetworkX只负责验证和编排有限有向无环执行图。"
     "专家禁止外部工具；网页GPT只负责忠实提交、监控、取回和转述。"
 )
@@ -41,6 +46,8 @@ def _rewrite_outputs(status: Mapping[str, Any]) -> None:
     for key in (
         "cost_anomaly_usd",
         "model_plan_sha256",
+        "candidate_pool_plan_sha256",
+        "top20_reasoning_pool_sha256",
         "selected_expert_count",
         "selected_recovery_count",
         "model_selection_authority",
@@ -119,7 +126,8 @@ def _postprocess(root: Path, packet: Mapping[str, Any]) -> dict[str, Any]:
 
     if status.get("accepted") is True:
         try:
-            plan = validate_governance_model_plan(packet)
+            materialized_packet, receipt = materialize_top20_selection(packet)
+            plan = validate_governance_model_plan(materialized_packet)
             if int(plan["expert_count"]) > total - recovery:
                 raise GovernanceModelPlanError(
                     "selected expert count exceeds initial call capacity"
@@ -128,16 +136,38 @@ def _postprocess(root: Path, packet: Mapping[str, Any]) -> dict[str, Any]:
                 {
                     "required_model_calls": int(plan["expert_count"]),
                     "maximum_initial_calls": total - recovery,
-                    "analysis_owner": "governance-selected-expert-execution-runtime",
-                    "runtime_version": "v5-governance-plan-runtime-1",
+                    "analysis_owner": "expert-center-top20-pool-selection-runtime",
+                    "runtime_version": "v5-governance-top20-pool-runtime-1",
                     "claude_red_team_calls": 0,
                     "claude_mechanism_enabled": False,
                     "governance_model_calls": 0,
-                    "model_selection_authority": plan["selection_authority"],
+                    "model_selection_authority": (
+                        "expert-assessment-center-from-governance-top20-pool"
+                    ),
+                    "candidate_pool_authority": "decision-system-governance",
+                    "model_assignment_authority": "expert-assessment-center",
                     "model_plan_sha256": plan["plan_sha256"],
+                    "candidate_pool_plan_sha256": plan[
+                        "source_governance_pool_plan_sha256"
+                    ],
+                    "top20_reasoning_pool_sha256": plan[
+                        "top20_reasoning_pool_sha256"
+                    ],
+                    "top20_reasoning_pool_size": plan[
+                        "top20_reasoning_pool_size"
+                    ],
+                    "expert_selectable_candidate_count": plan[
+                        "expert_selectable_candidate_count"
+                    ],
+                    "expert_center_selection_receipt_sha256": receipt[
+                        "receipt_sha256"
+                    ],
                     "selected_expert_count": plan["expert_count"],
                     "selected_recovery_count": plan["recovery_count"],
-                    "expert_center_model_selection_allowed": False,
+                    "expert_center_model_selection_allowed": True,
+                    "expert_center_model_selection_scope": (
+                        "frozen-governance-top20-reasoning-pool-only"
+                    ),
                     "expert_center_model_reranking_allowed": False,
                     "model_substitution_allowed": False,
                     "provider_resolution_only": True,
@@ -151,27 +181,40 @@ def _postprocess(root: Path, packet: Mapping[str, Any]) -> dict[str, Any]:
                         "approved-total-includes-experts-and-recovery-only"
                     ),
                     "reason": (
-                        "explicit command, authorization, uniqueness, immutable "
-                        "governance model plan, expert reserve, recovery reserve, "
-                        "exact provider lock, and fail-closed policy accepted"
+                        "explicit command, authorization, uniqueness, frozen top-20 "
+                        "reasoning pool, expert-center in-pool 4+4 assignment, exact "
+                        "provider lock, recovery reserve, and fail-closed policy accepted"
                     ),
                 }
             )
             (root / "ticket.json").write_text(
-                json.dumps(packet, ensure_ascii=False, indent=2),
+                json.dumps(materialized_packet, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
             (root / "governance-model-plan.json").write_text(
                 json.dumps(plan, ensure_ascii=False, indent=2, sort_keys=True),
                 encoding="utf-8",
             )
+            (root / "expert-center-selection-receipt.json").write_text(
+                json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
             (root / "task.txt").write_text(_task_text(packet), encoding="utf-8")
-        except (GovernanceModelPlanError, KeyError, TypeError, ValueError) as exc:
+        except (
+            GovernanceModelPlanError,
+            Top20PoolSelectionError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as exc:
             status["accepted"] = False
             status["errors"] = [str(exc)]
             status["reason"] = str(exc)
-            status["model_selection_authority"] = "decision-system-governance"
-            status["expert_center_model_selection_allowed"] = False
+            status["model_selection_authority"] = (
+                "expert-assessment-center-from-governance-top20-pool"
+            )
+            status["candidate_pool_authority"] = "decision-system-governance"
+            status["expert_center_model_selection_allowed"] = True
 
     path.write_text(
         json.dumps(status, ensure_ascii=False, indent=2),
@@ -224,14 +267,17 @@ def render(args: argparse.Namespace) -> int:
         )
         text = (
             f"## {heading}\n\n"
-            "GitHub Issue Runner 已接收治理中心选模后的唯一专家任务。\n\n"
+            "GitHub Issue Runner 已接收治理中心冻结的推理周榜前20名候选池。\n\n"
             f"- Task ID：`{status.get('task_id')}`\n"
             f"- TASK_FINGERPRINT: `{status.get('task_fingerprint')}`\n"
             + identity
-            + f"- 模型计划SHA256：`{status.get('model_plan_sha256')}`\n"
-            + "- 选模权：`decision-system-governance`\n"
-            + "- 专家团权限：`只校验和执行；禁止排名、选模、补选、替换`\n"
-            + "- Provider：`仅解析治理中心指定模型的精确兼容端点；精确单锁；禁止fallback`\n"
+            + f"- 候选池计划SHA256：`{status.get('candidate_pool_plan_sha256')}`\n"
+            + f"- 执行模型计划SHA256：`{status.get('model_plan_sha256')}`\n"
+            + f"- 前20名候选池SHA256：`{status.get('top20_reasoning_pool_sha256')}`\n"
+            + "- 候选池权：`decision-system-governance`\n"
+            + "- 4主+4替补分配权：`expert-assessment-center`\n"
+            + "- 专家团权限：`只能在冻结前20名合格候选内选择；禁止越池补选`\n"
+            + "- Provider：`仅解析所选模型的精确兼容端点；精确单锁；禁止fallback`\n"
             + "- 组织：`并行独立分析 → 交叉审查 → 最终综合`\n"
             + "- Claude机制：`关闭；调用数0`\n"
             + f"- 模型调用总硬上限：`{status.get('calls')}`（专家与恢复合计）\n"
@@ -240,7 +286,7 @@ def render(args: argparse.Namespace) -> int:
             + f"- 费用异常提示阈值：{anomaly_text}\n"
             + "- 专家外部工具：`禁止`\n"
             + "- 跨任务历史：`不读取、不保存、不参与执行`\n"
-            + "- 失败策略：`计划缺失、篡改、不匹配或模型不可执行即失败关闭`\n"
+            + "- 失败策略：`候选池缺失、篡改、不足8个合格公司或模型不可执行即失败关闭`\n"
             + run_line
         )
     elif args.phase == "rejected":
@@ -255,7 +301,7 @@ def render(args: argparse.Namespace) -> int:
         text = (
             "## EXECUTION_FAILED\n\n"
             + run_line
-            + "最终状态由治理模型计划、独立审计、主Artifact和最终证明发布。\n"
+            + "最终状态由候选池、专家中心选择回执、独立审计、主Artifact和最终证明发布。\n"
         )
     print(text)
     return 0
