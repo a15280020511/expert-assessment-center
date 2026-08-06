@@ -1,9 +1,9 @@
 """V5 runtime compatibility layer for audited provider fallback pools.
 
 The native runtime implementation is preserved verbatim in
-``v5_runtime_legacy``. This layer replaces only request-policy validation so a
-request may carry more than one provider when—and only when—``only`` and
-``order`` are the same explicit audited whitelist for one fixed model.
+``v5_runtime_legacy``. This layer accepts both the legacy exact single-provider
+lock and the new explicit audited same-model provider whitelist. New production
+plans generate only the whitelist form; the legacy form remains rollback-only.
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from typing import Any, Mapping, Sequence
 
 import v5_runtime_legacy as _legacy
 from execution_graph import SelectedNode
+from v5_provider_lock import canonical_provider_lock
 
 for _name in dir(_legacy):
     if not _name.startswith("__"):
@@ -18,7 +19,7 @@ for _name in dir(_legacy):
 
 
 class PromptPolicy:
-    """Build expert payloads with an explicit same-model provider whitelist."""
+    """Build expert payloads with a fail-closed provider routing contract."""
 
     def build_payload(
         self,
@@ -60,28 +61,11 @@ class PromptPolicy:
             }
             payload["messages"] = messages
 
-        provider = payload.get("provider")
-        if not isinstance(provider, Mapping):
-            raise RuntimeError("provider whitelist missing from node request")
-        only = provider.get("only")
-        order = provider.get("order")
-        if (
-            not isinstance(only, list)
-            or not only
-            or not isinstance(order, list)
-            or only != order
-        ):
+        if not canonical_provider_lock(payload):
             raise RuntimeError(
-                "provider.only and provider.order must be the same non-empty audited whitelist"
+                "provider routing must be either one exact locked endpoint or "
+                "one explicit audited same-model provider whitelist"
             )
-        normalized = [str(value).strip() for value in only]
-        if any(not value for value in normalized) or len(normalized) != len(set(normalized)):
-            raise RuntimeError("provider whitelist contains empty or duplicate entries")
-        if provider.get("allow_fallbacks") is not True:
-            raise RuntimeError("audited same-model provider fallback must be enabled")
-        if provider.get("require_parameters") is not True:
-            raise RuntimeError("provider.require_parameters must be true")
-
         _legacy.assert_request_has_no_tools(
             payload,
             context=f"expert node {node.node_id} request",
