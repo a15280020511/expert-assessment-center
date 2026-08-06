@@ -5,14 +5,20 @@ The legacy ticket validator remains responsible for authorization, duplicate
 protection and task projection. This wrapper removes the governance model plan
 before legacy schema validation, then validates and restores it as an immutable
 execution contract.
+
+Controlled retry capacity is scoped to the immutable governance plan digest.
+A governance-authorized plan repair therefore receives a fresh bounded retry
+budget, while repeated retries of the same plan remain capped and retry IDs
+remain unique for the whole Issue.
 """
 from __future__ import annotations
 
 import argparse
 import copy
 import json
+import re
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 import v5_issue_ticket as legacy
 from v5_governance_model_plan import (
@@ -24,6 +30,10 @@ LEGACY_GOVERNANCE_RESERVE_REASON = (
     "approved recovery calls must leave at least one initial expert call "
     "after three governance calls"
 )
+PLAN_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+PLAN_DIGEST_COMMENT_RE = re.compile(
+    r"模型计划SHA256：\s*`?([0-9a-f]{64})`?"
+)
 
 DELEGATION_NOTICE = (
     "委托边界：具体模型由治理中心在下发任务前选定并写入不可变模型计划；"
@@ -31,6 +41,64 @@ DELEGATION_NOTICE = (
     "专家团中心禁止重新排名、替换、补选或自行选择任何模型。"
     "NetworkX只负责验证和编排有限有向无环执行图。"
     "专家禁止外部工具；网页GPT只负责忠实提交、监控、取回和转述。"
+)
+
+_ORIGINAL_EXECUTION_STATE = legacy._execution_state  # noqa: SLF001
+_ORIGINAL_CURRENT_ISSUE_SUBMISSION_REASON = (
+    legacy._current_issue_submission_reason  # noqa: SLF001
+)
+_CURRENT_MODEL_PLAN_SHA256 = ""
+
+
+def _model_plan_digest(packet: Mapping[str, Any]) -> str:
+    plan = packet.get("governance_model_plan")
+    if not isinstance(plan, Mapping):
+        return ""
+    digest = str(plan.get("plan_sha256") or "").strip().lower()
+    return digest if PLAN_DIGEST_RE.fullmatch(digest) else ""
+
+
+def _execution_state_by_plan(comments: Iterable[str]) -> dict[str, Any]:
+    """Preserve legacy state and add accepted-retry counts by plan digest."""
+    bodies = list(comments)
+    state = dict(_ORIGINAL_EXECUTION_STATE(bodies))
+    retry_counts: dict[str, int] = {}
+    for body in bodies:
+        if not body.startswith("## EXECUTION_RETRY_ACCEPTED"):
+            continue
+        match = PLAN_DIGEST_COMMENT_RE.search(body)
+        if not match:
+            continue
+        digest = match.group(1)
+        retry_counts[digest] = retry_counts.get(digest, 0) + 1
+    state["retry_counts_by_model_plan"] = retry_counts
+    return state
+
+
+def _current_issue_submission_reason_by_plan(
+    state: Mapping[str, Any],
+    *,
+    is_retry: bool,
+    retry_id: str,
+) -> str:
+    """Apply the finite retry ceiling to the current immutable plan only."""
+    adjusted = dict(state)
+    if is_retry and _CURRENT_MODEL_PLAN_SHA256:
+        counts = state.get("retry_counts_by_model_plan")
+        per_plan = counts if isinstance(counts, Mapping) else {}
+        adjusted["retry_count"] = int(
+            per_plan.get(_CURRENT_MODEL_PLAN_SHA256, 0) or 0
+        )
+    return _ORIGINAL_CURRENT_ISSUE_SUBMISSION_REASON(
+        adjusted,
+        is_retry=is_retry,
+        retry_id=retry_id,
+    )
+
+
+legacy._execution_state = _execution_state_by_plan  # noqa: SLF001
+legacy._current_issue_submission_reason = (  # noqa: SLF001
+    _current_issue_submission_reason_by_plan
 )
 
 
@@ -174,6 +242,8 @@ def _postprocess(root: Path, packet: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def prepare(args: argparse.Namespace) -> int:
+    global _CURRENT_MODEL_PLAN_SHA256
+
     root = Path(args.output_dir)
     root.mkdir(parents=True, exist_ok=True)
     try:
@@ -190,7 +260,12 @@ def prepare(args: argparse.Namespace) -> int:
         )
         _rewrite_outputs(status)
         return 0
-    legacy.prepare(sanitized_args)
+
+    _CURRENT_MODEL_PLAN_SHA256 = _model_plan_digest(packet)
+    try:
+        legacy.prepare(sanitized_args)
+    finally:
+        _CURRENT_MODEL_PLAN_SHA256 = ""
     _postprocess(root, packet)
     return 0
 
