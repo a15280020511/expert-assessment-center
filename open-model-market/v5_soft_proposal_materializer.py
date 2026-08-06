@@ -57,38 +57,150 @@ def _soft_node(node: SelectedNode) -> SelectedNode:
     )
 
 
-def _soft_recovery_pool(
+def _recovery_identity(row: Mapping[str, Any]) -> tuple[str, str]:
+    return (
+        str(row.get("model") or "").strip(),
+        str(row.get("provider_endpoint") or "").strip(),
+    )
+
+
+def _recovery_rows(value: Any) -> tuple[Mapping[str, Any], ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(row for row in value if isinstance(row, Mapping))
+
+
+def _unique_recovery_candidates(
+    value: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for rows in value.values():
+        for row in _recovery_rows(rows):
+            identity = _recovery_identity(row)
+            if not all(identity) or identity in seen:
+                continue
+            seen.add(identity)
+            candidates.append(dict(row))
+    return candidates
+
+
+def _soft_recovery_placeholder(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve non-executable compatibility metadata only at its source node."""
+    softened = dict(row)
+    request = row.get("request_config")
+    if isinstance(request, Mapping):
+        softened["request_config"] = _soft_request_config(request)
+    profile = row.get("parameter_profile")
+    if isinstance(profile, Mapping):
+        softened["parameter_profile"] = {
+            **dict(profile),
+            "recommended_output_allowance_is_advisory": True,
+            "local_token_ceiling_enforced": False,
+        }
+    return softened
+
+
+def _local_recovery_placeholders(
+    value: Mapping[str, Any],
+    node_id: str,
+) -> list[dict[str, Any]]:
+    return [
+        _soft_recovery_placeholder(row)
+        for row in _recovery_rows(value.get(node_id))
+        if not all(_recovery_identity(row))
+    ]
+
+
+def _adapt_recovery_candidate(
+    row: Mapping[str, Any],
+    node: SelectedNode,
+) -> dict[str, Any]:
+    """Bind one approved recovery model to a node without changing its role."""
+    adapted = dict(row)
+    model, endpoint = _recovery_identity(row)
+    adapted.update(
+        {
+            "candidate_id": f"recovery:{node.node_id}:{endpoint}",
+            "assigned_work": list(node.assigned_work),
+            "professional_capabilities": dict(node.professional_capabilities),
+            "functions": list(node.functions),
+            "prompt_profile": dict(node.prompt_profile),
+            "reasoning_profile": dict(node.reasoning_profile),
+            "model": model,
+            "provider_endpoint": endpoint,
+            "output_contract": dict(node.output_contract),
+        }
+    )
+
+    recovery_profile = row.get("parameter_profile")
+    profile = dict(recovery_profile) if isinstance(recovery_profile, Mapping) else {}
+    for key, child in node.parameter_profile.items():
+        if str(key) != "supported_parameters":
+            profile[str(key)] = child
+    profile.update(
+        {
+            "recommended_output_allowance_is_advisory": True,
+            "local_token_ceiling_enforced": False,
+            "shared_recovery_pool": True,
+        }
+    )
+    adapted["parameter_profile"] = profile
+
+    recovery_request = row.get("request_config")
+    request = dict(recovery_request) if isinstance(recovery_request, Mapping) else {}
+    selected_request = node.request_config
+    selected_reasoning = (
+        selected_request.get("reasoning")
+        if isinstance(selected_request, Mapping)
+        else None
+    )
+    if isinstance(selected_reasoning, Mapping):
+        request["reasoning"] = dict(selected_reasoning)
+    else:
+        request.pop("reasoning", None)
+    adapted["request_config"] = _soft_request_config(request)
+    return adapted
+
+
+def _shared_recovery_pool(
+    graph: ExecutionGraph,
     value: Mapping[str, Any],
 ) -> dict[str, list[dict[str, Any]]]:
-    result: dict[str, list[dict[str, Any]]] = {}
-    for node_id, rows in value.items():
-        softened_rows: list[dict[str, Any]] = []
-        if not isinstance(rows, list):
-            continue
-        for row in rows:
-            if not isinstance(row, Mapping):
-                continue
-            softened = dict(row)
-            request = row.get("request_config")
-            if isinstance(request, Mapping):
-                softened["request_config"] = _soft_request_config(request)
-            profile = row.get("parameter_profile")
-            if isinstance(profile, Mapping):
-                softened["parameter_profile"] = {
-                    **dict(profile),
-                    "recommended_output_allowance_is_advisory": True,
-                    "local_token_ceiling_enforced": False,
-                }
-            softened_rows.append(softened)
-        result[str(node_id)] = softened_rows
-    return result
+    """Expose approved recovery candidates to every node as one global pool.
+
+    The runtime budget controller remains the sole authority for how many
+    recovery calls may actually be reserved. Repeating candidate metadata per
+    node changes availability only; it does not increase the admitted call
+    ceiling or create local model selection. Incomplete compatibility rows are
+    softened but remain local and cannot become executable shared candidates.
+    """
+    candidates = _unique_recovery_candidates(value)
+    return {
+        node.node_id: [
+            *(
+                _adapt_recovery_candidate(candidate, node)
+                for candidate in candidates
+            ),
+            *_local_recovery_placeholders(value, node.node_id),
+        ]
+        for node in graph.nodes
+    }
 
 
 def _soft_graph(graph: ExecutionGraph) -> ExecutionGraph:
     metadata = dict(graph.metadata)
     recovery_pool = metadata.get("recovery_pool")
     if isinstance(recovery_pool, Mapping):
-        metadata["recovery_pool"] = _soft_recovery_pool(recovery_pool)
+        shared = _shared_recovery_pool(graph, recovery_pool)
+        metadata["recovery_pool"] = shared
+        metadata["recovery_pool_policy"] = {
+            "mode": "shared-governance-approved-candidates",
+            "candidate_count": len(_unique_recovery_candidates(recovery_pool)),
+            "call_ceiling_authority": "runtime-global-recovery-budget",
+            "local_model_selection_performed": False,
+            "incomplete_placeholders_shared": False,
+        }
     metadata["resource_governance"] = {
         "mode": "prompt-led-soft-governance",
         "local_token_ceiling_enforced": False,
@@ -152,6 +264,7 @@ def materialize_proposal(
             "cost_threshold_can_reject_materialization": False,
             "local_token_ceiling_enforced": False,
             "request_token_fields_removed_before_artifact": True,
+            "recovery_pool_mode": "shared-governance-approved-candidates",
         }
     )
     return softened_graph, softened_limits, telemetry
