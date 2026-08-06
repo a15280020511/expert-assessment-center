@@ -1,0 +1,33 @@
+name: Export Audit Source Once
+
+on:
+  push:
+    branches:
+      - audit/minimal-expert-runtime-20260806
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: ${{ github.actor == github.repository_owner }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: audit/minimal-expert-runtime-20260806
+          persist-credentials: false
+      - name: Build source snapshot
+        run: |
+          set -euo pipefail
+          mkdir -p source-snapshot
+          cp -R open-model-market tests tools .github source-snapshot/
+          cp requirements-runtime.txt requirements-dev.txt ruff.toml README.md CONSTITUTION.md CONTROL_TOPOLOGY.md source-snapshot/
+          git rev-parse HEAD > source-snapshot/commit.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: expert-center-source-${{ github.run_id }}
+          path: source-snapshot/
+          if-no-files-found: error
+          retention-days: 3
