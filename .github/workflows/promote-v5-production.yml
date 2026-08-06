@@ -144,6 +144,75 @@ jobs:
           )
           from v5_top50_pool_optimizer import materialize_top50_selection
 
+          def write_local_catalog_fixtures(root, candidates):
+              ordered = sorted(
+                  candidates,
+                  key=lambda row: (
+                      int(row["official_intelligence_rank"]),
+                      int(row["popularity_rank"]),
+                      str(row["model"]),
+                  ),
+              )
+              catalog_rows = []
+              endpoints = {}
+              for row in ordered:
+                  model = str(row["model"])
+                  prompt_ppm = float(row["prompt_usd_per_million"])
+                  completion_ppm = float(row["completion_usd_per_million"])
+                  context = int(row.get("context_length") or 262144)
+                  completion = int(row.get("max_completion_tokens") or 32768)
+                  catalog_rows.append(
+                      {
+                          "id": model,
+                          "name": model,
+                          "description": "synthetic zero-call qualification reasoning model",
+                          "context_length": context,
+                          "pricing": {
+                              "prompt": str(prompt_ppm / 1_000_000),
+                              "completion": str(completion_ppm / 1_000_000),
+                          },
+                          "supported_parameters": ["reasoning", "max_tokens"],
+                          "reasoning": {"supports_max_tokens": True},
+                          "architecture": {
+                              "input_modalities": ["text"],
+                              "output_modalities": ["text"],
+                          },
+                          "top_provider": {
+                              "max_completion_tokens": completion,
+                          },
+                      }
+                  )
+                  endpoints[model] = {
+                      "data": {
+                          "endpoints": [
+                              {
+                                  "tag": "synthetic-open-provider",
+                                  "context_length": context,
+                                  "max_completion_tokens": completion,
+                                  "pricing": {
+                                      "prompt": prompt_ppm,
+                                      "completion": completion_ppm,
+                                  },
+                                  "supported_parameters": ["reasoning", "max_tokens"],
+                                  "uptime": 1.0,
+                              }
+                          ]
+                      }
+                  }
+              catalog_path = root / "models.json"
+              endpoint_path = root / "endpoints.json"
+              catalog_path.write_text(
+                  json.dumps(
+                      {"sorts": {"intelligence-high-to-low": {"data": catalog_rows}}},
+                      ensure_ascii=False,
+                      indent=2,
+                  )
+              )
+              endpoint_path.write_text(
+                  json.dumps(endpoints, ensure_ascii=False, indent=2)
+              )
+              return catalog_path, endpoint_path
+
           tasks = {
               "simple": "比较A与B，给出结论。",
               "contract": "比较A与B，并按结论、依据、风险、行动四节输出。",
@@ -179,13 +248,17 @@ jobs:
               root.mkdir(parents=True, exist_ok=True)
               ticket_path = root / "ticket.json"
               ticket_path.write_text(json.dumps(materialized, ensure_ascii=False, indent=2))
+              catalog_path, endpoint_path = write_local_catalog_fixtures(
+                  root,
+                  plan["top50_expert_selectable_candidates"],
+              )
               subprocess.run(
                   [
                       "python", "open-model-market/v5_price_ranked_pipeline.py",
                       "--task", question,
                       "--governance-plan-file", str(ticket_path),
-                      "--catalog-file", "tests/fixtures/models.json",
-                      "--endpoint-file", "tests/fixtures/endpoints.json",
+                      "--catalog-file", str(catalog_path),
+                      "--endpoint-file", str(endpoint_path),
                       "--dry-run",
                       "--maximum-total-calls", "8",
                       "--maximum-recovery-calls", "4",
