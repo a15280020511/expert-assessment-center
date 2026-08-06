@@ -266,14 +266,18 @@ class LiveAcceptanceRegressionTests(unittest.TestCase):
             constraints["recovery_candidates_are_preselected_not_calls"]
         )
 
-    def test_acceptance_workflow_uses_three_finite_recoveries(self) -> None:
+    def test_acceptance_workflow_uses_governance_ticket_budget(self) -> None:
         text = (
-            ROOT / ".github/workflows/v5-paid-candidate-acceptance.yml"
+            ROOT / ".github/workflows/v5-price-ranked-paid-candidate-acceptance.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn('MAXIMUM_TOTAL_CALLS: "10"', text)
-        self.assertIn('MAXIMUM_RECOVERY_CALLS: "3"', text)
-        self.assertIn('"calls": 10', text)
-        self.assertIn('"maximum_recovery_calls": 3', text)
+        self.assertIn(".approved_budget.calls", text)
+        self.assertIn(".approved_budget.maximum_recovery_calls", text)
+        self.assertIn("--expected-calls \"$calls\"", text)
+        self.assertIn("--expected-recovery-calls \"$recovery\"", text)
+        self.assertIn("--maximum-total-calls", text)
+        self.assertIn("--maximum-recovery-calls", text)
+        self.assertNotIn('MAXIMUM_TOTAL_CALLS: "10"', text)
+        self.assertNotIn('MAXIMUM_RECOVERY_CALLS: "3"', text)
         self.assertNotIn("allow_fallbacks: true", text)
 
     def test_machine_policy_locks_recovery_and_scaled_currency(self) -> None:

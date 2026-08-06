@@ -1,11 +1,5 @@
 name: Deprecated Paid Candidate Acceptance
 
-# Non-executable compatibility metadata retained for repository regression tests:
-# MAXIMUM_TOTAL_CALLS: "10"
-# MAXIMUM_RECOVERY_CALLS: "3"
-# "calls": 10
-# "maximum_recovery_calls": 3
-
 on:
   issue_comment:
     types: [created]
@@ -34,9 +28,10 @@ jobs:
               body: [
                 '## DEPRECATED_ACCEPTANCE_REJECTED',
                 '',
-                '`/accept-main` 已禁用，因为旧入口调用退役的 GPT/Claude 治理运行时。',
+                '`/accept-main` 已禁用，因为旧入口允许专家中心自行形成模型计划。',
                 '',
-                '请使用：`/accept-price-main <40位main SHA>`。',
+                '请先把治理中心签发的完整专家票据作为本 Issue 正文，再使用：',
+                '`/accept-governed-main <40位main SHA>`。',
                 '',
                 '模型调用：`0`。'
               ].join('\n')
