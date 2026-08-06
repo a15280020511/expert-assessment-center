@@ -13,6 +13,13 @@ from v5_top50_plan_validation import validate_top50_contract
 from v5_top50_pool_optimizer import Top50PoolOptimizationError, materialize_top50_selection
 
 
+PRINCIPLES = [
+    "concrete-problem-concrete-analysis",
+    "dynamic-adaptation",
+    "small-effort-large-return",
+]
+
+
 def _sha(value):
     return hashlib.sha256(
         json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
@@ -77,6 +84,13 @@ def _packet(*, complex_task: bool = False) -> dict:
         "top50_candidate_pool_authority": "decision-system-governance",
         "top50_model_assignment_authority": "expert-assessment-center-ortools",
         "expert_center_top50_pool_selection_allowed": True,
+        "top50_task_adaptive_assignment_required": True,
+        "top50_model_assignment_principles": list(PRINCIPLES),
+        "top50_assignment_recomputed_from_current_task": True,
+        "top50_cross_task_history_allowed": False,
+        "top50_semantic_keyword_routing_allowed": False,
+        "top50_domain_hardcoding_allowed": False,
+        "top50_provider_metric_allowed_in_assignment": False,
         "top50_provider_routing_mode": "unrestricted-openrouter",
         "top50_provider_restrictions_applied": False,
         "top50_provider_endpoint_qualification_required": False,
@@ -130,14 +144,8 @@ class Top50PoolOptimizerTests(unittest.TestCase):
         self.assertTrue(plan["optimizer_audit"]["constraints"]["dynamic_role_weights_used"])
         self.assertTrue(plan["optimizer_audit"]["constraints"]["marginal_return_used"])
         self.assertTrue(plan["task_adaptive_scoring_completed"])
-        self.assertEqual(
-            plan["selection_principles"],
-            [
-                "concrete-problem-concrete-analysis",
-                "dynamic-adaptation",
-                "small-effort-large-return",
-            ],
-        )
+        self.assertEqual(plan["selection_principles"], PRINCIPLES)
+        self.assertEqual(plan["top50_model_assignment_principles"], PRINCIPLES)
         self.assertEqual(plan["provider_routing_mode"], "unrestricted-openrouter")
         self.assertFalse(plan["provider_restrictions_applied"])
         self.assertEqual(receipt["optimizer_audit"]["optimizer"], "ortools-cp-sat")
