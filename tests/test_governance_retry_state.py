@@ -129,7 +129,7 @@ class GovernanceRetryStateTests(unittest.TestCase):
     def test_duplicate_retry_id_and_completed_state_remain_blocked(self) -> None:
         state = ledger.execution_state([accepted("used"), failed(0)])
         self.assertIn(
-            "already been used",
+            "already used",
             ledger.current_issue_submission_reason(
                 state,
                 is_retry=True,
