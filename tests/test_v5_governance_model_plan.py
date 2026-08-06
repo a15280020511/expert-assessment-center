@@ -44,8 +44,8 @@ def expand_to_four_recoveries(ticket: dict) -> None:
         },
         {
             "slot": 2,
-            "model": "gamma/backup-pro",
-            "company": "gamma",
+            "model": "epsilon/backup-pro",
+            "company": "epsilon",
             "estimated_task_cost_usd": 0.06,
             "prompt_usd_per_million": 0.06,
             "completion_usd_per_million": 0.18,
@@ -53,8 +53,8 @@ def expand_to_four_recoveries(ticket: dict) -> None:
         },
         {
             "slot": 3,
-            "model": "deepseek/backup-pro",
-            "company": "deepseek",
+            "model": "zeta/backup-pro",
+            "company": "zeta",
             "estimated_task_cost_usd": 0.07,
             "prompt_usd_per_million": 0.07,
             "completion_usd_per_million": 0.21,
@@ -62,8 +62,8 @@ def expand_to_four_recoveries(ticket: dict) -> None:
         },
         {
             "slot": 4,
-            "model": "rho/forecast-pro",
-            "company": "rho",
+            "model": "eta/forecast-pro",
+            "company": "eta",
             "estimated_task_cost_usd": 0.08,
             "prompt_usd_per_million": 0.08,
             "completion_usd_per_million": 0.24,
@@ -114,20 +114,31 @@ class GovernanceModelPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(GovernanceModelPlanError, "duplicate or reused"):
             validate_governance_model_plan(ticket)
 
-    def test_recovery_company_reuse_is_allowed_for_distinct_models(self) -> None:
+    def test_full_ranking_uses_unique_companies(self) -> None:
         ticket = load_ticket()
         expand_to_four_recoveries(ticket)
         plan = validate_governance_model_plan(ticket)
         self.assertEqual(plan["recovery_count"], 4)
         self.assertEqual(
             [row["company"] for row in plan["recovery_models"]],
-            ["rho", "gamma", "deepseek", "rho"],
+            ["rho", "epsilon", "zeta", "eta"],
         )
         all_models = [
             row["model"]
             for row in plan["selected_models"] + plan["recovery_models"]
         ]
         self.assertEqual(len(all_models), len(set(all_models)))
+
+    def test_recovery_company_reuse_is_rejected(self) -> None:
+        ticket = load_ticket()
+        expand_to_four_recoveries(ticket)
+        ticket["governance_model_plan"]["recovery_models"][3]["company"] = "rho"
+        resign(ticket)
+        with self.assertRaisesRegex(
+            GovernanceModelPlanError,
+            "duplicate or reused model company across full ranking",
+        ):
+            validate_governance_model_plan(ticket)
 
     def test_selected_and_recovery_model_overlap_is_rejected(self) -> None:
         ticket = load_ticket()

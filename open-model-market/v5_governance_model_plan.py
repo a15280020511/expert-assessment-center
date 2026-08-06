@@ -192,12 +192,14 @@ def _validate_recovery_identity_rows(
     recoveries: Sequence[Mapping[str, Any]],
     *,
     selected_models: set[str],
+    selected_companies: set[str],
 ) -> set[str]:
     models = set(selected_models)
+    companies = set(selected_companies)
     recovery_models: set[str] = set()
     previous_price: float | None = None
     for index, row in enumerate(recoveries):
-        model, _, _ = _validate_model_row(
+        model, company, _ = _validate_model_row(
             row,
             field="recovery_models",
             index=index,
@@ -210,6 +212,10 @@ def _validate_recovery_identity_rows(
             raise GovernanceModelPlanError(
                 f"selected and recovery model sets overlap or repeat: {model}"
             )
+        if company in companies:
+            raise GovernanceModelPlanError(
+                f"duplicate or reused model company across full ranking: {company}"
+            )
         price = _recovery_price(row, index)
         if previous_price is not None and price < previous_price - 1e-12:
             raise GovernanceModelPlanError(
@@ -217,6 +223,7 @@ def _validate_recovery_identity_rows(
             )
         previous_price = price
         models.add(model)
+        companies.add(company)
         recovery_models.add(model)
     return recovery_models
 
@@ -225,11 +232,67 @@ def _validate_model_sets(
     selected: Sequence[Mapping[str, Any]],
     recoveries: Sequence[Mapping[str, Any]],
 ) -> None:
-    selected_models, _ = _validate_selected_identity_rows(selected)
+    selected_models, selected_companies = _validate_selected_identity_rows(selected)
     _validate_recovery_identity_rows(
         recoveries,
         selected_models=selected_models,
+        selected_companies=selected_companies,
     )
+
+
+def _validate_price_ranking(
+    plan: Mapping[str, Any],
+    selected: Sequence[Mapping[str, Any]],
+    recoveries: Sequence[Mapping[str, Any]],
+) -> None:
+    ranked_value = plan.get("price_ranked_models")
+    live_contract = (
+        plan.get("catalog_fetch_mode") == "live-per-task-no-cross-task-cache"
+    )
+    if ranked_value is None and not live_contract:
+        return
+    ranked = _model_rows(ranked_value, "price_ranked_models")
+    expected_count = len(selected) + len(recoveries)
+    if len(ranked) != expected_count:
+        raise GovernanceModelPlanError(
+            "price_ranked_models must cover every selected and recovery model"
+        )
+    expected_pairs = {
+        (str(row.get("model") or ""), str(row.get("company") or ""))
+        for row in [*selected, *recoveries]
+    }
+    seen_models: set[str] = set()
+    seen_companies: set[str] = set()
+    observed_pairs: set[tuple[str, str]] = set()
+    previous_price: float | None = None
+    for index, row in enumerate(ranked):
+        model, company, _ = _validate_model_row(
+            row, field="price_ranked_models", index=index
+        )
+        if row.get("price_rank") != index + 1:
+            raise GovernanceModelPlanError(
+                "price_ranked_models ranks must be contiguous"
+            )
+        if model in seen_models or company in seen_companies:
+            raise GovernanceModelPlanError(
+                "price ranking must contain one model per company"
+            )
+        price = _positive_finite(
+            row.get("price_rank_usd_per_million"),
+            f"price_ranked_models[{index}].price_rank_usd_per_million",
+        )
+        if previous_price is not None and price < previous_price - 1e-12:
+            raise GovernanceModelPlanError(
+                "price_ranked_models must preserve ascending price order"
+            )
+        previous_price = price
+        seen_models.add(model)
+        seen_companies.add(company)
+        observed_pairs.add((model, company))
+    if observed_pairs != expected_pairs:
+        raise GovernanceModelPlanError(
+            "price ranking does not match selected and recovery model identities"
+        )
 
 
 def _validate_roles(selected: Sequence[Mapping[str, Any]]) -> None:
@@ -289,6 +352,7 @@ def validate_governance_model_plan(
         plan_value, selected, recoveries
     )
     _validate_model_sets(selected, recoveries)
+    _validate_price_ranking(plan_value, selected, recoveries)
     _validate_roles(selected)
     _validate_budget(ticket, expert_count, recovery_count)
     return plan_value
