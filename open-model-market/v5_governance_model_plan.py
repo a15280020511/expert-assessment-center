@@ -632,6 +632,23 @@ def _validate_live_flagship_row(
         raise GovernanceModelPlanError(
             f"{field}[{index}].endpoint_inventory_sha256 is invalid"
         )
+    providers = row.get("qualified_provider_count")
+    if isinstance(providers, bool) or not isinstance(providers, int) or providers < 1:
+        raise GovernanceModelPlanError(
+            f"{field}[{index}].qualified_provider_count must be positive"
+        )
+    evidence = str(row.get("selection_evidence") or "")
+    required_evidence = (
+        "non-search",
+        "verified-company-flagship-reasoning",
+        basis,
+        "live-exact-endpoint-qualified",
+        "authenticated-zdr-endpoint-qualified",
+    )
+    if any(fragment not in evidence for fragment in required_evidence):
+        raise GovernanceModelPlanError(
+            f"{field}[{index}] lacks verified reasoning flagship evidence"
+        )
 
 
 def _validate_live_flagship_contract(
