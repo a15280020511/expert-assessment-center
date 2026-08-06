@@ -58,6 +58,7 @@ jobs:
           mkdir -p free-canary
           python - <<'PY'
           import json
+          import math
           import os
           import urllib.error
           import urllib.request
@@ -105,11 +106,14 @@ jobs:
           if not isinstance(usage, dict):
               raise SystemExit('free Canary usage accounting is missing')
           cost_raw = usage.get('cost')
-          if isinstance(cost_raw, bool) or not isinstance(cost_raw, (int, float)):
+          if isinstance(cost_raw, bool) or cost_raw is None:
               raise SystemExit('free Canary usage.cost is missing or non-numeric')
-          cost = float(cost_raw)
-          if cost != 0.0:
-              raise SystemExit(f'free Canary incurred non-zero cost: {cost}')
+          try:
+              cost = float(cost_raw)
+          except (TypeError, ValueError) as exc:
+              raise SystemExit('free Canary usage.cost is missing or non-numeric') from exc
+          if not math.isfinite(cost) or cost != 0.0:
+              raise SystemExit(f'free Canary incurred non-zero or invalid cost: {cost}')
           actual_model = str(value.get('model') or '').strip()
           if not actual_model:
               raise SystemExit('free Canary did not disclose routed model identity')
