@@ -1,0 +1,70 @@
+name: Run Direct Governance Plan Endpoints
+
+on:
+  push:
+    branches:
+      - "fix/direct-governance-plan-endpoints"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "fix/direct-governance-plan-endpoints"
+          fetch-depth: 0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-runtime.txt
+            requirements-dev.txt
+      - name: Install pinned test dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+      - name: Apply direct endpoint patch
+        run: python tools/apply_direct_governance_plan_endpoints_v2.py
+      - name: Run zero-call regression tests
+        run: |
+          set -euo pipefail
+          PYTHONPATH=open-model-market python -m unittest \
+            tests.test_v5_planned_catalog_scope \
+            tests.test_v5_endpoint_catalog \
+            tests.test_v5_governed_plan_orchestrator \
+            tests.test_v5_governance_model_plan \
+            tests.test_v5_price_ranked_pipeline -v
+          rm -rf /tmp/direct-plan-dry
+          python open-model-market/v5_price_ranked_pipeline.py \
+            --task "仅依据题面比较A与B，禁止工具，输出已知事实和最终建议。" \
+            --governance-plan-file tests/fixtures/governance-ticket.json \
+            --catalog-file tests/fixtures/models.json \
+            --endpoint-file tests/fixtures/endpoints.json \
+            --dry-run \
+            --maximum-total-calls 8 \
+            --maximum-recovery-calls 1 \
+            --output-dir /tmp/direct-plan-dry
+          test "$(jq -r '.selection_authority' /tmp/direct-plan-dry/v5-catalog.json)" = "decision-system-governance"
+          test "$(jq -r '.model_identity_source' /tmp/direct-plan-dry/v5-catalog.json)" = "governance-signed-plan"
+      - name: Commit source changes
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- \
+            open-model-market/v5_price_ranked_pipeline.py \
+            tests/test_v5_planned_catalog_scope.py; then
+            echo "Direct endpoint patch already applied"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            open-model-market/v5_price_ranked_pipeline.py \
+            tests/test_v5_planned_catalog_scope.py
+          git commit -m "fix: materialize exact endpoints from signed governance plan"
+          git push origin HEAD:fix/direct-governance-plan-endpoints
