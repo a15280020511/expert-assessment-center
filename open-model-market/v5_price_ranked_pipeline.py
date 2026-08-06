@@ -1,10 +1,7 @@
 """Production pipeline facade for signed top-50 + expert OR-Tools assignment.
 
-The native governance-plan executor remains unchanged. This layer patches only
-responsibility/evidence fields so the artifacts accurately distinguish:
-1. governance candidate-pool signing;
-2. expert-center CP-SAT assignment;
-3. runtime provider-whitelist resolution.
+Governance signs model candidates, the expert center assigns models with CP-SAT,
+and OpenRouter selects the actual provider without any provider routing filter.
 """
 from __future__ import annotations
 
@@ -27,16 +24,8 @@ def _assignment_fields(plan: Mapping[str, Any]) -> dict[str, Any]:
     active = _top50(plan)
     return {
         "candidate_pool_authority": "decision-system-governance",
-        "model_assignment_authority": (
-            "expert-assessment-center-ortools"
-            if active
-            else "decision-system-governance"
-        ),
-        "selection_authority": (
-            "expert-assessment-center-ortools"
-            if active
-            else "decision-system-governance"
-        ),
+        "model_assignment_authority": "expert-assessment-center-ortools" if active else "decision-system-governance",
+        "selection_authority": "expert-assessment-center-ortools" if active else "decision-system-governance",
         "expert_center_model_selection_allowed": active,
         "expert_center_pool_assignment_performed": active,
         "model_selection_performed_locally": active,
@@ -46,9 +35,25 @@ def _assignment_fields(plan: Mapping[str, Any]) -> dict[str, Any]:
         "optimizer_present": active,
         "optimizer_used": active,
         "optimizer": plan.get("optimizer") if active else None,
-        "optimizer_optimality_proven": bool(
-            plan.get("optimizer_audit", {}).get("optimality_proven")
-        ) if active else False,
+        "optimizer_optimality_proven": bool(plan.get("optimizer_audit", {}).get("optimality_proven")) if active else False,
+    }
+
+
+def _provider_fields() -> dict[str, Any]:
+    return {
+        "provider_routing_mode": "unrestricted-openrouter",
+        "provider_resolution_only": False,
+        "provider_resolution_performed_locally": False,
+        "provider_restrictions_applied": False,
+        "provider_fallback_allowed": True,
+        "unrestricted_provider_fallback_allowed": True,
+        "provider_only_allowed": False,
+        "provider_order_allowed": False,
+        "provider_zdr_filter_allowed": False,
+        "provider_data_collection_filter_allowed": False,
+        "provider_price_filter_allowed": False,
+        "openrouter_selects_provider": True,
+        "model_substitution_allowed": False,
     }
 
 
@@ -61,94 +66,39 @@ _original_request_audit = _legacy._request_audit
 _original_finalize_result = _legacy._finalize_result
 
 
-def _task_state(
-    args: Any,
-    run: Any,
-    output: Path,
-    plan: Mapping[str, Any],
-):
+def _task_state(args: Any, run: Any, output: Path, plan: Mapping[str, Any]):
     task, digest, envelope = _original_task_state(args, run, output, plan)
     value = dict(envelope)
     value.update(_assignment_fields(plan))
-    value["provider_resolution_only"] = True
+    value.update(_provider_fields())
     write_json(output / "v5-task-envelope.json", value)
     return task, digest, value
 
 
-def _catalog_state(
-    args: Any,
-    run: Any,
-    task_envelope: Mapping[str, Any],
-    plan: Mapping[str, Any],
-):
-    catalog, catalog_source, endpoint_source = _original_catalog_state(
-        args,
-        run,
-        task_envelope,
-        plan,
-    )
+def _catalog_state(args: Any, run: Any, task_envelope: Mapping[str, Any], plan: Mapping[str, Any]):
+    catalog, catalog_source, endpoint_source = _original_catalog_state(args, run, task_envelope, plan)
     value = dict(catalog)
     value.update(_assignment_fields(plan))
-    value.update(
-        {
-            "provider_resolution_only": True,
-            "provider_resolution_policy": (
-                "same-model-audited-qualified-provider-whitelist"
-            ),
-            "catalog_scope": "governance-signed-top50-assigned-models-only",
-        }
-    )
+    value.update(_provider_fields())
+    value["catalog_scope"] = "governance-signed-top50-assigned-models-only"
+    value["endpoint_catalog_role"] = "availability-and-telemetry-only-not-routing-restriction"
     return value, catalog_source, endpoint_source
 
 
-def _catalog_snapshot(
-    catalog: Mapping[str, Any],
-    catalog_source: str,
-    endpoint_source: str,
-    plan: Mapping[str, Any],
-):
-    value = dict(
-        _original_catalog_snapshot(
-            catalog,
-            catalog_source,
-            endpoint_source,
-            plan,
-        )
-    )
+def _catalog_snapshot(catalog: Mapping[str, Any], catalog_source: str, endpoint_source: str, plan: Mapping[str, Any]):
+    value = dict(_original_catalog_snapshot(catalog, catalog_source, endpoint_source, plan))
     value.update(_assignment_fields(plan))
-    value["provider_resolution_performed_locally"] = True
-    value["provider_fallback_scope"] = (
-        "same-model-audited-qualified-provider-whitelist"
-    )
+    value.update(_provider_fields())
     return value
 
 
-def _runtime_config(
-    args: Any,
-    *,
-    total_calls: int,
-    recovery_calls: int,
-    plan: Mapping[str, Any],
-):
-    value = dict(
-        _original_runtime_config(
-            args,
-            total_calls=total_calls,
-            recovery_calls=recovery_calls,
-            plan=plan,
-        )
-    )
+def _runtime_config(args: Any, *, total_calls: int, recovery_calls: int, plan: Mapping[str, Any]):
+    value = dict(_original_runtime_config(args, total_calls=total_calls, recovery_calls=recovery_calls, plan=plan))
     value.update(_assignment_fields(plan))
+    value.update(_provider_fields())
     value.update(
         {
-            "provider_resolution_authority": "expert-runtime-provider-whitelist",
-            "provider_fallback_allowed": True if _top50(plan) else False,
-            "provider_fallback_scope": (
-                "same-model-audited-qualified-provider-whitelist"
-                if _top50(plan)
-                else "legacy-exact-single-endpoint"
-            ),
-            "unrestricted_provider_fallback_allowed": False,
+            "provider_resolution_authority": "openrouter-unrestricted",
             "orchestration_library": "networkx",
             "optimizer_library": "ortools-cp-sat" if _top50(plan) else None,
         }
@@ -156,26 +106,18 @@ def _runtime_config(
     return value
 
 
-def _zero_local_governance_artifacts(
-    output: Path,
-    plan: Mapping[str, Any],
-    materialization_audit: Mapping[str, Any],
-):
-    ledger = dict(
-        _original_zero_governance(
-            output,
-            plan,
-            materialization_audit,
-        )
-    )
+def _zero_local_governance_artifacts(output: Path, plan: Mapping[str, Any], materialization_audit: Mapping[str, Any]):
+    ledger = dict(_original_zero_governance(output, plan, materialization_audit))
     fields = _assignment_fields(plan)
     ledger.update(fields)
+    ledger.update(_provider_fields())
     ledger["selection_performed_in_expert_center"] = _top50(plan)
     write_json(output / "v5-governance-calls.json", ledger)
 
     result_raw = load_json_or_default(output / "v5-governance-result.json", {})
     result = dict(result_raw) if isinstance(result_raw, Mapping) else {}
     result.update(fields)
+    result.update(_provider_fields())
     result["selection_performed_in_expert_center"] = _top50(plan)
     result["provider_materialization"] = dict(materialization_audit)
     write_json(output / "v5-governance-result.json", result)
@@ -183,58 +125,26 @@ def _zero_local_governance_artifacts(
 
 
 def _request_audit(output: Path, *, approved_total_calls: int) -> None:
-    _original_request_audit(
-        output,
-        approved_total_calls=approved_total_calls,
-    )
+    _original_request_audit(output, approved_total_calls=approved_total_calls)
     path = output / "v5-request-audit.json"
     raw = load_json_or_default(path, {})
     document = dict(raw) if isinstance(raw, Mapping) else {}
-    requests = document.get("requests")
-    rows = requests if isinstance(requests, list) else []
-    fallback_allowed = any(
-        isinstance(row, Mapping)
-        and isinstance(row.get("provider"), Mapping)
-        and row["provider"].get("allow_fallbacks") is True
-        for row in rows
-    )
-    document.update(
-        {
-            "provider_fallback_allowed": fallback_allowed,
-            "provider_fallback_scope": (
-                "same-model-audited-qualified-provider-whitelist"
-                if fallback_allowed
-                else "legacy-exact-single-endpoint"
-            ),
-            "unrestricted_provider_fallback_allowed": False,
-            "provider_lock_contract": (
-                "legacy-exact-single-endpoint-or-audited-same-model-provider-pool"
-            ),
-        }
-    )
+    rows = document.get("requests") if isinstance(document.get("requests"), list) else []
+    restricted = [row for row in rows if isinstance(row, Mapping) and "provider" in row]
+    document.update(_provider_fields())
+    document["provider_objects_present"] = len(restricted)
+    document["provider_routing_open"] = not restricted
+    document["status"] = "PASS" if document.get("status") == "PASS" and not restricted else "FAIL"
     write_json(path, document)
+    if restricted:
+        raise RuntimeError("provider routing restriction detected in production request audit")
 
 
-def _finalize_result(
-    result: dict[str, Any],
-    *,
-    total_calls: int,
-    plan: Mapping[str, Any],
-    selection_audit: Mapping[str, Any],
-) -> None:
-    _original_finalize_result(
-        result,
-        total_calls=total_calls,
-        plan=plan,
-        selection_audit=selection_audit,
-    )
+def _finalize_result(result: dict[str, Any], *, total_calls: int, plan: Mapping[str, Any], selection_audit: Mapping[str, Any]) -> None:
+    _original_finalize_result(result, total_calls=total_calls, plan=plan, selection_audit=selection_audit)
     result.update(_assignment_fields(plan))
+    result.update(_provider_fields())
     result["selection_audit"] = dict(selection_audit)
-    result["provider_fallback_scope"] = (
-        "same-model-audited-qualified-provider-whitelist"
-        if _top50(plan)
-        else "legacy-exact-single-endpoint"
-    )
 
 
 def _rewrite_static_artifacts(output: Path) -> None:
@@ -243,13 +153,14 @@ def _rewrite_static_artifacts(output: Path) -> None:
     if not plan:
         return
     fields = _assignment_fields(plan)
+    provider = _provider_fields()
 
     selection_path = output / "v5-selection.json"
     selection_raw = load_json_or_default(selection_path, {})
     if isinstance(selection_raw, Mapping) and selection_raw:
         selection = dict(selection_raw)
         selection.update(fields)
-        selection["provider_resolution_only"] = True
+        selection.update(provider)
         write_json(selection_path, selection)
 
     graph_path = output / "v5-execution-graph.json"
@@ -259,18 +170,12 @@ def _rewrite_static_artifacts(output: Path) -> None:
         metadata_raw = graph.get("metadata")
         metadata = dict(metadata_raw) if isinstance(metadata_raw, Mapping) else {}
         metadata.update(fields)
-        metadata["provider_fallback_scope"] = (
-            "same-model-audited-qualified-provider-whitelist"
-        )
+        metadata.update(provider)
         graph["metadata"] = metadata
         write_json(graph_path, graph)
 
 
-def main(
-    argv: Sequence[str] | None = None,
-    *,
-    expert_call_fn: Any | None = None,
-) -> int:
+def main(argv: Sequence[str] | None = None, *, expert_call_fn: Any | None = None) -> int:
     args = _legacy.build_parser().parse_args(argv)
     result = _legacy.main(argv, expert_call_fn=expert_call_fn)
     _rewrite_static_artifacts(Path(args.output_dir))
