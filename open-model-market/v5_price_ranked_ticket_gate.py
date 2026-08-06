@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed contract gate for admitted top-50 OR-Tools tickets."""
+"""Fail-closed contract gate for admitted task-adaptive Top-50 OR-Tools tickets."""
 from __future__ import annotations
 
 import argparse
@@ -11,6 +11,12 @@ from typing import Any, Mapping
 PRIMARY_COUNT = 4
 WARM_RECOVERY_COUNT = 4
 MINIMUM_TOP50_CALLS = PRIMARY_COUNT + WARM_RECOVERY_COUNT
+TASK_SCORING_SCHEMA_VERSION = "v5-task-adaptive-value-scoring-1"
+SELECTION_PRINCIPLES = [
+    "concrete-problem-concrete-analysis",
+    "dynamic-adaptation",
+    "small-effort-large-return",
+]
 
 
 def _load(path: Path) -> Mapping[str, Any]:
@@ -30,6 +36,48 @@ def _optional_float(value: str) -> float | None:
     return number
 
 
+def _require_task_adaptive_plan(ticket: Mapping[str, Any]) -> Mapping[str, Any]:
+    plan = ticket.get("governance_model_plan")
+    if not isinstance(plan, Mapping):
+        raise RuntimeError("materialized governance model plan is missing")
+    if plan.get("selected_from_top50_reasoning_pool_only") is not True:
+        raise RuntimeError("ticket is not using the frozen Top-50 path")
+    if plan.get("task_adaptive_scoring_completed") is not True:
+        raise RuntimeError("task-adaptive value scoring was not completed")
+    if plan.get("task_adaptive_scoring_schema_version") != TASK_SCORING_SCHEMA_VERSION:
+        raise RuntimeError("task-adaptive scoring schema is invalid")
+    if plan.get("selection_principles") != SELECTION_PRINCIPLES:
+        raise RuntimeError("task-adaptive selection principles are missing")
+    profile = plan.get("task_demand_profile")
+    if not isinstance(profile, Mapping):
+        raise RuntimeError("current-task demand profile is missing")
+    if profile.get("schema_version") != TASK_SCORING_SCHEMA_VERSION:
+        raise RuntimeError("current-task demand profile schema is invalid")
+    if profile.get("semantic_keyword_routing_used") is not False:
+        raise RuntimeError("semantic keyword routing is forbidden")
+    if profile.get("cross_task_history_used") is not False:
+        raise RuntimeError("cross-task history is forbidden")
+    if profile.get("provider_metric_used") is not False:
+        raise RuntimeError("Provider metrics cannot affect model assignment")
+    audit = plan.get("optimizer_audit")
+    if not isinstance(audit, Mapping):
+        raise RuntimeError("optimizer audit is missing")
+    constraints = audit.get("constraints")
+    if not isinstance(constraints, Mapping):
+        raise RuntimeError("optimizer constraint audit is missing")
+    for field in (
+        "task_role_native_capacity_compatibility",
+        "dynamic_role_weights_used",
+        "marginal_return_used",
+        "warm_recovery_priority_uses_same_objective",
+    ):
+        if constraints.get(field) is not True:
+            raise RuntimeError(f"task-adaptive optimizer evidence missing: {field}")
+    if constraints.get("provider_resilience_used") is not False:
+        raise RuntimeError("Provider resilience unexpectedly affects assignment")
+    return plan
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", required=True)
@@ -40,6 +88,7 @@ def main() -> int:
     root = Path(args.output_dir)
     status = _load(root / "ticket-status.json")
     ticket = _load(root / "ticket.json")
+    plan = _require_task_adaptive_plan(ticket)
     expected_cost = _optional_float(args.expected_cost_anomaly_usd)
     observed_cost = status.get("cost_anomaly_usd")
 
@@ -67,6 +116,10 @@ def main() -> int:
         raise RuntimeError("ticket optimizer is not OR-Tools CP-SAT")
     if status.get("optimizer_optimality_proven") is not True:
         raise RuntimeError("ticket does not prove OR-Tools optimality")
+    if plan.get("optimizer") != "ortools-cp-sat":
+        raise RuntimeError("materialized plan optimizer is not OR-Tools CP-SAT")
+    if plan.get("optimizer_audit", {}).get("optimality_proven") is not True:
+        raise RuntimeError("materialized plan does not prove OR-Tools optimality")
     if status.get("claude_mechanism_enabled") is not False:
         raise RuntimeError("Claude mechanism is not disabled in admission evidence")
     if int(status.get("governance_model_calls") or 0) != 0:
@@ -101,6 +154,8 @@ def main() -> int:
                 "primary_experts": PRIMARY_COUNT,
                 "warm_recoveries": WARM_RECOVERY_COUNT,
                 "optimizer": "ortools-cp-sat",
+                "task_adaptive_scoring": True,
+                "selection_principles": SELECTION_PRINCIPLES,
                 "provider_routing_mode": "unrestricted-openrouter",
             }
         )
