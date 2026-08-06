@@ -1,22 +1,24 @@
 {
   "catalog": {
     "sorts": [
+      "most-popular",
       "intelligence-high-to-low"
     ],
-    "maximum_models": 150,
+    "maximum_models": 50,
     "minimum_context_length": 16384,
-    "selection_authority": "gpt-direct",
-    "local_scoring_allowed": false,
-    "optimizer_allowed": false
+    "popularity_period": "week",
+    "selection_authority": "expert-center-ortools-from-governance-top50",
+    "local_scoring_allowed": true,
+    "optimizer_allowed": true
   },
   "governance": {
     "gpt_model": "~openai/gpt-latest",
     "claude_model": "~anthropic/claude-opus-latest",
-    "claude_red_team_calls": 1,
-    "claude_advisory_only": true,
+    "claude_red_team_calls": 0,
+    "claude_advisory_only": false,
     "claude_gatekeeping_allowed": false,
-    "gpt_synthesis_calls": 1,
-    "governance_calls": 3,
+    "gpt_synthesis_calls": 0,
+    "governance_calls": 0,
     "model_loop_allowed": false
   },
   "execution": {
@@ -26,12 +28,14 @@
     "catalog_timeout_seconds": 30,
     "catalog_max_retries": 1,
     "model_timeout_seconds": 240,
-    "maximum_replacements": 2,
+    "maximum_replacements": 4,
     "parallel_workers": 4
   },
   "provider": {
-    "allow_fallbacks": false,
+    "allow_fallbacks": true,
     "require_parameters": true,
-    "explicit_provider_lock_required": true
+    "explicit_provider_lock_required": true,
+    "same_model_qualified_fallback_only": true,
+    "fallback_scope": "audited-qualified-provider-whitelist"
   }
 }
