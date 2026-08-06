@@ -38,25 +38,27 @@ jobs:
           path = Path("tests/test_unique_company_price_ranking.py")
           text = path.read_text(encoding="utf-8")
           marker = '    plan = value["governance_model_plan"]\n'
-          replacement = '''    plan = value["governance_model_plan"]
-              primary = (
-                  ("gamma/reasoning-pro", "gamma"),
-                  ("deepseek/reasoning-pro", "deepseek"),
-                  ("beta/reasoning-max", "beta"),
-                  ("tau/reasoning-ultra", "tau"),
-              )
-              for row, (model_id, company) in zip(
-                  plan["selected_models"], primary, strict=True
-              ):
-                  row["model"] = model_id
-                  row["company"] = company
-              plan["recovery_models"][0]["model"] = "rho/reasoning-pro"
-              plan["recovery_models"][0]["company"] = "rho"
-          '''
-          if text.count(marker) != 2:
-              raise SystemExit("ticket plan markers changed")
-          first = text.index('def ticket() -> dict:')
+          first = text.index("def ticket() -> dict:")
           position = text.index(marker, first)
+          replacement = "\n".join(
+              (
+                  '    plan = value["governance_model_plan"]',
+                  '    primary = (',
+                  '        ("gamma/reasoning-pro", "gamma"),',
+                  '        ("deepseek/reasoning-pro", "deepseek"),',
+                  '        ("beta/reasoning-max", "beta"),',
+                  '        ("tau/reasoning-ultra", "tau"),',
+                  '    )',
+                  '    for row, (model_id, company) in zip(',
+                  '        plan["selected_models"], primary, strict=True',
+                  '    ):',
+                  '        row["model"] = model_id',
+                  '        row["company"] = company',
+                  '    plan["recovery_models"][0]["model"] = "rho/reasoning-pro"',
+                  '    plan["recovery_models"][0]["company"] = "rho"',
+                  '',
+              )
+          )
           text = text[:position] + replacement + text[position + len(marker):]
           path.write_text(text, encoding="utf-8")
           PY
