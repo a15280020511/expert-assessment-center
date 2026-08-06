@@ -8,6 +8,10 @@ import math
 from pathlib import Path
 from typing import Any, Mapping
 
+PRIMARY_COUNT = 4
+WARM_RECOVERY_COUNT = 4
+MINIMUM_TOP50_CALLS = PRIMARY_COUNT + WARM_RECOVERY_COUNT
+
 
 def _load(path: Path) -> Mapping[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
@@ -38,18 +42,31 @@ def main() -> int:
     ticket = _load(root / "ticket.json")
     expected_cost = _optional_float(args.expected_cost_anomaly_usd)
     observed_cost = status.get("cost_anomaly_usd")
+
     if status.get("accepted") is not True:
         raise RuntimeError("ticket was not accepted")
     if status.get("runtime_version") != "v5-governance-top50-ortools-open-provider-runtime-1":
         raise RuntimeError("ticket was not admitted for the top-50 open-provider runtime")
+    if args.expected_calls < MINIMUM_TOP50_CALLS or args.expected_calls > 16:
+        raise RuntimeError("top-50 execution requires 8-16 approved total calls")
+    if args.expected_recovery_calls != WARM_RECOVERY_COUNT:
+        raise RuntimeError("top-50 execution requires exactly four warm recovery calls")
     if int(status.get("calls") or 0) != args.expected_calls:
         raise RuntimeError("admitted total-call ceiling changed")
-    if int(status.get("maximum_recovery_calls") or 0) != args.expected_recovery_calls:
-        raise RuntimeError("admitted recovery reserve changed")
-    if int(status.get("maximum_initial_calls") or 0) != args.expected_calls - args.expected_recovery_calls:
+    if int(status.get("maximum_recovery_calls") or 0) != WARM_RECOVERY_COUNT:
+        raise RuntimeError("admitted recovery reserve must equal four")
+    if int(status.get("selected_expert_count") or 0) != PRIMARY_COUNT:
+        raise RuntimeError("top-50 assignment must contain four primary experts")
+    if int(status.get("selected_recovery_count") or 0) != WARM_RECOVERY_COUNT:
+        raise RuntimeError("top-50 assignment must contain four warm recovery models")
+    if int(status.get("maximum_initial_calls") or 0) != args.expected_calls - WARM_RECOVERY_COUNT:
         raise RuntimeError("initial expert capacity is inconsistent")
-    if args.expected_calls - args.expected_recovery_calls < 3:
-        raise RuntimeError("ticket does not leave three initial experts")
+    if args.expected_calls - WARM_RECOVERY_COUNT < PRIMARY_COUNT:
+        raise RuntimeError("ticket does not leave capacity for four primary experts")
+    if status.get("optimizer") != "ortools-cp-sat":
+        raise RuntimeError("ticket optimizer is not OR-Tools CP-SAT")
+    if status.get("optimizer_optimality_proven") is not True:
+        raise RuntimeError("ticket does not prove OR-Tools optimality")
     if status.get("claude_mechanism_enabled") is not False:
         raise RuntimeError("Claude mechanism is not disabled in admission evidence")
     if int(status.get("governance_model_calls") or 0) != 0:
@@ -81,6 +98,9 @@ def main() -> int:
             {
                 "status": "PASS",
                 "calls": args.expected_calls,
+                "primary_experts": PRIMARY_COUNT,
+                "warm_recoveries": WARM_RECOVERY_COUNT,
+                "optimizer": "ortools-cp-sat",
                 "provider_routing_mode": "unrestricted-openrouter",
             }
         )
