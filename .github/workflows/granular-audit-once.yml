@@ -1,0 +1,227 @@
+name: Granular Expert Center Audit Once
+
+on:
+  push:
+    branches:
+      - audit/minimal-expert-runtime-20260806
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    if: ${{ github.actor == github.repository_owner }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout audit branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: audit/minimal-expert-runtime-20260806
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-runtime.txt
+            requirements-dev.txt
+
+      - name: Install pinned dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+
+      - name: Compile all Python
+        run: python -m compileall -q open-model-market tools tests
+
+      - name: Build static dependency and residue report
+        run: |
+          set -euo pipefail
+          mkdir -p audit-artifacts
+          python - <<'PY'
+          from __future__ import annotations
+          import ast
+          import hashlib
+          import json
+          import re
+          from collections import defaultdict, deque
+          from pathlib import Path
+
+          root = Path('.')
+          market = root / 'open-model-market'
+          workflows = root / '.github' / 'workflows'
+          modules = {p.stem: p for p in market.glob('*.py')}
+          edges: dict[str, set[str]] = {name: set() for name in modules}
+          syntax_errors = []
+          for name, path in modules.items():
+              try:
+                  tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+              except SyntaxError as exc:
+                  syntax_errors.append({'path': str(path), 'error': str(exc)})
+                  continue
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Import):
+                      for alias in node.names:
+                          target = alias.name.split('.')[0]
+                          if target in modules:
+                              edges[name].add(target)
+                  elif isinstance(node, ast.ImportFrom) and node.module:
+                      target = node.module.split('.')[0]
+                      if target in modules:
+                          edges[name].add(target)
+
+          workflow_roots: set[str] = set()
+          workflow_python_commands = []
+          for wf in workflows.glob('*.yml'):
+              text = wf.read_text(encoding='utf-8')
+              for match in re.finditer(r'python(?:\s+-m)?\s+([A-Za-z0-9_./-]+\.py)', text):
+                  path = match.group(1)
+                  workflow_python_commands.append({'workflow': wf.name, 'path': path})
+                  stem = Path(path).stem
+                  if stem in modules:
+                      workflow_roots.add(stem)
+
+          explicit_roots = {
+              'v5_price_ranked_production_ticket',
+              'v5_price_ranked_issue_ticket',
+              'v5_price_ranked_ticket_gate',
+              'v5_price_ranked_execution_auditor',
+              'v5_price_ranked_independent_revalidation',
+              'publish_report',
+              'v5_price_ranked_artifact_manifest',
+              'v5_admission_lock',
+          }
+          production_roots = sorted(workflow_roots | (explicit_roots & set(modules)))
+          reachable: set[str] = set()
+          queue = deque(production_roots)
+          while queue:
+              current = queue.popleft()
+              if current in reachable:
+                  continue
+              reachable.add(current)
+              queue.extend(sorted(edges.get(current, ())))
+
+          unreachable = sorted(set(modules) - reachable)
+          selection_terms = re.compile(
+              r'(selector|catalog|market|price_rank|candidate|qualification|claude_red_team|gpt_expert)',
+              re.IGNORECASE,
+          )
+          selection_residue = []
+          for name, path in modules.items():
+              text = path.read_text(encoding='utf-8')
+              if selection_terms.search(path.name) or re.search(
+                  r'model_selection|rank.*model|eligible_models|fetch_catalog', text, re.IGNORECASE
+              ):
+                  selection_residue.append({
+                      'module': name,
+                      'path': str(path),
+                      'reachable_from_production': name in reachable,
+                      'lines': len(text.splitlines()),
+                  })
+
+          hashes: dict[str, list[str]] = defaultdict(list)
+          for path in [*market.glob('*.py'), *workflows.glob('*.yml')]:
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              hashes[digest].append(str(path))
+          exact_duplicates = [paths for paths in hashes.values() if len(paths) > 1]
+
+          large_files = []
+          for path in market.glob('*.py'):
+              lines = len(path.read_text(encoding='utf-8').splitlines())
+              if lines >= 500:
+                  large_files.append({'path': str(path), 'lines': lines})
+          large_files.sort(key=lambda row: (-row['lines'], row['path']))
+
+          workflow_residue = []
+          residue_terms = re.compile(
+              r'(free-model|paid-candidate|price-ranked-full-load|price-ranked-paid-candidate|model-qualification)',
+              re.IGNORECASE,
+          )
+          for wf in workflows.glob('*.yml'):
+              if residue_terms.search(wf.name):
+                  workflow_residue.append(wf.name)
+
+          reverse: dict[str, list[str]] = defaultdict(list)
+          for source, targets in edges.items():
+              for target in targets:
+                  reverse[target].append(source)
+
+          report = {
+              'baseline_commit': __import__('subprocess').check_output(
+                  ['git', 'rev-parse', 'HEAD'], text=True
+              ).strip(),
+              'python_module_count': len(modules),
+              'production_roots': production_roots,
+              'production_reachable_module_count': len(reachable),
+              'production_reachable_modules': sorted(reachable),
+              'production_unreachable_module_count': len(unreachable),
+              'production_unreachable_modules': unreachable,
+              'selection_residue': sorted(selection_residue, key=lambda row: row['path']),
+              'selection_residue_count': len(selection_residue),
+              'workflow_residue': sorted(workflow_residue),
+              'workflow_python_commands': workflow_python_commands,
+              'exact_duplicates': exact_duplicates,
+              'large_files': large_files,
+              'syntax_errors': syntax_errors,
+              'imports': {key: sorted(value) for key, value in sorted(edges.items())},
+              'imported_by': {key: sorted(value) for key, value in sorted(reverse.items())},
+          }
+          Path('audit-artifacts/static-audit.json').write_text(
+              json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          print(json.dumps({
+              'python_module_count': report['python_module_count'],
+              'production_reachable_module_count': report['production_reachable_module_count'],
+              'production_unreachable_module_count': report['production_unreachable_module_count'],
+              'selection_residue_count': report['selection_residue_count'],
+              'workflow_residue': report['workflow_residue'],
+              'large_files': report['large_files'][:10],
+              'syntax_errors': report['syntax_errors'],
+          }, ensure_ascii=False, indent=2))
+          PY
+
+      - name: Run Ruff and save report
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          ruff check open-model-market tools tests --output-format=json > audit-artifacts/ruff.json
+
+      - name: Run full zero-call unit test suite
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p 'test_*.py' -v 2>&1 | tee audit-artifacts/unittest.log
+
+      - name: Record repository size and line inventory
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          rows=[]
+          for base in ('open-model-market','tests','.github/workflows','tools'):
+              for path in Path(base).glob('*'):
+                  if path.is_file():
+                      text=path.read_text(encoding='utf-8', errors='replace')
+                      rows.append({'path':str(path),'lines':len(text.splitlines()),'bytes':path.stat().st_size})
+          rows.sort(key=lambda row:(-row['lines'],row['path']))
+          Path('audit-artifacts/file-inventory.json').write_text(
+              json.dumps(rows,ensure_ascii=False,indent=2)+'\n',encoding='utf-8'
+          )
+          print(f'files={len(rows)} lines={sum(row["lines"] for row in rows)}')
+          PY
+
+      - name: Upload audit evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: granular-expert-center-audit-${{ github.run_id }}
+          path: audit-artifacts/
+          if-no-files-found: error
+          retention-days: 14
