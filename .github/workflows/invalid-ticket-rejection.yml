@@ -35,14 +35,14 @@ jobs:
         id: ticket
         continue-on-error: true
         run: |
-          python open-model-market/v5_issue_ticket.py prepare \
+          python open-model-market/v5_price_ranked_issue_ticket.py prepare \
             --event-path "$GITHUB_EVENT_PATH" \
             --output-dir invalid-ticket-artifacts
 
       - name: Render invalid-ticket terminal receipt
         if: steps.ticket.outcome == 'success' && steps.ticket.outputs.accepted != 'true'
         run: |
-          python open-model-market/v5_issue_ticket.py render \
+          python open-model-market/v5_price_ranked_issue_ticket.py render \
             --phase rejected \
             --output-dir invalid-ticket-artifacts \
             --run-url "$RUN_URL" > invalid-ticket-rejection.md
