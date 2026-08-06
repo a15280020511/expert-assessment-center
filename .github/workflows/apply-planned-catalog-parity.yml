@@ -28,65 +28,51 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          catalog = Path("open-model-market/v5_catalog_view.py")
-          text = catalog.read_text(encoding="utf-8")
-          old = "MAX_VISIBLE_MODELS = 150"
-          assert old in text
-          catalog.write_text(text.replace(old, "MAX_VISIBLE_MODELS = 1000", 1), encoding="utf-8")
+          catalog_path = Path("open-model-market/v5_catalog_view.py")
+          text = catalog_path.read_text(encoding="utf-8")
+          assert "MAX_VISIBLE_MODELS = 150" in text
+          catalog_path.write_text(
+              text.replace("MAX_VISIBLE_MODELS = 150", "MAX_VISIBLE_MODELS = 1000", 1),
+              encoding="utf-8",
+          )
 
-          endpoint = Path("open-model-market/v5_endpoint_catalog.py")
-          text = endpoint.read_text(encoding="utf-8")
+          endpoint_path = Path("open-model-market/v5_endpoint_catalog.py")
+          text = endpoint_path.read_text(encoding="utf-8")
           text = text.replace("    GOVERNANCE_COMPANIES,\n", "", 1)
           text = text.replace("from v5_model_company import canonical_model_company\n", "", 1)
-          old = '''    expert_model_ids = {
-              str(model.id)
-              for model in eligible
-              if canonical_model_company(str(model.id)) not in GOVERNANCE_COMPANIES
-          }
-          zdr_keys = _fetch_zdr_endpoint_keys(run) if expert_model_ids else frozenset()
-          '''
-          new = '''    zdr_model_ids = {str(model.id) for model in eligible}
-          zdr_keys = _fetch_zdr_endpoint_keys(run)
-          '''
-          assert old in text
-          text = text.replace(old, new, 1)
-          old = '''        if model_id in expert_model_ids:
-              payload = _filter_model_payload_to_zdr(model_id, payload, zdr_keys)
-          '''
-          new = '''        if model_id in zdr_model_ids:
-              payload = _filter_model_payload_to_zdr(model_id, payload, zdr_keys)
-          '''
-          assert old in text
-          endpoint.write_text(text.replace(old, new, 1), encoding="utf-8")
+          start = text.index("    expert_model_ids = {")
+          end = text.index("\n\n    timeout =", start)
+          text = (
+              text[:start]
+              + "    zdr_model_ids = {str(model.id) for model in eligible}\n"
+              + "    zdr_keys = _fetch_zdr_endpoint_keys(run)"
+              + text[end:]
+          )
+          assert "if model_id in expert_model_ids:" in text
+          text = text.replace(
+              "if model_id in expert_model_ids:",
+              "if model_id in zdr_model_ids:",
+              1,
+          )
+          endpoint_path.write_text(text, encoding="utf-8")
 
-          pipeline = Path("open-model-market/v5_price_ranked_pipeline.py")
-          text = pipeline.read_text(encoding="utf-8")
-          old = '''from v5_catalog_view import (
-              MINIMUM_EXPERT_COMPLETION_TOKENS,
-          '''
-          new = '''from v5_catalog_view import (
-              CatalogViewError,
-              MINIMUM_EXPERT_COMPLETION_TOKENS,
-          '''
-          assert old in text
-          text = text.replace(old, new, 1)
-          old = 'parser.add_argument("--ranking-limit", type=int, default=150)'
-          assert old in text
-          text = text.replace(old, 'parser.add_argument("--ranking-limit", type=int, default=1000)', 1)
-          old = '''def _catalog_state(
-              args: argparse.Namespace,
-              run: Any,
-              task_envelope: Mapping[str, Any],
-          ) -> tuple[Mapping[str, Any], str, str]:
-              required_context = int(task_envelope["required_context_tokens"])
-              models, catalog_source = model_market.fetch_catalog(run)
-              ranked = eligible_models(
-                  models,
-                  requested_context=required_context,
-                  maximum_models=int(args.ranking_limit),
-              )
-          '''
-          new = '''def _catalog_state(
+          pipeline_path = Path("open-model-market/v5_price_ranked_pipeline.py")
+          text = pipeline_path.read_text(encoding="utf-8")
+          assert "    MINIMUM_EXPERT_COMPLETION_TOKENS,\n" in text
+          text = text.replace(
+              "    MINIMUM_EXPERT_COMPLETION_TOKENS,\n",
+              "    CatalogViewError,\n    MINIMUM_EXPERT_COMPLETION_TOKENS,\n",
+              1,
+          )
+          assert 'parser.add_argument("--ranking-limit", type=int, default=150)' in text
+          text = text.replace(
+              'parser.add_argument("--ranking-limit", type=int, default=150)',
+              'parser.add_argument("--ranking-limit", type=int, default=1000)',
+              1,
+          )
+          start = text.index("def _catalog_state(")
+          end = text.index("\ndef _catalog_snapshot(", start)
+          function = '''def _catalog_state(
               args: argparse.Namespace,
               run: Any,
               task_envelope: Mapping[str, Any],
@@ -110,44 +96,81 @@ jobs:
                   if isinstance(row, Mapping)
               ]
               if not planned_ids or len(planned_ids) != len(set(planned_ids)):
-                  raise CatalogViewError("governance plan model identities are missing or repeated")
+                  raise CatalogViewError(
+                      "governance plan model identities are missing or repeated"
+                  )
               eligible_by_id = {
                   str(getattr(model, "id", "") or ""): model for model in eligible
               }
-              missing = [model_id for model_id in planned_ids if model_id not in eligible_by_id]
+              missing = [
+                  model_id for model_id in planned_ids if model_id not in eligible_by_id
+              ]
               if missing:
                   raise CatalogViewError(
-                      "governance-planned models are not live-eligible: " + ", ".join(missing)
+                      "governance-planned models are not live-eligible: "
+                      + ", ".join(missing)
                   )
               ranked = [eligible_by_id[model_id] for model_id in planned_ids]
-          '''
-          assert old in text
-          text = text.replace(old, new, 1)
-          old = '''            "model_substitution_allowed": False,
-                      "provider_resolution_only": True,
-          '''
-          new = '''            "model_substitution_allowed": False,
+              if args.endpoint_file:
+                  payloads = _load_mapping(Path(args.endpoint_file))
+                  endpoint_source = f"fixture:{args.endpoint_file}"
+                  synthetic = False
+              elif run.dry_run and run.catalog_file:
+                  payloads = {}
+                  endpoint_source = "synthetic-fixture-endpoints"
+                  synthetic = True
+              else:
+                  payloads = fetch_live_endpoint_payloads(
+                      ranked,
+                      run,
+                      maximum_models=len(ranked),
+                  )
+                  endpoint_source = "openrouter-live-exact-endpoints"
+                  synthetic = False
+              catalog = dict(
+                  compact_endpoint_catalog(
+                      ranked,
+                      payloads,
+                      allow_synthetic_fixture=synthetic,
+                      required_context_tokens=required_context,
+                      minimum_completion_tokens=MINIMUM_EXPERT_COMPLETION_TOKENS,
+                  )
+              )
+              catalog.update(
+                  {
+                      "selection_authority": "decision-system-governance",
+                      "model_selection_performed_locally": False,
+                      "model_reranking_performed_locally": False,
+                      "model_substitution_allowed": False,
                       "provider_resolution_only": True,
                       "catalog_scope": "governance-plan-models-only",
                       "planned_model_ids": planned_ids,
+                  }
+              )
+              return catalog, catalog_source, endpoint_source
+
           '''
-          assert old in text
-          text = text.replace(old, new, 1)
-          old = '''    catalog, catalog_source, endpoint_source = _catalog_state(
+          text = text[:start] + function + text[end + 1:]
+          old_call = """    catalog, catalog_source, endpoint_source = _catalog_state(
                   args, run, task_envelope
               )
-          '''
-          new = '''    catalog, catalog_source, endpoint_source = _catalog_state(
+          """
+          new_call = """    catalog, catalog_source, endpoint_source = _catalog_state(
                   args, run, task_envelope, plan
               )
-          '''
-          assert old in text
-          pipeline.write_text(text.replace(old, new, 1), encoding="utf-8")
+          """
+          assert old_call in text
+          pipeline_path.write_text(text.replace(old_call, new_call, 1), encoding="utf-8")
 
-          test_endpoint = Path("tests/test_v5_endpoint_catalog.py")
-          text = test_endpoint.read_text(encoding="utf-8")
-          old_start = text.index("    def test_governance_models_are_not_filtered_by_expert_zdr_policy")
-          old_end = text.index("    def test_missing_zdr_inventory_fails_closed_before_endpoint_fetch", old_start)
+          test_path = Path("tests/test_v5_endpoint_catalog.py")
+          text = test_path.read_text(encoding="utf-8")
+          start = text.index(
+              "    def test_governance_models_are_not_filtered_by_expert_zdr_policy"
+          )
+          end = text.index(
+              "    def test_missing_zdr_inventory_fails_closed_before_endpoint_fetch",
+              start,
+          )
           replacement = '''    def test_all_planned_models_are_filtered_by_zdr_policy(self):
               models = [
                   SimpleNamespace(id="openai/gpt-latest"),
@@ -187,14 +210,14 @@ jobs:
                       result[model.id]["data"]["endpoints"],
                       [{"tag": "direct"}],
                   )
-                  self.assertTrue(result[model.id]["zdr_endpoint_filter"]["required"])
+                  self.assertTrue(
+                      result[model.id]["zdr_endpoint_filter"]["required"]
+                  )
 
           '''
-          test_endpoint.write_text(
-              text[:old_start] + replacement + text[old_end:], encoding="utf-8"
-          )
+          test_path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
 
-          Path("tests/test_v5_planned_catalog_scope.py").write_text('''from __future__ import annotations
+          new_test = '''from __future__ import annotations
 
           import sys
           import unittest
@@ -239,7 +262,7 @@ jobs:
               return {"selected_models": rows[:4], "recovery_models": rows[4:]}
 
           class PlannedCatalogScopeTests(unittest.TestCase):
-              def test_only_governance_planned_models_are_fetched_in_plan_order(self) -> None:
+              def test_only_planned_models_are_fetched_in_plan_order(self) -> None:
                   models = {
                       model_id: model(model_id, rank)
                       for model_id, rank in zip(MODEL_IDS, RANKS, strict=True)
@@ -249,17 +272,25 @@ jobs:
 
                   def fake_fetch_endpoints(ranked, _run, **_kwargs):
                       captured.extend(row.id for row in ranked)
-                      return {row.id: {"data": {"endpoints": []}} for row in ranked}
+                      return {
+                          row.id: {"data": {"endpoints": []}} for row in ranked
+                      }
 
                   args = SimpleNamespace(ranking_limit=1000, endpoint_file=None)
                   run = SimpleNamespace(dry_run=False, catalog_file=None)
                   envelope = {"required_context_tokens": 16384}
                   with patch.object(
-                      pipeline.model_market, "fetch_catalog", return_value=(models, "live")
+                      pipeline.model_market,
+                      "fetch_catalog",
+                      return_value=(models, "live"),
                   ), patch.object(
-                      pipeline, "fetch_live_endpoint_payloads", side_effect=fake_fetch_endpoints
+                      pipeline,
+                      "fetch_live_endpoint_payloads",
+                      side_effect=fake_fetch_endpoints,
                   ), patch.object(
-                      pipeline, "compact_endpoint_catalog", return_value={"endpoints": []}
+                      pipeline,
+                      "compact_endpoint_catalog",
+                      return_value={"endpoints": []},
                   ):
                       catalog, source, endpoint_source = pipeline._catalog_state(
                           args, run, envelope, plan()
@@ -268,31 +299,45 @@ jobs:
                   self.assertEqual(captured, MODEL_IDS)
                   self.assertNotIn("unused/cheap", captured)
                   self.assertEqual(source, "live")
-                  self.assertEqual(endpoint_source, "openrouter-live-exact-endpoints")
-                  self.assertEqual(catalog["catalog_scope"], "governance-plan-models-only")
+                  self.assertEqual(
+                      endpoint_source, "openrouter-live-exact-endpoints"
+                  )
+                  self.assertEqual(
+                      catalog["catalog_scope"], "governance-plan-models-only"
+                  )
                   self.assertEqual(catalog["planned_model_ids"], MODEL_IDS)
 
               def test_missing_planned_model_fails_closed(self) -> None:
                   models = {
                       model_id: model(model_id, rank)
-                      for model_id, rank in zip(MODEL_IDS[:-1], RANKS[:-1], strict=True)
+                      for model_id, rank in zip(
+                          MODEL_IDS[:-1], RANKS[:-1], strict=True
+                      )
                   }
                   args = SimpleNamespace(ranking_limit=1000, endpoint_file=None)
                   run = SimpleNamespace(dry_run=False, catalog_file=None)
                   envelope = {"required_context_tokens": 16384}
                   with patch.object(
-                      pipeline.model_market, "fetch_catalog", return_value=(models, "live")
+                      pipeline.model_market,
+                      "fetch_catalog",
+                      return_value=(models, "live"),
                   ):
-                      with self.assertRaisesRegex(CatalogViewError, "perplexity/sonar-pro"):
+                      with self.assertRaisesRegex(
+                          CatalogViewError, "perplexity/sonar-pro"
+                      ):
                           pipeline._catalog_state(args, run, envelope, plan())
 
-              def test_runtime_default_matches_governance_rank_ceiling(self) -> None:
+              def test_default_matches_governance_rank_ceiling(self) -> None:
                   args = pipeline.build_parser().parse_args(["--task", "test"])
                   self.assertEqual(args.ranking_limit, 1000)
 
           if __name__ == "__main__":
               unittest.main()
-          '''.replace("\n          ", "\n").lstrip(), encoding="utf-8")
+          '''
+          Path("tests/test_v5_planned_catalog_scope.py").write_text(
+              new_test.replace("\n          ", "\n").lstrip(),
+              encoding="utf-8",
+          )
 
           Path(".github/workflows/apply-planned-catalog-parity.yml").unlink()
           PY
