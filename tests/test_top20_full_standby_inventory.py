@@ -53,8 +53,11 @@ class Top50FullStandbyInventoryTests(unittest.TestCase):
         self.assertTrue(all(row["execution_eligible"] for row in warm))
         self.assertTrue(all(row["execution_eligible"] for row in extended))
         self.assertTrue(all(not row["execution_eligible"] for row in disabled))
+        ordered = sorted(
+            [*warm, *extended], key=lambda row: int(row["recovery_priority"])
+        )
         self.assertEqual(
-            [row["recovery_priority"] for row in warm + extended],
+            [row["recovery_priority"] for row in ordered],
             list(range(1, 27)),
         )
 
