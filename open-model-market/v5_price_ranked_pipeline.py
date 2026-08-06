@@ -99,6 +99,7 @@ def _runtime_config(args: Any, *, total_calls: int, recovery_calls: int, plan: M
     value.update(
         {
             "provider_resolution_authority": "openrouter-unrestricted",
+            "provider_lock_required": False,
             "orchestration_library": "networkx",
             "optimizer_library": "ortools-cp-sat" if _top50(plan) else None,
         }
@@ -122,6 +123,37 @@ def _zero_local_governance_artifacts(output: Path, plan: Mapping[str, Any], mate
     result["provider_materialization"] = dict(materialization_audit)
     write_json(output / "v5-governance-result.json", result)
     return ledger
+
+
+def _execute(
+    *,
+    args: Any,
+    run: Any,
+    output: Path,
+    task: str,
+    graph: Any,
+    limits: Any,
+    total_calls: int,
+    recovery_calls: int,
+    expert_call_fn: Any | None,
+) -> dict[str, Any]:
+    config = _legacy.RuntimeConfig(
+        total_call_limit=total_calls,
+        recovery_call_limit=recovery_calls,
+        cost_anomaly_usd=args.cost_anomaly_usd,
+        tools_allowed=False,
+        live_catalog_required=bool(args.require_live_catalog),
+        provider_lock_required=False,
+    )
+    runtime = _legacy.build_production_runtime(config)
+    return runtime.execute_graph(
+        graph,
+        run,
+        task,
+        call_fn=expert_call_fn,
+        output_dir=output,
+        limits=limits,
+    )
 
 
 def _request_audit(output: Path, *, approved_total_calls: int) -> None:
@@ -187,6 +219,7 @@ _legacy._catalog_state = _catalog_state
 _legacy._catalog_snapshot = _catalog_snapshot
 _legacy._runtime_config = _runtime_config
 _legacy._zero_local_governance_artifacts = _zero_local_governance_artifacts
+_legacy._execute = _execute
 _legacy._request_audit = _request_audit
 _legacy._finalize_result = _finalize_result
 
