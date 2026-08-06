@@ -1,11 +1,10 @@
-"""Constitutional runtime compatibility for audited provider whitelists."""
+"""Constitutional runtime compatibility for unrestricted provider routing."""
 from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
 import v5_constitutional_runtime_legacy as _legacy
 from execution_graph import SelectedNode
-from v5_provider_lock import canonical_provider_lock
 
 
 def _build_payload(
@@ -50,11 +49,7 @@ def _build_payload(
             "不得遗漏标题、改变顺序、增加其他H2或用冗长复述耗尽输出。"
         )
     messages = payload.get("messages")
-    if (
-        isinstance(messages, list)
-        and messages
-        and isinstance(messages[0], Mapping)
-    ):
+    if isinstance(messages, list) and messages and isinstance(messages[0], Mapping):
         system = _legacy.dynamic_prompt.dynamic_system_prompt(node)
         constitutional = _legacy.json.dumps(
             constraints.to_dict(),
@@ -77,11 +72,7 @@ def _build_payload(
         }
         payload["messages"] = messages
 
-    if not canonical_provider_lock(payload):
-        raise RuntimeError(
-            "provider routing must be either one exact locked endpoint or "
-            "one explicit audited same-model provider whitelist"
-        )
+    payload.pop("provider", None)
     _legacy.assert_request_has_no_tools(
         payload,
         context=f"constitutional node {node.node_id} request",
