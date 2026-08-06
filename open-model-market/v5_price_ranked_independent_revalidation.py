@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Independently revalidate an uploaded governance-plan production artifact."""
+"""Independently revalidate an uploaded top-50 OR-Tools production artifact."""
 from __future__ import annotations
 
 import argparse
@@ -12,8 +12,9 @@ from v5_governance_model_plan import validate_governance_model_plan
 from v5_price_ranked_execution_auditor import RUNTIME_VERSION, audit
 from v5_price_ranked_support import load_mapping
 
-SCHEMA_VERSION = "v5-independent-artifact-revalidation-3"
-AUTHORITY = "decision-system-governance"
+SCHEMA_VERSION = "v5-independent-artifact-revalidation-4-open-provider"
+POOL_AUTHORITY = "decision-system-governance"
+ASSIGNMENT_AUTHORITY = "expert-assessment-center-ortools"
 
 
 def _expected_digest(value: str) -> str:
@@ -48,13 +49,20 @@ def _check_identity(
     maximum_calls: int,
     failures: list[str],
 ) -> None:
+    top50 = plan.get("selected_from_top50_reasoning_pool_only") is True
+    expected_authority = ASSIGNMENT_AUTHORITY if top50 else POOL_AUTHORITY
     checks = (
         (str(runtime.get("source_commit") or "") == str(expected_sha), "artifact source commit does not match authoritative production SHA"),
         (str(runtime.get("source_run_id") or "") == str(expected_run_id), "artifact source run id does not match current workflow run"),
         (int(ticket_status.get("calls") or 0) == int(maximum_calls), "artifact ticket call ceiling differs from admitted call ceiling"),
-        (runtime.get("selection_authority") == AUTHORITY, "artifact runtime selection authority is not governance"),
-        (runtime.get("model_selection_performed_locally") is False, "artifact runtime reports local model selection"),
+        (runtime.get("candidate_pool_authority") == POOL_AUTHORITY, "artifact runtime candidate-pool authority mismatch"),
+        (runtime.get("selection_authority") == expected_authority, "artifact runtime selection authority mismatch"),
+        (runtime.get("model_selection_performed_locally") is top50, "artifact runtime model-assignment evidence mismatch"),
         (runtime.get("governance_model_plan_sha256") == plan.get("plan_sha256"), "artifact runtime model plan digest mismatch"),
+        (runtime.get("provider_routing_mode") == "unrestricted-openrouter", "artifact runtime provider routing is not unrestricted"),
+        (runtime.get("provider_restrictions_applied") is False, "artifact runtime reports Provider restrictions"),
+        (runtime.get("unrestricted_provider_fallback_allowed") is True, "artifact runtime does not allow unrestricted Provider fallback"),
+        (runtime.get("model_substitution_allowed") is False, "artifact runtime permits model substitution"),
     )
     for condition, message in checks:
         _record(failures, condition, message)
@@ -67,16 +75,8 @@ def _ledger_state(
 ) -> tuple[dict[str, Any], float]:
     summary = ledger.get("summary")
     summary = dict(summary) if isinstance(summary, Mapping) else {}
-    _record(
-        failures,
-        int(summary.get("call_count") or 0) <= int(maximum_calls),
-        "artifact call count exceeds admitted ceiling",
-    )
-    _record(
-        failures,
-        int(summary.get("governance_calls_in_expert_center") or 0) == 0,
-        "artifact reports governance model calls in expert center",
-    )
+    _record(failures, int(summary.get("call_count") or 0) <= int(maximum_calls), "artifact call count exceeds admitted ceiling")
+    _record(failures, int(summary.get("governance_calls_in_expert_center") or 0) == 0, "artifact reports governance model calls in expert center")
     actual_cost = float(summary.get("provider_actual_cost_usd") or 0.0)
     _record(failures, actual_cost >= 0, "artifact actual cost is invalid")
     return summary, actual_cost
@@ -101,11 +101,7 @@ def revalidate(
 
     observed_digest = sha256_file(archive)
     expected_digest = _expected_digest(expected_artifact_digest)
-    _record(
-        failures,
-        not expected_digest or observed_digest == expected_digest,
-        "downloaded artifact archive digest does not match GitHub digest",
-    )
+    _record(failures, not expected_digest or observed_digest == expected_digest, "downloaded artifact archive digest does not match GitHub digest")
     plan = _validated_plan(ticket, plan_file, failures)
     _check_identity(
         runtime,
@@ -126,20 +122,23 @@ def revalidate(
     if diagnosis.get("status") != "PASS":
         failures.extend(str(row) for row in diagnosis.get("failures", []))
     failures = list(dict.fromkeys(failures))
-    advisory = (
-        None if cost_advisory_usd is None else float(cost_advisory_usd)
-    )
+    advisory = None if cost_advisory_usd is None else float(cost_advisory_usd)
+    top50 = plan.get("selected_from_top50_reasoning_pool_only") is True
     return {
         "schema_version": SCHEMA_VERSION,
         "status": "PASS" if not failures else "FAIL",
         "runtime_version": RUNTIME_VERSION,
         "recomputed_from_primitive_evidence": True,
         "paid_acceptance_verdict_used_as_source": False,
-        "selection_authority": AUTHORITY,
+        "candidate_pool_authority": POOL_AUTHORITY,
+        "selection_authority": ASSIGNMENT_AUTHORITY if top50 else POOL_AUTHORITY,
         "governance_model_plan_sha256": plan.get("plan_sha256"),
-        "model_selection_performed_locally": False,
+        "model_selection_performed_locally": top50,
         "model_reranking_performed_locally": False,
         "model_substitution_allowed": False,
+        "provider_routing_mode": "unrestricted-openrouter",
+        "provider_restrictions_applied": False,
+        "unrestricted_provider_fallback_allowed": True,
         "expected_sha": expected_sha,
         "observed_source_commit": runtime.get("source_commit"),
         "expected_run_id": str(expected_run_id),
@@ -150,9 +149,7 @@ def revalidate(
         "observed_calls": int(summary.get("call_count") or 0),
         "actual_cost_usd": actual_cost,
         "cost_advisory_usd": advisory,
-        "cost_advisory_exceeded": bool(
-            advisory is not None and actual_cost > advisory + 1e-12
-        ),
+        "cost_advisory_exceeded": bool(advisory is not None and actual_cost > advisory + 1e-12),
         "cost_threshold_can_invalidate_result": False,
         "claude_mechanism_enabled": False,
         "governance_model_calls_in_expert_center": 0,
@@ -181,10 +178,7 @@ def main() -> int:
         archive=Path(args.archive),
         expected_artifact_digest=args.expected_artifact_digest,
     )
-    Path(args.output).write_text(
-        json.dumps(result, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    Path(args.output).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result["status"] == "PASS" else 1
 

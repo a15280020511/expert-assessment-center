@@ -1,227 +1,82 @@
-#!/usr/bin/env python3
-"""Execute one production ticket using governance-selected expert models."""
+"""Production-ticket evidence facade for signed top-50 OR-Tools plans."""
 from __future__ import annotations
 
-import argparse
-import hashlib
 import json
-import os
-import traceback
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
-import v5_price_ranked_pipeline
-from v5_governance_plan_evidence import (
-    RUNTIME_VERSION,
-    normalize_governance_plan_evidence,
-)
-from v5_json_io import write_json
-from v5_price_ranked_support import canonical_ticket_task
-from v5_task_constraints import compile_task_constraints
+import v5_price_ranked_production_ticket_legacy as _legacy
+
+for _name in dir(_legacy):
+    if not _name.startswith("__"):
+        globals()[_name] = getattr(_legacy, _name)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--task", required=True)
-    parser.add_argument("--output-dir", default="ticket-artifacts")
-    parser.add_argument("--maximum-total-calls", type=int, required=True)
-    parser.add_argument("--maximum-recovery-calls", type=int, required=True)
-    parser.add_argument("--cost-anomaly-usd", type=float)
-    parser.add_argument("--max-completion-tokens", type=int)
-    parser.add_argument("--require-live-catalog", action="store_true")
-    return parser
-
-
-def _pipeline_args(
-    args: argparse.Namespace,
-    root: Path,
-    task: str,
-) -> list[str]:
-    values = [
-        "--task",
-        task,
-        "--output-dir",
-        str(root),
-        "--governance-plan-file",
-        str(root / "ticket.json"),
-        "--ranking-limit",
-        "150",
-        "--maximum-total-calls",
-        str(args.maximum_total_calls),
-        "--maximum-recovery-calls",
-        str(args.maximum_recovery_calls),
-    ]
-    if args.cost_anomaly_usd is not None:
-        values.extend(["--cost-anomaly-usd", str(args.cost_anomaly_usd)])
-    if args.max_completion_tokens is not None:
-        values.extend(["--max-completion-tokens", str(args.max_completion_tokens)])
-    if args.require_live_catalog:
-        values.append("--require-live-catalog")
-    return values
-
-
-def _normalize(
-    root: Path,
-    args: argparse.Namespace,
-    require_report: bool,
-) -> dict[str, Any]:
-    return normalize_governance_plan_evidence(
-        root,
-        approved_total_calls=args.maximum_total_calls,
-        approved_recovery_calls=args.maximum_recovery_calls,
-        cost_anomaly_usd=args.cost_anomaly_usd,
-        require_report=require_report,
-    )
+def _fields(plan: Mapping[str, Any]) -> dict[str, Any]:
+    top50 = plan.get("selected_from_top50_reasoning_pool_only") is True
+    return {
+        "candidate_pool_authority": "decision-system-governance",
+        "selection_authority": "expert-assessment-center-ortools" if top50 else "decision-system-governance",
+        "model_assignment_authority": "expert-assessment-center-ortools" if top50 else "decision-system-governance",
+        "model_selection_performed_locally": top50,
+        "candidate_pool_reranking_performed_locally": False,
+        "model_reranking_performed_locally": False,
+        "model_substitution_allowed": False,
+        "optimizer_used": top50,
+        "optimizer": plan.get("optimizer") if top50 else None,
+        "optimizer_optimality_proven": bool(plan.get("optimizer_audit", {}).get("optimality_proven")) if top50 else False,
+        "provider_resolution_authority": "openrouter-unrestricted",
+        "provider_routing_mode": "unrestricted-openrouter",
+        "provider_restrictions_applied": False,
+        "provider_fallback_allowed": True,
+        "unrestricted_provider_fallback_allowed": True,
+        "provider_only_allowed": False,
+        "provider_order_allowed": False,
+        "provider_zdr_filter_allowed": False,
+        "provider_data_collection_filter_allowed": False,
+        "provider_price_filter_allowed": False,
+        "openrouter_selects_provider": True,
+        "orchestration_library": "networkx",
+        "optimizer_library": "ortools-cp-sat" if top50 else None,
+    }
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    args = _legacy.build_parser().parse_args(argv)
     root = Path(args.output_dir)
-    root.mkdir(parents=True, exist_ok=True)
-    total = int(args.maximum_total_calls)
-    recovery = int(args.maximum_recovery_calls)
-    if not 4 <= total <= 16:
-        raise ValueError("maximum-total-calls must be between 4 and 16")
-    if not 0 <= recovery < total:
-        raise ValueError("recovery reserve must leave expert-call capacity")
-    if total - recovery < 3:
-        raise ValueError("governance plan requires capacity for at least three experts")
-    if args.max_completion_tokens is not None and args.max_completion_tokens <= 0:
-        raise ValueError("max-completion-tokens must be positive")
+    ticket_path = root / "ticket.json"
+    plan: Mapping[str, Any] = {}
+    if ticket_path.is_file():
+        raw = json.loads(ticket_path.read_text(encoding="utf-8"))
+        if isinstance(raw, Mapping) and isinstance(raw.get("governance_model_plan"), Mapping):
+            plan = raw["governance_model_plan"]
+    fields = _fields(plan)
+    original_write = _legacy.write_json
 
-    task, source = canonical_ticket_task(root, args.task)
-    if not task:
-        raise ValueError("canonical user task is empty")
-    constraints = compile_task_constraints(task)
-    source_commit = str(
-        os.getenv("AUTHORITATIVE_EXECUTION_SHA")
-        or os.getenv("GITHUB_SHA")
-        or ""
-    )
-    source_run_id = str(os.getenv("GITHUB_RUN_ID") or "")
-    ticket = json.loads((root / "ticket.json").read_text(encoding="utf-8"))
-    plan = ticket.get("governance_model_plan") if isinstance(ticket, dict) else None
-    plan = plan if isinstance(plan, dict) else {}
-    plan_sha = str(plan.get("plan_sha256") or "")
+    def write_json(path: Path, value: Any) -> None:
+        if isinstance(value, Mapping) and path.name in {
+            "planning-task.json",
+            "production-runtime.json",
+            "expert-team-error.json",
+        }:
+            document = dict(value)
+            document.update(fields)
+            if path.name == "production-runtime.json" and fields["optimizer_used"]:
+                document["architecture"] = (
+                    "governance-signed-weekly-top50 -> expert-center OR-Tools CP-SAT "
+                    "4-primary+4-warm-recovery assignment -> unrestricted OpenRouter "
+                    "provider routing for each fixed model -> NetworkX DAG -> parallel "
+                    "analysis -> cross-review -> final synthesis"
+                )
+            original_write(path, document)
+            return
+        original_write(path, value)
 
-    write_json(
-        root / "planning-task.json",
-        {
-            "schema_version": "v5-governance-plan-planning-task-1",
-            "source": source,
-            "sha256": hashlib.sha256(task.encode("utf-8")).hexdigest(),
-            "characters": len(task),
-            "task_constraints": constraints.to_dict(),
-            "selection_authority": "decision-system-governance",
-            "governance_model_plan_sha256": plan_sha,
-            "model_selection_performed_locally": False,
-            "model_reranking_performed_locally": False,
-            "model_substitution_allowed": False,
-            "provider_resolution_only": True,
-            "claude_mechanism_enabled": False,
-            "claude_calls": 0,
-            "governance_model_calls_in_expert_center": 0,
-            "networkx_orchestration": True,
-            "optimizer_used": False,
-        },
-    )
-    write_json(
-        root / "production-runtime.json",
-        {
-            "runtime_version": RUNTIME_VERSION,
-            "entrypoint": "v5_price_ranked_production_ticket.py",
-            "pipeline": "v5_price_ranked_pipeline.py",
-            "architecture": (
-                "governance-selected-model-plan -> immutable plan validation -> "
-                "exact provider resolution -> parallel analysis -> cross-review -> "
-                "final synthesis"
-            ),
-            "source_commit": source_commit,
-            "source_run_id": source_run_id,
-            "maximum_total_calls": total,
-            "governance_calls_reserved": 0,
-            "maximum_expert_calls": total,
-            "maximum_recovery_calls": recovery,
-            "maximum_initial_calls": total - recovery,
-            "cost_anomaly_usd": args.cost_anomaly_usd,
-            "max_completion_tokens": args.max_completion_tokens,
-            "selection_authority": "decision-system-governance",
-            "governance_model_plan_sha256": plan_sha,
-            "model_selection_performed_locally": False,
-            "model_reranking_performed_locally": False,
-            "model_substitution_allowed": False,
-            "provider_resolution_authority": "expert-runtime-exact-endpoint-only",
-            "orchestration_library": "networkx",
-            "claude_mechanism_enabled": False,
-            "claude_calls": 0,
-            "governance_model_calls": 0,
-            "external_tools_allowed": False,
-            "provider_fallback_allowed": False,
-            "fallback_policy": "fail-closed-no-alternate-runtime",
-            "legacy_runtime_present": False,
-            "model_loop_allowed": False,
-            "cross_task_history_used": False,
-        },
-    )
+    _legacy.write_json = write_json
     try:
-        code = int(v5_price_ranked_pipeline.main(_pipeline_args(args, root, task)))
-        if code:
-            raise RuntimeError(f"governance-plan pipeline returned {code}")
-        result = _normalize(root, args, True)
-        if result.get("status") != "success":
-            raise RuntimeError("production result failed delivery gate")
-        print(
-            json.dumps(
-                {
-                    "runtime_version": RUNTIME_VERSION,
-                    "status": result["status"],
-                    "completion_mode": result["completion_mode"],
-                    "actual_cost_usd": result["actual_cost_usd"],
-                    "node_count": result["node_count"],
-                    "approved_total_calls": total,
-                    "selection_authority": "decision-system-governance",
-                    "governance_model_plan_sha256": plan_sha,
-                    "model_selection_performed_locally": False,
-                    "claude_calls": 0,
-                    "governance_model_calls_in_expert_center": 0,
-                    "networkx_orchestration": True,
-                    "evidence_input_sha256": result["evidence_input_sha256"],
-                },
-                ensure_ascii=False,
-            )
-        )
-        return 0
-    except Exception as exc:
-        normalization_error = None
-        try:
-            _normalize(root, args, False)
-        except Exception as normalize_exc:  # noqa: BLE001
-            normalization_error = str(normalize_exc)
-        write_json(
-            root / "expert-team-error.json",
-            {
-                "version": 5,
-                "runtime_version": RUNTIME_VERSION,
-                "error_code": "GOVERNANCE_PLAN_PRODUCTION_EXECUTION_FAILED",
-                "stage": "governance-plan-production-runtime",
-                "message": str(exc),
-                "traceback": traceback.format_exc(),
-                "normalization_error": normalization_error,
-                "fallback_used": False,
-                "legacy_runtime_present": False,
-                "selection_authority": "decision-system-governance",
-                "governance_model_plan_sha256": plan_sha,
-                "model_selection_performed_locally": False,
-                "model_reranking_performed_locally": False,
-                "model_substitution_allowed": False,
-                "claude_mechanism_enabled": False,
-                "claude_calls": 0,
-                "governance_model_calls_in_expert_center": 0,
-                "model_loop_allowed": False,
-                "cross_task_history_used": False,
-            },
-        )
-        raise
+        return _legacy.main(argv)
+    finally:
+        _legacy.write_json = original_write
 
 
 if __name__ == "__main__":

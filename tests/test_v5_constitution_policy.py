@@ -11,22 +11,14 @@ sys.path.insert(0, str(MARKET))
 
 from execution_graph import ExecutionGraph, SelectedNode  # noqa: E402
 from execution_graph_validator import validate_execution_graph  # noqa: E402
-from v5_free_first_preflight import (  # noqa: E402
-    SCHEMA_VERSION,
-    evaluate_free_first_preflight,
-)
-from v5_model_company import (  # noqa: E402
-    REQUIRE_DISTINCT_MODEL_COMPANIES,
-    canonical_model_company,
-)
+from v5_free_first_preflight import SCHEMA_VERSION, evaluate_free_first_preflight  # noqa: E402
+from v5_model_company import REQUIRE_DISTINCT_MODEL_COMPANIES, canonical_model_company  # noqa: E402
 
 
 class ConstitutionPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.policy = json.loads(
-            (MARKET / "constitutional_policy.json").read_text(encoding="utf-8")
-        )
+        cls.policy = json.loads((MARKET / "constitutional_policy.json").read_text(encoding="utf-8"))
         cls.constitution = (ROOT / "CONSTITUTION.md").read_text(encoding="utf-8")
 
     def test_free_first_policy_is_fail_closed(self) -> None:
@@ -48,11 +40,7 @@ class ConstitutionPolicyTests(unittest.TestCase):
         receipt = {
             "schema_version": SCHEMA_VERSION,
             "target_sha": "a" * 40,
-            "simulation": {
-                "status": "PASS",
-                "model_calls": 0,
-                "paid_model_calls": 0,
-            },
+            "simulation": {"status": "PASS", "model_calls": 0, "paid_model_calls": 0},
             "free_canary": {
                 "status": "PASS",
                 "requested_model": "openrouter/free",
@@ -82,13 +70,12 @@ class ConstitutionPolicyTests(unittest.TestCase):
     def test_active_governance_has_zero_model_calls(self) -> None:
         self.assertEqual(
             self.policy["schema_version"],
-            "v5-constitutional-policy-5",
+            "v5-constitutional-policy-7-top50-ortools-open-provider",
         )
         chain = self.policy["governance_chain"]
-        self.assertEqual(
-            chain["selection_authority"],
-            "python_price_ranked_orchestrator",
-        )
+        self.assertEqual(chain["candidate_pool_authority"], "decision-system-governance")
+        self.assertEqual(chain["assignment_authority"], "expert-assessment-center-ortools-cp-sat")
+        self.assertEqual(chain["provider_routing_authority"], "openrouter-unrestricted")
         self.assertFalse(chain["claude_mechanism_enabled"])
         self.assertEqual(chain["claude_calls_per_task"], 0)
         self.assertEqual(chain["gpt_selection_calls_per_task"], 0)
@@ -96,36 +83,57 @@ class ConstitutionPolicyTests(unittest.TestCase):
         self.assertFalse(chain["model_loop_allowed"])
         self.assertFalse(chain["agent_framework_allowed"])
 
-    def test_price_ranked_networkx_organization_is_authoritative(self) -> None:
+    def test_weekly_top50_ortools_organization_is_authoritative(self) -> None:
+        pool = self.policy["candidate_pool"]
+        self.assertEqual(pool["pool_size"], 50)
+        self.assertEqual(pool["popularity_period"], "week")
+        self.assertFalse(pool["daily_or_monthly_can_replace_primary_pool"])
+        self.assertFalse(pool["provider_endpoint_qualification_required"])
+        self.assertFalse(pool["zdr_provider_qualification_required"])
+        optimizer = self.policy["optimizer_runtime"]
+        self.assertEqual(optimizer["engine"], "ortools-cp-sat")
+        self.assertEqual(optimizer["primary_expert_count"], 4)
+        self.assertEqual(optimizer["warm_recovery_count"], 4)
+        self.assertEqual(optimizer["required_solver_status"], "OPTIMAL")
+        self.assertEqual(optimizer["deterministic_workers"], 1)
+        self.assertFalse(optimizer["provider_metric_used"])
+        self.assertNotIn("qualified_provider_resilience", optimizer["objective_components"])
         matching = self.policy["dynamic_task_matching"]
-        self.assertEqual(matching["planner"], "python_price_ranked_orchestrator")
-        self.assertEqual(matching["sort_order"], "estimated_task_cost_ascending")
-        self.assertEqual(matching["official_intelligence_rank_window"], 150)
-        self.assertEqual(matching["team_size"], {
-            "minimum": 3,
-            "default": 4,
-            "maximum": 6,
-            "bounded_by_initial_call_capacity": True,
-        })
+        self.assertEqual(matching["planner"], "expert-center-ortools-cp-sat")
+        self.assertTrue(matching["provider_selection_delegated_to_openrouter"])
         self.assertEqual(
             matching["organization"],
             "parallel_independent_analysis_then_cross_review_then_final_synthesis",
         )
-        self.assertIn("取消 Claude", self.constitution)
+        self.assertIn("OR-Tools", self.constitution)
+        self.assertIn("周榜前五十", self.constitution)
         self.assertIn("NetworkX", self.constitution)
-        self.assertIn("价格优先", self.constitution)
         self.assertIn("Token 与费用实行软治理", self.constitution)
+
+    def test_provider_routing_is_completely_open(self) -> None:
+        privacy = self.policy["expert_endpoint_privacy"]
+        self.assertEqual(privacy["provider_routing_mode"], "unrestricted-openrouter")
+        self.assertFalse(privacy["zdr_required"])
+        self.assertFalse(privacy["data_collection_filter_applied"])
+        self.assertFalse(privacy["provider_allowlist_allowed"])
+        self.assertFalse(privacy["provider_order_allowed"])
+        self.assertTrue(privacy["provider_fallback_allowed"])
+        self.assertTrue(privacy["unrestricted_provider_fallback_allowed"])
+        self.assertTrue(privacy["openrouter_selects_provider"])
+        self.assertFalse(privacy["model_substitution_allowed"])
+        self.assertIn("Provider 完全开放", self.constitution)
+
+    def test_dependency_set_is_minimal_and_sufficient(self) -> None:
+        deps = self.policy["dependency_allowlist"]
+        self.assertEqual(set(deps["runtime"]), {"jsonschema", "networkx", "ortools"})
+        self.assertTrue(deps["minimum_sufficient_set"])
+        self.assertFalse(deps["langchain_allowed"])
+        self.assertFalse(deps["crewai_allowed"])
+        self.assertFalse(deps["autogen_allowed"])
 
     def test_tool_prohibition_covers_selection_and_experts(self) -> None:
         tools = self.policy["tool_prohibition"]
-        self.assertEqual(
-            tools["scope"],
-            [
-                "deterministic_selection",
-                "expert_execution",
-                "expert_recovery",
-            ],
-        )
+        self.assertEqual(tools["scope"], ["deterministic_selection", "expert_execution", "expert_recovery"])
         for key in (
             "external_tools_allowed",
             "web_browsing_allowed",
@@ -160,10 +168,7 @@ class ConstitutionPolicyTests(unittest.TestCase):
             )
 
         graph = ExecutionGraph(
-            nodes=(
-                node("n1", "w1", "google/model-a"),
-                node("n2", "w2", "deepmind/model-b"),
-            ),
+            nodes=(node("n1", "w1", "google/model-a"), node("n2", "w2", "deepmind/model-b")),
             edges=(),
             execution_stages=(("n1", "n2"),),
             entry_nodes=("n1", "n2"),
