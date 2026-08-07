@@ -426,10 +426,12 @@ def materialize_top50_selection(
             ),
         }
     )
-    plan["plan_sha256"] = _sha({k: v for k, v in plan.items() if k != "plan_sha256"})
+    plan.pop("plan_sha256", None)
+    selection_basis_sha256 = _sha(plan)
 
     receipt = {
         "schema_version": "expert-center-task-dynamic-selection-receipt-v1",
+        "selection_basis_sha256": selection_basis_sha256,
         "selected_models": [row["model"] for row in selected],
         "recovery_models": [row["model"] for row in recoveries],
         "primary_expert_count": len(selected),
@@ -443,6 +445,7 @@ def materialize_top50_selection(
     }
     receipt["receipt_sha256"] = _sha(receipt)
     plan["expert_center_selection_receipt"] = receipt
+    plan["plan_sha256"] = _sha(plan)
 
     materialized = dict(packet)
     materialized["governance_model_plan"] = plan
