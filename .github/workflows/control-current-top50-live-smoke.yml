@@ -1,0 +1,171 @@
+name: Control Current Top50 OR-Tools Live Smoke
+
+on:
+  push:
+    branches:
+      - control/live-smoke-20260807
+
+permissions:
+  contents: write
+
+jobs:
+  live-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.12'
+      - name: Install runtime dependencies
+        run: python -m pip install -r requirements-runtime.txt
+      - name: Import Governance weekly Top50 artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, urllib.request
+          url='https://raw.githubusercontent.com/a15280020511/decision-system-governance/control/live-smoke-top50-20260807/LIVE_TOP50.json'
+          req=urllib.request.Request(url,headers={'User-Agent':'expert-live-smoke-control-plane'})
+          with urllib.request.urlopen(req,timeout=30) as r:
+              data=json.load(r)
+          assert data.get('schema_version')=='governance-openrouter-top50-reasoning-pool-v2-open-provider'
+          rows=data.get('selectable_candidates') or data.get('eligible_models') or data.get('models') or []
+          raw=data.get('raw_top50') or rows
+          assert len(raw)==50 and len(rows)>=8
+          open('governance-live-top50.json','w',encoding='utf-8').write(json.dumps(data,ensure_ascii=False,indent=2)+'\n')
+          PY
+      - name: OR-Tools materialize 4+4 and execute four primary experts
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PYTHONPATH: open-model-market
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$OPENROUTER_API_KEY"
+          python - <<'PY'
+          import json, os, time, urllib.request, urllib.error
+          from pathlib import Path
+          from v5_price_ranked_pipeline import prepare_execution_plan
+
+          question=("A SaaS team has 4 engineers and 8 weeks. Option A reduces cloud spend by 15% and saves "
+                    "$4,000 per month. Option B builds a feature expected to add $6,000 monthly recurring revenue "
+                    "but has a 40% probability of delay. Assume equal engineering opportunity cost. Which should "
+                    "be prioritized? State assumptions, expected-value comparison, main risk, and recommendation.")
+          pool=json.load(open('governance-live-top50.json',encoding='utf-8'))
+          rows=pool.get('selectable_candidates') or pool.get('eligible_models') or pool.get('models') or []
+
+          def first(row,*names,default=None):
+              for n in names:
+                  v=row.get(n)
+                  if v not in (None,''):
+                      return v
+              return default
+          def num(v, default=0.0):
+              try: return float(v)
+              except Exception: return default
+
+          catalog=[]
+          for r in rows:
+              x=dict(r)
+              mid=str(first(r,'model_id','id','model',default='')).strip()
+              if not mid: continue
+              ctx=int(num(first(r,'context_length','context_window','native_context_length',default=32768),32768))
+              pricing=dict(r.get('pricing') or {})
+              if not pricing.get('prompt'):
+                  pm=first(r,'prompt_price_usd_per_token','prompt_price','input_price_usd_per_token','prompt_price_usd_per_million')
+                  if pm is not None:
+                      v=num(pm); pricing['prompt']=str(v/1_000_000 if v>0.01 else v)
+              if not pricing.get('completion'):
+                  cm=first(r,'completion_price_usd_per_token','completion_price','output_price_usd_per_token','completion_price_usd_per_million')
+                  if cm is not None:
+                      v=num(cm); pricing['completion']=str(v/1_000_000 if v>0.01 else v)
+              pricing.setdefault('prompt','0')
+              pricing.setdefault('completion','0')
+              pricing.setdefault('request','0')
+              x.update({'id':mid,'model_id':mid,'context_length':ctx,'pricing':pricing,'capabilities':['reasoning']})
+              catalog.append(x)
+          assert len(catalog)>=8
+          plan=prepare_execution_plan(pool,catalog,task_text=question)
+          assert plan.get('optimizer_used') is True
+          assert plan.get('solver_status')=='OPTIMAL'
+          primary=plan.get('primary_roles') or []
+          assert len(primary)==4, len(primary)
+          selected=[]
+          for r in primary:
+              m=r.get('selected_model') or r.get('model_id') or r.get('model')
+              assert m; selected.append(str(m))
+          assert len(set(selected))==4
+          Path('live-smoke-plan.json').write_text(json.dumps(plan,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+
+          assignment=plan.get('assignment') or {}
+          warm=assignment.get('warm_recovery_order') or plan.get('warm_recovery_order') or []
+          recovery=[]
+          for x in warm:
+              if isinstance(x,str): recovery.append(x)
+              elif isinstance(x,dict):
+                  m=x.get('model') or x.get('model_id') or x.get('selected_model')
+                  if m: recovery.append(str(m))
+          used=set(selected)
+          recovery=[m for m in recovery if m not in used]
+
+          role_names=['Evidence','Options','Review','Synthesis']
+          outputs=[]; calls=[]; recovery_cursor=0
+          def call_model(model, role, prompt):
+              payload={'model':model,'messages':[{'role':'system','content':'You are one member of a bounded expert panel. Use no tools. Answer in Chinese. Be concise, analytical, and explicit about assumptions.'},{'role':'user','content':prompt}], 'temperature':0.2, 'max_tokens':900}
+              body=json.dumps(payload).encode()
+              req=urllib.request.Request('https://openrouter.ai/api/v1/chat/completions',data=body,method='POST',headers={'Authorization':'Bearer '+os.environ['OPENROUTER_API_KEY'],'Content-Type':'application/json','HTTP-Referer':'https://github.com/a15280020511/expert-assessment-center','X-Title':'current-top50-ortools-live-smoke'})
+              with urllib.request.urlopen(req,timeout=120) as resp:
+                  data=json.load(resp)
+              actual=str(data.get('model') or '')
+              if actual and actual!=model:
+                  raise RuntimeError(f'model substitution detected requested={model} actual={actual}')
+              text=str(((data.get('choices') or [{}])[0].get('message') or {}).get('content') or '').strip()
+              if not text: raise RuntimeError('empty expert answer')
+              usage=data.get('usage') or {}
+              return text, {'role':role,'requested_model':model,'actual_model':actual or model,'provider_restrictions_applied':False,'provider_object_sent':False,'cost_usd':usage.get('cost'),'prompt_tokens':usage.get('prompt_tokens'),'completion_tokens':usage.get('completion_tokens')}
+
+          for i,role in enumerate(role_names):
+              if role=='Evidence':
+                  prompt='任务：'+question+'\n角色：核对题内证据、数字、假设和不确定性；做必要的基础计算。'
+              elif role=='Options':
+                  prompt='任务：'+question+'\n角色：独立比较两个方案、机制、机会成本和反事实，不依赖其他专家。'
+              elif role=='Review':
+                  prompt='任务：'+question+'\n前两位专家输出：\n--- Evidence ---\n'+outputs[0]+'\n--- Options ---\n'+outputs[1]+'\n角色：交叉审查冲突、遗漏、错误计算、薄弱假设和失败模式。'
+              else:
+                  prompt='任务：'+question+'\n前三位专家输出：\n'+ '\n\n'.join(f'--- {role_names[j]} ---\n{outputs[j]}' for j in range(3)) +'\n角色：给出唯一最终结论，包含假设、期望值比较、主要风险、建议。'
+              model=selected[i]
+              try:
+                  text,receipt=call_model(model,role,prompt)
+              except Exception as first_error:
+                  if recovery_cursor>=len(recovery): raise
+                  model=recovery[recovery_cursor]; recovery_cursor+=1
+                  text,receipt=call_model(model,role,prompt)
+                  receipt['recovery_used']=True; receipt['primary_failure']=repr(first_error)[:500]
+              outputs.append(text); calls.append(receipt)
+
+          total_cost=0.0
+          known_costs=[]
+          for c in calls:
+              try:
+                  if c.get('cost_usd') is not None:
+                      v=float(c['cost_usd']); total_cost+=v; known_costs.append(v)
+              except Exception: pass
+          result={'status':'PASS','question':question,'optimizer_used':True,'solver_status':'OPTIMAL','primary_selected_models':selected,'warm_recovery_models':recovery,'calls':calls,'successful_calls':len(calls),'recovery_calls':sum(1 for c in calls if c.get('recovery_used')),'reported_cost_usd':total_cost if len(known_costs)==len(calls) else None,'provider_routing_mode':'unrestricted-openrouter','provider_restrictions_applied':False,'model_substitution_allowed':False,'final_answer':outputs[-1],'all_outputs':dict(zip(role_names,outputs))}
+          Path('live-smoke-result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          Path('LIVE_SMOKE_RESULT.md').write_text('# Current Top50 OR-Tools live smoke\n\nStatus: **PASS**\n\n## Question\n'+question+'\n\n## Selected primary models\n'+ '\n'.join('- '+m for m in selected)+'\n\n## Final synthesis\n'+outputs[-1]+'\n',encoding='utf-8')
+          print(json.dumps({k:result[k] for k in ['status','successful_calls','recovery_calls','reported_cost_usd','primary_selected_models']},ensure_ascii=False))
+          PY
+      - name: Commit auditable live result and self-remove
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/control-current-top50-live-smoke.yml governance-live-top50.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add live-smoke-plan.json live-smoke-result.json LIVE_SMOKE_RESULT.md .github/workflows/control-current-top50-live-smoke.yml || true
+          git add -A
+          git commit -m 'control: record actual Top50 OR-Tools expert smoke result'
+          git push origin HEAD:control/live-smoke-20260807
