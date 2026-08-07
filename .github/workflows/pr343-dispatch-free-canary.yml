@@ -1,0 +1,89 @@
+name: PR343 Dispatch Main Free Canary
+
+on:
+  push:
+    branches:
+      - feat/task-adaptive-value-optimizer-20260807
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  dispatch-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout control branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Dispatch and verify main Canary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import datetime
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          workflow = 'v5-free-model-canary.yml'
+          api = f'https://api.github.com/repos/{repo}'
+          headers = {
+              'Authorization': f'Bearer {token}',
+              'Accept': 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28',
+          }
+
+          def request(method, url, body=None):
+              data = None if body is None else json.dumps(body).encode()
+              req = urllib.request.Request(url, data=data, method=method, headers=headers)
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  raw = response.read()
+              return json.loads(raw) if raw else None
+
+          started = datetime.datetime.now(datetime.timezone.utc)
+          request('POST', f'{api}/actions/workflows/{workflow}/dispatches', {'ref': 'main'})
+          print('Canary dispatch accepted')
+
+          run_id = None
+          deadline = time.time() + 900
+          while time.time() < deadline:
+              payload = request('GET', f'{api}/actions/workflows/{workflow}/runs?event=workflow_dispatch&branch=main&per_page=20')
+              for run in payload.get('workflow_runs', []):
+                  created = datetime.datetime.fromisoformat(run['created_at'].replace('Z', '+00:00'))
+                  if created >= started - datetime.timedelta(seconds=5):
+                      run_id = run['id']
+                      status = run['status']
+                      conclusion = run.get('conclusion')
+                      print(f'Canary run {run_id}: status={status} conclusion={conclusion}')
+                      if status == 'completed':
+                          if conclusion != 'success':
+                              raise SystemExit(f'Canary run {run_id} failed: {conclusion}')
+                          print(f'CANARY_PASS_RUN_ID={run_id}')
+                          raise SystemExit(0)
+                      break
+              time.sleep(10)
+          raise SystemExit(f'Canary did not complete successfully before deadline; last run_id={run_id}')
+          PY
+
+      - name: Record verified Canary and self-delete launcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/pr343-dispatch-free-canary.yml
+          : > .pr343-free-canary-qualified
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'ci: record verified main free Canary'
+          git push origin HEAD:feat/task-adaptive-value-optimizer-20260807
