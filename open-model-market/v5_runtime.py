@@ -6,11 +6,18 @@ runtime resilience telemetry are derived from the current finite execution
 graph. Provider routing stays open and company identity is audit telemetry only.
 Structural safety, no-tools, evidence contracts and finite DAG execution remain
 enforced.
+
+Initial recovery depth is still computed before execution, but it is no longer
+the end of the recovery process. If current-run failures or quality-gate failures
+exhaust the initially activated recovery rows, the runtime recomputes a finite
+promotion depth from live feedback and may promote additional candidates from
+the current task's ordered standby inventory. No cross-task history is used.
 """
 from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
+from threading import Lock
 from typing import Any, Callable, Mapping, Sequence
 
 import v5_runtime_legacy as _legacy
@@ -77,15 +84,20 @@ class RuntimeConfig:
             "provider_routing_mode": "unrestricted-openrouter",
             "fixed_call_ceiling_applied": False,
             "team_size_source": "current-execution-graph",
-            "recovery_capacity_source": "unique-current-run-recovery-identities",
+            "recovery_capacity_source": (
+                "current-run-active-recovery-plus-runtime-promotable-standby"
+            ),
             "runtime_resilience_parameters_dynamic": True,
+            "runtime_feedback_replanning_enabled": True,
+            "standby_promotion_depth_fixed": False,
             "failed_model_circuit_scope": "current-run-only",
+            "cross_task_history_used": False,
             "tool_use_forbidden": True,
         }
 
 
 def _recovery_capacity(graph: ExecutionGraph) -> int:
-    """Count unique recovery identities, not per-node copies of the shared pool."""
+    """Count unique initially activated recovery identities."""
     metadata = graph.metadata if isinstance(graph.metadata, Mapping) else {}
     pool = metadata.get("recovery_pool")
     if not isinstance(pool, Mapping):
@@ -104,20 +116,42 @@ def _recovery_capacity(graph: ExecutionGraph) -> int:
     return len(identities)
 
 
+def _standby_capacity(graph: ExecutionGraph) -> int:
+    """Count unique current-task standby identities available for promotion."""
+    metadata = graph.metadata if isinstance(graph.metadata, Mapping) else {}
+    rows = metadata.get("standby_inventory")
+    if not isinstance(rows, list):
+        return 0
+    identities: set[tuple[str, str]] = set()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        model = str(row.get("model") or "").strip()
+        endpoint = str(row.get("provider_endpoint") or "").strip()
+        if model:
+            identities.add((model, endpoint))
+    return len(identities)
+
+
 def _dynamic_resilience_parameters(
     graph: ExecutionGraph,
 ) -> tuple[float, int]:
     """Derive runtime resilience telemetry from this execution graph only."""
     initial = max(1, len(graph.nodes))
     recovery = max(0, _recovery_capacity(graph))
-    graph_width = max(1, initial + recovery)
+    standby = max(0, _standby_capacity(graph))
+    # Standby is only potential recovery. Use its square-root breadth for
+    # circuit telemetry so merely having a large inventory does not create an
+    # artificially huge same-endpoint failure tolerance.
+    adaptive_breadth = recovery + math.ceil(math.sqrt(standby)) if standby else recovery
+    graph_width = max(1, initial + adaptive_breadth)
     cost_risk_multiplier = 1.0 + min(
         1.0,
         math.log2(graph_width + 1) / 10.0,
     )
     max_provider_failures = max(
         1,
-        math.ceil(recovery / max(1, initial)),
+        math.ceil(adaptive_breadth / max(1, initial)),
     )
     return float(cost_risk_multiplier), int(max_provider_failures)
 
@@ -125,19 +159,21 @@ def _dynamic_resilience_parameters(
 def _dynamic_config(config: RuntimeConfig, graph: ExecutionGraph) -> RuntimeConfig:
     initial = max(1, len(graph.nodes))
     recovery = max(0, _recovery_capacity(graph))
+    standby = max(0, _standby_capacity(graph))
     cost_risk_multiplier, max_provider_failures = _dynamic_resilience_parameters(
         graph
     )
     return RuntimeConfig(
-        total_call_limit=initial + recovery,
-        recovery_call_limit=recovery,
+        # This is a finite structural capacity for the current graph, not a
+        # business admission quota. Standby calls are not made unless runtime
+        # feedback promotes them.
+        total_call_limit=initial + recovery + standby,
+        recovery_call_limit=recovery + standby,
         cost_anomaly_usd=config.cost_anomaly_usd,
         tools_allowed=False,
         live_catalog_required=config.live_catalog_required,
         provider_lock_required=False,
         cost_risk_multiplier=cost_risk_multiplier,
-        # Current-run circuit depth scales with the graph's recovery breadth.
-        # It carries no state across tasks and is not a Provider allowlist.
         max_provider_failures=max_provider_failures,
     )
 
@@ -147,6 +183,8 @@ class BudgetController(_legacy.BudgetController):
 
     def __init__(self, config: RuntimeConfig, graph: ExecutionGraph) -> None:
         self.requested_config = config
+        self.active_recovery_capacity = _recovery_capacity(graph)
+        self.standby_capacity = _standby_capacity(graph)
         super().__init__(_dynamic_config(config, graph), graph)
 
     def snapshot(self) -> dict[str, Any]:
@@ -154,9 +192,15 @@ class BudgetController(_legacy.BudgetController):
         value.update(
             {
                 "fixed_call_ceiling_applied": False,
-                "call_capacity_source": "current-execution-graph",
-                "recovery_capacity_source": "unique-current-run-recovery-identities",
+                "call_capacity_source": "current-finite-execution-graph",
+                "recovery_capacity_source": (
+                    "active-recovery-plus-runtime-promotable-standby"
+                ),
+                "active_recovery_capacity": int(self.active_recovery_capacity),
+                "runtime_promotable_standby_capacity": int(self.standby_capacity),
                 "runtime_resilience_parameters_dynamic": True,
+                "runtime_feedback_replanning_enabled": True,
+                "standby_promotion_depth_fixed": False,
                 "failed_model_circuit_scope": "current-run-only",
                 "failed_model_circuit_threshold": int(
                     self.config.max_provider_failures
@@ -173,7 +217,7 @@ class BudgetController(_legacy.BudgetController):
 
 
 class ExecutionEngine(_LegacyExecutionEngine):
-    """Validate intrinsic graph safety without historical business gates."""
+    """Validate intrinsic graph safety and adapt recovery from live feedback."""
 
     _IGNORED_BUSINESS_LIMIT_CODES = {
         "budget_limit",
@@ -183,6 +227,140 @@ class ExecutionEngine(_LegacyExecutionEngine):
         "stage_limit",
         "model_company_reuse",
     }
+
+    def _ensure_feedback_state(self) -> None:
+        if not hasattr(self, "_feedback_lock"):
+            self._feedback_lock = Lock()
+            self._standby_inventory: list[dict[str, Any]] = []
+            self._standby_claimed: set[str] = set()
+            self._feedback_attempts = 0
+            self._feedback_failures = 0
+            self._feedback_quality_failures = 0
+            self._feedback_promotions = 0
+            self._feedback_primary_count = 1
+            self._feedback_events: list[dict[str, Any]] = []
+
+    def _initialize_feedback(self, graph: ExecutionGraph) -> None:
+        self._ensure_feedback_state()
+        metadata = graph.metadata if isinstance(graph.metadata, Mapping) else {}
+        rows = metadata.get("standby_inventory")
+        inventory = [dict(row) for row in rows if isinstance(row, Mapping)] if isinstance(rows, list) else []
+        with self._feedback_lock:
+            self._standby_inventory = inventory
+            self._standby_claimed = set()
+            self._feedback_attempts = 0
+            self._feedback_failures = 0
+            self._feedback_quality_failures = 0
+            self._feedback_promotions = 0
+            self._feedback_primary_count = max(1, len(graph.nodes))
+            self._feedback_events = []
+
+    def _feedback_snapshot(self) -> dict[str, Any]:
+        self._ensure_feedback_state()
+        with self._feedback_lock:
+            attempts = int(self._feedback_attempts)
+            failures = int(self._feedback_failures)
+            quality_failures = int(self._feedback_quality_failures)
+            standby_total = len(self._standby_inventory)
+            claimed = len(self._standby_claimed)
+            return {
+                "schema_version": "v5-current-run-feedback-replanning-1",
+                "enabled": bool(standby_total),
+                "promotion_trigger": (
+                    "initial-recovery-exhausted-plus-current-run-failure-feedback"
+                ),
+                "promotion_depth_fixed": False,
+                "promotion_depth_recomputed_from_current_run": True,
+                "observed_attempts": attempts,
+                "observed_failures": failures,
+                "observed_failure_rate": round(failures / max(1, attempts), 6),
+                "observed_quality_gate_failures": quality_failures,
+                "observed_quality_gate_failure_rate": round(
+                    quality_failures / max(1, attempts), 6
+                ),
+                "standby_total": standby_total,
+                "standby_promoted_or_claimed": claimed,
+                "standby_remaining": max(0, standby_total - claimed),
+                "promotion_attempts": int(self._feedback_promotions),
+                "events": [dict(row) for row in self._feedback_events],
+                "cross_task_history_used": False,
+            }
+
+    def _record_feedback(self, attempt: Any | None) -> None:
+        if attempt is None:
+            return
+        self._ensure_feedback_state()
+        category = self._category(attempt)
+        with self._feedback_lock:
+            self._feedback_attempts += 1
+            if str(getattr(attempt, "status", "")) != "passed":
+                self._feedback_failures += 1
+                if category == _legacy.FailureCategory.QUALITY_GATE_FAILED:
+                    self._feedback_quality_failures += 1
+
+    def _dynamic_promotion_depth(self, node_attempts: Sequence[Any]) -> int:
+        """Recompute finite standby depth from current-run observations."""
+        self._ensure_feedback_state()
+        with self._feedback_lock:
+            remaining = max(
+                0,
+                len(self._standby_inventory) - len(self._standby_claimed),
+            )
+            if remaining <= 0:
+                return 0
+            attempts = max(1, int(self._feedback_attempts))
+            failure_rate = self._feedback_failures / attempts
+            quality_rate = self._feedback_quality_failures / attempts
+            node_failures = sum(
+                1
+                for row in node_attempts
+                if str(getattr(row, "status", "")) != "passed"
+            )
+            primary = max(1, int(self._feedback_primary_count))
+            node_pressure = min(1.0, node_failures / primary)
+            feedback_pressure = min(
+                1.0,
+                (failure_rate + quality_rate + node_pressure) / 3.0,
+            )
+            structural_breadth = math.sqrt(remaining / primary)
+            depth = math.ceil(structural_breadth * (1.0 + feedback_pressure))
+            return min(remaining, max(1, int(depth)))
+
+    def _claim_next_standby(self) -> dict[str, Any] | None:
+        self._ensure_feedback_state()
+        with self._feedback_lock:
+            for row in self._standby_inventory:
+                model = str(row.get("model") or "").strip()
+                if not model or model in self._standby_claimed:
+                    continue
+                self._standby_claimed.add(model)
+                return dict(row)
+        return None
+
+    def _record_promotion_event(
+        self,
+        *,
+        selected: SelectedNode,
+        candidate: SelectedNode,
+        trigger_category: Any,
+        attempt: Any | None,
+        planned_depth: int,
+        ordinal: int,
+    ) -> None:
+        self._ensure_feedback_state()
+        event = {
+            "node_id": selected.node_id,
+            "selected_model": selected.model,
+            "promoted_model": candidate.model,
+            "trigger_category": str(getattr(trigger_category, "value", trigger_category)),
+            "planned_dynamic_promotion_depth": int(planned_depth),
+            "promotion_ordinal": int(ordinal),
+            "attempt_status": str(getattr(attempt, "status", "not-called")),
+            "passed": bool(attempt is not None and getattr(attempt, "status", "") == "passed"),
+        }
+        with self._feedback_lock:
+            self._feedback_promotions += 1
+            self._feedback_events.append(event)
 
     def _validated_graph(
         self,
@@ -222,7 +400,7 @@ class ExecutionEngine(_LegacyExecutionEngine):
         kind: str,
     ) -> Any:
         # Explicit top-level no-tools enforcement wraps the actual model request
-        # and raw response.  openrouter_api enforces the same boundary again at
+        # and raw response. openrouter_api enforces the same boundary again at
         # transport level, giving production a two-layer fail-closed guarantee.
         def guarded_call_fn(
             run_config: Any,
@@ -244,10 +422,161 @@ class ExecutionEngine(_LegacyExecutionEngine):
             node,
             kind,
         )
+        self._record_feedback(attempt)
         invalid = _legacy.FailureCategory.PROVIDER_INVALID_RESPONSE
         if attempt is not None and self._category(attempt) == invalid:
             budget.fail_endpoint(node.provider_endpoint, invalid)
         return attempt
+
+    def _recover_node(
+        self,
+        selected: SelectedNode,
+        attempts: list[Any],
+        recovery_rows: Sequence[Mapping[str, Any]],
+        category: Any,
+        best: tuple[Any, SelectedNode] | None,
+        call: Callable[[SelectedNode, str], Any | None],
+    ) -> tuple[Any | None, tuple[Any, SelectedNode] | None, SelectedNode]:
+        """Use initial recovery, then replan standby promotion from live feedback."""
+        last_node = selected
+        eligible = set(self.recovery_policy.replace_categories)
+        eligible.add(_legacy.FailureCategory.QUALITY_GATE_FAILED)
+        if category not in eligible:
+            return None, best, last_node
+
+        source = attempts[-1] if attempts else None
+        saturated = self._reasoning_saturated_attempt(source)
+        for row in recovery_rows:
+            candidate = self._candidate(row, selected)
+            original = candidate
+            candidate, adaptation = self._replacement_adaptation(
+                candidate, source, saturated
+            )
+            attempted = call(candidate, "replacement")
+            if attempted is None:
+                continue
+            if adaptation is not None:
+                attempted.answer_transformations.append(adaptation)
+            last_node = candidate
+            if attempted.status == "passed":
+                return (
+                    self._node_result(
+                        selected,
+                        candidate,
+                        attempts,
+                        attempted,
+                        "success_recovered",
+                    ),
+                    best,
+                    last_node,
+                )
+            quality_node = candidate if adaptation is not None else original
+            best = self._better_degraded(
+                best,
+                attempted,
+                candidate,
+                self._degraded_usable(quality_node, attempted),
+            )
+            source = attempted
+            saturated = self._reasoning_saturated_attempt(source)
+
+        promotion_depth = self._dynamic_promotion_depth(attempts)
+        for ordinal in range(1, promotion_depth + 1):
+            row = self._claim_next_standby()
+            if row is None:
+                break
+            candidate = self._candidate(row, selected)
+            original = candidate
+            source = attempts[-1] if attempts else source
+            saturated = self._reasoning_saturated_attempt(source)
+            candidate, adaptation = self._replacement_adaptation(
+                candidate, source, saturated
+            )
+            attempted = call(candidate, "replacement")
+            if attempted is not None and adaptation is not None:
+                attempted.answer_transformations.append(adaptation)
+            self._record_promotion_event(
+                selected=selected,
+                candidate=candidate,
+                trigger_category=category,
+                attempt=attempted,
+                planned_depth=promotion_depth,
+                ordinal=ordinal,
+            )
+            if attempted is None:
+                continue
+            last_node = candidate
+            if attempted.status == "passed":
+                return (
+                    self._node_result(
+                        selected,
+                        candidate,
+                        attempts,
+                        attempted,
+                        "success_recovered",
+                    ),
+                    best,
+                    last_node,
+                )
+            quality_node = candidate if adaptation is not None else original
+            best = self._better_degraded(
+                best,
+                attempted,
+                candidate,
+                self._degraded_usable(quality_node, attempted),
+            )
+        return None, best, last_node
+
+    def _execution_result(
+        self,
+        graph: ExecutionGraph,
+        outputs: Mapping[str, Any],
+        stage_records: Sequence[Mapping[str, Any]],
+        budget: BudgetController,
+        preflight: Mapping[str, Any],
+        limits: GraphLimits,
+        state: Mapping[str, Any],
+        blockers: list[str],
+        missing_non_degradable: list[str],
+    ) -> dict[str, Any]:
+        result = super()._execution_result(
+            graph,
+            outputs,
+            stage_records,
+            budget,
+            preflight,
+            limits,
+            state,
+            blockers,
+            missing_non_degradable,
+        )
+        result["runtime_feedback_replanning"] = self._feedback_snapshot()
+        return result
+
+    def execute_graph(
+        self,
+        graph: ExecutionGraph | Mapping[str, Any],
+        run: Any,
+        original_task: str,
+        *,
+        call_fn: Callable[[Any, Mapping[str, Any]], tuple[Mapping[str, Any], float]] | None = None,
+        output_dir: str | Any | None = None,
+        limits: GraphLimits | None = None,
+    ) -> dict[str, Any]:
+        parsed = (
+            graph
+            if isinstance(graph, ExecutionGraph)
+            else ExecutionGraph.from_mapping(graph)
+        )
+        self._initialize_feedback(parsed)
+        return super().execute_graph(
+            parsed,
+            run,
+            original_task,
+            call_fn=call_fn,
+            output_dir=output_dir,
+            limits=limits,
+        )
 
 
 # Patch legacy module globals because legacy classes resolve these names at
