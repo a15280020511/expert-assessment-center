@@ -12,8 +12,15 @@ import json
 from typing import Any, Mapping, Sequence
 
 import v5_constitutional_runtime_legacy as _legacy
+import v5_cost_reliability_hardening as cost_hardening
+import v5_dynamic_prompt_delivery as dynamic_prompt
+import v5_task_delivery_contract as delivery_contract
 from execution_graph import SelectedNode
 from v5_no_tools_policy import assert_request_has_no_tools
+from v5_task_constraints import (
+    closed_world_numeric_prompt,
+    compile_task_constraints,
+)
 
 for _name in dir(_legacy):
     if not _name.startswith("__"):
