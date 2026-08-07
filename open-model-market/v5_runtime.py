@@ -1,14 +1,14 @@
 """Compatibility facade for the native V5 runtime.
 
-The active architecture fixes model identity in the governance/OR-Tools plan but
-keeps Provider routing unrestricted. ProductionExpertPromptPolicy removes any
-Provider object before a model call. This facade preserves the native
-PromptPolicy, ExpertExecutionEngine, and normalize_heading_key implementation
-while replacing only the obsolete RuntimeConfig Provider-lock requirement.
+The active architecture fixes model identity in the signed Top-50/OR-Tools plan
+while leaving OpenRouter Provider routing unrestricted.  The native runtime is
+kept intact except for one obsolete invariant: production no longer requires an
+exact Provider lock.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from dataclasses import asdict, dataclass
 
 import v5_runtime_legacy as _legacy
 
@@ -17,39 +17,65 @@ for _name in dir(_legacy):
         globals()[_name] = getattr(_legacy, _name)
 
 
-PromptPolicy = _legacy.PromptPolicy
-ExpertExecutionEngine = _legacy.ExpertExecutionEngine
-normalize_heading_key = _legacy.normalize_heading_key
-
-
 @dataclass(frozen=True)
 class RuntimeConfig:
-    openrouter_api_key: str
-    openrouter_api_url: str
-    application_name: str
-    application_url: str
-    timeout_seconds: float
-    maximum_recovery_calls: int
-    cost_anomaly_usd: float | None = None
+    """Native runtime configuration with unrestricted Provider routing.
+
+    Field names and semantics intentionally match ``v5_runtime_legacy`` so all
+    existing runtime, recovery, budget, and evidence code remains compatible.
+    Only the historical exact-Provider-lock requirement is removed.
+    """
+
+    total_call_limit: int
+    recovery_call_limit: int
+    cost_anomaly_usd: float | None
+    tools_allowed: bool = False
+    live_catalog_required: bool = False
     provider_lock_required: bool = False
+    cost_risk_multiplier: float = 1.18
+    max_provider_failures: int = 2
 
     def __post_init__(self) -> None:
-        if not self.openrouter_api_key:
-            raise ValueError("OPENROUTER_API_KEY is required")
-        if not self.openrouter_api_url.startswith("https://"):
-            raise ValueError("OPENROUTER_API_URL must use https")
-        if self.timeout_seconds <= 0:
-            raise ValueError("timeout_seconds must be positive")
-        if self.maximum_recovery_calls < 0:
-            raise ValueError("maximum_recovery_calls cannot be negative")
-        if self.cost_anomaly_usd is not None and self.cost_anomaly_usd < 0:
-            raise ValueError("cost_anomaly_usd cannot be negative")
-        if self.provider_lock_required is not False:
+        if not 1 <= int(self.total_call_limit) <= 16:
+            raise ValueError("total_call_limit must be between 1 and 16")
+        if not 0 <= int(self.recovery_call_limit) < int(self.total_call_limit):
+            raise ValueError(
+                "recovery_call_limit must be non-negative and below total_call_limit"
+            )
+        if self.cost_anomaly_usd is not None and (
+            not math.isfinite(float(self.cost_anomaly_usd))
+            or float(self.cost_anomaly_usd) <= 0
+        ):
+            raise ValueError("cost_anomaly_usd must be finite and positive")
+        if self.tools_allowed:
+            raise ValueError("V5 expert runtime forbids external tools")
+        if self.provider_lock_required:
             raise ValueError(
                 "V5 active runtime requires unrestricted Provider routing"
             )
+        if not math.isfinite(float(self.cost_risk_multiplier)) or float(
+            self.cost_risk_multiplier
+        ) < 1.0:
+            raise ValueError("cost_risk_multiplier must be finite and at least 1")
+        if int(self.max_provider_failures) < 1:
+            raise ValueError("max_provider_failures must be positive")
+
+    @property
+    def initial_call_limit(self) -> int:
+        return int(self.total_call_limit) - int(self.recovery_call_limit)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            **asdict(self),
+            "initial_call_limit": self.initial_call_limit,
+            "runtime_version": _legacy.RUNTIME_VERSION,
+            "provider_routing_mode": "unrestricted-openrouter",
+        }
 
 
+# The preserved native classes resolve RuntimeConfig from their module globals at
+# execution time.  Replace only that symbol so production and rollback facades
+# share one field-compatible configuration contract.
 _legacy.RuntimeConfig = RuntimeConfig
 
 
