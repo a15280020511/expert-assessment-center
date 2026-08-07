@@ -4,6 +4,11 @@ Business qualification gates are intentionally absent. The validator checks
 only that a plan is representable and contains executable model identities;
 team size, company mix, role topology, pool membership, budget, ranking source,
 optimizer status and recovery count are not admission constraints.
+
+Plan integrity uses a canonical execution-plan hash. A small set of fields below
+are validator annotations: they are deterministic consequences of the v9 policy,
+not governance-authored execution content, so adding those annotations must not
+change an already valid plan hash.
 """
 from __future__ import annotations
 
@@ -16,6 +21,15 @@ import v5_governance_model_plan_legacy as _legacy
 GovernanceModelPlanError = _legacy.GovernanceModelPlanError
 SCHEMA_VERSION = _legacy.SCHEMA_VERSION
 SELECTION_AUTHORITY = _legacy.SELECTION_AUTHORITY
+
+_VALIDATOR_ANNOTATIONS = frozenset(
+    {
+        "company_uniqueness_required",
+        "candidate_pool_membership_required",
+        "optimizer_optimality_required",
+        "budget_admission_gate_enabled",
+    }
+)
 
 
 def _canonical(value: Any) -> bytes:
@@ -30,8 +44,11 @@ def _canonical(value: Any) -> bytes:
 
 
 def plan_sha256(plan: Mapping[str, Any]) -> str:
+    """Hash governance/execution content, excluding deterministic annotations."""
     value = dict(plan)
     value.pop("plan_sha256", None)
+    for field in _VALIDATOR_ANNOTATIONS:
+        value.pop(field, None)
     return hashlib.sha256(_canonical(value)).hexdigest()
 
 
@@ -79,6 +96,17 @@ def validate_governance_model_plan(
         value = candidate
     if not isinstance(value, Mapping):
         raise GovernanceModelPlanError("governance model plan must be an object")
+
+    # Verify an existing execution-plan hash before normalization. This prevents
+    # validation from silently replacing a tampered hash with a new valid hash.
+    incoming_sha = str(value.get("plan_sha256") or "").strip()
+    if incoming_sha:
+        observed_sha = plan_sha256(value)
+        if incoming_sha != observed_sha:
+            raise GovernanceModelPlanError(
+                "governance model plan sha256 mismatch: "
+                f"expected {incoming_sha}, observed {observed_sha}"
+            )
 
     normalized = dict(value)
     selected = _rows(normalized.get("selected_models"), "selected_models", required=True)
