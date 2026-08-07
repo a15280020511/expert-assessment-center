@@ -1,256 +1,175 @@
 #!/usr/bin/env python3
-"""Admission wrapper for governance-frozen weekly top-50 reasoning pools.
+"""Permissive Issue admission for task-dynamic expert execution.
 
-The governance center freezes and signs model-level OpenRouter weekly reasoning
-candidates. This wrapper delegates four-primary/four-recovery assignment to
-OR-Tools CP-SAT. Provider routing is completely open and delegated to OpenRouter;
-no Provider allowlist, order, ZDR filter or endpoint qualification is an
-admission requirement.
+The Issue entrypoint performs only parsing plus dynamic team materialization.
+Historical schema, budget, duplicate, retry-count, busy, Top50, 4+4, company,
+free-first and optimizer-status admission gates are intentionally absent.
 """
 from __future__ import annotations
 
 import argparse
-import copy
 import json
+import os
 from pathlib import Path
 from typing import Any, Mapping
 
-import v5_governance_retry_state as governance_retry_state
-import v5_issue_ticket as legacy
-from v5_governance_model_plan import GovernanceModelPlanError, validate_governance_model_plan
-from v5_top50_pool_optimizer import Top50PoolOptimizationError, materialize_candidate_pool_selection
-
-LEGACY_GOVERNANCE_RESERVE_REASON = (
-    "approved recovery calls must leave at least one initial expert call "
-    "after three governance calls"
-)
-governance_retry_state.patch(legacy)
-
-DELEGATION_NOTICE = (
-    "委托边界：治理中心每次实时冻结并签名OpenRouter过去一周Token使用量最高的前50个推理模型，"
-    "只完成模型身份、推理能力、价格和任务上下文等模型级资格检查；专家团中心只能在该冻结候选池内，"
-    "由OR-Tools CP-SAT在不同公司约束下计算4个主模型、4个热替补，并保留其余合格模型为顺序替补。"
-    "Provider完全开放，由OpenRouter在固定模型的当前可用Provider之间自由选择和故障转移；"
-    "治理中心和专家中心均不得设置Provider白名单、顺序、ZDR、数据收集或价格过滤。"
-    "禁止越池选模、网络搜索和未经批准的模型替换。OR-Tools只负责确定性组合优化；"
-    "NetworkX只负责验证和编排有限有向无环执行图。专家禁止外部工具；"
-    "网页GPT只负责忠实提交、监控、取回和转述。"
-)
+from v5_governance_model_plan import validate_governance_model_plan
+from v5_top50_pool_optimizer import materialize_candidate_pool_selection
 
 
-def _rewrite_outputs(status: Mapping[str, Any]) -> None:
-    legacy._rewrite_outputs(status)  # noqa: SLF001
-    for key in (
-        "cost_anomaly_usd",
-        "model_plan_sha256",
-        "candidate_pool_plan_sha256",
-        "top20_reasoning_pool_sha256",
-        "top50_reasoning_pool_sha256",
-        "top50_reasoning_pool_size",
-        "optimizer",
-        "optimizer_optimality_proven",
-        "selected_expert_count",
-        "selected_recovery_count",
-        "model_selection_authority",
-        "provider_routing_mode",
-    ):
-        value = status.get(key, "")
-        legacy._write_output(key, "" if value is None else value)  # noqa: SLF001
+def _write_output(name: str, value: Any) -> None:
+    path = os.getenv("GITHUB_OUTPUT")
+    if not path:
+        return
+    text = str(value).replace("\n", " ").replace("\r", " ")
+    if isinstance(value, bool):
+        text = text.lower()
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(f"{name}={text}\n")
 
 
-def _read_original_packet(
-    args: argparse.Namespace,
-    root: Path,
-) -> tuple[dict[str, Any], argparse.Namespace]:
-    sanitized_args = copy.copy(args)
+def _event(args: argparse.Namespace) -> tuple[str, str, int, str]:
     if args.event_path:
-        event = json.loads(Path(args.event_path).read_text(encoding="utf-8"))
-        issue = event.get("issue") if isinstance(event.get("issue"), Mapping) else {}
-        packet = json.loads(str(issue.get("body") or ""))
-        if not isinstance(packet, dict):
-            raise ValueError("Issue body must be one JSON object")
-        sanitized = dict(packet)
-        sanitized.pop("governance_model_plan", None)
-        sanitized_event = dict(event)
-        sanitized_issue = dict(issue)
-        sanitized_issue["body"] = json.dumps(sanitized, ensure_ascii=False, separators=(",", ":"))
-        sanitized_event["issue"] = sanitized_issue
-        path = root / "sanitized-admission-event.json"
-        path.write_text(json.dumps(sanitized_event, ensure_ascii=False, indent=2), encoding="utf-8")
-        sanitized_args.event_path = str(path)
-        return packet, sanitized_args
-
-    packet = json.loads(str(args.issue_body or ""))
-    if not isinstance(packet, dict):
-        raise ValueError("Issue body must be one JSON object")
-    sanitized = dict(packet)
-    sanitized.pop("governance_model_plan", None)
-    sanitized_args.issue_body = json.dumps(sanitized, ensure_ascii=False, separators=(",", ":"))
-    return packet, sanitized_args
+        raw = json.loads(Path(args.event_path).read_text(encoding="utf-8"))
+        issue = raw.get("issue") if isinstance(raw.get("issue"), Mapping) else {}
+        comment = raw.get("comment") if isinstance(raw.get("comment"), Mapping) else {}
+        return (
+            str(issue.get("title") or ""),
+            str(issue.get("body") or ""),
+            int(issue.get("number") or 0),
+            str(comment.get("body") or ""),
+        )
+    return args.issue_title, args.issue_body, int(args.issue_number), args.comment_body
 
 
 def _task_text(packet: Mapping[str, Any]) -> str:
-    sanitized = dict(packet)
-    sanitized.pop("governance_model_plan", None)
-    projected = legacy._substantive_task_text(sanitized)  # noqa: SLF001
-    if projected.startswith(legacy.DELEGATION_NOTICE):
-        projected = DELEGATION_NOTICE + projected[len(legacy.DELEGATION_NOTICE) :]
-    return projected
+    task = packet.get("task") if isinstance(packet.get("task"), Mapping) else {}
+    question = str(task.get("question") or packet.get("question") or "").strip()
+    requirements = task.get("requirements")
+    rows = [str(value).strip() for value in requirements] if isinstance(requirements, list) else []
+    text = question or json.dumps(task or packet, ensure_ascii=False, default=str)
+    if rows:
+        text += "\n\n执行要求：\n" + "\n".join(f"- {value}" for value in rows if value)
+    evidence = packet.get("evidence")
+    if evidence not in {None, "", [], {}}:
+        text += "\n\n已提供证据/上下文：\n" + json.dumps(
+            evidence, ensure_ascii=False, default=str
+        )
+    return text
 
 
-def _accept_legacy_only_budget_rejection(
-    status: Mapping[str, Any],
-    total: int,
-    recovery: int,
-) -> bool:
-    errors = [str(value) for value in status.get("errors", [])]
-    return bool(
-        status.get("accepted") is not True
-        and errors == [LEGACY_GOVERNANCE_RESERVE_REASON]
-        and total - recovery >= 3
-    )
+def _cost_advisory(packet: Mapping[str, Any]) -> float | None:
+    budget = packet.get("approved_budget")
+    if not isinstance(budget, Mapping):
+        return None
+    raw = budget.get("cost_anomaly_usd")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
 
 
-def _postprocess(root: Path, packet: Mapping[str, Any]) -> dict[str, Any]:
-    path = root / "ticket-status.json"
-    status = json.loads(path.read_text(encoding="utf-8"))
-    total = int(status.get("calls") or 0)
-    recovery = int(status.get("maximum_recovery_calls") or 0)
-    if _accept_legacy_only_budget_rejection(status, total, recovery):
-        status["accepted"] = True
-        status["errors"] = []
-        status["reason"] = ""
-
-    if status.get("accepted") is True:
-        try:
-            materialized_packet, receipt = materialize_candidate_pool_selection(packet)
-            plan = validate_governance_model_plan(materialized_packet)
-            if int(plan["expert_count"]) > total - recovery:
-                raise GovernanceModelPlanError("selected expert count exceeds initial call capacity")
-            is_top50 = plan.get("selected_from_top50_reasoning_pool_only") is True
-            status.update(
-                {
-                    "required_model_calls": int(plan["expert_count"]),
-                    "maximum_initial_calls": total - recovery,
-                    "analysis_owner": (
-                        "expert-center-top50-ortools-runtime"
-                        if is_top50
-                        else "expert-center-top20-pool-selection-runtime"
-                    ),
-                    "runtime_version": (
-                        "v5-governance-top50-ortools-open-provider-runtime-1"
-                        if is_top50
-                        else "v5-governance-top20-pool-runtime-1"
-                    ),
-                    "claude_red_team_calls": 0,
-                    "claude_mechanism_enabled": False,
-                    "governance_model_calls": 0,
-                    "model_selection_authority": (
-                        "expert-assessment-center-ortools-from-governance-top50-pool"
-                        if is_top50
-                        else "expert-assessment-center-from-governance-top20-pool"
-                    ),
-                    "candidate_pool_authority": "decision-system-governance",
-                    "model_assignment_authority": (
-                        "expert-assessment-center-ortools"
-                        if is_top50
-                        else "expert-assessment-center"
-                    ),
-                    "model_plan_sha256": plan["plan_sha256"],
-                    "candidate_pool_plan_sha256": plan["source_governance_pool_plan_sha256"],
-                    "top20_reasoning_pool_sha256": plan.get("top20_reasoning_pool_sha256", ""),
-                    "top20_reasoning_pool_size": plan.get("top20_reasoning_pool_size", 0),
-                    "top50_reasoning_pool_sha256": plan.get("top50_reasoning_pool_sha256", ""),
-                    "top50_reasoning_pool_size": plan.get("top50_reasoning_pool_size", 0),
-                    "top50_reasoning_pool_period": plan.get("top50_reasoning_pool_period", ""),
-                    "top50_expert_selectable_candidate_count": plan.get("top50_expert_selectable_candidate_count", 0),
-                    "expert_selectable_candidate_count": plan.get(
-                        "top50_expert_selectable_candidate_count",
-                        plan.get("expert_selectable_candidate_count", 0),
-                    ),
-                    "optimizer": plan.get("optimizer", "legacy-price-order"),
-                    "optimizer_optimality_proven": bool(plan.get("optimizer_audit", {}).get("optimality_proven")),
-                    "expert_center_selection_receipt_sha256": receipt["receipt_sha256"],
-                    "selected_expert_count": plan["expert_count"],
-                    "selected_recovery_count": plan["recovery_count"],
-                    "ordered_standby_count": plan.get("expert_center_ordered_standby_count", 0),
-                    "expert_center_model_selection_allowed": True,
-                    "expert_center_model_selection_scope": (
-                        "frozen-governance-top50-reasoning-pool-only"
-                        if is_top50
-                        else "frozen-governance-top20-reasoning-pool-only"
-                    ),
-                    "expert_center_model_reranking_allowed": False,
-                    "model_substitution_allowed": False,
-                    "provider_resolution_only": False,
-                    "provider_routing_mode": "unrestricted-openrouter",
-                    "provider_restrictions_applied": False,
-                    "provider_fallback_allowed": True,
-                    "unrestricted_provider_fallback_allowed": True,
-                    "openrouter_selects_provider": True,
-                    "business_retry_limit": governance_retry_state.BUSINESS_RETRY_LIMIT,
-                    "system_repair_retry_limit": governance_retry_state.SYSTEM_REPAIR_RETRY_LIMIT,
-                    "call_policy": "approved-total-includes-experts-and-recovery-only",
-                    "reason": (
-                        "explicit command, authorization, uniqueness, signed weekly top-50 "
-                        "reasoning pool, OR-Tools 4+4 assignment, unrestricted OpenRouter "
-                        "provider routing, recovery reserve, and fail-closed policy accepted"
-                        if is_top50
-                        else "legacy signed top-20 rollback path accepted"
-                    ),
-                }
-            )
-            (root / "ticket.json").write_text(
-                json.dumps(materialized_packet, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            (root / "governance-model-plan.json").write_text(
-                json.dumps(plan, ensure_ascii=False, indent=2, sort_keys=True),
-                encoding="utf-8",
-            )
-            (root / "expert-center-selection-receipt.json").write_text(
-                json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True),
-                encoding="utf-8",
-            )
-            (root / "task.txt").write_text(_task_text(packet), encoding="utf-8")
-        except (
-            GovernanceModelPlanError,
-            Top50PoolOptimizationError,
-            KeyError,
-            TypeError,
-            ValueError,
-        ) as exc:
-            status["accepted"] = False
-            status["errors"] = [str(exc)]
-            status["reason"] = str(exc)
-            status["model_selection_authority"] = (
-                "expert-assessment-center-ortools-from-governance-top50-pool"
-            )
-            status["candidate_pool_authority"] = "decision-system-governance"
-            status["expert_center_model_selection_allowed"] = True
-
-    path.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
-    _rewrite_outputs(status)
-    return status
+def _status_outputs(status: Mapping[str, Any]) -> None:
+    for key in (
+        "accepted",
+        "reason",
+        "calls",
+        "maximum_recovery_calls",
+        "maximum_initial_calls",
+        "cost_anomaly_usd",
+        "task_id",
+        "task_fingerprint",
+        "is_retry",
+        "retry_id",
+        "execution_id",
+        "selected_expert_count",
+        "selected_recovery_count",
+    ):
+        _write_output(key, status.get(key, ""))
 
 
 def prepare(args: argparse.Namespace) -> int:
     root = Path(args.output_dir)
     root.mkdir(parents=True, exist_ok=True)
+    title, body, issue_number, comment_body = _event(args)
+    status: dict[str, Any] = {
+        "accepted": False,
+        "title": title,
+        "issue_number": issue_number,
+        "reason": "",
+        "errors": [],
+        "admission_mode": "dynamic-no-business-gates",
+        "free_first_required": False,
+        "canary_required": False,
+        "schema_gate_required": False,
+        "budget_gate_required": False,
+        "duplicate_gate_required": False,
+        "busy_gate_required": False,
+        "top50_gate_required": False,
+        "four_plus_four_required": False,
+        "company_uniqueness_required": False,
+        "optimizer_optimality_required": False,
+        "provider_routing_mode": "unrestricted-openrouter",
+    }
     try:
-        packet, sanitized_args = _read_original_packet(args, root)
-    except (OSError, json.JSONDecodeError, ValueError) as exc:
-        legacy.prepare(args)
-        status_path = root / "ticket-status.json"
-        status = json.loads(status_path.read_text(encoding="utf-8"))
-        status["accepted"] = False
-        status["errors"] = [str(exc)]
+        packet = json.loads(body)
+        if not isinstance(packet, Mapping):
+            raise ValueError("Issue body must be a JSON object")
+        materialized, receipt = materialize_candidate_pool_selection(packet)
+        plan = validate_governance_model_plan(materialized)
+        selected = list(plan.get("selected_models") or [])
+        recoveries = list(plan.get("recovery_models") or [])
+        if not selected:
+            raise ValueError("dynamic planner produced no expert")
+
+        calls = len(selected) + len(recoveries)
+        task_id = str(packet.get("task_id") or f"issue-{issue_number}")
+        is_retry = comment_body.startswith("/retry-expert-team")
+        command_id = comment_body.split(maxsplit=1)[1].strip() if " " in comment_body else task_id
+        status.update(
+            {
+                "accepted": True,
+                "reason": "dynamic expert plan materialized; no business admission gates applied",
+                "task_id": task_id,
+                "task_fingerprint": str(plan.get("plan_sha256") or receipt.get("receipt_sha256") or ""),
+                "calls": calls,
+                "maximum_recovery_calls": len(recoveries),
+                "maximum_initial_calls": len(selected),
+                "cost_anomaly_usd": _cost_advisory(packet),
+                "cost_policy": "advisory-only",
+                "cost_threshold_can_stop_execution": False,
+                "selected_expert_count": len(selected),
+                "selected_recovery_count": len(recoveries),
+                "ordered_standby_count": int(plan.get("expert_center_ordered_standby_count") or 0),
+                "is_retry": is_retry,
+                "retry_id": command_id if is_retry else "",
+                "execution_id": "" if is_retry else command_id,
+                "model_assignment_authority": "expert-assessment-center-dynamic-ortools",
+                "fixed_team_size_used": False,
+                "fixed_role_topology_used": False,
+                "company_uniqueness_constraint_used": False,
+                "optimizer_optimality_required": False,
+            }
+        )
+        (root / "ticket.json").write_text(
+            json.dumps(materialized, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        (root / "governance-model-plan.json").write_text(
+            json.dumps(plan, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
+        )
+        (root / "expert-center-selection-receipt.json").write_text(
+            json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
+        )
+        (root / "task.txt").write_text(_task_text(packet), encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001 - malformed execution input still needs a receipt
         status["reason"] = str(exc)
-        status_path.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
-        _rewrite_outputs(status)
-        return 0
-    legacy.prepare(sanitized_args)
-    _postprocess(root, packet)
+        status["errors"] = [str(exc)]
+
+    (root / "ticket-status.json").write_text(
+        json.dumps(status, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    _status_outputs(status)
     return 0
 
 
@@ -260,66 +179,58 @@ def render(args: argparse.Namespace) -> int:
     run_line = f"- Run: `{args.run_url}`\n" if args.run_url else ""
     if args.phase == "accepted":
         heading = "EXECUTION_RETRY_ACCEPTED" if status.get("is_retry") else "EXECUTION_ACCEPTED"
-        identity = (
-            f"- RETRY_ID: `{status.get('retry_id')}`\n"
-            if status.get("is_retry")
-            else f"- EXECUTION_ID: `{status.get('execution_id')}`\n"
-        )
-        anomaly = status.get("cost_anomaly_usd")
-        anomaly_text = f"`${anomaly}`" if anomaly is not None else "`未配置固定美元阈值`"
         text = (
             f"## {heading}\n\n"
-            "GitHub Issue Runner 已接收治理中心签名的推理周榜前50名候选池。\n\n"
+            "任务已进入动态专家执行。\n\n"
             f"- Task ID：`{status.get('task_id')}`\n"
-            f"- TASK_FINGERPRINT: `{status.get('task_fingerprint')}`\n"
-            + identity
-            + f"- 候选池计划SHA256：`{status.get('candidate_pool_plan_sha256')}`\n"
-            + f"- 执行模型计划SHA256：`{status.get('model_plan_sha256')}`\n"
-            + f"- 前50名候选池SHA256：`{status.get('top50_reasoning_pool_sha256')}`\n"
-            + "- 候选池权：`decision-system-governance`\n"
-            + "- 4主+4热替补及顺序替补分配权：`expert-assessment-center-ortools`\n"
-            + "- 专家团权限：`只能在冻结前50名合格候选内优化；其余合格模型全部保留为顺序替补`\n"
-            + "- Provider：`完全开放；请求不设置only/order/ZDR/数据收集/价格等Provider过滤，由OpenRouter自由路由固定模型`\n"
-            + "- 组织：`并行独立分析 → 交叉审查 → 最终综合`\n"
-            + "- Claude机制：`关闭；调用数0`\n"
-            + f"- 优化器：`{status.get('optimizer')}`；最优性证明：`{status.get('optimizer_optimality_proven')}`\n"
-            + f"- 模型调用总硬上限：`{status.get('calls')}`（专家与恢复合计）\n"
-            + f"- 计划专家数：`{status.get('selected_expert_count')}`\n"
-            + f"- 计划热替补数：`{status.get('selected_recovery_count')}`\n"
-            + f"- 其余顺序替补数：`{status.get('ordered_standby_count')}`\n"
-            + f"- 费用异常提示阈值：{anomaly_text}\n"
-            + "- 专家外部工具：`禁止`\n"
-            + "- 跨任务历史：`不读取、不保存、不参与执行`\n"
-            + "- 失败策略：`候选池缺失、篡改、不足8个合格公司、求解非OPTIMAL、出现Provider限制字段或模型不可执行即失败关闭`\n"
+            f"- 动态专家数：`{status.get('selected_expert_count')}`\n"
+            f"- 动态恢复专家数：`{status.get('selected_recovery_count')}`\n"
+            f"- 其余候选：`{status.get('ordered_standby_count')}`\n"
+            "- 固定4+4：`关闭`\n"
+            "- Top50-only：`关闭`\n"
+            "- 公司去重：`关闭`\n"
+            "- OR-Tools OPTIMAL门禁：`关闭；FEASIBLE/启发式回退均可执行`\n"
+            "- free-first / 免费Canary前置：`关闭，仅可作为遥测`\n"
+            "- Provider：`完全开放，由OpenRouter动态路由`\n"
+            "- 费用/调用预算：`不作为入场门禁；由当前动态执行图决定调用规模`\n"
             + run_line
         )
     elif args.phase == "rejected":
         text = (
             "## EXECUTION_REJECTED\n\n"
-            f"票据未进入模型调用阶段：{status.get('reason', 'unknown')}。\n\n"
-            "模型调用：`0`。首次执行请评论：`/run-expert-team <ticket_task_id>`；"
-            "受控重试请评论：`/retry-expert-team <唯一retry_id>`。\n"
+            f"输入无法形成可执行动态专家图：{status.get('reason', 'unknown')}。\n"
+            "该拒绝仅表示输入/结构不可执行，不是资格、预算、Canary或模型门禁。\n"
             + run_line
         )
     else:
-        text = (
-            "## EXECUTION_FAILED\n\n"
-            + run_line
-            + "最终状态由候选池、专家中心选择回执、独立审计、主Artifact和最终证明发布。\n"
-        )
+        text = "## EXECUTION_STATUS\n\n" + run_line
     print(text)
     return 0
 
 
-def main() -> int:
-    parser = legacy.parser()
-    args = parser.parse_args()
-    if args.command == "prepare":
-        return prepare(args)
-    if args.command == "render":
-        return render(args)
-    raise ValueError(f"unsupported command: {args.command}")
+def parser() -> argparse.ArgumentParser:
+    root = argparse.ArgumentParser()
+    sub = root.add_subparsers(dest="command", required=True)
+    prepare_parser = sub.add_parser("prepare")
+    prepare_parser.add_argument("--event-path")
+    prepare_parser.add_argument("--issue-title", default="")
+    prepare_parser.add_argument("--issue-body", default="")
+    prepare_parser.add_argument("--issue-number", default=0, type=int)
+    prepare_parser.add_argument("--actor", default="")
+    prepare_parser.add_argument("--author-association", default="")
+    prepare_parser.add_argument("--comment-body", default="")
+    prepare_parser.add_argument("--output-dir", default="ticket-artifacts")
+    prepare_parser.set_defaults(func=prepare)
+    render_parser = sub.add_parser("render")
+    render_parser.add_argument(
+        "--phase", choices=["accepted", "rejected", "success", "failure"], required=True
+    )
+    render_parser.add_argument("--output-dir", default="ticket-artifacts")
+    render_parser.add_argument("--run-url", default="")
+    render_parser.set_defaults(func=render)
+    return root
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    arguments = parser().parse_args()
+    raise SystemExit(arguments.func(arguments))
