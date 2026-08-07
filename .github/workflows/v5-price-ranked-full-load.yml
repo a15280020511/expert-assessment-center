@@ -10,10 +10,15 @@ on:
       - "open-model-market/v5_top50_plan_validation.py"
       - "open-model-market/v5_governance_model_plan.py"
       - "open-model-market/v5_dynamic_pipeline.py"
+      - "open-model-market/v5_hierarchical_candidate_optimizer.py"
+      - "open-model-market/v5_execution_transport.py"
       - "open-model-market/v5_runtime.py"
+      - "open-model-market/v5_soft_resource_governance.py"
       - "tests/test_v5_task_adaptive_scoring.py"
       - "tests/test_top50_pool_optimizer.py"
       - "tests/test_v5_dynamic_recovery_resilience.py"
+      - "tests/test_v5_execution_transport.py"
+      - "tests/test_v5_production_standby_promotion.py"
       - ".github/workflows/v5-price-ranked-full-load.yml"
       - "requirements*.txt"
 
@@ -61,6 +66,14 @@ jobs:
             2>&1 | tee full-load-evidence/targeted-tests.log
           coverage report --show-missing --fail-under=85 \
             2>&1 | tee full-load-evidence/coverage.log
+
+      - name: Run execution-transport and production standby regressions
+        run: |
+          set -euo pipefail
+          PYTHONPATH=open-model-market python -m unittest -v \
+            tests.test_v5_execution_transport \
+            tests.test_v5_production_standby_promotion \
+            2>&1 | tee full-load-evidence/transport-and-standby-tests.log
 
       - name: Produce deterministic dynamic full-load receipt
         env:
@@ -174,8 +187,6 @@ jobs:
           assert simple_candidates == complex_candidates
           assert simple_candidates > 0
 
-          # Budget metadata is advisory. Deliberately tiny values must not
-          # reject or force the dynamic execution graph into an artificial shape.
           budget_probe = _packet()
           budget_probe['approved_budget'] = {'calls': 1, 'maximum_recovery_calls': 0}
           budget_materialized, _ = materialize_top50_selection(budget_probe)
