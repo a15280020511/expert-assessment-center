@@ -53,20 +53,14 @@ def add_recoveries(ticket: dict) -> None:
 
 
 class GovernanceModelPlanTests(unittest.TestCase):
-    def test_valid_fixture_passes_and_normalizes_v9_policy(self) -> None:
+    def test_valid_fixture_passes_without_policy_rewrite(self) -> None:
         ticket = load_ticket()
+        original_sha = ticket["governance_model_plan"]["plan_sha256"]
         plan = validate_governance_model_plan(ticket)
         self.assertEqual(plan["selection_authority"], "decision-system-governance")
-        self.assertTrue(plan["model_substitution_allowed"])
-        self.assertTrue(plan["expert_center_reranking_allowed"])
-        self.assertFalse(plan["fixed_team_size_required"])
-        self.assertFalse(plan["fixed_role_topology_required"])
-        self.assertFalse(plan["company_uniqueness_required"])
-        self.assertFalse(plan["candidate_pool_membership_required"])
-        self.assertFalse(plan["optimizer_optimality_required"])
-        self.assertFalse(plan["budget_admission_gate_enabled"])
-        self.assertEqual(plan["provider_routing_mode"], "unrestricted-openrouter")
-        self.assertFalse(plan["provider_restrictions_applied"])
+        self.assertFalse(plan["model_substitution_allowed"])
+        self.assertFalse(plan["expert_center_reranking_allowed"])
+        self.assertEqual(plan["plan_sha256"], original_sha)
         self.assertEqual(plan["plan_sha256"], plan_sha256(plan))
         self.assertEqual(
             validate_governance_model_plan({**ticket, "governance_model_plan": plan})[
@@ -75,12 +69,25 @@ class GovernanceModelPlanTests(unittest.TestCase):
             plan["plan_sha256"],
         )
 
-    def test_current_dynamic_schema_is_accepted(self) -> None:
+    def test_current_dynamic_schema_and_unrestricted_provider_are_accepted(self) -> None:
         ticket = load_ticket()
-        ticket["governance_model_plan"]["schema_version"] = DYNAMIC_SCHEMA_VERSION
+        plan = ticket["governance_model_plan"]
+        plan["schema_version"] = DYNAMIC_SCHEMA_VERSION
+        plan["model_substitution_allowed"] = True
+        plan["expert_center_reranking_allowed"] = True
+        plan["fixed_team_size_required"] = False
+        plan["fixed_role_topology_required"] = False
+        plan["company_uniqueness_required"] = False
+        plan["optimizer_optimality_required"] = False
+        plan["budget_admission_gate_enabled"] = False
+        plan["provider_routing_mode"] = "unrestricted-openrouter"
+        plan["provider_restrictions_applied"] = False
         resign(ticket)
-        plan = validate_governance_model_plan(ticket)
-        self.assertEqual(plan["schema_version"], DYNAMIC_SCHEMA_VERSION)
+        validated = validate_governance_model_plan(ticket)
+        self.assertEqual(validated["schema_version"], DYNAMIC_SCHEMA_VERSION)
+        self.assertEqual(validated["provider_routing_mode"], "unrestricted-openrouter")
+        self.assertFalse(validated["provider_restrictions_applied"])
+        self.assertEqual(validated["plan_sha256"], plan["plan_sha256"])
 
     def test_missing_plan_fails_closed(self) -> None:
         ticket = load_ticket()
@@ -114,14 +121,19 @@ class GovernanceModelPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(GovernanceModelPlanError, "sha256 mismatch"):
             validate_governance_model_plan(ticket)
 
+    def test_explicit_provider_pinning_is_rejected_even_when_resigned(self) -> None:
+        ticket = load_ticket()
+        ticket["governance_model_plan"]["provider_routing_mode"] = "pinned-provider"
+        resign(ticket)
+        with self.assertRaisesRegex(GovernanceModelPlanError, "restricts Provider routing"):
+            validate_governance_model_plan(ticket)
+
     def test_same_company_experts_are_allowed(self) -> None:
         ticket = load_ticket()
         selected = ticket["governance_model_plan"]["selected_models"]
         selected[1]["company"] = selected[0]["company"]
         resign(ticket)
-        plan = validate_governance_model_plan(ticket)
-        self.assertEqual(selected[0]["company"], plan["selected_models"][1]["company"])
-        self.assertFalse(plan["company_uniqueness_required"])
+        validate_governance_model_plan(ticket)
 
     def test_recovery_company_reuse_is_allowed(self) -> None:
         ticket = load_ticket()
@@ -162,7 +174,13 @@ class GovernanceModelPlanTests(unittest.TestCase):
         ticket["approved_budget"]["maximum_recovery_calls"] = 0
         plan = validate_governance_model_plan(ticket)
         self.assertEqual(plan["recovery_count"], 1)
-        self.assertFalse(plan["budget_admission_gate_enabled"])
+
+    def test_declared_model_counts_are_structural_integrity(self) -> None:
+        ticket = load_ticket()
+        ticket["governance_model_plan"]["expert_count"] = 99
+        resign(ticket)
+        with self.assertRaisesRegex(GovernanceModelPlanError, "expert_count"):
+            validate_governance_model_plan(ticket)
 
     def test_noncanonical_plan_value_is_rejected(self) -> None:
         ticket = load_ticket()
