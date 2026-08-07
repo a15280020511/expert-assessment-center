@@ -37,7 +37,7 @@ def resign(ticket: dict) -> None:
 
 
 class GovernedPlanOrchestratorTests(unittest.TestCase):
-    def test_current_plan_materializes_dynamic_finite_dag(self) -> None:
+    def test_current_plan_materializes_exact_declared_roles_without_inventing_edges(self) -> None:
         ticket = load_ticket()
         proposal, audit = build_governed_proposal(
             ticket=ticket,
@@ -48,9 +48,16 @@ class GovernedPlanOrchestratorTests(unittest.TestCase):
             [row["model"] for row in proposal["nodes"]],
             [row["model"] for row in ticket["governance_model_plan"]["selected_models"]],
         )
+        self.assertEqual(
+            [row["role_kind"] for row in proposal["nodes"]],
+            [row["role_kind"] for row in ticket["governance_model_plan"]["selected_models"]],
+        )
         self.assertEqual(len(proposal["nodes"]), 4)
-        self.assertEqual(proposal["nodes"][-1]["role_kind"], "synthesis")
-        self.assertEqual(proposal["final_nodes"], [proposal["nodes"][-1]["node_id"]])
+        self.assertEqual(proposal["edges"], [])
+        self.assertEqual(
+            sorted(proposal["final_nodes"]),
+            sorted(row["node_id"] for row in proposal["nodes"]),
+        )
         self.assertEqual(
             proposal["recovery_models"],
             ticket["governance_model_plan"]["recovery_models"],
@@ -58,6 +65,9 @@ class GovernedPlanOrchestratorTests(unittest.TestCase):
         self.assertTrue(audit["networkx_used_for_dag_validation"])
         self.assertFalse(audit["fixed_team_size_used"])
         self.assertFalse(audit["fixed_four_plus_four_used"])
+        self.assertFalse(audit["fixed_role_topology_used"])
+        self.assertFalse(audit["fixed_role_grammar_used"])
+        self.assertFalse(audit["role_dependencies_recomputed_from_role_kind"])
         self.assertFalse(audit["company_uniqueness_constraint_used"])
         self.assertFalse(audit["provider_endpoint_resolution_performed"])
         self.assertEqual(audit["provider_routing_mode"], "unrestricted-openrouter")
@@ -168,7 +178,7 @@ class GovernedPlanOrchestratorTests(unittest.TestCase):
             )
             self.assertEqual(candidate, baseline)
 
-    def test_single_expert_becomes_synthesis_without_edges(self) -> None:
+    def test_single_expert_without_role_metadata_remains_single_dynamic_sink(self) -> None:
         ticket = load_ticket()
         plan = ticket["governance_model_plan"]
         plan["selected_models"] = [copy.deepcopy(plan["selected_models"][0])]
@@ -184,11 +194,11 @@ class GovernedPlanOrchestratorTests(unittest.TestCase):
             task_envelope={},
         )
         self.assertEqual(len(proposal["nodes"]), 1)
-        self.assertEqual(proposal["nodes"][0]["role_kind"], "synthesis")
+        self.assertEqual(proposal["nodes"][0]["role_kind"], "dynamic:task-role")
         self.assertEqual(proposal["edges"], [])
         self.assertEqual(proposal["final_nodes"], [proposal["nodes"][0]["node_id"]])
 
-    def test_two_experts_form_independent_then_synthesis(self) -> None:
+    def test_two_experts_without_declared_dependency_remain_parallel_sinks(self) -> None:
         ticket = load_ticket()
         plan = ticket["governance_model_plan"]
         plan["selected_models"] = [
@@ -209,16 +219,12 @@ class GovernedPlanOrchestratorTests(unittest.TestCase):
         )
         self.assertEqual(
             [row["role_kind"] for row in proposal["nodes"]],
-            ["independent", "synthesis"],
+            ["dynamic:task-role", "dynamic:task-role"],
         )
-        self.assertEqual(len(proposal["edges"]), 1)
+        self.assertEqual(proposal["edges"], [])
         self.assertEqual(
-            proposal["edges"][0],
-            {
-                "source": proposal["nodes"][0]["node_id"],
-                "target": proposal["nodes"][1]["node_id"],
-                "relation_type": "synthesis",
-            },
+            sorted(proposal["final_nodes"]),
+            sorted(row["node_id"] for row in proposal["nodes"]),
         )
 
     def test_same_company_models_are_not_rejected_by_orchestrator(self) -> None:
