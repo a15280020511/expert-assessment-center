@@ -103,7 +103,7 @@ class ProductionExpertPolicyTests(unittest.TestCase):
         constraints = compile_task_constraints("task")
         with (
             patch(
-                "v5_constitutional_runtime.normalize_answer",
+                "v5_constitutional_runtime_legacy.normalize_answer",
                 return_value=("normalized answer", {"applied": True}),
             ),
             patch.object(
@@ -112,10 +112,13 @@ class ProductionExpertPolicyTests(unittest.TestCase):
                 return_value=(False, 0.25, ["quality-floor-not-met"]),
             ),
             patch(
-                "v5_constitutional_runtime.delivery_contract.validate_answer_contract",
+                "v5_constitutional_runtime_legacy.delivery_contract.validate_answer_contract",
                 return_value=[],
             ),
-            patch("v5_constitutional_runtime.validate_answer_evidence", return_value=[]),
+            patch(
+                "v5_constitutional_runtime_legacy.validate_answer_evidence",
+                return_value=[],
+            ),
         ):
             normalized = engine._normalize_attempt(node, "task", attempt, constraints)
         self.assertFalse(normalized)
