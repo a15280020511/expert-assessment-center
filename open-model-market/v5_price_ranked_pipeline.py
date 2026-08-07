@@ -18,6 +18,11 @@ for _name in dir(_legacy):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_legacy, _name)
 
+# Explicit aliases keep the active facade statically auditable instead of relying on
+# the compatibility globals export above.
+model_market = _legacy.model_market
+_load_mapping = _legacy._load_mapping
+
 
 def _top50(plan: Mapping[str, Any]) -> bool:
     return plan.get("selected_from_top50_reasoning_pool_only") is True
