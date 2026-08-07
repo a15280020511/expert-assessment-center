@@ -51,7 +51,8 @@ def _task_text(packet: Mapping[str, Any]) -> str:
     if rows:
         text += "\n\n执行要求：\n" + "\n".join(f"- {value}" for value in rows if value)
     evidence = packet.get("evidence")
-    if evidence not in {None, "", [], {}}:
+    has_evidence = evidence is not None and evidence != "" and evidence != [] and evidence != {}
+    if has_evidence:
         text += "\n\n已提供证据/上下文：\n" + json.dumps(
             evidence, ensure_ascii=False, default=str
         )
