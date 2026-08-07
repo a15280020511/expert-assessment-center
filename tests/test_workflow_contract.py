@@ -60,6 +60,39 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("Publish whatever expert delivery exists", self.text)
         self.assertIn("Upload execution evidence", self.text)
 
+    def test_authoritative_terminal_is_after_evidence_upload(self):
+        upload = self.text.index("name: Upload execution evidence")
+        terminal = self.text.index("name: Publish authoritative governance terminal")
+        self.assertLess(upload, terminal)
+        self.assertIn("id: evidence", self.text)
+        self.assertIn("steps.evidence.outputs.artifact-id", self.text)
+        self.assertIn("steps.evidence.outputs.artifact-url", self.text)
+        self.assertIn("steps.evidence.outputs.artifact-digest", self.text)
+
+    def test_authoritative_terminal_matches_governance_contract(self):
+        required = (
+            "EXECUTION_COMPLETED",
+            "EXECUTION_DEGRADED",
+            "EXECUTION_FAILED",
+            "- Task ID:",
+            "- Primary Artifact ID:",
+            "- Primary Artifact digest:",
+            "- Primary Artifact:",
+            "- Final attestation Artifact ID:",
+            "- Final attestation Artifact digest:",
+            "- Final attestation Artifact:",
+            "single-self-contained-v9-artifact",
+            "v5-execution-summary.json",
+        )
+        missing = [item for item in required if item not in self.text]
+        self.assertEqual(missing, [])
+
+    def test_degraded_result_is_not_reported_as_completed(self):
+        self.assertIn("completion === 'degraded'", self.text)
+        self.assertIn("heading = 'EXECUTION_DEGRADED'", self.text)
+        self.assertIn("completion === 'full'", self.text)
+        self.assertIn("quality === 'full_success'", self.text)
+
     def test_provider_routing_is_not_pinned_in_workflow(self):
         lowered = self.text.casefold()
         self.assertNotIn("provider.only", lowered)
