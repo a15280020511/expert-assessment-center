@@ -35,11 +35,19 @@ jobs:
           python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
           python -m pip check
 
-      - name: Run canonical static and unit gates
+      - name: Run Ruff static gate
         run: |
           set -euo pipefail
           python -m ruff check .
+
+      - name: Run compileall gate
+        run: |
+          set -euo pipefail
           python -m compileall -q open-model-market tests tools
+
+      - name: Run full unittest gate
+        run: |
+          set -euo pipefail
           python -m unittest discover -s tests -p 'test*.py' -v
 
       - name: Validate governance-plan execution boundary
