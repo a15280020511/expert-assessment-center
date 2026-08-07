@@ -10,81 +10,56 @@ class WorkflowContractTests(unittest.TestCase):
     def setUpClass(cls):
         cls.text = WORKFLOW.read_text(encoding="utf-8")
 
-    def test_only_explicit_comment_commands_trigger_execution(self):
+    def test_owner_comment_commands_trigger_dynamic_execution(self):
         self.assertIn("issue_comment:", self.text)
         self.assertIn("types: [created]", self.text)
-        self.assertIn("startsWith(github.event.comment.body, '/run-expert-team ')", self.text)
-        self.assertIn("startsWith(github.event.comment.body, '/retry-expert-team ')", self.text)
+        self.assertIn("github.actor == github.repository_owner", self.text)
+        self.assertIn("/run-expert-team", self.text)
+        self.assertIn("/retry-expert-team", self.text)
 
-    def test_both_jobs_checkout_frozen_production_ref(self):
-        self.assertEqual(2, self.text.count("ref: production"))
-        self.assertGreaterEqual(self.text.count('test "$main" = "$production"'), 2)
-        self.assertGreaterEqual(self.text.count('test "$checked" = "$production"'), 2)
-        self.assertIn("checked-out-production-sha.txt", self.text)
+    def test_checkout_uses_current_main_without_production_sha_gate(self):
+        self.assertIn("name: Checkout current main", self.text)
+        self.assertIn("ref: main", self.text)
+        self.assertNotIn("ref: production", self.text)
+        self.assertNotIn('test "$main" = "$production"', self.text)
+        self.assertNotIn("checked-out-production-sha.txt", self.text)
 
-    def test_active_path_is_price_ranked_and_zero_claude(self):
-        for name in (
-            "v5_price_ranked_issue_ticket.py",
+    def test_active_path_is_task_dynamic_and_gate_free(self):
+        self.assertIn("v5_price_ranked_issue_ticket.py", self.text)
+        self.assertIn("v5_dynamic_pipeline.py", self.text)
+        for legacy_gate in (
             "v5_price_ranked_ticket_gate.py",
             "v5_price_ranked_production_ticket.py",
-            "v5_price_ranked_execution_auditor.py",
+            "v5_admission_lock.py",
             "v5_price_ranked_independent_revalidation.py",
         ):
-            self.assertIn(name, self.text)
-        self.assertNotIn("v5_production_claude_request.py", self.text)
-        self.assertNotIn("v5_claude_red_team_policy.py", self.text)
-        self.assertNotIn("v5_governance_runtime.py", self.text)
-        self.assertNotIn("claude-opus", self.text.casefold())
-        self.assertNotIn("anthropic", self.text.casefold())
+            self.assertNotIn(legacy_gate, self.text)
+        self.assertNotIn("group: expert-production-admission", self.text)
+        self.assertNotIn("group: expert-production-global", self.text)
 
-    def test_production_is_serial_and_fail_closed(self):
-        self.assertIn("group: expert-production-admission", self.text)
-        self.assertIn("group: expert-production-global", self.text)
-        self.assertIn("cancel-in-progress: false", self.text)
-        self.assertIn("v5_admission_lock.py", self.text)
-        self.assertIn("EXECUTION_REJECTED", self.text)
-        self.assertIn("--require-live-catalog", self.text)
+    def test_dynamic_plan_executes_without_canary_or_artifact_qualification(self):
+        build = self.text.index("name: Build task-dynamic expert plan")
+        execute = self.text.index("name: Execute dynamic expert graph")
+        publish = self.text.index("name: Publish whatever expert delivery exists")
+        self.assertLess(build, execute)
+        self.assertLess(execute, publish)
+        self.assertNotIn("free-first", self.text.casefold())
+        self.assertNotIn("canary", self.text.casefold())
+        self.assertNotIn("independently revalidate", self.text.casefold())
+        self.assertNotIn("only after audit", self.text.casefold())
 
-    def test_audit_artifact_revalidation_and_attestation_order(self):
-        execute = self.text.index("name: Execute explicit price-ranked production runtime")
-        prepare = self.text.index("name: Prepare report publication package")
-        audit = self.text.index("name: Audit complete price-ranked evidence before publication")
-        freeze = self.text.index("name: Freeze primary artifact manifest after audit")
-        upload = self.text.index("name: Upload primary ticket artifacts")
-        revalidate = self.text.index("name: Independently revalidate uploaded primary artifact")
-        publish = self.text.index("name: Publish report only after audit and artifact freeze")
-        final = self.text.index("name: Render authoritative V5 final status")
-        attest = self.text.index("name: Generate post-upload final attestation")
-        proof = self.text.index("name: Upload final attestation artifact")
-        self.assertLess(execute, prepare)
-        self.assertLess(prepare, audit)
-        self.assertLess(audit, freeze)
-        self.assertLess(freeze, upload)
-        self.assertLess(upload, revalidate)
-        self.assertLess(revalidate, publish)
-        self.assertLess(publish, final)
-        self.assertLess(final, attest)
-        self.assertLess(attest, proof)
-        self.assertIn("steps.audit.outputs.status == 'PASS'", self.text)
-        self.assertIn("steps.independent.outputs.status == 'PASS'", self.text)
+    def test_result_publication_is_best_effort_not_fail_closed_gate(self):
+        self.assertIn("continue-on-error: true", self.text)
+        self.assertIn("if: always() && steps.ticket.outputs.accepted == 'true'", self.text)
+        self.assertIn("Publish whatever expert delivery exists", self.text)
+        self.assertIn("Upload execution evidence", self.text)
 
-    def test_authoritative_failure_is_visible_job_failure(self):
-        marker = self.text.index("name: Verify authoritative V5 final outcome")
-        tail = self.text[marker:]
-        for field in (
-            "steps.execute.outcome",
-            "steps.prepare_report.outcome",
-            "steps.audit.outcome",
-            "steps.audit.outputs.status",
-            "steps.manifest.outcome",
-            "steps.ticket_artifact.outcome",
-            "steps.independent.outcome",
-            "steps.publish.outcome",
-            "steps.attest.outcome",
-            "steps.proof_artifact.outcome",
-            "steps.final.outputs.status",
-        ):
-            self.assertIn(field, tail)
+    def test_provider_routing_is_not_pinned_in_workflow(self):
+        lowered = self.text.casefold()
+        self.assertNotIn("provider.only", lowered)
+        self.assertNotIn("provider.order", lowered)
+        self.assertNotIn("require_parameters", lowered)
+        self.assertNotIn("zdr", lowered)
 
 
 if __name__ == "__main__":
