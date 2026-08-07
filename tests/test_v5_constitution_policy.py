@@ -1,125 +1,81 @@
 from __future__ import annotations
 
 import json
-import sys
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MARKET = ROOT / "open-model-market"
-sys.path.insert(0, str(MARKET))
-
-from execution_graph import ExecutionGraph, SelectedNode  # noqa: E402
-from execution_graph_validator import validate_execution_graph  # noqa: E402
-from v5_free_first_preflight import SCHEMA_VERSION, evaluate_free_first_preflight  # noqa: E402
-from v5_model_company import REQUIRE_DISTINCT_MODEL_COMPANIES, canonical_model_company  # noqa: E402
 
 
 class ConstitutionPolicyTests(unittest.TestCase):
+    """Assert the active v9 policy rather than retired v8 admission gates."""
+
     @classmethod
     def setUpClass(cls) -> None:
-        cls.policy = json.loads((MARKET / "constitutional_policy.json").read_text(encoding="utf-8"))
-        cls.constitution = (ROOT / "CONSTITUTION.md").read_text(encoding="utf-8")
-
-    def test_free_first_policy_is_fail_closed(self) -> None:
-        free = self.policy["free_first_testing"]
-        self.assertTrue(self.policy["fail_closed"])
-        self.assertEqual(
-            free["required_order"],
-            [
-                "zero_call_deterministic_validation",
-                "zero_cost_free_model_canary",
-                "explicitly_authorized_paid_acceptance_or_production",
-            ],
+        cls.policy = json.loads(
+            (MARKET / "constitutional_policy.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(free["free_model_actual_cost_usd"], 0.0)
-        self.assertFalse(free["automatic_paid_full_task_retry_allowed"])
-        self.assertFalse(free["free_evidence_can_move_production"])
 
-    def test_free_preflight_cannot_promote_production(self) -> None:
-        receipt = {
-            "schema_version": SCHEMA_VERSION,
-            "target_sha": "a" * 40,
-            "simulation": {"status": "PASS", "model_calls": 0, "paid_model_calls": 0},
-            "free_canary": {
-                "status": "PASS",
-                "requested_model": "openrouter/free",
-                "model_requests": 1,
-                "successful_model_calls": 1,
-                "paid_model_calls": 0,
-                "actual_cost_usd": 0.0,
-            },
-            "shadow_governance": None,
-            "paid_acceptance_triggered": False,
-            "production_ref_moved": False,
-        }
-        verdict = evaluate_free_first_preflight(receipt)
-        self.assertEqual(verdict["status"], "PASS")
-        self.assertTrue(verdict["paid_acceptance_allowed"])
-        self.assertFalse(verdict["production_promotion_allowed"])
-
-    def test_company_aliases_cannot_evade_all_different_rule(self) -> None:
-        self.assertTrue(REQUIRE_DISTINCT_MODEL_COMPANIES)
-        self.assertEqual(canonical_model_company("google/model-a"), "google")
-        self.assertEqual(canonical_model_company("deepmind/model-b"), "google")
-        diversity = self.policy["expert_company_diversity"]
-        self.assertEqual(diversity["constraint"], "all_different")
-        self.assertFalse(diversity["provider_can_override_company"])
-        self.assertEqual(diversity["duplicate_company_action"], "fail_closed")
-
-    def test_active_governance_has_zero_model_calls(self) -> None:
+    def test_v9_open_dynamic_policy_is_active(self) -> None:
         self.assertEqual(
             self.policy["schema_version"],
-            "v5-constitutional-policy-8-task-adaptive-value-ortools",
+            "v5-constitutional-policy-9-open-dynamic-experts",
         )
-        chain = self.policy["governance_chain"]
-        self.assertEqual(chain["candidate_pool_authority"], "decision-system-governance")
-        self.assertEqual(chain["assignment_authority"], "expert-assessment-center-ortools-cp-sat")
-        self.assertEqual(chain["provider_routing_authority"], "openrouter-unrestricted")
-        self.assertIn("current_task_structural_demand_profile", chain["sequence"])
-        self.assertFalse(chain["claude_mechanism_enabled"])
-        self.assertEqual(chain["claude_calls_per_task"], 0)
-        self.assertEqual(chain["gpt_selection_calls_per_task"], 0)
-        self.assertEqual(chain["governance_model_calls_per_task"], 0)
-        self.assertFalse(chain["model_loop_allowed"])
-        self.assertFalse(chain["agent_framework_allowed"])
+        self.assertEqual(self.policy["authority"], "CONSTITUTION.md")
 
-    def test_weekly_top50_ortools_organization_is_authoritative(self) -> None:
-        pool = self.policy["candidate_pool"]
-        self.assertEqual(pool["pool_size"], 50)
-        self.assertEqual(pool["popularity_period"], "week")
-        self.assertFalse(pool["daily_or_monthly_can_replace_primary_pool"])
-        self.assertFalse(pool["provider_endpoint_qualification_required"])
-        self.assertFalse(pool["zdr_provider_qualification_required"])
-        optimizer = self.policy["optimizer_runtime"]
-        self.assertEqual(optimizer["engine"], "ortools-cp-sat")
-        self.assertEqual(optimizer["primary_expert_count"], 4)
-        self.assertEqual(optimizer["warm_recovery_count"], 4)
-        self.assertEqual(optimizer["required_solver_status"], "OPTIMAL")
-        self.assertEqual(optimizer["deterministic_workers"], 1)
-        self.assertFalse(optimizer["provider_metric_used"])
+    def test_execution_has_no_free_first_or_exact_sha_qualification_gate(self) -> None:
+        admission = self.policy["execution_admission"]
+        for key in (
+            "free_first_required",
+            "zero_call_qualification_required",
+            "free_canary_required",
+            "full_ci_pass_required_before_task_execution",
+            "exact_sha_evidence_required",
+            "paid_execution_requires_prior_qualification",
+        ):
+            self.assertFalse(admission[key], key)
         self.assertEqual(
-            optimizer["selection_principles"],
-            [
-                "concrete-problem-concrete-analysis",
-                "dynamic-adaptation",
-                "small-effort-large-return",
-            ],
+            admission["qualification_and_canary_role"],
+            "advisory-telemetry-only",
         )
-        self.assertIn(
-            "role_aware_estimated_current_task_cost_rank",
-            optimizer["objective_components"],
-        )
-        self.assertIn(
-            "marginal_cost_per_relative_quality_rank",
-            optimizer["objective_components"],
-        )
-        self.assertNotIn("qualified_provider_resilience", optimizer["objective_components"])
+
+    def test_governance_supplies_candidates_without_fixed_pool_eligibility(self) -> None:
+        pool = self.policy["candidate_pool"]
+        self.assertEqual(pool["authority"], "decision-system-governance")
+        self.assertIsNone(pool["fixed_pool_size"])
+        for key in (
+            "top50_only",
+            "top20_only",
+            "weekly_rank_required",
+            "reasoning_rank_required",
+            "flagship_filter_required",
+            "price_filter_required",
+            "company_diversity_required",
+            "signed_pool_membership_required",
+            "provider_endpoint_qualification_required",
+            "zdr_provider_qualification_required",
+        ):
+            self.assertFalse(pool[key], key)
+        self.assertTrue(pool["expert_center_can_use_any_governance_supplied_candidate"])
+        self.assertTrue(pool["expert_center_can_rerank_and_assign"])
+
+    def test_team_roles_and_recovery_are_task_derived(self) -> None:
         matching = self.policy["dynamic_task_matching"]
-        self.assertEqual(matching["planner"], "expert-center-ortools-cp-sat")
-        self.assertTrue(matching["provider_selection_delegated_to_openrouter"])
-        self.assertFalse(matching["keyword_routing_allowed"])
-        self.assertFalse(matching["domain_hardcoding_allowed"])
+        self.assertTrue(matching["required"])
+        self.assertTrue(matching["current_task_only"])
+        self.assertFalse(matching["cross_task_history_allowed"])
+        self.assertEqual(matching["team_size"], "task-derived")
+        self.assertEqual(matching["recovery_size"], "task-derived")
+        self.assertEqual(matching["roles"], "task-derived")
+        self.assertEqual(matching["role_topology"], "task-derived")
+        self.assertEqual(matching["model_assignment"], "task-derived")
+        self.assertEqual(matching["company_mix"], "unconstrained")
+        self.assertFalse(matching["fixed_team_size_allowed"])
+        self.assertFalse(matching["fixed_four_plus_four_allowed"])
+        self.assertFalse(matching["keyword_routing_required"])
+        self.assertFalse(matching["domain_hardcoding_required"])
+        self.assertTrue(matching["model_substitution_allowed"])
         self.assertEqual(
             matching["principles"],
             [
@@ -128,94 +84,89 @@ class ConstitutionPolicyTests(unittest.TestCase):
                 "small_effort_large_return",
             ],
         )
-        self.assertEqual(
-            matching["organization"],
-            "parallel_independent_analysis_then_cross_review_then_final_synthesis",
-        )
-        self.assertIn("OR-Tools", self.constitution)
-        self.assertIn("周榜前五十", self.constitution)
-        self.assertIn("NetworkX", self.constitution)
-        self.assertIn("Token 与费用实行软治理", self.constitution)
-        self.assertIn("具体问题具体分析", self.constitution)
-        self.assertIn("动态适配", self.constitution)
-        self.assertIn("小付出大回报", self.constitution)
 
-    def test_provider_routing_is_completely_open(self) -> None:
-        privacy = self.policy["expert_endpoint_privacy"]
-        self.assertEqual(privacy["provider_routing_mode"], "unrestricted-openrouter")
-        self.assertFalse(privacy["zdr_required"])
-        self.assertFalse(privacy["data_collection_filter_applied"])
-        self.assertFalse(privacy["provider_allowlist_allowed"])
-        self.assertFalse(privacy["provider_order_allowed"])
-        self.assertTrue(privacy["provider_fallback_allowed"])
-        self.assertTrue(privacy["unrestricted_provider_fallback_allowed"])
-        self.assertTrue(privacy["openrouter_selects_provider"])
-        self.assertFalse(privacy["model_substitution_allowed"])
-        self.assertIn("Provider 完全开放", self.constitution)
-
-    def test_dependency_set_is_minimal_and_sufficient(self) -> None:
-        deps = self.policy["dependency_allowlist"]
-        self.assertEqual(set(deps["runtime"]), {"jsonschema", "networkx", "ortools"})
-        self.assertTrue(deps["minimum_sufficient_set"])
-        self.assertFalse(deps["langchain_allowed"])
-        self.assertFalse(deps["crewai_allowed"])
-        self.assertFalse(deps["autogen_allowed"])
-
-    def test_tool_prohibition_covers_selection_and_experts(self) -> None:
-        tools = self.policy["tool_prohibition"]
-        self.assertEqual(tools["scope"], ["deterministic_selection", "expert_execution", "expert_recovery"])
+    def test_optimizer_is_optional_and_has_nonblocking_fallbacks(self) -> None:
+        optimizer = self.policy["optimizer_runtime"]
+        self.assertEqual(optimizer["engine"], "ortools-cp-sat")
+        self.assertFalse(optimizer["optimizer_required"])
+        self.assertFalse(optimizer["optimality_required"])
+        self.assertTrue(optimizer["feasible_solution_allowed"])
+        self.assertTrue(optimizer["heuristic_fallback_allowed"])
         for key in (
-            "external_tools_allowed",
-            "web_browsing_allowed",
-            "mcp_or_plugin_allowed",
-            "code_or_shell_execution_allowed",
-            "database_or_file_lookup_allowed",
-            "connector_or_external_api_allowed",
-            "request_tool_fields_allowed",
-            "external_fact_collection_allowed",
+            "company_uniqueness_constraint",
+            "top50_membership_constraint",
+            "fixed_role_slot_constraint",
+            "fixed_recovery_slot_constraint",
+            "approved_budget_constraint",
+            "provider_constraint",
+        ):
+            self.assertFalse(optimizer[key], key)
+        self.assertTrue(optimizer["capacity_metadata_is_advisory"])
+        self.assertTrue(optimizer["cost_metadata_is_advisory"])
+
+    def test_provider_routing_is_unrestricted(self) -> None:
+        routing = self.policy["provider_routing"]
+        self.assertEqual(routing["mode"], "unrestricted-openrouter")
+        self.assertFalse(routing["provider_allowlist_allowed"])
+        self.assertFalse(routing["provider_order_allowed"])
+        self.assertFalse(routing["provider_ignore_list_allowed"])
+        self.assertFalse(routing["provider_price_filter_allowed"])
+        self.assertFalse(routing["provider_zdr_filter_required"])
+        self.assertFalse(routing["provider_data_collection_filter_required"])
+        self.assertFalse(routing["exact_provider_lock_required"])
+        self.assertTrue(routing["openrouter_selects_provider"])
+        self.assertTrue(routing["provider_fallback_allowed"])
+
+    def test_resource_controls_are_soft_but_execution_must_be_finite(self) -> None:
+        resources = self.policy["resource_governance"]
+        for key in (
+            "fixed_total_call_ceiling",
+            "fixed_initial_call_ceiling",
+            "fixed_recovery_call_ceiling",
+            "fixed_team_size_ceiling",
+            "cost_threshold_can_reject_execution",
+            "estimated_cost_can_reject_execution",
+            "actual_cost_can_invalidate_valid_output",
+            "local_token_ceiling_allowed",
+        ):
+            self.assertFalse(resources[key], key)
+        self.assertTrue(resources["team_and_recovery_counts_come_from_current_execution_graph"])
+        self.assertTrue(resources["finite_execution_graph_required"])
+        self.assertFalse(resources["infinite_model_loop_allowed"])
+        self.assertFalse(resources["unbounded_recursive_retry_allowed"])
+
+    def test_expert_tools_and_arbitrary_network_egress_remain_prohibited(self) -> None:
+        tools = self.policy["tool_policy"]
+        for key in (
+            "expert_external_tools_allowed",
+            "expert_web_browsing_allowed",
+            "expert_plugin_or_mcp_allowed",
+            "expert_code_execution_allowed",
+            "expert_database_lookup_allowed",
+            "expert_external_api_allowed",
         ):
             self.assertFalse(tools[key], key)
-        self.assertEqual(tools["violation_action"], "fail_closed")
 
-    def test_production_promotion_requires_task_adaptive_value_scoring(self) -> None:
+        security = self.policy["security_boundaries"]
+        self.assertTrue(security["authentication_required"])
+        self.assertTrue(security["secret_protection_required"])
+        self.assertTrue(security["repository_isolation_preserved"])
+        self.assertFalse(security["arbitrary_network_egress_allowed"])
+        self.assertEqual(security["model_plane_hosts"], ["openrouter.ai"])
+        self.assertEqual(security["control_plane_hosts"], ["api.github.com"])
+        self.assertFalse(security["unsafe_infinite_execution_allowed"])
+
+    def test_production_requires_unrestricted_provider_routing_only_as_model_policy_gate(self) -> None:
         promotion = self.policy["production_promotion"]
-        self.assertTrue(promotion["requires_task_adaptive_value_scoring"])
-        self.assertTrue(promotion["requires_ortools_optimality_proof"])
-        self.assertTrue(promotion["requires_unrestricted_provider_routing"])
-
-    def test_duplicate_expert_companies_fail_graph_validation(self) -> None:
-        def node(node_id: str, work: str, model: str) -> SelectedNode:
-            return SelectedNode(
-                node_id=node_id,
-                assigned_work=(work,),
-                professional_capabilities={},
-                functions=("analysis",),
-                prompt_profile={},
-                reasoning_profile={},
-                parameter_profile={},
-                model=model,
-                provider_endpoint="provider/example",
-                output_contract={"required": True},
-                estimated_quality=0.8,
-                quality_uncertainty=0.1,
-                estimated_cost=0.0,
-                failure_probability=0.0,
-                request_config={},
-            )
-
-        graph = ExecutionGraph(
-            nodes=(node("n1", "w1", "google/model-a"), node("n2", "w2", "deepmind/model-b")),
-            edges=(),
-            execution_stages=(("n1", "n2"),),
-            entry_nodes=("n1", "n2"),
-            final_nodes=("n1", "n2"),
-            required_work=("w1", "w2"),
-            estimated_quality=0.8,
-            quality_floor=0.7,
-            estimated_total_cost=0.0,
-        )
-        issues = validate_execution_graph(graph)
-        self.assertIn("model_company_reuse", {issue.code for issue in issues})
+        self.assertFalse(promotion["zero_cost_ci_required"])
+        self.assertFalse(promotion["zero_cost_free_canary_required"])
+        self.assertFalse(promotion["explicit_paid_acceptance_required"])
+        self.assertFalse(promotion["signed_weekly_top50_pool_required"])
+        self.assertFalse(promotion["ortools_optimality_proof_required"])
+        self.assertFalse(promotion["task_adaptive_value_scoring_required"])
+        self.assertTrue(promotion["unrestricted_provider_routing_required"])
+        self.assertFalse(promotion["automatic_merge_allowed"])
+        self.assertFalse(promotion["automatic_production_ref_move_allowed"])
 
 
 if __name__ == "__main__":
