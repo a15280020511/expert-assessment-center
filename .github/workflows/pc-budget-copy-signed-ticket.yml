@@ -18,6 +18,7 @@ jobs:
       TARGET_REPO: ${{ github.repository }}
       SOURCE_REPO: a15280020511/decision-system-governance
       SOURCE_ISSUE: "252"
+      TARGET_ISSUE: "344"
     steps:
       - name: Fetch and validate immutable governance ticket
         shell: bash
@@ -31,21 +32,21 @@ jobs:
           test "$(jq -r '.state' /tmp/source.json)" = "closed"
           jq -er '.body | fromjson | select(.task_id == "run-20260807-pc-budget") | select(.route == "expert-team") | select(.private_output == false) | select(.governance_model_plan.top50_reasoning_pool_size == 50)' /tmp/source.json >/dev/null
           jq -r '.body' /tmp/source.json > /tmp/signed-ticket.json
+          echo "signed_ticket_bytes=$(wc -c < /tmp/signed-ticket.json)"
 
-      - name: Create exact acceptance Issue without execution command
+      - name: Patch exact signed ticket into existing acceptance Issue
         shell: bash
         run: |
           set -euo pipefail
-          jq -n \
-            --arg title '[acceptance] run-20260807-pc-budget real execution' \
-            --rawfile body /tmp/signed-ticket.json \
-            '{title:$title, body:$body}' > /tmp/create.json
-          curl -fsSL -X POST \
+          jq -n --rawfile body /tmp/signed-ticket.json '{body:$body}' > /tmp/patch.json
+          status="$(curl -sS -o /tmp/response.json -w '%{http_code}' -X PATCH \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/$TARGET_REPO/issues" \
-            --data-binary @/tmp/create.json \
-            > /tmp/created.json
-          jq -e '.number and .html_url' /tmp/created.json
-          echo "Created acceptance issue #$(jq -r '.number' /tmp/created.json)"
+            "https://api.github.com/repos/$TARGET_REPO/issues/$TARGET_ISSUE" \
+            --data-binary @/tmp/patch.json)"
+          echo "patch_http_status=$status"
+          cat /tmp/response.json
+          test "$status" = "200"
+          test "$(jq -r '.number' /tmp/response.json)" = "$TARGET_ISSUE"
+          jq -er '.body | fromjson | select(.task_id == "run-20260807-pc-budget") | select(.governance_model_plan.top50_reasoning_pool_size == 50)' /tmp/response.json >/dev/null
