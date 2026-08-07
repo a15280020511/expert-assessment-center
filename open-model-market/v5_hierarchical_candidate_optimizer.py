@@ -1,13 +1,14 @@
 """Task-derived dynamic candidate optimizer.
 
-Production planning order:
+Pre-execution planning order:
 current ticket -> task-derived work DAG -> parameter-instance discovery ->
 parameter dependency graph -> conditional Optuna resolution -> role DAG ->
-OR-Tools model-role assignment -> current-run standby replanning.
+OR-Tools model-role assignment.
 
-No fixed role grammar or pre-activated business parameter template participates.
-No model-business eligibility gates are introduced; no-tools remains the sole hard
-model boundary.
+Current-run standby promotion is a separate execution/replanning phase, not a
+pre-execution planning step. No fixed role grammar or pre-activated business
+parameter template participates. No model-business eligibility gates are
+introduced; no-tools remains the sole hard model boundary.
 """
 from __future__ import annotations
 
@@ -59,15 +60,39 @@ def _materialize(
     parameter_requirements = dict(planning["parameter_requirements"])
     resolved_parameters = dict(planning["resolved_parameters"])
     decomposition = dict(planning["decomposition"])
-    parameter_coverage = dict(resolved_parameters.get("parameter_coverage_audit") or {})
+    parameter_coverage = dict(
+        resolved_parameters.get("parameter_coverage_audit") or {}
+    )
     if parameter_coverage.get("status") != "PASS":
-        raise HierarchicalOptimizationError("dynamic parameter coverage audit did not pass")
+        raise HierarchicalOptimizationError(
+            "dynamic parameter coverage audit did not pass"
+        )
+
+    planning_sequence = [
+        str(value)
+        for value in planning.get("planning_sequence") or []
+        if str(value) != "runtime-feedback-replanning"
+    ]
+    if not planning_sequence or planning_sequence[-1] != "ortools-model-assignment":
+        raise HierarchicalOptimizationError(
+            "pre-execution planning must terminate at OR-Tools model assignment"
+        )
+    runtime_replanning = {
+        "enabled": bool(standby),
+        "stage": "runtime-feedback-replanning",
+        "trigger_source": "current-run-failure-and-quality-feedback",
+        "promotion_depth_fixed": False,
+        "cross_task_history_used": False,
+    }
 
     audit = {
         **solver_audit,
-        "schema_version": "v5-task-derived-dynamic-expert-composition-1",
-        "dynamic_parameter_graph_schema_version": DYNAMIC_PARAMETER_GRAPH_SCHEMA_VERSION,
-        "planning_sequence": list(planning["planning_sequence"]),
+        "schema_version": "v5-task-derived-dynamic-expert-composition-2",
+        "dynamic_parameter_graph_schema_version": (
+            DYNAMIC_PARAMETER_GRAPH_SCHEMA_VERSION
+        ),
+        "planning_sequence": planning_sequence,
+        "runtime_replanning": runtime_replanning,
         "task_decomposition": decomposition,
         "parameter_requirements": parameter_requirements,
         "resolved_parameters": resolved_parameters,
@@ -96,6 +121,7 @@ def _materialize(
         "parameter_values_resolved_before_team_composition": True,
         "team_and_roles_derived_after_parameter_resolution": True,
         "model_assignment_executed_after_parameter_resolution": True,
+        "runtime_feedback_replanning_separate_from_planning": True,
         "all_calculable_planning_parameters_dynamic": True,
         "all_parameter_instances_current_task_derived": True,
         "fixed_parameter_template_used": False,
@@ -139,7 +165,8 @@ def _materialize(
             "parameter_requirement_discovery_completed": True,
             "parameter_dependency_graph_completed": True,
             "parameter_values_resolved_before_model_assignment": True,
-            "planning_sequence": list(planning["planning_sequence"]),
+            "planning_sequence": planning_sequence,
+            "runtime_replanning": runtime_replanning,
             "task_decomposition": decomposition,
             "dynamic_parameter_requirements": parameter_requirements,
             "dynamic_parameter_values": resolved_parameters,
@@ -148,7 +175,9 @@ def _materialize(
             "selected_from_top50_reasoning_pool_only": False,
             "selected_from_governance_candidate_pool": True,
             "candidate_pool_authority": "decision-system-governance",
-            "model_assignment_authority": "expert-assessment-center-task-derived-dynamic-ortools",
+            "model_assignment_authority": (
+                "expert-assessment-center-task-derived-dynamic-ortools"
+            ),
             "optimizer": str(audit["optimizer"]),
             "optimizer_audit": audit,
             "task_adaptive_scoring_completed": True,
@@ -176,12 +205,13 @@ def _materialize(
             "all_calculable_planning_parameters_dynamic": True,
             "all_parameter_instances_current_task_derived": True,
             "selection_policy": (
-                "governance reasoning-popularity candidates -> derive current-ticket finite "
-                "work DAG -> discover required parameter instances -> build parameter DAG -> "
-                "resolve conditional values with Optuna/direct derivation -> derive arbitrary "
-                "role DAG from work DAG -> OR-Tools model-role assignment -> current-run "
-                "feedback standby promotion -> unrestricted OpenRouter Provider routing; "
-                "no business eligibility gates; hard model boundary=no-tools"
+                "governance reasoning-popularity candidates -> derive current-ticket "
+                "finite work DAG -> discover effective parameter instances -> build "
+                "parameter DAG -> resolve current values with NetworkX/Optuna -> derive "
+                "role DAG from work DAG -> OR-Tools model-role assignment; execution "
+                "then performs current-run feedback standby promotion; unrestricted "
+                "OpenRouter Provider routing; no business eligibility gates; hard model "
+                "boundary=no-tools"
             ),
         }
     )
@@ -189,9 +219,10 @@ def _materialize(
     selection_basis_sha256 = base._sha(plan)  # noqa: SLF001
 
     receipt = {
-        "schema_version": "expert-center-task-derived-dynamic-selection-receipt-v1",
+        "schema_version": "expert-center-task-derived-dynamic-selection-receipt-v2",
         "selection_basis_sha256": selection_basis_sha256,
-        "planning_sequence": list(planning["planning_sequence"]),
+        "planning_sequence": planning_sequence,
+        "runtime_replanning": runtime_replanning,
         "task_decomposition": decomposition,
         "parameter_requirements": parameter_requirements,
         "resolved_parameters": resolved_parameters,
