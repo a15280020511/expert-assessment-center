@@ -16,6 +16,8 @@ import v5_runtime_legacy as _legacy
 from execution_graph import ExecutionGraph, GraphLimits, SelectedNode
 from execution_graph_validator import validate_execution_graph
 
+_LegacyExecutionEngine = _legacy.ExecutionEngine
+
 for _name in dir(_legacy):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_legacy, _name)
@@ -140,7 +142,7 @@ class BudgetController(_legacy.BudgetController):
         return value
 
 
-class ExecutionEngine(_legacy.ExecutionEngine):
+class ExecutionEngine(_LegacyExecutionEngine):
     """Validate intrinsic graph safety without historical business gates."""
 
     _IGNORED_BUSINESS_LIMIT_CODES = {
