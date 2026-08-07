@@ -4,4 +4,4 @@ ortools==9.15.6755
 optuna==4.9.0
 ruff==0.16.0
 coverage==7.15.2
-hypothesis==6.160.0
+hypothesis==6.165.1
