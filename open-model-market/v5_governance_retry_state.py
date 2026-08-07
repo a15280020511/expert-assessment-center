@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable, Mapping
 
-BUSINESS_RETRY_LIMIT = 2
+BUSINESS_RETRY_LIMIT = 3
 SYSTEM_REPAIR_RETRY_LIMIT = 6
 
 FORMAL_STATE_PREFIXES = (
