@@ -15,18 +15,20 @@ import v5_price_ranked_issue_ticket as governed_ticket  # noqa: E402
 
 
 class GovernancePlanAdmissionIntegrationTests(unittest.TestCase):
-    def test_invalid_ticket_guard_uses_dynamic_governed_wrapper(self) -> None:
-        text = (ROOT / ".github/workflows/invalid-ticket-rejection.yml").read_text(
+    def test_authoritative_dynamic_workflow_has_no_secondary_admission_race(self) -> None:
+        primary = (ROOT / ".github/workflows/execution-ticket.yml").read_text(
             encoding="utf-8"
         )
+        secondary = ROOT / ".github/workflows/invalid-ticket-rejection.yml"
+        self.assertFalse(secondary.exists())
         self.assertIn(
-            "python open-model-market/v5_price_ranked_issue_ticket.py prepare", text
+            "python open-model-market/v5_price_ranked_issue_ticket.py prepare", primary
         )
         self.assertIn(
-            "python open-model-market/v5_price_ranked_issue_ticket.py render", text
+            "python open-model-market/v5_price_ranked_issue_ticket.py render", primary
         )
-        self.assertNotIn("v5_price_ranked_ticket_gate.py", text)
-        self.assertNotIn("v5_issue_ticket.py prepare", text)
+        self.assertIn("--comments-path ticket-artifacts/issue-comments.json", primary)
+        self.assertNotIn("ref: production", primary)
 
     def test_cost_advisory_is_optional_and_never_an_admission_gate(self) -> None:
         self.assertIsNone(governed_ticket._cost_advisory({}))  # noqa: SLF001
