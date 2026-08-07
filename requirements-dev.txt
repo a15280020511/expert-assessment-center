@@ -1,4 +1,6 @@
--r requirements-runtime.txt
+jsonschema==4.26.0
+networkx==3.6.1
+ortools==9.15.6755
 ruff==0.16.0
 coverage==7.15.2
 hypothesis==6.160.0

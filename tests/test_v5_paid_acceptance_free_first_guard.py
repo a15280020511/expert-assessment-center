@@ -11,8 +11,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-model-market"))
 
-import v5_paid_acceptance_free_first_guard as guard
-import v5_price_ranked_production_ticket as production_ticket
+import v5_paid_acceptance_free_first_guard as guard  # noqa: E402
+import v5_price_ranked_production_ticket as production_ticket  # noqa: E402
 
 
 SHA = "a" * 40
@@ -40,7 +40,7 @@ def _canary() -> dict:
 
 def _zero_call() -> dict:
     return {
-        "schema_version": "v5-top50-ortools-zero-call-qualification-1",
+        "schema_version": "v5-top50-task-adaptive-ortools-zero-call-qualification-2",
         "target_sha": SHA,
         "status": "PASS",
         "model_calls": 0,
@@ -50,6 +50,14 @@ def _zero_call() -> dict:
         "popularity_period": "week",
         "optimizer": "ortools-cp-sat",
         "optimizer_required_status": "OPTIMAL",
+        "selection_principles": [
+            "concrete-problem-concrete-analysis",
+            "dynamic-adaptation",
+            "small-effort-large-return",
+        ],
+        "task_adaptive_value_scoring_required": True,
+        "semantic_keyword_routing_used": False,
+        "cross_task_history_used": False,
         "primary_expert_count": 4,
         "warm_recovery_count": 4,
         "provider_routing_mode": "unrestricted-openrouter",
@@ -96,6 +104,23 @@ class PaidAcceptanceFreeFirstGuardTests(unittest.TestCase):
             self.assertEqual(receipt["target_sha"], SHA)
             self.assertEqual(receipt["simulation"]["model_calls"], 0)
             self.assertEqual(receipt["free_canary"]["actual_cost_usd"], 0.0)
+            self.assertEqual(
+                receipt["evidence"]["selection_principles"],
+                [
+                    "concrete-problem-concrete-analysis",
+                    "dynamic-adaptation",
+                    "small-effort-large-return",
+                ],
+            )
+
+    def test_legacy_zero_call_receipt_is_rejected(self) -> None:
+        receipt = _zero_call()
+        receipt["schema_version"] = "v5-top50-ortools-zero-call-qualification-1"
+        with self.assertRaisesRegex(
+            guard.PaidAcceptanceFreeFirstError,
+            "schema_version",
+        ):
+            guard._validate_zero_call_receipt(receipt, SHA)
 
     def test_missing_free_canary_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.object(
@@ -103,7 +128,10 @@ class PaidAcceptanceFreeFirstGuardTests(unittest.TestCase):
             "_find_free_canary",
             side_effect=guard.PaidAcceptanceFreeFirstError("missing"),
         ):
-            with self.assertRaisesRegex(guard.PaidAcceptanceFreeFirstError, "missing"):
+            with self.assertRaisesRegex(
+                guard.PaidAcceptanceFreeFirstError,
+                "missing",
+            ):
                 guard.enforce_free_first(
                     output_dir=Path(tmp),
                     expected_sha=SHA,
@@ -145,7 +173,10 @@ class PaidAcceptanceFreeFirstGuardTests(unittest.TestCase):
             clear=True,
         ):
             root = Path(tmp)
-            with self.assertRaisesRegex(guard.PaidAcceptanceFreeFirstError, "no evidence"):
+            with self.assertRaisesRegex(
+                guard.PaidAcceptanceFreeFirstError,
+                "no evidence",
+            ):
                 production_ticket._enforce_paid_acceptance_free_first(root)
             error = json.loads((root / "free-first-preflight-error.json").read_text())
             self.assertEqual(error["status"], "FAIL")

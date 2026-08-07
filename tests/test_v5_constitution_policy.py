@@ -70,12 +70,13 @@ class ConstitutionPolicyTests(unittest.TestCase):
     def test_active_governance_has_zero_model_calls(self) -> None:
         self.assertEqual(
             self.policy["schema_version"],
-            "v5-constitutional-policy-7-top50-ortools-open-provider",
+            "v5-constitutional-policy-8-task-adaptive-value-ortools",
         )
         chain = self.policy["governance_chain"]
         self.assertEqual(chain["candidate_pool_authority"], "decision-system-governance")
         self.assertEqual(chain["assignment_authority"], "expert-assessment-center-ortools-cp-sat")
         self.assertEqual(chain["provider_routing_authority"], "openrouter-unrestricted")
+        self.assertIn("current_task_structural_demand_profile", chain["sequence"])
         self.assertFalse(chain["claude_mechanism_enabled"])
         self.assertEqual(chain["claude_calls_per_task"], 0)
         self.assertEqual(chain["gpt_selection_calls_per_task"], 0)
@@ -97,10 +98,36 @@ class ConstitutionPolicyTests(unittest.TestCase):
         self.assertEqual(optimizer["required_solver_status"], "OPTIMAL")
         self.assertEqual(optimizer["deterministic_workers"], 1)
         self.assertFalse(optimizer["provider_metric_used"])
+        self.assertEqual(
+            optimizer["selection_principles"],
+            [
+                "concrete-problem-concrete-analysis",
+                "dynamic-adaptation",
+                "small-effort-large-return",
+            ],
+        )
+        self.assertIn(
+            "role_aware_estimated_current_task_cost_rank",
+            optimizer["objective_components"],
+        )
+        self.assertIn(
+            "marginal_cost_per_relative_quality_rank",
+            optimizer["objective_components"],
+        )
         self.assertNotIn("qualified_provider_resilience", optimizer["objective_components"])
         matching = self.policy["dynamic_task_matching"]
         self.assertEqual(matching["planner"], "expert-center-ortools-cp-sat")
         self.assertTrue(matching["provider_selection_delegated_to_openrouter"])
+        self.assertFalse(matching["keyword_routing_allowed"])
+        self.assertFalse(matching["domain_hardcoding_allowed"])
+        self.assertEqual(
+            matching["principles"],
+            [
+                "concrete_problem_concrete_analysis",
+                "dynamic_adaptation",
+                "small_effort_large_return",
+            ],
+        )
         self.assertEqual(
             matching["organization"],
             "parallel_independent_analysis_then_cross_review_then_final_synthesis",
@@ -109,6 +136,9 @@ class ConstitutionPolicyTests(unittest.TestCase):
         self.assertIn("周榜前五十", self.constitution)
         self.assertIn("NetworkX", self.constitution)
         self.assertIn("Token 与费用实行软治理", self.constitution)
+        self.assertIn("具体问题具体分析", self.constitution)
+        self.assertIn("动态适配", self.constitution)
+        self.assertIn("小付出大回报", self.constitution)
 
     def test_provider_routing_is_completely_open(self) -> None:
         privacy = self.policy["expert_endpoint_privacy"]
@@ -146,6 +176,12 @@ class ConstitutionPolicyTests(unittest.TestCase):
         ):
             self.assertFalse(tools[key], key)
         self.assertEqual(tools["violation_action"], "fail_closed")
+
+    def test_production_promotion_requires_task_adaptive_value_scoring(self) -> None:
+        promotion = self.policy["production_promotion"]
+        self.assertTrue(promotion["requires_task_adaptive_value_scoring"])
+        self.assertTrue(promotion["requires_ortools_optimality_proof"])
+        self.assertTrue(promotion["requires_unrestricted_provider_routing"])
 
     def test_duplicate_expert_companies_fail_graph_validation(self) -> None:
         def node(node_id: str, work: str, model: str) -> SelectedNode:

@@ -15,7 +15,14 @@ import v5_price_ranked_ticket_gate as gate  # noqa: E402
 
 
 class Top50TicketGateCapacityTests(unittest.TestCase):
-    def _fixture(self, root: Path, *, calls: int = 8, recovery: int = 4) -> None:
+    def _fixture(
+        self,
+        root: Path,
+        *,
+        calls: int = 8,
+        recovery: int = 4,
+        task_adaptive: bool = True,
+    ) -> None:
         status = {
             "accepted": True,
             "runtime_version": "v5-governance-top50-ortools-open-provider-runtime-1",
@@ -36,8 +43,38 @@ class Top50TicketGateCapacityTests(unittest.TestCase):
             "model_substitution_allowed": False,
             "cost_anomaly_usd": None,
         }
+        plan = {
+            "selected_from_top50_reasoning_pool_only": True,
+            "optimizer": "ortools-cp-sat",
+            "optimizer_audit": {
+                "optimality_proven": True,
+                "constraints": {
+                    "task_role_native_capacity_compatibility": True,
+                    "dynamic_role_weights_used": True,
+                    "marginal_return_used": True,
+                    "warm_recovery_priority_uses_same_objective": True,
+                    "provider_resilience_used": False,
+                },
+            },
+            "task_adaptive_scoring_completed": task_adaptive,
+            "task_adaptive_scoring_schema_version": "v5-task-adaptive-value-scoring-1",
+            "selection_principles": [
+                "concrete-problem-concrete-analysis",
+                "dynamic-adaptation",
+                "small-effort-large-return",
+            ],
+            "task_demand_profile": {
+                "schema_version": "v5-task-adaptive-value-scoring-1",
+                "semantic_keyword_routing_used": False,
+                "cross_task_history_used": False,
+                "provider_metric_used": False,
+            },
+        }
         (root / "ticket-status.json").write_text(json.dumps(status), encoding="utf-8")
-        (root / "ticket.json").write_text(json.dumps({"route": "expert-team"}), encoding="utf-8")
+        (root / "ticket.json").write_text(
+            json.dumps({"route": "expert-team", "governance_model_plan": plan}),
+            encoding="utf-8",
+        )
         (root / "task.txt").write_text("task", encoding="utf-8")
 
     def _run(self, root: Path, *, calls: int, recovery: int) -> int:
@@ -58,6 +95,13 @@ class Top50TicketGateCapacityTests(unittest.TestCase):
             root = Path(tmp)
             self._fixture(root, calls=8, recovery=4)
             self.assertEqual(self._run(root, calls=8, recovery=4), 0)
+
+    def test_missing_task_adaptive_scoring_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._fixture(root, calls=8, recovery=4, task_adaptive=False)
+            with self.assertRaisesRegex(RuntimeError, "task-adaptive value scoring"):
+                self._run(root, calls=8, recovery=4)
 
     def test_less_than_four_recovery_calls_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,4 +1,4 @@
-"""Production-ticket evidence facade for signed top-50 OR-Tools plans."""
+"""Production-ticket evidence facade for signed task-adaptive Top-50 OR-Tools plans."""
 from __future__ import annotations
 
 import json
@@ -21,6 +21,14 @@ for _name in dir(_legacy):
 
 def _fields(plan: Mapping[str, Any]) -> dict[str, Any]:
     top50 = plan.get("selected_from_top50_reasoning_pool_only") is True
+    audit = plan.get("optimizer_audit")
+    audit = dict(audit) if isinstance(audit, Mapping) else {}
+    constraints = audit.get("constraints")
+    constraints = dict(constraints) if isinstance(constraints, Mapping) else {}
+    profile = plan.get("task_demand_profile")
+    profile = dict(profile) if isinstance(profile, Mapping) else {}
+    principles = plan.get("selection_principles")
+    principles = list(principles) if isinstance(principles, list) else []
     return {
         "candidate_pool_authority": "decision-system-governance",
         "selection_authority": "expert-assessment-center-ortools" if top50 else "decision-system-governance",
@@ -31,7 +39,16 @@ def _fields(plan: Mapping[str, Any]) -> dict[str, Any]:
         "model_substitution_allowed": False,
         "optimizer_used": top50,
         "optimizer": plan.get("optimizer") if top50 else None,
-        "optimizer_optimality_proven": bool(plan.get("optimizer_audit", {}).get("optimality_proven")) if top50 else False,
+        "optimizer_optimality_proven": bool(audit.get("optimality_proven")) if top50 else False,
+        "task_adaptive_scoring_completed": bool(plan.get("task_adaptive_scoring_completed")) if top50 else False,
+        "task_adaptive_scoring_schema_version": plan.get("task_adaptive_scoring_schema_version") if top50 else None,
+        "selection_principles": principles if top50 else [],
+        "task_demand_profile": profile if top50 else {},
+        "dynamic_role_weights_used": constraints.get("dynamic_role_weights_used") is True if top50 else False,
+        "marginal_return_used": constraints.get("marginal_return_used") is True if top50 else False,
+        "task_role_native_capacity_compatibility": constraints.get("task_role_native_capacity_compatibility") is True if top50 else False,
+        "semantic_keyword_routing_used": constraints.get("semantic_keyword_routing_used") is True if top50 else False,
+        "cross_task_history_used": constraints.get("cross_task_history_used") is True if top50 else False,
         "provider_resolution_authority": "openrouter-unrestricted",
         "provider_routing_mode": "unrestricted-openrouter",
         "provider_restrictions_applied": False,
@@ -104,10 +121,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             document.update(fields)
             if path.name == "production-runtime.json" and fields["optimizer_used"]:
                 document["architecture"] = (
-                    "governance-signed-weekly-top50 -> expert-center OR-Tools CP-SAT "
-                    "4-primary+4-warm-recovery assignment -> unrestricted OpenRouter "
-                    "provider routing for each fixed model -> NetworkX DAG -> parallel "
-                    "analysis -> cross-review -> final synthesis"
+                    "governance-signed-weekly-top50 -> current-ticket structural demand "
+                    "profile -> task-adaptive cost/intelligence/capacity/marginal-return "
+                    "scoring -> expert-center OR-Tools CP-SAT 4-primary+4-warm-recovery "
+                    "assignment -> unrestricted OpenRouter provider routing for each fixed "
+                    "model -> NetworkX DAG -> parallel analysis -> cross-review -> final "
+                    "synthesis"
                 )
             original_write(path, document)
             return

@@ -81,6 +81,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python -m unittest discover -s tests -p 'test_v5_task_adaptive_scoring.py' -v \
+            2>&1 | tee free-qualification/logs/task-adaptive-scoring.log
           python -m unittest discover -s tests -p 'test_top50_pool_optimizer.py' -v \
             2>&1 | tee free-qualification/logs/top50-optimizer.log
           python -m unittest discover -s tests -p 'test_v5_top50_provider_pool.py' -v \
@@ -99,10 +101,12 @@ jobs:
           policy = json.loads(Path('open-model-market/constitutional_policy.json').read_text())
           pool = policy['candidate_pool']
           optimizer = policy['optimizer_runtime']
+          matching = policy['dynamic_task_matching']
           privacy = policy['expert_endpoint_privacy']
           promotion = policy['production_promotion']
           deps = Path('requirements-runtime.txt').read_text()
 
+          assert policy['schema_version'] == 'v5-constitutional-policy-8-task-adaptive-value-ortools'
           assert pool['authority'] == 'decision-system-governance'
           assert pool['source'] == 'openrouter-most-popular-last-week-token-volume'
           assert pool['popularity_period'] == 'week'
@@ -117,6 +121,20 @@ jobs:
           assert optimizer['provider_metric_used'] is False
           assert optimizer['model_calls'] == 0
           assert optimizer['network_access'] is False
+          assert optimizer['selection_principles'] == [
+              'concrete-problem-concrete-analysis',
+              'dynamic-adaptation',
+              'small-effort-large-return',
+          ]
+          assert optimizer['task_pressure_changes_role_weights'] is True
+          assert 'role_aware_estimated_current_task_cost_rank' in optimizer['objective_components']
+          assert 'marginal_cost_per_relative_quality_rank' in optimizer['objective_components']
+
+          assert matching['recomputed_from_current_task'] is True
+          assert matching['cross_task_history_allowed'] is False
+          assert matching['keyword_routing_allowed'] is False
+          assert matching['domain_hardcoding_allowed'] is False
+          assert matching['estimated_task_cost_must_include_prompt_and_completion'] is True
 
           assert privacy['provider_routing_mode'] == 'unrestricted-openrouter'
           assert privacy['provider_allowlist_allowed'] is False
@@ -128,6 +146,7 @@ jobs:
 
           assert promotion['requires_signed_weekly_top50_pool'] is True
           assert promotion['requires_ortools_optimality_proof'] is True
+          assert promotion['requires_task_adaptive_value_scoring'] is True
           assert promotion['requires_unrestricted_provider_routing'] is True
 
           assert 'ortools==9.15.6755' in deps
@@ -148,7 +167,7 @@ jobs:
           policy_path = Path('open-model-market/constitutional_policy.json')
           policy_sha = hashlib.sha256(policy_path.read_bytes()).hexdigest()
           receipt = {
-              'schema_version': 'v5-top50-ortools-zero-call-qualification-1',
+              'schema_version': 'v5-top50-task-adaptive-ortools-zero-call-qualification-2',
               'target_sha': os.environ['TARGET_SHA'],
               'status': 'PASS',
               'model_calls': 0,
@@ -158,6 +177,14 @@ jobs:
               'popularity_period': 'week',
               'optimizer': 'ortools-cp-sat',
               'optimizer_required_status': 'OPTIMAL',
+              'selection_principles': [
+                  'concrete-problem-concrete-analysis',
+                  'dynamic-adaptation',
+                  'small-effort-large-return',
+              ],
+              'task_adaptive_value_scoring_required': True,
+              'semantic_keyword_routing_used': False,
+              'cross_task_history_used': False,
               'primary_expert_count': 4,
               'warm_recovery_count': 4,
               'provider_routing_mode': 'unrestricted-openrouter',
@@ -192,7 +219,8 @@ jobs:
               `- Target SHA: \`${process.env.TARGET_SHA}\``,
               `- Job status: \`${{ job.status }}\``,
               '- Model calls: `0`',
-              '- Team computation: `OR-Tools CP-SAT / 4 primary + 4 warm recovery`',
+              '- Team computation: `OR-Tools CP-SAT / task-adaptive 4 primary + 4 warm recovery`',
+              '- Principles: `concrete problem / dynamic adaptation / small effort large return`',
               '- Provider routing: `unrestricted-openrouter`',
               `- Run: \`${process.env.RUN_URL}\``
             ].join('\n');

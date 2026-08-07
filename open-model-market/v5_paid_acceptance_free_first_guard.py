@@ -2,9 +2,9 @@
 """Fail-closed free-first evidence guard for explicit paid acceptance.
 
 This module runs in the GitHub control plane before any paid model request. It
-finds the successful zero-call qualification and zero-cost free-model Canary
-artifacts for the exact candidate SHA, independently revalidates their receipts,
-and then evaluates the canonical free-first preflight policy.
+finds the successful task-adaptive zero-call qualification and zero-cost free
+model Canary artifacts for the exact candidate SHA, independently revalidates
+their receipts, and then evaluates the canonical free-first preflight policy.
 """
 from __future__ import annotations
 
@@ -23,6 +23,12 @@ ZERO_CALL_WORKFLOW = "v5-free-model-qualification.yml"
 FREE_CANARY_WORKFLOW = "v5-zero-cost-free-canary.yml"
 ZERO_CALL_ARTIFACT_PREFIX = "v5-top50-ortools-zero-call-"
 FREE_CANARY_ARTIFACT_PREFIX = "v5-zero-cost-free-canary-"
+ZERO_CALL_SCHEMA_VERSION = "v5-top50-task-adaptive-ortools-zero-call-qualification-2"
+SELECTION_PRINCIPLES = [
+    "concrete-problem-concrete-analysis",
+    "dynamic-adaptation",
+    "small-effort-large-return",
+]
 
 
 class PaidAcceptanceFreeFirstError(RuntimeError):
@@ -136,7 +142,7 @@ def _validate_zero_call_receipt(
     expected_sha: str,
 ) -> None:
     expected = {
-        "schema_version": "v5-top50-ortools-zero-call-qualification-1",
+        "schema_version": ZERO_CALL_SCHEMA_VERSION,
         "target_sha": expected_sha,
         "status": "PASS",
         "model_calls": 0,
@@ -146,6 +152,10 @@ def _validate_zero_call_receipt(
         "popularity_period": "week",
         "optimizer": "ortools-cp-sat",
         "optimizer_required_status": "OPTIMAL",
+        "selection_principles": SELECTION_PRINCIPLES,
+        "task_adaptive_value_scoring_required": True,
+        "semantic_keyword_routing_used": False,
+        "cross_task_history_used": False,
         "primary_expert_count": 4,
         "warm_recovery_count": 4,
         "provider_routing_mode": "unrestricted-openrouter",
@@ -274,6 +284,8 @@ def enforce_free_first(
             "zero_call_artifact_id": zero_artifact_id,
             "free_canary_run_id": canary_run_id,
             "free_canary_artifact_id": canary_artifact_id,
+            "task_adaptive_zero_call_schema_version": ZERO_CALL_SCHEMA_VERSION,
+            "selection_principles": SELECTION_PRINCIPLES,
         },
     }
     verdict = evaluate_free_first_preflight(combined, expected_sha=sha)
