@@ -34,7 +34,7 @@ def _node(node_id: str, model: str) -> SelectedNode:
     )
 
 
-def _graph() -> ExecutionGraph:
+def _graph(*, standby_count: int = 0) -> ExecutionGraph:
     nodes = (_node("n1", "vendor/main-1"), _node("n2", "vendor/main-2"))
     recovery_rows = [
         {
@@ -50,6 +50,14 @@ def _graph() -> ExecutionGraph:
             "provider_endpoint": "backup-c/model@openrouter-auto",
         },
     ]
+    standby = [
+        {
+            "model": f"standby-{index}/model",
+            "provider_endpoint": f"standby-{index}/model@openrouter-auto",
+            "estimated_cost": 0.001,
+        }
+        for index in range(1, standby_count + 1)
+    ]
     return ExecutionGraph(
         nodes=nodes,
         edges=(),
@@ -64,7 +72,12 @@ def _graph() -> ExecutionGraph:
             "recovery_pool": {
                 "n1": [dict(row) for row in recovery_rows],
                 "n2": [dict(row) for row in recovery_rows],
-            }
+            },
+            "standby_inventory": standby,
+            "runtime_feedback_replanning": {
+                "enabled": bool(standby),
+                "promotion_depth_fixed": False,
+            },
         },
     )
 
@@ -113,6 +126,31 @@ def _optimizer_packet() -> dict[str, object]:
     }
 
 
+def _attempt(
+    category: runtime.FailureCategory,
+    *,
+    status: str = "call_failed",
+) -> runtime.RuntimeAttempt:
+    return runtime.RuntimeAttempt(
+        attempt_index=1,
+        attempt_kind="replacement",
+        candidate_id="n1",
+        model="candidate/model",
+        provider_endpoint="candidate/model@openrouter-auto",
+        request={},
+        status=status,
+        answer=None,
+        quality_score=0.0,
+        gate_reasons=[category.value],
+        latency_seconds=0.1,
+        usage={},
+        response_id=None,
+        response_model=None,
+        response_provider=None,
+        failure={"category": category.value, "retryable": False},
+    )
+
+
 class DynamicRecoveryResilienceTests(unittest.TestCase):
     def test_team_and_recovery_shape_are_computed_from_current_task(self) -> None:
         profile = {
@@ -152,6 +190,7 @@ class DynamicRecoveryResilienceTests(unittest.TestCase):
     def test_shared_pool_capacity_counts_unique_backups_not_node_copies(self) -> None:
         graph = _graph()
         self.assertEqual(runtime._recovery_capacity(graph), 3)  # noqa: SLF001
+        self.assertEqual(runtime._standby_capacity(graph), 0)  # noqa: SLF001
         budget = runtime.BudgetController(
             runtime.RuntimeConfig(
                 total_call_limit=99,
@@ -166,9 +205,68 @@ class DynamicRecoveryResilienceTests(unittest.TestCase):
         self.assertEqual(snapshot["maximum_total_calls"], 5)
         self.assertEqual(
             snapshot["recovery_capacity_source"],
-            "unique-current-run-recovery-identities",
+            "active-recovery-plus-runtime-promotable-standby",
         )
+        self.assertEqual(snapshot["active_recovery_capacity"], 3)
+        self.assertEqual(snapshot["runtime_promotable_standby_capacity"], 0)
         self.assertTrue(snapshot["runtime_resilience_parameters_dynamic"])
+        self.assertTrue(snapshot["runtime_feedback_replanning_enabled"])
+        self.assertFalse(snapshot["standby_promotion_depth_fixed"])
+
+    def test_standby_is_finite_capacity_but_not_precalled(self) -> None:
+        graph = _graph(standby_count=9)
+        self.assertEqual(runtime._standby_capacity(graph), 9)  # noqa: SLF001
+        budget = runtime.BudgetController(
+            runtime.RuntimeConfig(
+                total_call_limit=1,
+                recovery_call_limit=0,
+                cost_anomaly_usd=None,
+            ),
+            graph,
+        )
+        snapshot = budget.snapshot()
+        self.assertEqual(snapshot["maximum_initial_calls"], 2)
+        self.assertEqual(snapshot["maximum_recovery_calls"], 12)
+        self.assertEqual(snapshot["maximum_total_calls"], 14)
+        self.assertEqual(snapshot["calls_reserved"], 0)
+        self.assertEqual(snapshot["runtime_promotable_standby_capacity"], 9)
+
+    def test_promotion_depth_recomputes_from_current_run_feedback(self) -> None:
+        graph = _graph(standby_count=9)
+        engine = object.__new__(runtime.ExecutionEngine)
+        engine._initialize_feedback(graph)  # noqa: SLF001
+        one_failure = [_attempt(runtime.FailureCategory.PROVIDER_TIMEOUT)]
+        low_depth = engine._dynamic_promotion_depth(one_failure)  # noqa: SLF001
+
+        for _ in range(4):
+            engine._record_feedback(  # noqa: SLF001
+                _attempt(runtime.FailureCategory.QUALITY_GATE_FAILED)
+            )
+        high_depth = engine._dynamic_promotion_depth(  # noqa: SLF001
+            [
+                _attempt(runtime.FailureCategory.QUALITY_GATE_FAILED),
+                _attempt(runtime.FailureCategory.PROVIDER_TIMEOUT),
+            ]
+        )
+        self.assertGreaterEqual(low_depth, 1)
+        self.assertGreater(high_depth, low_depth)
+        snapshot = engine._feedback_snapshot()  # noqa: SLF001
+        self.assertEqual(snapshot["observed_attempts"], 4)
+        self.assertEqual(snapshot["observed_failures"], 4)
+        self.assertEqual(snapshot["observed_quality_gate_failures"], 4)
+        self.assertTrue(snapshot["promotion_depth_recomputed_from_current_run"])
+        self.assertFalse(snapshot["promotion_depth_fixed"])
+        self.assertFalse(snapshot["cross_task_history_used"])
+
+    def test_standby_claims_are_unique_across_runtime(self) -> None:
+        graph = _graph(standby_count=3)
+        engine = object.__new__(runtime.ExecutionEngine)
+        engine._initialize_feedback(graph)  # noqa: SLF001
+        claimed = [engine._claim_next_standby() for _ in range(4)]  # noqa: SLF001
+        models = [row["model"] for row in claimed if row]
+        self.assertEqual(len(models), 3)
+        self.assertEqual(len(models), len(set(models)))
+        self.assertIsNone(claimed[-1])
 
     def test_provider_failure_circuit_threshold_is_graph_derived(self) -> None:
         graph = _graph()
@@ -254,9 +352,7 @@ class DynamicRecoveryResilienceTests(unittest.TestCase):
             [row["warm_recovery_priority"] for row in recovery],
             list(range(1, len(recovery) + 1)),
         )
-        self.assertTrue(
-            all("recovery_resilience" in row for row in recovery)
-        )
+        self.assertTrue(all("recovery_resilience" in row for row in recovery))
         self.assertTrue(
             all(
                 row["recovery_resilience"]["soft_free_route_penalty"] == 0
