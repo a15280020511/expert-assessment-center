@@ -6,6 +6,8 @@ from typing import Any, Mapping, Sequence
 
 import v5_price_ranked_pipeline as pipeline
 
+_ORIGINAL_PROVIDER_FIELDS = pipeline._provider_fields
+
 
 def _dynamic_validate_budget(args: Any) -> tuple[int, int]:
     """Treat CLI call counts as execution telemetry, not admission thresholds."""
@@ -93,15 +95,45 @@ def _dynamic_assignment_fields(plan: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _dynamic_provider_fields() -> dict[str, Any]:
+    """Keep Provider routing open while allowing Expert-Center recovery models.
+
+    OpenRouter may choose/fail over Providers for the *same* model identity.  A
+    different model identity may only be selected by the Expert Center's dynamic
+    recovery graph.  Historical telemetry used one ``model_substitution`` flag
+    for both concepts and incorrectly reported recovery as disabled.
+    """
+    value = dict(_ORIGINAL_PROVIDER_FIELDS())
+    value.update(
+        {
+            "provider_routing_mode": "unrestricted-openrouter",
+            "provider_restrictions_applied": False,
+            "provider_fallback_allowed": True,
+            "unrestricted_provider_fallback_allowed": True,
+            "openrouter_selects_provider": True,
+            "provider_may_change_model_identity": False,
+            "model_substitution_allowed": True,
+            "model_substitution_authority": (
+                "expert-assessment-center-dynamic-recovery"
+            ),
+            "tool_use_forbidden": True,
+            "tools_allowed": False,
+            "only_hard_model_boundary": "no-tools",
+        }
+    )
+    return value
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     # The active facade delegates to the battle-tested implementation for I/O
-    # and evidence writing. Replace only historical business-gate compatibility
-    # hooks; graph/materializer/runtime behavior stays current-task dynamic.
+    # and evidence writing. Replace historical compatibility hooks so old names
+    # cannot silently re-introduce a business gate or false telemetry.
     legacy_runtime = getattr(pipeline, "_legacy")
     setattr(legacy_runtime, "_validate_budget", _dynamic_validate_budget)
 
     setattr(pipeline, "_top50", _expert_assignment_active)
     setattr(pipeline, "_assignment_fields", _dynamic_assignment_fields)
+    setattr(pipeline, "_provider_fields", _dynamic_provider_fields)
     return int(pipeline.main(argv))
 
 
