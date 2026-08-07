@@ -92,23 +92,17 @@ class NoToolsNetworkPolicyTests(unittest.TestCase):
             {"model": "vendor/exact-model", "messages": []}
         )
 
-    def test_zero_call_qualification_does_not_select_a_canary_model(self) -> None:
-        workflow = (
+    def test_free_qualification_workflow_is_not_an_active_gate(self) -> None:
+        obsolete = (
             ROOT / ".github" / "workflows" / "v5-free-model-qualification.yml"
-        ).read_text(encoding="utf-8")
-        self.assertNotIn('"model": "openrouter/free"', workflow)
-        self.assertNotIn("MODELS_URL", workflow)
-        self.assertNotIn('model_id.endswith(":free")', workflow)
-        self.assertNotIn("CHAT_URL", workflow)
-        self.assertIn('"model_calls": 0', workflow)
-        self.assertIn(
-            '"selection_authority": "decision-system-governance"',
-            workflow,
         )
-        self.assertIn(
-            '"model_selection_performed_locally": False',
-            workflow,
-        )
+        self.assertFalse(obsolete.exists())
+        active = (
+            ROOT / ".github" / "workflows" / "execution-ticket.yml"
+        ).read_text(encoding="utf-8").casefold()
+        self.assertNotIn("free-first", active)
+        self.assertNotIn("free canary", active)
+        self.assertNotIn("v5-free-model-qualification", active)
 
     def test_response_side_tool_and_network_evidence_is_rejected(self) -> None:
         responses = (
@@ -355,20 +349,23 @@ class NoToolsNetworkPolicyTests(unittest.TestCase):
             )
         )
         self.assertEqual(
-            "v5-constitutional-policy-5",
+            "v5-constitutional-policy-10-fully-dynamic-no-tools",
             policy["schema_version"],
         )
-        tool = policy["tool_prohibition"]
-        self.assertTrue(tool["request_and_response_boundary_required"])
-        self.assertFalse(tool["response_tool_calls_allowed"])
-        self.assertFalse(tool["arbitrary_network_egress_allowed"])
+        self.assertEqual("no-tools", policy["only_hard_model_boundary"])
+        tools = policy["tool_policy"]
+        self.assertTrue(tools["request_tool_fields_forbidden"])
+        self.assertTrue(tools["response_tool_evidence_forbidden"])
+        self.assertFalse(tools["expert_external_tools_allowed"])
+        integrity = policy["security_and_integrity_invariants"]
+        self.assertFalse(integrity["arbitrary_network_egress_allowed"])
         self.assertEqual(
             ["openrouter.ai"],
-            tool["model_plane_network_allowlist"],
+            integrity["model_plane_hosts"],
         )
         self.assertEqual(
             ["api.github.com"],
-            tool["control_plane_network_allowlist"],
+            integrity["control_plane_hosts"],
         )
 
 

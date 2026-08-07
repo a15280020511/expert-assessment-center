@@ -1,8 +1,9 @@
-name: Validate V5 Dynamic Expert Architecture
+name: Validate V5 Fully Dynamic Expert Architecture
 
 on:
   pull_request:
     paths:
+      - "CONSTITUTION.md"
       - "open-model-market/**"
       - "tests/**"
       - ".github/workflows/**"
@@ -40,14 +41,15 @@ jobs:
           python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
           python -m pip check
 
-      - name: Verify dynamic gate-free architecture contract
+      - name: Verify fully dynamic no-tools architecture contract
         run: |
           set -euo pipefail
           PYTHONPATH=open-model-market python - <<'PY'
           import json
           from pathlib import Path
           policy = json.loads(Path('open-model-market/constitutional_policy.json').read_text())
-          assert policy['schema_version'] == 'v5-constitutional-policy-9-open-dynamic-experts'
+          assert policy['schema_version'] == 'v5-constitutional-policy-10-fully-dynamic-no-tools'
+          assert policy['only_hard_model_boundary'] == 'no-tools'
           admission = policy['execution_admission']
           for key in (
               'free_first_required', 'zero_call_qualification_required',
@@ -56,7 +58,12 @@ jobs:
           ):
               assert admission[key] is False, key
           pool = policy['candidate_pool']
+          assert pool['source'] == 'openrouter-live-reasoning-most-popular-catalog'
+          assert pool['source_definition']['sort'] == 'most-popular'
+          assert pool['source_definition']['supported_parameters'] == 'reasoning'
+          assert pool['source_definition']['output_modalities'] == 'text'
           assert pool['fixed_pool_size'] is None
+          assert pool['fixed_top_n_allowed'] is False
           for key in (
               'top50_only', 'top20_only', 'weekly_rank_required',
               'reasoning_rank_required', 'flagship_filter_required',
@@ -64,12 +71,21 @@ jobs:
               'provider_endpoint_qualification_required', 'zdr_provider_qualification_required',
           ):
               assert pool[key] is False, key
+          assert pool['tool_use_forbidden'] is True
+          assert pool['tools_allowed'] is False
           matching = policy['dynamic_task_matching']
           assert matching['required'] is True
-          assert matching['team_size'] == 'task-derived'
-          assert matching['recovery_size'] == 'task-derived'
-          assert matching['roles'] == 'task-derived'
-          assert matching['model_assignment'] == 'task-derived'
+          assert matching['all_calculable_planning_parameters_dynamic'] is True
+          for key in (
+              'task_volume', 'evidence_volume', 'constraint_pressure',
+              'delivery_pressure', 'prompt_token_estimate',
+              'completion_token_estimate', 'protocol_reserve',
+              'dependency_fan_in', 'team_size', 'recovery_size',
+              'roles', 'role_topology', 'model_assignment', 'role_weights',
+              'solver_time',
+          ):
+              assert matching[key] == 'task-derived', key
+          assert matching['solver_seed'] == 'task-derived-reproducible'
           assert matching['company_mix'] == 'unconstrained'
           assert matching['model_substitution_allowed'] is True
           optimizer = policy['optimizer_runtime']
@@ -77,10 +93,14 @@ jobs:
           assert optimizer['optimality_required'] is False
           assert optimizer['feasible_solution_allowed'] is True
           assert optimizer['heuristic_fallback_allowed'] is True
-          assert optimizer['company_uniqueness_constraint'] is False
-          assert optimizer['top50_membership_constraint'] is False
-          assert optimizer['approved_budget_constraint'] is False
-          assert optimizer['provider_constraint'] is False
+          for key in (
+              'company_uniqueness_constraint', 'top50_membership_constraint',
+              'fixed_role_slot_constraint', 'fixed_recovery_slot_constraint',
+              'approved_budget_constraint', 'provider_constraint',
+              'capacity_constraint', 'free_route_penalty_required',
+              'company_overlap_penalty_required',
+          ):
+              assert optimizer[key] is False, key
           provider = policy['provider_routing']
           assert provider['mode'] == 'unrestricted-openrouter'
           assert provider['provider_allowlist_allowed'] is False
@@ -91,14 +111,22 @@ jobs:
           assert provider['exact_provider_lock_required'] is False
           assert provider['openrouter_selects_provider'] is True
           assert provider['provider_fallback_allowed'] is True
+          assert provider['provider_may_change_model_identity'] is False
+          assert provider['model_substitution_authority'] == 'expert-assessment-center-dynamic-recovery'
           resource = policy['resource_governance']
           assert resource['fixed_total_call_ceiling'] is False
           assert resource['fixed_initial_call_ceiling'] is False
           assert resource['fixed_recovery_call_ceiling'] is False
           assert resource['finite_execution_graph_required'] is True
           assert resource['unbounded_recursive_retry_allowed'] is False
+          tools = policy['tool_policy']
+          assert tools['request_tool_fields_forbidden'] is True
+          assert tools['response_tool_evidence_forbidden'] is True
           source = Path('open-model-market/v5_price_ranked_pipeline.py').read_text()
           assert 'provider_lock_required=False' in source
+          dynamic = Path('open-model-market/v5_dynamic_pipeline.py').read_text()
+          assert 'only_hard_model_boundary' in dynamic
+          assert 'model_substitution_allowed": True' in dynamic
           PY
 
       - name: Compile dynamic expert runtime
@@ -112,9 +140,12 @@ jobs:
           PYTHONPATH=open-model-market python -m unittest -v \
             tests.test_workflow_contract \
             tests.test_legacy_runtime_removed \
-            tests.test_v5_constitution_policy
+            tests.test_v5_constitution_policy \
+            tests.test_v5_task_adaptive_scoring \
+            tests.test_top50_pool_optimizer \
+            tests.test_v5_no_tools_network_policy
 
-      - name: Verify active execution path has no Provider pinning
+      - name: Verify active execution path has no Provider pinning or model business gates
         run: |
           set -euo pipefail
           PYTHONPATH=open-model-market python - <<'PY'
@@ -131,4 +162,9 @@ jobs:
               assert 'require_parameters": true' not in text, name
               assert 'provider.only' not in text, name
               assert 'provider.order' not in text, name
+          dynamic = (Path('open-model-market') / 'v5_dynamic_pipeline.py').read_text().casefold()
+          assert 'model_substitution_allowed": true' in dynamic
+          no_tools = (Path('open-model-market') / 'v5_no_tools_policy.py').read_text().casefold()
+          for token in ('tools', 'tool_choice', 'function_call', 'web_search', 'mcp'):
+              assert token in no_tools, token
           PY

@@ -1,16 +1,20 @@
-"""Task-dynamic OR-Tools expert composition without fixed business gates.
+"""Task-dynamic OR-Tools expert composition with open model eligibility.
 
-Historical Top50/4+4/company-uniqueness/OPTIMAL-only rules are compatibility
-metadata only. The current task determines team size, role mix and recovery
-capacity. Any candidate supplied by governance may participate; Provider routing
-remains unrestricted and delegated to OpenRouter.
+Historical Top50/4+4/company-uniqueness/free-first/OPTIMAL-only/price/flagship
+rules are not model-admission gates.  Governance supplies a reasoning-popularity
+candidate sequence; the current task determines team size, role mix, recovery
+depth, role demand, scoring weights and solver time.  Provider routing remains
+unrestricted and delegated to OpenRouter.
+
+The only hard model-execution boundary is no-tools.  Protocol integrity, unique
+execution identities and DAG validity are structural invariants rather than
+business model-eligibility gates.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import math
-from collections import Counter
 from typing import Any, Mapping, Sequence
 
 from ortools.sat.python import cp_model
@@ -23,13 +27,6 @@ from v5_task_adaptive_scoring import (
     build_role_metrics,
     build_task_demand_profile,
 )
-
-
-RECOVERY_BASE_RESILIENCE = 0.20
-RECOVERY_MAX_RESILIENCE = 0.80
-RECOVERY_FREE_ROUTE_SOFT_PENALTY = 5_000
-RECOVERY_PRIMARY_COMPANY_OVERLAP_SOFT_PENALTY = 1_500
-RECOVERY_COMPANY_CONCENTRATION_SOFT_PENALTY = 2_000
 
 
 class Top50PoolOptimizationError(RuntimeError):
@@ -58,7 +55,7 @@ def _rows(value: Any) -> list[dict[str, Any]]:
 
 
 def _candidate_rows(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Accept every governance-supplied candidate source without pool gates."""
+    """Accept every governance-supplied candidate identity without business gates."""
     sources = (
         plan.get("expert_candidate_pool"),
         plan.get("top50_expert_selectable_candidates"),
@@ -93,6 +90,8 @@ def _candidate_rows(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
         row.setdefault("max_completion_tokens", 0)
         row["provider_routing_mode"] = "unrestricted-openrouter"
         row["provider_restrictions_applied"] = False
+        row["tool_use_forbidden"] = True
+        row["tools_allowed"] = False
         result.append(row)
         seen.add(model)
     if not result:
@@ -102,16 +101,31 @@ def _candidate_rows(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
-def _recovery_resilience_ratio(profile: Mapping[str, Any]) -> float:
+def _pressure(profile: Mapping[str, Any], key: str) -> int:
     pressure = profile.get("pressure")
-    pressure_map = pressure if isinstance(pressure, Mapping) else {}
-    overall = max(0, int(pressure_map.get("overall") or 0))
-    evidence_count = min(20, max(0, int(profile.get("evidence_count") or 0)))
+    values = pressure if isinstance(pressure, Mapping) else {}
+    try:
+        return max(0, min(100, int(values.get(key) or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _recovery_resilience_ratio(profile: Mapping[str, Any]) -> float:
+    """Compute current-task recovery depth from pressure and structural breadth."""
+    overall = _pressure(profile, "overall")
+    requirements = max(0, int(profile.get("requirement_count") or 0))
+    acceptance = max(0, int(profile.get("acceptance_count") or 0))
+    delivery = max(0, int(profile.get("delivery_item_count") or 0))
+    evidence = max(0, int(profile.get("evidence_count") or 0))
+    breadth_pressure = min(
+        100,
+        5 * (requirements + acceptance + delivery) + 3 * evidence,
+    )
+    # The ratio is task-derived; clamps only prevent nonsensical zero/all-pool
+    # recovery shapes and are not model eligibility gates.
     return min(
-        RECOVERY_MAX_RESILIENCE,
-        RECOVERY_BASE_RESILIENCE
-        + overall / 150.0
-        + evidence_count / 100.0,
+        0.90,
+        max(0.10, (overall + breadth_pressure + 20) / 220.0),
     )
 
 
@@ -119,24 +133,24 @@ def _dynamic_team_shape(
     profile: Mapping[str, Any],
     candidate_count: int,
 ) -> tuple[int, int]:
-    """Derive team/recovery size from current-task structural load, not fixed counts."""
-    pressure = profile.get("pressure")
-    pressure_map = pressure if isinstance(pressure, Mapping) else {}
-    overall = max(0, int(pressure_map.get("overall") or 0))
+    """Derive team/recovery size from current-task load rather than fixed counts."""
+    if candidate_count <= 0:
+        return 0, 0
+    overall = _pressure(profile, "overall")
     structural = (
         1
         + int(profile.get("requirement_count") or 0)
         + int(profile.get("acceptance_count") or 0)
         + int(profile.get("delivery_item_count") or 0)
-        + min(20, int(profile.get("evidence_count") or 0))
+        + int(profile.get("evidence_count") or 0)
         + math.ceil(
             (
                 int(profile.get("task_characters") or 0)
                 + int(profile.get("evidence_characters") or 0)
             )
-            / 6000
+            / 4000
         )
-        + math.ceil(overall / 10)
+        + math.ceil(overall / 15)
     )
     primary = min(
         candidate_count,
@@ -150,33 +164,53 @@ def _dynamic_team_shape(
     return primary, recovery
 
 
-def _role_plan(primary_count: int) -> list[dict[str, str]]:
+def _role_plan(
+    primary_count: int,
+    profile: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    """Generate role topology from current pressure rather than a fixed 4-role graph."""
     if primary_count <= 1:
         return [
             {
                 "role_id": "synthesis",
                 "role_kind": "synthesis",
+                "metric_role_id": "synthesis",
                 "role": "动态综合专家：独立完成当前任务的分析、审查与最终交付",
+                "role_source_signal": "single-expert-current-task-shape",
             }
         ]
+
+    evidence_signal = _pressure(profile, "evidence") + _pressure(
+        profile, "constraints"
+    )
+    options_signal = _pressure(profile, "delivery") + _pressure(
+        profile, "constraints"
+    )
+    first_metric = "evidence" if evidence_signal >= options_signal else "options"
+    second_metric = "options" if first_metric == "evidence" else "evidence"
+
     if primary_count == 2:
         return [
             {
-                "role_id": "evidence",
+                "role_id": "independent-1",
                 "role_kind": "independent",
-                "role": "动态独立专家：形成第一份完整分析并检查证据与假设",
+                "metric_role_id": first_metric,
+                "role": "动态独立专家：依据当前任务主压力形成完整分析并检查反例",
+                "role_source_signal": first_metric,
             },
             {
                 "role_id": "synthesis",
                 "role_kind": "synthesis",
+                "metric_role_id": "synthesis",
                 "role": "动态综合专家：审查前序结果并形成最终交付",
+                "role_source_signal": "downstream-synthesis",
             },
         ]
 
     independent_count = max(1, primary_count - 2)
     roles: list[dict[str, str]] = []
     for index in range(independent_count):
-        metric_role = "evidence" if index % 2 == 0 else "options"
+        metric_role = first_metric if index % 2 == 0 else second_metric
         roles.append(
             {
                 "role_id": f"independent-{index + 1}",
@@ -184,8 +218,9 @@ def _role_plan(primary_count: int) -> list[dict[str, str]]:
                 "role_kind": "independent",
                 "role": (
                     f"动态独立专家{index + 1}："
-                    "从不同角度分析证据、机制、方案、反例与不确定性"
+                    "依据当前结构压力分析证据、机制、方案、反例与不确定性"
                 ),
+                "role_source_signal": metric_role,
             }
         )
     roles.extend(
@@ -193,12 +228,16 @@ def _role_plan(primary_count: int) -> list[dict[str, str]]:
             {
                 "role_id": "review",
                 "role_kind": "review",
-                "role": "动态交叉审查专家：比较全部前序分析并找出冲突、遗漏和失败模式",
+                "metric_role_id": "review",
+                "role": "动态交叉审查专家：比较全部前序分析并定位冲突、遗漏和失败模式",
+                "role_source_signal": "current-fan-in-review",
             },
             {
                 "role_id": "synthesis",
                 "role_kind": "synthesis",
+                "metric_role_id": "synthesis",
                 "role": "动态最终综合专家：依据任务和全部前序结果形成唯一完整交付",
+                "role_source_signal": "current-fan-in-synthesis",
             },
         ]
     )
@@ -229,84 +268,55 @@ def _annotate(
             "task_adaptive_objective_score": int(
                 metric.get("objective_score") or 0
             ),
+            "task_adaptive_base_objective_score": int(
+                metric.get("base_objective_score") or 0
+            ),
             "task_adaptive_ranks": dict(metric.get("ranks") or {}),
             "task_adaptive_weights": dict(metric.get("weights") or {}),
             "task_adaptive_role_tokens": dict(metric.get("role_tokens") or {}),
             "task_adaptive_capacity_compatible": bool(
                 metric.get("compatible", True)
             ),
+            "capacity_shortfall": float(
+                metric.get("capacity_shortfall") or 0.0
+            ),
+            "capacity_shortfall_penalty": int(
+                metric.get("capacity_shortfall_penalty") or 0
+            ),
+            "capacity_is_hard_gate": False,
             "marginal_cost_per_quality": float(
                 metric.get("marginal_cost_per_quality") or 0.0
             ),
+            "tool_use_forbidden": True,
+            "tools_allowed": False,
         }
     )
     return value
 
 
-def _company(row: Mapping[str, Any]) -> str:
-    value = str(row.get("company") or "").strip().casefold()
-    if value:
-        return value
-    model = str(row.get("model") or "")
-    return model.split("/", 1)[0].casefold() if "/" in model else "unknown"
-
-
-def _is_explicit_free_route(row: Mapping[str, Any]) -> bool:
-    model = str(row.get("model") or "").strip().casefold()
-    return model.endswith(":free") or bool(row.get("free_route") is True)
-
-
-def _recovery_soft_penalty(
-    row: Mapping[str, Any],
-    primary_companies: set[str],
-    recovery_company_count: int = 0,
-) -> int:
-    penalty = 0
-    if _is_explicit_free_route(row):
-        penalty += RECOVERY_FREE_ROUTE_SOFT_PENALTY
-    if _company(row) in primary_companies:
-        penalty += RECOVERY_PRIMARY_COMPANY_OVERLAP_SOFT_PENALTY
-    if recovery_company_count > 0:
-        penalty += (
-            RECOVERY_COMPANY_CONCENTRATION_SOFT_PENALTY
-            * int(recovery_company_count)
-        )
-    return penalty
-
-
 def _annotate_recovery_rows(
     rows: list[dict[str, Any]],
-    selected: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    primary_companies = {_company(row) for row in selected}
-    counts = Counter(_company(row) for row in rows)
-    for row in rows:
-        company = _company(row)
-        duplicate_count = max(0, int(counts[company]) - 1)
-        row["recovery_resilience"] = {
-            "explicit_free_route": _is_explicit_free_route(row),
-            "company_overlaps_primary": company in primary_companies,
-            "same_company_other_recoveries": duplicate_count,
-            "soft_penalty": _recovery_soft_penalty(
-                row,
-                primary_companies,
-                duplicate_count,
-            ),
-            "hard_company_diversity_constraint": False,
-            "free_model_forbidden": False,
-        }
     rows.sort(
         key=lambda row: (
-            not bool(row.get("task_adaptive_capacity_compatible", True)),
-            int(row["recovery_resilience"]["soft_penalty"])
-            + int(row.get("task_adaptive_objective_score") or 0),
+            int(row.get("task_adaptive_objective_score") or 0),
             float(row.get("estimated_task_cost_usd") or 0.0),
+            int(row.get("popularity_rank") or 1_000_000),
             str(row.get("model") or ""),
         )
     )
     for index, row in enumerate(rows, 1):
         row["slot"] = index
         row["warm_recovery_priority"] = index
+        row["recovery_resilience"] = {
+            "selection_source": "current-task-recovery-role-objective",
+            "soft_company_penalty": 0,
+            "soft_free_route_penalty": 0,
+            "hard_company_diversity_constraint": False,
+            "free_model_forbidden": False,
+            "provider_constraint": False,
+            "capacity_hard_gate": False,
+        }
     return rows
 
 
@@ -314,50 +324,79 @@ def _heuristic_recoveries(
     candidates: Sequence[Mapping[str, Any]],
     recovery_metrics: Mapping[str, Mapping[str, Any]],
     used: set[str],
-    selected: Sequence[Mapping[str, Any]],
     recovery_count: int,
 ) -> list[dict[str, Any]]:
-    primary_companies = {_company(row) for row in selected}
-    company_counts: Counter[str] = Counter()
-    available = [
-        row for row in candidates if str(row.get("model") or "") not in used
-    ]
-    backups: list[dict[str, Any]] = []
-    for _ in range(recovery_count):
-        if not available:
-            break
-        ranked = sorted(
-            available,
-            key=lambda row: (
-                not bool(
-                    recovery_metrics[str(row["model"])].get("compatible", True)
-                ),
-                int(
-                    recovery_metrics[str(row["model"])].get("objective_score")
-                    or 0
-                )
-                + _recovery_soft_penalty(
-                    row,
-                    primary_companies,
-                    company_counts[_company(row)],
-                ),
-                float(
-                    recovery_metrics[str(row["model"])].get(
-                        "estimated_task_cost_usd"
-                    )
-                    or 0.0
-                ),
-                str(row["model"]),
+    ranked = sorted(
+        (
+            row
+            for row in candidates
+            if str(row.get("model") or "") not in used
+        ),
+        key=lambda row: (
+            int(
+                recovery_metrics[str(row["model"])].get("objective_score")
+                or 0
             ),
-        )
-        source = ranked[0]
+            float(
+                recovery_metrics[str(row["model"])].get(
+                    "estimated_task_cost_usd"
+                )
+                or 0.0
+            ),
+            str(row["model"]),
+        ),
+    )
+    backups: list[dict[str, Any]] = []
+    for source in ranked[:recovery_count]:
         model_id = str(source["model"])
-        backup = _annotate(source, recovery_metrics[model_id])
-        backups.append(backup)
+        backups.append(_annotate(source, recovery_metrics[model_id]))
         used.add(model_id)
-        company_counts[_company(source)] += 1
-        available = [row for row in available if str(row["model"]) != model_id]
-    return _annotate_recovery_rows(backups, selected)
+    return _annotate_recovery_rows(backups)
+
+
+def _dynamic_solver_profile(
+    profile: Mapping[str, Any],
+    candidate_count: int,
+    role_count: int,
+    recovery_count: int,
+) -> dict[str, Any]:
+    problem_cells = max(1, candidate_count * (role_count + 1))
+    overall = _pressure(profile, "overall")
+    structural = (
+        int(profile.get("requirement_count") or 0)
+        + int(profile.get("acceptance_count") or 0)
+        + int(profile.get("delivery_item_count") or 0)
+        + int(profile.get("evidence_count") or 0)
+    )
+    max_time = min(
+        60.0,
+        max(
+            2.0,
+            1.0
+            + math.log2(problem_cells + 1)
+            + overall / 12.0
+            + structural / 8.0
+            + recovery_count / 3.0,
+        ),
+    )
+    seed_material = {
+        "task_characters": int(profile.get("task_characters") or 0),
+        "evidence_characters": int(profile.get("evidence_characters") or 0),
+        "pressure": dict(profile.get("pressure") or {}),
+        "candidate_count": candidate_count,
+        "role_count": role_count,
+        "recovery_count": recovery_count,
+    }
+    seed = int(_sha(seed_material)[:8], 16) % 2_147_483_647
+    return {
+        "problem_cells": problem_cells,
+        "max_time_in_seconds": round(max_time, 6),
+        "random_seed": seed,
+        # Single worker is retained as a reproducibility/integrity invariant,
+        # not a task/model eligibility gate.
+        "num_search_workers": 1,
+        "single_worker_reason": "deterministic-audit-reproducibility",
+    }
 
 
 def _solve(
@@ -401,9 +440,8 @@ def _solve(
             == 1
         )
 
-    # Exact-model duplication is prevented only because it would be the same
-    # expert identity twice; company/provider diversity is intentionally not a
-    # hard constraint.
+    # Same model identity cannot simultaneously occupy multiple expert/recovery
+    # nodes.  This is graph identity integrity, not a company/provider/model gate.
     for index in range(len(candidates)):
         model.add(
             sum(active[index, role] for role in range(len(roles)))
@@ -412,101 +450,69 @@ def _solve(
         )
     model.add(sum(recovery.values()) == int(recovery_count))
 
+    # No company, price, free/paid, flagship, TopN, Provider or capacity hard
+    # constraints are applied.  All current-task considerations enter objective
+    # metrics only.
+    tie_base = max(2, len(candidates) * max(1, len(roles)) + 1)
     terms: list[Any] = []
     for index, row in enumerate(candidates):
         model_id = str(row["model"])
         for role_index in range(len(roles)):
             metric = metrics_by_role[role_index][model_id]
-            penalty = 0 if metric.get("compatible") is True else 1_000_000_000
+            tie = index * max(1, len(roles)) + role_index
             terms.append(
-                (int(metric.get("objective_score") or 0) + penalty)
+                (
+                    int(metric.get("objective_score") or 0) * tie_base
+                    + tie
+                )
                 * active[index, role_index]
             )
         recovery_metric = recovery_metrics[model_id]
-        recovery_penalty = (
-            0 if recovery_metric.get("compatible") is True else 1_000_000_000
-        )
         terms.append(
             (
-                int(recovery_metric.get("objective_score") or 0)
-                + recovery_penalty
-                + (
-                    RECOVERY_FREE_ROUTE_SOFT_PENALTY
-                    if _is_explicit_free_route(row)
-                    else 0
-                )
+                int(recovery_metric.get("objective_score") or 0) * tie_base
+                + index
             )
             * recovery[index]
         )
 
-    company_indexes: dict[str, list[int]] = {}
-    for index, row in enumerate(candidates):
-        company_indexes.setdefault(_company(row), []).append(index)
-
-    for company, indexes in company_indexes.items():
-        active_sum = sum(
-            active[index, role]
-            for index in indexes
-            for role in range(len(roles))
-        )
-        recovery_sum = sum(recovery[index] for index in indexes)
-        active_flag = model.new_bool_var(f"company_active_{len(terms)}")
-        recovery_flag = model.new_bool_var(f"company_recovery_{len(terms)}")
-        model.add(active_sum >= active_flag)
-        model.add(
-            active_sum
-            <= max(1, len(indexes) * len(roles)) * active_flag
-        )
-        model.add(recovery_sum >= recovery_flag)
-        model.add(recovery_sum <= max(1, len(indexes)) * recovery_flag)
-
-        overlap = model.new_bool_var(f"company_overlap_{len(terms)}")
-        model.add(overlap <= active_flag)
-        model.add(overlap <= recovery_flag)
-        model.add(overlap >= active_flag + recovery_flag - 1)
-        terms.append(
-            RECOVERY_PRIMARY_COMPANY_OVERLAP_SOFT_PENALTY * overlap
-        )
-
-        max_excess = max(0, len(indexes) - 1)
-        excess = model.new_int_var(
-            0,
-            max_excess,
-            f"recovery_company_excess_{len(terms)}",
-        )
-        model.add(excess >= recovery_sum - 1)
-        terms.append(
-            RECOVERY_COMPANY_CONCENTRATION_SOFT_PENALTY * excess
-        )
-        del company
-
     model.minimize(sum(terms))
 
+    solver_profile = _dynamic_solver_profile(
+        profile,
+        len(candidates),
+        len(roles),
+        recovery_count,
+    )
     solver = cp_model.CpSolver()
-    solver.parameters.num_search_workers = 1
-    solver.parameters.random_seed = 0
-    solver.parameters.max_time_in_seconds = 10.0
+    solver.parameters.num_search_workers = int(
+        solver_profile["num_search_workers"]
+    )
+    solver.parameters.random_seed = int(solver_profile["random_seed"])
+    solver.parameters.max_time_in_seconds = float(
+        solver_profile["max_time_in_seconds"]
+    )
     status = solver.solve(model)
     accepted_statuses = {cp_model.OPTIMAL, cp_model.FEASIBLE}
 
     if status not in accepted_statuses:
-        # Non-blocking heuristic fallback: best currently scored unique
-        # candidates, with the same soft recovery-resilience preferences.
         used: set[str] = set()
         selected: list[dict[str, Any]] = []
         for role_index, role in enumerate(roles):
             ranked = sorted(
                 candidates,
                 key=lambda row: (
-                    not bool(
-                        metrics_by_role[role_index][str(row["model"])][
-                            "compatible"
-                        ]
-                    ),
                     int(
-                        metrics_by_role[role_index][str(row["model"])][
+                        metrics_by_role[role_index][str(row["model"])].get(
                             "objective_score"
-                        ]
+                        )
+                        or 0
+                    ),
+                    float(
+                        metrics_by_role[role_index][str(row["model"])].get(
+                            "estimated_task_cost_usd"
+                        )
+                        or 0.0
                     ),
                     str(row["model"]),
                 ),
@@ -534,7 +540,6 @@ def _solve(
             candidates,
             recovery_metrics,
             used,
-            selected,
             recovery_count,
         )
         return selected, backups, {
@@ -542,6 +547,7 @@ def _solve(
             "solver_status": solver.status_name(status),
             "optimality_proven": False,
             "fallback_used": True,
+            "dynamic_solver_profile": solver_profile,
         }
 
     selected: list[dict[str, Any]] = []
@@ -570,7 +576,7 @@ def _solve(
             backups.append(
                 _annotate(row, recovery_metrics[str(row["model"])])
             )
-    backups = _annotate_recovery_rows(backups, selected)
+    backups = _annotate_recovery_rows(backups)
 
     return selected, backups, {
         "optimizer": "ortools-cp-sat",
@@ -580,6 +586,7 @@ def _solve(
         "objective_value": float(solver.objective_value),
         "best_objective_bound": float(solver.best_objective_bound),
         "wall_time_seconds": round(float(solver.wall_time), 6),
+        "dynamic_solver_profile": solver_profile,
     }
 
 
@@ -600,7 +607,7 @@ def materialize_top50_selection(
         profile,
         len(candidates),
     )
-    roles = _role_plan(primary_count)
+    roles = _role_plan(primary_count, profile)
     selected, recoveries, solver_audit = _solve(
         candidates,
         profile,
@@ -617,7 +624,7 @@ def materialize_top50_selection(
 
     audit = {
         **solver_audit,
-        "schema_version": "v5-task-dynamic-expert-composition-1",
+        "schema_version": "v5-fully-dynamic-expert-composition-2",
         "selection_principles": list(PRINCIPLES),
         "task_adaptive_scoring_schema_version": TASK_SCORING_SCHEMA_VERSION,
         "task_demand_profile": dict(profile),
@@ -626,30 +633,37 @@ def materialize_top50_selection(
         "role_plan": [dict(role) for role in roles],
         "recovery_resilience": {
             "computed_ratio": round(_recovery_resilience_ratio(profile), 6),
-            "base_ratio": RECOVERY_BASE_RESILIENCE,
-            "maximum_ratio": RECOVERY_MAX_RESILIENCE,
             "recovery_count": len(recoveries),
-            "free_route_soft_penalty": RECOVERY_FREE_ROUTE_SOFT_PENALTY,
-            "primary_company_overlap_soft_penalty": (
-                RECOVERY_PRIMARY_COMPANY_OVERLAP_SOFT_PENALTY
-            ),
-            "recovery_company_concentration_soft_penalty": (
-                RECOVERY_COMPANY_CONCENTRATION_SOFT_PENALTY
-            ),
+            "selection_source": "current-task-recovery-role-objective",
+            "free_route_soft_penalty": 0,
+            "primary_company_overlap_soft_penalty": 0,
+            "recovery_company_concentration_soft_penalty": 0,
             "free_models_forbidden": False,
             "company_diversity_hard_constraint": False,
             "provider_diversity_hard_constraint": False,
+            "capacity_hard_constraint": False,
             "cross_task_failure_history_used": False,
         },
+        "all_calculable_planning_parameters_dynamic": True,
+        "hard_model_eligibility_gates": [],
+        "only_hard_model_boundary": "no-tools",
+        "tool_use_forbidden": True,
         "fixed_team_size_used": False,
         "fixed_four_plus_four_used": False,
+        "fixed_role_topology_used": False,
         "company_uniqueness_constraint_used": False,
         "top50_membership_constraint_used": False,
         "budget_constraint_used": False,
+        "price_gate_used": False,
+        "flagship_gate_used": False,
+        "free_first_gate_used": False,
+        "canary_gate_used": False,
         "provider_constraint_used": False,
-        "optimality_required_to_execute": False,
+        "capacity_gate_used": False,
+        "optimizer_optimality_required": False,
         "semantic_keyword_routing_used": False,
         "provider_routing_mode": "unrestricted-openrouter",
+        "same_model_identity_reuse_prevented_for_graph_integrity": True,
     }
 
     plan = dict(source_plan)
@@ -668,13 +682,11 @@ def materialize_top50_selection(
             "selected_from_top50_reasoning_pool_only": False,
             "selected_from_governance_candidate_pool": True,
             "candidate_pool_authority": "decision-system-governance",
-            "model_assignment_authority": "expert-assessment-center-ortools",
+            "model_assignment_authority": "expert-assessment-center-dynamic-ortools",
             "optimizer": str(audit["optimizer"]),
             "optimizer_audit": audit,
             "task_adaptive_scoring_completed": True,
-            "task_adaptive_scoring_schema_version": (
-                TASK_SCORING_SCHEMA_VERSION
-            ),
+            "task_adaptive_scoring_schema_version": TASK_SCORING_SCHEMA_VERSION,
             "task_demand_profile": profile,
             "selection_principles": list(PRINCIPLES),
             "provider_routing_mode": "unrestricted-openrouter",
@@ -685,11 +697,24 @@ def materialize_top50_selection(
             "company_deduplication_required": False,
             "free_first_required": False,
             "canary_required_before_execution": False,
+            "optimizer_optimality_required": False,
+            "price_filter_required": False,
+            "flagship_filter_required": False,
+            "intelligence_rank_required": False,
+            "provider_endpoint_qualification_required": False,
+            "zdr_provider_qualification_required": False,
+            "tool_use_forbidden": True,
+            "tools_allowed": False,
+            "only_hard_model_boundary": "no-tools",
+            "all_calculable_planning_parameters_dynamic": True,
             "selection_policy": (
-                "governance candidates -> current-task structural demand -> "
-                "dynamic team size and recovery depth -> OR-Tools task-value "
-                "assignment with soft recovery resilience -> feasible-or-heuristic "
-                "fallback -> unrestricted OpenRouter Provider routing"
+                "governance reasoning-popularity candidates -> current-task "
+                "structural demand -> dynamic token/reserve/fan-in estimates -> "
+                "dynamic team size, role topology and recovery depth -> dynamic "
+                "cost/intelligence/popularity/capacity/marginal-return scoring -> "
+                "OR-Tools assignment -> feasible-or-heuristic recovery -> "
+                "unrestricted OpenRouter Provider routing; no business eligibility "
+                "gates; hard model boundary=no-tools"
             ),
         }
     )
@@ -697,7 +722,7 @@ def materialize_top50_selection(
     selection_basis_sha256 = _sha(plan)
 
     receipt = {
-        "schema_version": "expert-center-task-dynamic-selection-receipt-v1",
+        "schema_version": "expert-center-fully-dynamic-selection-receipt-v2",
         "selection_basis_sha256": selection_basis_sha256,
         "selected_models": [row["model"] for row in selected],
         "recovery_models": [row["model"] for row in recoveries],
@@ -708,6 +733,9 @@ def materialize_top50_selection(
         "provider_routing_mode": "unrestricted-openrouter",
         "provider_restrictions_applied": False,
         "free_first_required": False,
+        "tool_use_forbidden": True,
+        "tools_allowed": False,
+        "only_hard_model_boundary": "no-tools",
         "model_calls": 0,
     }
     receipt["receipt_sha256"] = _sha(receipt)
