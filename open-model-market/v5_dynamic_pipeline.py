@@ -24,7 +24,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     # The active facade delegates to the legacy implementation for I/O and
     # evidence writing. Replace only its historical fixed 4..16/min-3 budget
     # admission function; graph/materializer/runtime limits are already dynamic.
-    pipeline._legacy._validate_budget = _dynamic_validate_budget  # noqa: SLF001
+    legacy_runtime = getattr(pipeline, "_legacy")
+    setattr(legacy_runtime, "_validate_budget", _dynamic_validate_budget)
     return int(pipeline.main(argv))
 
 
