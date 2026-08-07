@@ -1,9 +1,11 @@
-"""Canonical model-company identity for governance and expert isolation."""
+"""Canonical model-company identity for governance and audit telemetry."""
 from __future__ import annotations
 
 from typing import Any, Mapping
 
-REQUIRE_DISTINCT_MODEL_COMPANIES = True
+# Company identity is retained for observability only. It is not an admission,
+# assignment, recovery, or delivery constraint in the task-dynamic runtime.
+REQUIRE_DISTINCT_MODEL_COMPANIES = False
 MINIMUM_CANDIDATES_PER_WORK = 2
 ABSOLUTE_INTELLIGENCE_RANKING_CEILING = 150
 DEFAULT_INTELLIGENCE_RANKING_LIMIT = (
@@ -60,6 +62,7 @@ def canonical_model_company(model_id: str) -> str:
 
 
 def candidate_company(candidate: Any) -> str:
+    """Return company identity for audit/telemetry; never use it as a gate."""
     if isinstance(candidate, Mapping):
         model_id = (
             candidate.get("model")
