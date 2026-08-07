@@ -63,6 +63,7 @@ jobs:
             tests.test_unique_company_price_ranking \
             tests.test_v5_constitution_policy \
             tests.test_v5_dynamic_ranking_limit \
+            tests.test_v5_dynamic_recovery_resilience \
             tests.test_v5_governance_model_plan \
             tests.test_v5_governed_plan_orchestrator \
             tests.test_v5_task_adaptive_scoring \
