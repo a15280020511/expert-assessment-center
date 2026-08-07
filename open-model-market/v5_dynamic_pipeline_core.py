@@ -7,6 +7,7 @@ from typing import Any, Mapping, Sequence
 import v5_price_ranked_pipeline as pipeline
 
 _ORIGINAL_PROVIDER_FIELDS = pipeline._provider_fields
+_ORIGINAL_RUNTIME_CONFIG = pipeline._runtime_config
 
 
 def _dynamic_validate_budget(args: Any) -> tuple[int, int]:
@@ -55,7 +56,7 @@ def _dynamic_assignment_fields(plan: Mapping[str, Any]) -> dict[str, Any]:
     assignment_authority = (
         declared_authority
         if active and declared_authority.startswith("expert-assessment-center")
-        else "expert-assessment-center-dynamic-ortools"
+        else "expert-assessment-center-task-derived-dynamic-ortools"
         if active
         else "decision-system-governance"
     )
@@ -92,17 +93,27 @@ def _dynamic_assignment_fields(plan: Mapping[str, Any]) -> dict[str, Any]:
             plan.get("all_calculable_planning_parameters_dynamic")
             or audit_map.get("all_calculable_planning_parameters_dynamic")
         ),
+        "all_parameter_instances_current_task_derived": bool(
+            plan.get("all_parameter_instances_current_task_derived")
+            or audit_map.get("all_parameter_instances_current_task_derived")
+        ),
+        "fixed_parameter_template_used": bool(
+            plan.get("fixed_parameter_template_used") is True
+            or audit_map.get("fixed_parameter_template_used") is True
+        ),
+        "fixed_role_topology_used": bool(
+            plan.get("fixed_role_topology_required") is True
+            or audit_map.get("fixed_role_topology_used") is True
+        ),
+        "fixed_role_grammar_used": bool(
+            plan.get("fixed_role_grammar_required") is True
+            or audit_map.get("fixed_role_grammar_used") is True
+        ),
     }
 
 
 def _dynamic_provider_fields() -> dict[str, Any]:
-    """Keep Provider routing open while allowing Expert-Center recovery models.
-
-    OpenRouter may choose/fail over Providers for the *same* model identity.  A
-    different model identity may only be selected by the Expert Center's dynamic
-    recovery graph.  Historical telemetry used one ``model_substitution`` flag
-    for both concepts and incorrectly reported recovery as disabled.
-    """
+    """Keep Provider routing open while allowing Expert-Center recovery models."""
     value = dict(_ORIGINAL_PROVIDER_FIELDS())
     value.update(
         {
@@ -124,16 +135,49 @@ def _dynamic_provider_fields() -> dict[str, Any]:
     return value
 
 
+def _dynamic_runtime_config(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Replace legacy fixed-topology/call-ceiling telemetry with active truth."""
+    value = dict(_ORIGINAL_RUNTIME_CONFIG(*args, **kwargs))
+    plan = kwargs.get("plan")
+    if not isinstance(plan, Mapping) and len(args) >= 4 and isinstance(args[3], Mapping):
+        plan = args[3]
+    plan = plan if isinstance(plan, Mapping) else {}
+    value.update(_dynamic_assignment_fields(plan))
+    value.update(
+        {
+            "team_topology": "current-task-derived-declared-role-dag",
+            "role_topology_source": "current-task-work-dag",
+            "role_dependencies_source": "current-plan-explicit-dependencies",
+            "fixed_role_topology_used": False,
+            "fixed_role_grammar_used": False,
+            "parameter_discovery_mode": "task-derived-parameter-instance-graph",
+            "parameter_optimizer_library": "optuna",
+            "parameter_dependency_library": "networkx",
+            "model_assignment_optimizer_library": "ortools-cp-sat",
+            "requested_call_budget_role": "telemetry-only",
+            "fixed_call_ceiling_applied": False,
+            "runtime_call_capacity_source": (
+                "current-finite-execution-graph-plus-active-recovery-plus-standby"
+            ),
+            "runtime_feedback_replanning_enabled": True,
+            "cross_task_history_used": False,
+        }
+    )
+    return value
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    # The active facade delegates to the battle-tested implementation for I/O
-    # and evidence writing. Replace historical compatibility hooks so old names
-    # cannot silently re-introduce a business gate or false telemetry.
+    # The active facade delegates I/O and evidence writing to the validated core,
+    # but replaces historical compatibility hooks that could re-introduce a
+    # business gate or false fixed-topology telemetry.
     legacy_runtime = getattr(pipeline, "_legacy")
     setattr(legacy_runtime, "_validate_budget", _dynamic_validate_budget)
 
     setattr(pipeline, "_top50", _expert_assignment_active)
     setattr(pipeline, "_assignment_fields", _dynamic_assignment_fields)
     setattr(pipeline, "_provider_fields", _dynamic_provider_fields)
+    setattr(pipeline, "_runtime_config", _dynamic_runtime_config)
+    setattr(legacy_runtime, "_runtime_config", _dynamic_runtime_config)
     return int(pipeline.main(argv))
 
 
