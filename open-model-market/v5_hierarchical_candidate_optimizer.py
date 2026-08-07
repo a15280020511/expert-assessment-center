@@ -233,7 +233,7 @@ def _materialize(
     selection_basis_sha256 = base._sha(plan)  # noqa: SLF001
 
     receipt = {
-        "schema_version": "expert-center-task-derived-dynamic-selection-receipt-v3",
+        "schema_version": "expert-center-task-derived-dynamic-selection-receipt-current-role",
         "selection_basis_sha256": selection_basis_sha256,
         "planning_sequence": planning_sequence,
         "runtime_replanning": runtime_replanning,
