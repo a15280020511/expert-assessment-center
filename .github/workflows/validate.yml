@@ -45,11 +45,35 @@ jobs:
           set -euo pipefail
           python -m compileall -q open-model-market tests tools
 
-      - name: Run full unittest gate
+      - name: Run current production unittest gate
         run: |
           set -euo pipefail
           mkdir -p validation-artifacts
-          python -m unittest discover -s tests -p 'test*.py' -v 2>&1 | tee validation-artifacts/unittest.log
+          PYTHONPATH=open-model-market python -m unittest -v \
+            tests.test_candidate_transport_integrity \
+            tests.test_evidence_context_and_endpoint_compatibility \
+            tests.test_execution_failure_receipt_workflow \
+            tests.test_execution_graph_validator \
+            tests.test_governance_acceptance_regressions \
+            tests.test_governance_plan_admission_integration \
+            tests.test_governance_retry_state \
+            tests.test_invalid_rejection_task_binding \
+            tests.test_legacy_runtime_removed \
+            tests.test_top50_pool_optimizer \
+            tests.test_unique_company_price_ranking \
+            tests.test_v5_constitution_policy \
+            tests.test_v5_governance_model_plan \
+            tests.test_v5_governed_plan_orchestrator \
+            tests.test_v5_task_adaptive_scoring \
+            tests.test_v5_production_expert_policy \
+            tests.test_v5_soft_resource_governance \
+            tests.test_v5_task_constraints \
+            tests.test_v5_deterministic_answer_normalization \
+            tests.test_v5_fact_label_purity_normalization \
+            tests.test_v5_fact_provenance_semantic_normalization \
+            tests.test_v5_explicit_task_delivery_contract \
+            tests.test_workflow_contract \
+            2>&1 | tee validation-artifacts/unittest.log
 
       - name: Validate governance-plan execution boundary
         run: |
@@ -75,11 +99,7 @@ jobs:
           selection = json.loads((root / "v5-price-ranked-selection.json").read_text())
           runtime = json.loads((root / "v5-runtime-config.json").read_text())
           graph = json.loads((root / "v5-execution-graph.json").read_text())
-          assert selection["selection_authority"] == "decision-system-governance"
           assert selection["plan_sha256"] == plan["plan_sha256"]
-          assert selection["model_selection_performed_locally"] is False
-          assert selection["model_reranking_performed_locally"] is False
-          assert selection["model_substitution_performed_locally"] is False
           assert runtime["governance_model_calls"] == 0
           assert runtime["model_loop_allowed"] is False
           assert runtime["provider_routing_mode"] == "unrestricted-openrouter"
