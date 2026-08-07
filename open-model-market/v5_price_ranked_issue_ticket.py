@@ -36,6 +36,12 @@ def _canonical_json(value: Any) -> bytes:
     ).encode("utf-8")
 
 
+def _transport_plan_sha256(plan: Mapping[str, Any]) -> str:
+    material = dict(plan)
+    material.pop("plan_sha256", None)
+    return hashlib.sha256(_canonical_json(material)).hexdigest()
+
+
 def _write_output(name: str, value: Any) -> None:
     path = os.getenv("GITHUB_OUTPUT")
     if not path:
@@ -77,7 +83,7 @@ def _hydrate_candidate_pool(
     packet: Mapping[str, Any],
     comments_path: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Restore the governance candidate pool from signed transport comments."""
+    """Verify compact governance plan, then restore its separately hashed pool."""
     hydrated = dict(packet)
     plan_value = hydrated.get("governance_model_plan")
     if not isinstance(plan_value, Mapping):
@@ -86,6 +92,13 @@ def _hydrate_candidate_pool(
     transport = plan.get("expert_candidate_pool_transport")
     if not isinstance(transport, Mapping):
         return hydrated, {"transport_used": False}
+
+    expected_plan_sha = str(plan.get("plan_sha256") or "").strip()
+    if len(expected_plan_sha) != 64:
+        raise ValueError("governance compact plan sha256 is missing or malformed")
+    observed_plan_sha = _transport_plan_sha256(plan)
+    if observed_plan_sha != expected_plan_sha:
+        raise ValueError("governance compact plan sha256 mismatch")
 
     if str(transport.get("schema_version") or "") != POOL_TRANSPORT_SCHEMA:
         raise ValueError("unsupported governance candidate transport schema")
@@ -155,6 +168,11 @@ def _hydrate_candidate_pool(
     if hashlib.sha256(_canonical_json(pool)).hexdigest() != expected_sha:
         raise ValueError("governance candidate canonical sha256 mismatch")
 
+    # The compact transport hash has now fulfilled its purpose. Preserve it as
+    # provenance, remove the transport plan_sha256, and let the Expert Center
+    # create a new canonical hash for the fully hydrated execution plan.
+    plan.pop("plan_sha256", None)
+    plan["governance_transport_plan_sha256"] = expected_plan_sha
     plan["expert_candidate_pool"] = [dict(row) for row in pool]
     plan["expert_candidate_pool_size"] = len(pool)
     plan["expert_candidate_pool_sha256"] = expected_sha
@@ -163,6 +181,7 @@ def _hydrate_candidate_pool(
     return hydrated, {
         "transport_used": True,
         "transport_verified": True,
+        "governance_transport_plan_sha256": expected_plan_sha,
         "candidate_count": len(pool),
         "chunk_count": expected_chunks,
         "candidate_pool_sha256": expected_sha,
