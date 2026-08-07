@@ -188,7 +188,7 @@ class DynamicRecoveryResilienceTests(unittest.TestCase):
             },
         )
         with mock.patch.object(
-            runtime._legacy.ExecutionEngine,  # noqa: SLF001
+            runtime._LegacyExecutionEngine,  # noqa: SLF001
             "_recorded_call",
             return_value=attempt,
         ):
