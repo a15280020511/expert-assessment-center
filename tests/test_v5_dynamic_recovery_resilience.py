@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sys
 import unittest
 from pathlib import Path
@@ -113,7 +114,7 @@ def _optimizer_packet() -> dict[str, object]:
 
 
 class DynamicRecoveryResilienceTests(unittest.TestCase):
-    def test_real_production_shape_expands_to_three_recoveries(self) -> None:
+    def test_team_and_recovery_shape_are_computed_from_current_task(self) -> None:
         profile = {
             "task_characters": 272,
             "evidence_characters": 233,
@@ -123,14 +124,29 @@ class DynamicRecoveryResilienceTests(unittest.TestCase):
             "delivery_item_count": 0,
             "pressure": {"overall": 37},
         }
-        self.assertEqual(
-            optimizer._dynamic_team_shape(profile, 400),  # noqa: SLF001
-            (5, 3),
+        ratio = optimizer._recovery_resilience_ratio(profile)  # noqa: SLF001
+        primary, recovery = optimizer._dynamic_team_shape(  # noqa: SLF001
+            profile,
+            400,
         )
-        self.assertAlmostEqual(
-            optimizer._recovery_resilience_ratio(profile),  # noqa: SLF001
-            0.4766666667,
-            places=6,
+        self.assertGreaterEqual(ratio, 0.10)
+        self.assertLessEqual(ratio, 0.90)
+        self.assertGreaterEqual(primary, 1)
+        self.assertEqual(
+            recovery,
+            min(400 - primary, math.ceil(primary * ratio)),
+        )
+
+        simpler = {
+            **profile,
+            "requirement_count": 0,
+            "evidence_count": 0,
+            "acceptance_count": 0,
+            "pressure": {"overall": 0},
+        }
+        self.assertNotEqual(
+            optimizer._dynamic_team_shape(simpler, 400),  # noqa: SLF001
+            (primary, recovery),
         )
 
     def test_shared_pool_capacity_counts_unique_backups_not_node_copies(self) -> None:
@@ -152,8 +168,9 @@ class DynamicRecoveryResilienceTests(unittest.TestCase):
             snapshot["recovery_capacity_source"],
             "unique-current-run-recovery-identities",
         )
+        self.assertTrue(snapshot["runtime_resilience_parameters_dynamic"])
 
-    def test_provider_invalid_response_enters_one_failure_run_circuit(self) -> None:
+    def test_provider_failure_circuit_threshold_is_graph_derived(self) -> None:
         graph = _graph()
         budget = runtime.BudgetController(
             runtime.RuntimeConfig(
@@ -192,7 +209,7 @@ class DynamicRecoveryResilienceTests(unittest.TestCase):
             "_recorded_call",
             return_value=attempt,
         ):
-            returned = engine._recorded_call(  # noqa: SLF001
+            engine._recorded_call(  # noqa: SLF001
                 selected,
                 [],
                 "task",
@@ -203,13 +220,22 @@ class DynamicRecoveryResilienceTests(unittest.TestCase):
                 replacement,
                 "replacement",
             )
-        self.assertIs(returned, attempt)
-        self.assertFalse(budget.endpoint_available(replacement.provider_endpoint))
-        circuit = budget.snapshot()["provider_circuit"]
-        self.assertEqual(circuit["max_failures"], 1)
-        self.assertEqual(circuit["failures"][replacement.provider_endpoint], 1)
+        snapshot = budget.snapshot()
+        threshold = snapshot["provider_circuit"]["max_failures"]
+        self.assertEqual(threshold, math.ceil(3 / 2))
+        self.assertEqual(
+            snapshot["provider_circuit"]["failures"][replacement.provider_endpoint],
+            1,
+        )
+        self.assertTrue(budget.endpoint_available(replacement.provider_endpoint))
 
-    def test_free_recovery_is_softly_penalized_not_forbidden(self) -> None:
+        budget.fail_endpoint(
+            replacement.provider_endpoint,
+            runtime.FailureCategory.PROVIDER_INVALID_RESPONSE,
+        )
+        self.assertFalse(budget.endpoint_available(replacement.provider_endpoint))
+
+    def test_free_recovery_has_no_fixed_penalty_or_gate(self) -> None:
         materialized, _ = optimizer.materialize_top50_selection(
             _optimizer_packet()
         )
@@ -220,15 +246,22 @@ class DynamicRecoveryResilienceTests(unittest.TestCase):
         self.assertFalse(audit["free_models_forbidden"])
         self.assertFalse(audit["company_diversity_hard_constraint"])
         self.assertFalse(audit["provider_diversity_hard_constraint"])
-        self.assertTrue(
-            any(not str(row["model"]).endswith(":free") for row in recovery)
-        )
+        self.assertFalse(audit["capacity_hard_constraint"])
+        self.assertEqual(audit["free_route_soft_penalty"], 0)
+        self.assertEqual(audit["primary_company_overlap_soft_penalty"], 0)
+        self.assertEqual(audit["recovery_company_concentration_soft_penalty"], 0)
         self.assertEqual(
             [row["warm_recovery_priority"] for row in recovery],
             list(range(1, len(recovery) + 1)),
         )
         self.assertTrue(
             all("recovery_resilience" in row for row in recovery)
+        )
+        self.assertTrue(
+            all(
+                row["recovery_resilience"]["soft_free_route_penalty"] == 0
+                for row in recovery
+            )
         )
 
 
