@@ -48,6 +48,12 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("independently revalidate", self.text.casefold())
         self.assertNotIn("only after audit", self.text.casefold())
 
+    def test_transport_comment_fetch_is_fully_paginated(self):
+        self.assertIn("Fetch all governance candidate transport comments", self.text)
+        self.assertIn("gh api --paginate --slurp", self.text)
+        self.assertIn("jq 'add // []'", self.text)
+        self.assertIn('type == "array"', self.text)
+
     def test_result_publication_is_best_effort_not_fail_closed_gate(self):
         self.assertIn("continue-on-error: true", self.text)
         self.assertIn("if: always() && steps.ticket.outputs.accepted == 'true'", self.text)
