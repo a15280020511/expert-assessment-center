@@ -247,6 +247,7 @@ def prepare(args: argparse.Namespace) -> int:
         packet, transport_receipt = _hydrate_candidate_pool(packet, args.comments_path)
         materialized, receipt = materialize_candidate_pool_selection(packet)
         plan = validate_governance_model_plan(materialized)
+        materialized["governance_model_plan"] = plan
         selected = list(plan.get("selected_models") or [])
         recoveries = list(plan.get("recovery_models") or [])
         if not selected:
