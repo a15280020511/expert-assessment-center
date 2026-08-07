@@ -53,21 +53,27 @@ jobs:
           python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
           python -m pip check
 
-      - name: Run adaptive scoring, transport and runtime recovery contracts
+      - name: Run adaptive scoring and dynamic candidate-pool contracts
         run: |
           set -euo pipefail
           mkdir -p full-load-evidence
           PYTHONPATH=open-model-market coverage run --branch \
-            --source=v5_task_adaptive_scoring,v5_execution_transport,v5_runtime \
+            --source=v5_task_adaptive_scoring \
             -m unittest \
             tests.test_v5_task_adaptive_scoring \
             tests.test_top50_pool_optimizer \
-            tests.test_v5_dynamic_recovery_resilience \
-            tests.test_v5_execution_transport \
-            tests.test_v5_production_standby_promotion -v \
+            tests.test_v5_dynamic_recovery_resilience -v \
             2>&1 | tee full-load-evidence/targeted-tests.log
-          coverage report --show-missing --fail-under=55 \
+          coverage report --show-missing --fail-under=85 \
             2>&1 | tee full-load-evidence/coverage.log
+
+      - name: Run execution-transport and production standby regressions
+        run: |
+          set -euo pipefail
+          PYTHONPATH=open-model-market python -m unittest -v \
+            tests.test_v5_execution_transport \
+            tests.test_v5_production_standby_promotion \
+            2>&1 | tee full-load-evidence/transport-and-standby-tests.log
 
       - name: Produce deterministic dynamic full-load receipt
         env:
