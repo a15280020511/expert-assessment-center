@@ -7,10 +7,10 @@ identities. Team size, company mix, role topology, pool membership, price,
 flagship labels, budget, ranking source, optimizer status and recovery count are
 not admission constraints.
 
-Plan integrity uses a canonical execution-plan hash. A small set of fields below
-are validator annotations: they are deterministic consequences of the v9 policy,
-not governance-authored execution content, so adding those annotations must not
-change an already valid plan hash.
+Execution-plan integrity hashes every plan field except ``plan_sha256`` itself.
+The validator may add deterministic v9 annotations during first normalization;
+it then emits a new hash covering that normalized result. Re-validating that
+normalized result is therefore idempotent and fail-closed.
 """
 from __future__ import annotations
 
@@ -25,15 +25,6 @@ SCHEMA_VERSION = _legacy.SCHEMA_VERSION
 DYNAMIC_SCHEMA_VERSION = "governance-expert-dynamic-candidate-plan-v1"
 ALLOWED_SCHEMA_VERSIONS = frozenset({SCHEMA_VERSION, DYNAMIC_SCHEMA_VERSION})
 SELECTION_AUTHORITY = _legacy.SELECTION_AUTHORITY
-
-_VALIDATOR_ANNOTATIONS = frozenset(
-    {
-        "company_uniqueness_required",
-        "candidate_pool_membership_required",
-        "optimizer_optimality_required",
-        "budget_admission_gate_enabled",
-    }
-)
 
 
 def _canonical(value: Any, field: str) -> bytes:
@@ -52,11 +43,9 @@ def _canonical(value: Any, field: str) -> bytes:
 
 
 def plan_sha256(plan: Mapping[str, Any]) -> str:
-    """Hash governance/execution content, excluding deterministic annotations."""
+    """Hash the complete execution plan except the digest field itself."""
     value = dict(plan)
     value.pop("plan_sha256", None)
-    for field in _VALIDATOR_ANNOTATIONS:
-        value.pop(field, None)
     return hashlib.sha256(_canonical(value, "governance model plan")).hexdigest()
 
 
@@ -145,8 +134,7 @@ def validate_governance_model_plan(
 
     _validate_protocol_envelope(ticket, value)
 
-    # Verify an existing execution-plan hash before normalization. This prevents
-    # validation from silently replacing a tampered hash with a new valid hash.
+    # Verify the producer's exact canonical execution plan before normalization.
     incoming_sha = str(value.get("plan_sha256") or "").strip()
     if not incoming_sha:
         raise GovernanceModelPlanError("governance model plan sha256 is missing")
