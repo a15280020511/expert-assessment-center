@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 import v5_runtime_legacy as _legacy
-from execution_graph import ExecutionGraph, GraphLimits
+from execution_graph import ExecutionGraph, GraphLimits, SelectedNode
 from execution_graph_validator import validate_execution_graph
 
 for _name in dir(_legacy):
@@ -70,20 +70,29 @@ class RuntimeConfig:
             "provider_routing_mode": "unrestricted-openrouter",
             "fixed_call_ceiling_applied": False,
             "team_size_source": "current-execution-graph",
-            "recovery_capacity_source": "current-execution-graph",
+            "recovery_capacity_source": "unique-current-run-recovery-identities",
+            "failed_model_circuit_scope": "current-run-only",
         }
 
 
 def _recovery_capacity(graph: ExecutionGraph) -> int:
+    """Count unique recovery identities, not per-node copies of the shared pool."""
     metadata = graph.metadata if isinstance(graph.metadata, Mapping) else {}
     pool = metadata.get("recovery_pool")
     if not isinstance(pool, Mapping):
         return 0
-    return sum(
-        len(rows)
-        for rows in pool.values()
-        if isinstance(rows, list)
-    )
+    identities: set[tuple[str, str]] = set()
+    for rows in pool.values():
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            model = str(row.get("model") or "").strip()
+            endpoint = str(row.get("provider_endpoint") or "").strip()
+            if model:
+                identities.add((model, endpoint))
+    return len(identities)
 
 
 def _dynamic_config(config: RuntimeConfig, graph: ExecutionGraph) -> RuntimeConfig:
@@ -97,10 +106,10 @@ def _dynamic_config(config: RuntimeConfig, graph: ExecutionGraph) -> RuntimeConf
         live_catalog_required=config.live_catalog_required,
         provider_lock_required=False,
         cost_risk_multiplier=config.cost_risk_multiplier,
-        max_provider_failures=max(
-            int(config.max_provider_failures),
-            initial + recovery,
-        ),
+        # One model identity that has already failed with a provider/runtime
+        # transport error is skipped for the rest of this run. This is not a
+        # Provider allowlist and carries no state across tasks.
+        max_provider_failures=1,
     )
 
 
@@ -117,6 +126,9 @@ class BudgetController(_legacy.BudgetController):
             {
                 "fixed_call_ceiling_applied": False,
                 "call_capacity_source": "current-execution-graph",
+                "recovery_capacity_source": "unique-current-run-recovery-identities",
+                "failed_model_circuit_scope": "current-run-only",
+                "failed_model_circuit_threshold": 1,
                 "requested_total_call_telemetry": int(
                     self.requested_config.total_call_limit
                 ),
@@ -164,6 +176,39 @@ class ExecutionEngine(_legacy.ExecutionEngine):
                 )
             )
         return parsed, active_limits
+
+    def _recorded_call(
+        self,
+        selected: SelectedNode,
+        attempts: list[Any],
+        original_task: str,
+        upstream: Sequence[Mapping[str, Any]],
+        run: Any,
+        call_fn: Callable[[Any, Mapping[str, Any]], tuple[Mapping[str, Any], float]],
+        budget: BudgetController,
+        node: SelectedNode,
+        kind: str,
+    ) -> Any:
+        attempt = super()._recorded_call(
+            selected,
+            attempts,
+            original_task,
+            upstream,
+            run,
+            call_fn,
+            budget,
+            node,
+            kind,
+        )
+        if (
+            attempt is not None
+            and self._category(attempt) == FailureCategory.PROVIDER_INVALID_RESPONSE
+        ):
+            budget.fail_endpoint(
+                node.provider_endpoint,
+                FailureCategory.PROVIDER_INVALID_RESPONSE,
+            )
+        return attempt
 
 
 # Patch legacy module globals because legacy classes resolve these names at
