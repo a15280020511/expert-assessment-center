@@ -39,11 +39,19 @@ jobs:
           python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
           python -m pip check
 
+      - name: Fetch governance candidate transport comments
+        run: |
+          mkdir -p ticket-artifacts
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.issue.number }}/comments?per_page=100" \
+            > ticket-artifacts/issue-comments.json
+
       - name: Build task-dynamic expert plan
         id: ticket
         run: |
           python open-model-market/v5_price_ranked_issue_ticket.py prepare \
             --event-path "$GITHUB_EVENT_PATH" \
+            --comments-path ticket-artifacts/issue-comments.json \
             --output-dir ticket-artifacts
 
       - name: Publish dynamic admission receipt
