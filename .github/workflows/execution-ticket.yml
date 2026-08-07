@@ -73,16 +73,12 @@ jobs:
         continue-on-error: true
         run: |
           task="$(cat ticket-artifacts/task.txt)"
-          calls="$(jq -r '.calls' ticket-artifacts/ticket-status.json)"
-          recovery="$(jq -r '.maximum_recovery_calls' ticket-artifacts/ticket-status.json)"
           advisory="$(jq -r '.cost_anomaly_usd // empty' ticket-artifacts/ticket-status.json)"
           args=(
             --task "$task"
             --output-dir ticket-artifacts
             --governance-plan-file ticket-artifacts/ticket.json
             --ranking-limit 1000000
-            --maximum-total-calls "$calls"
-            --maximum-recovery-calls "$recovery"
             --require-live-catalog
           )
           if [[ -n "$advisory" ]]; then args+=(--cost-anomaly-usd "$advisory"); fi
