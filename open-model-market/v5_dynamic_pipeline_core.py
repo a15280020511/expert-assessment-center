@@ -2,6 +2,7 @@
 """No-business-gate entrypoint for the V5 fully dynamic expert pipeline."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import v5_price_ranked_pipeline as pipeline
@@ -10,17 +11,47 @@ _ORIGINAL_PROVIDER_FIELDS = pipeline._provider_fields
 _ORIGINAL_RUNTIME_CONFIG = pipeline._runtime_config
 
 
+def _dynamic_plan_capacity(args: Any) -> tuple[int, int]:
+    """Derive finite compatibility capacity from this task's materialized plan.
+
+    Historical CLI/ticket call fields are intentionally ignored.  The legacy
+    pipeline still expects a finite ``total_calls``/``recovery_calls`` pair for
+    bookkeeping, so the active dynamic facade supplies a structural capacity
+    derived only from the current plan: primary roles + initially activated
+    recovery identities + current-task standby identities.
+    """
+    path = (
+        Path(args.governance_plan_file)
+        if getattr(args, "governance_plan_file", None)
+        else Path(args.output_dir) / "ticket.json"
+    )
+    ticket = pipeline._load_mapping(path)
+    plan = pipeline.validate_governance_model_plan(ticket)
+    expert_count = int(plan.get("expert_count") or 0)
+    recovery_count = int(plan.get("recovery_count") or 0)
+    standby_rows = plan.get("expert_center_ordered_standby")
+    standby_count = (
+        len(standby_rows)
+        if isinstance(standby_rows, list)
+        else int(plan.get("expert_center_ordered_standby_count") or 0)
+    )
+    if expert_count < 1:
+        raise ValueError("current dynamic plan has no executable expert role")
+    if recovery_count < 0 or standby_count < 0:
+        raise ValueError("current dynamic plan contains negative recovery capacity")
+    return expert_count + recovery_count + standby_count, recovery_count
+
+
 def _dynamic_validate_budget(args: Any) -> tuple[int, int]:
-    """Treat CLI call counts as execution telemetry, not admission thresholds."""
-    total = int(args.maximum_total_calls)
-    recovery = int(args.maximum_recovery_calls)
-    if total < 1:
-        total = 1
-    if recovery < 0:
-        recovery = 0
-    if recovery >= total:
-        recovery = max(0, total - 1)
-    return total, recovery
+    """Replace requested call ceilings with current-plan structural capacity."""
+    if args.cost_anomaly_usd is not None and float(args.cost_anomaly_usd) <= 0:
+        raise ValueError("cost_anomaly_usd must be positive")
+    if (
+        getattr(args, "max_completion_tokens", None) is not None
+        and int(args.max_completion_tokens) <= 0
+    ):
+        raise ValueError("max_completion_tokens must be positive")
+    return _dynamic_plan_capacity(args)
 
 
 def _expert_assignment_active(plan: Mapping[str, Any]) -> bool:
@@ -154,10 +185,11 @@ def _dynamic_runtime_config(*args: Any, **kwargs: Any) -> dict[str, Any]:
             "parameter_optimizer_library": "optuna",
             "parameter_dependency_library": "networkx",
             "model_assignment_optimizer_library": "ortools-cp-sat",
-            "requested_call_budget_role": "telemetry-only",
+            "requested_call_budget_role": "ignored-legacy-compatibility-input",
+            "legacy_cli_call_fields_ignored": True,
             "fixed_call_ceiling_applied": False,
             "runtime_call_capacity_source": (
-                "current-finite-execution-graph-plus-active-recovery-plus-standby"
+                "current-plan-primary-plus-recovery-plus-standby-then-current-execution-graph"
             ),
             "runtime_feedback_replanning_enabled": True,
             "cross_task_history_used": False,
