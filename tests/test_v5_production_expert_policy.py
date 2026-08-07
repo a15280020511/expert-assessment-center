@@ -21,6 +21,7 @@ from v5_production_expert_policy import (  # noqa: E402
 )
 from v5_runtime import ProductionRuntime, RetryPolicy, RuntimeAttempt, RuntimeConfig  # noqa: E402
 from v5_soft_resource_governance import SoftResourcePromptPolicy, build_runtime  # noqa: E402
+from v5_task_constraints import compile_task_constraints  # noqa: E402
 
 
 class ProductionExpertPolicyTests(unittest.TestCase):
@@ -99,13 +100,24 @@ class ProductionExpertPolicyTests(unittest.TestCase):
             response_model=node.model,
             response_provider="provider",
         )
+        constraints = compile_task_constraints("task")
         with (
-            patch("v5_constitutional_runtime.normalize_answer", return_value=("normalized answer", {"applied": True})),
-            patch.object(engine.quality_policy, "evaluate", return_value=(False, 0.25, ["quality-floor-not-met"])),
-            patch("v5_constitutional_runtime.delivery_contract.validate_answer_contract", return_value=[]),
+            patch(
+                "v5_constitutional_runtime.normalize_answer",
+                return_value=("normalized answer", {"applied": True}),
+            ),
+            patch.object(
+                engine.quality_policy,
+                "evaluate",
+                return_value=(False, 0.25, ["quality-floor-not-met"]),
+            ),
+            patch(
+                "v5_constitutional_runtime.delivery_contract.validate_answer_contract",
+                return_value=[],
+            ),
             patch("v5_constitutional_runtime.validate_answer_evidence", return_value=[]),
         ):
-            normalized = engine._normalize_attempt(node, "task", attempt, SimpleNamespace())
+            normalized = engine._normalize_attempt(node, "task", attempt, constraints)
         self.assertFalse(normalized)
         self.assertEqual("quality_gate_failed", attempt.status)
         self.assertEqual("QUALITY_GATE_FAILED", attempt.failure["category"])
@@ -113,7 +125,10 @@ class ProductionExpertPolicyTests(unittest.TestCase):
         self.assertEqual("normalized answer", attempt.answer)
 
     def test_failed_result_raise_is_deferred_without_changing_status(self) -> None:
-        result = {"status": "failed", "stop_reason": "insufficient-required-work-coverage"}
+        result = {
+            "status": "failed",
+            "stop_reason": "insufficient-required-work-coverage",
+        }
         EvidenceCompleteExecutionEngine._raise_failed_result(result)
         self.assertEqual("failed", result["status"])
         self.assertEqual("insufficient-required-work-coverage", result["stop_reason"])
@@ -128,13 +143,22 @@ class ProductionExpertPolicyTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            EvidenceCompleteExecutionEngine._fail_constitutional_result(result, root, "unsupported-evidence-or-quantity")
-            summary = json.loads((root / "v5-execution-summary.json").read_text(encoding="utf-8"))
+            EvidenceCompleteExecutionEngine._fail_constitutional_result(
+                result,
+                root,
+                "unsupported-evidence-or-quantity",
+            )
+            summary = json.loads(
+                (root / "v5-execution-summary.json").read_text(encoding="utf-8")
+            )
             report = (root / "v5-final-report.md").read_text(encoding="utf-8")
         self.assertEqual("failed", result["status"])
         self.assertEqual("none", result["completion_mode"])
         self.assertEqual("failed", summary["status"])
-        self.assertEqual("unsupported-evidence-or-quantity", summary["stop_reason"])
+        self.assertEqual(
+            "unsupported-evidence-or-quantity",
+            summary["stop_reason"],
+        )
         self.assertIn("unsupported-evidence-or-quantity", report)
 
     def test_installer_replaces_prompt_and_engine_without_model_retry(self) -> None:
@@ -147,23 +171,36 @@ class ProductionExpertPolicyTests(unittest.TestCase):
         self.assertTrue(callable(runtime.execution_engine._actual_cost))
         self.assertTrue(callable(runtime.execution_engine._normalize_attempt))
 
-    def test_machine_policy_requires_open_provider_routing_and_failure_evidence(self) -> None:
-        policy = json.loads((MARKET / "constitutional_policy.json").read_text(encoding="utf-8"))
-        privacy = policy["expert_endpoint_privacy"]
-        self.assertEqual("unrestricted-openrouter", privacy["provider_routing_mode"])
-        self.assertFalse(privacy["zdr_required"])
-        self.assertFalse(privacy["data_collection_filter_applied"])
-        self.assertFalse(privacy["live_zdr_endpoint_inventory_required"])
-        self.assertFalse(privacy["provider_allowlist_allowed"])
-        self.assertFalse(privacy["provider_order_allowed"])
-        self.assertTrue(privacy["provider_fallback_allowed"])
-        self.assertTrue(privacy["unrestricted_provider_fallback_allowed"])
-        evidence = policy["failure_evidence"]
-        self.assertTrue(evidence["failed_result_must_be_persisted"])
-        self.assertTrue(evidence["governance_and_expert_ledgers_must_be_merged"])
-        self.assertTrue(evidence["actual_calls_and_cost_must_survive_failure"])
-        self.assertTrue(evidence["primary_artifact_required_on_failure"])
-        self.assertTrue(evidence["authoritative_wrapper_failure_after_artifact_assembly"])
+    def test_machine_policy_requires_open_provider_routing_and_isolation(self) -> None:
+        policy = json.loads(
+            (MARKET / "constitutional_policy.json").read_text(encoding="utf-8")
+        )
+        provider = policy["provider_routing"]
+        self.assertEqual("unrestricted-openrouter", provider["mode"])
+        self.assertFalse(provider["provider_allowlist_allowed"])
+        self.assertFalse(provider["provider_order_allowed"])
+        self.assertFalse(provider["provider_ignore_list_allowed"])
+        self.assertFalse(provider["provider_price_filter_allowed"])
+        self.assertFalse(provider["provider_zdr_filter_required"])
+        self.assertFalse(provider["provider_data_collection_filter_required"])
+        self.assertFalse(provider["exact_provider_lock_required"])
+        self.assertTrue(provider["openrouter_selects_provider"])
+        self.assertTrue(provider["provider_fallback_allowed"])
+
+        tools = policy["tool_policy"]
+        self.assertFalse(tools["expert_external_tools_allowed"])
+        self.assertFalse(tools["expert_web_browsing_allowed"])
+        self.assertFalse(tools["expert_external_api_allowed"])
+
+        security = policy["security_boundaries"]
+        self.assertTrue(security["authentication_required"])
+        self.assertTrue(security["secret_protection_required"])
+        self.assertTrue(security["repository_isolation_preserved"])
+        self.assertFalse(security["unsafe_infinite_execution_allowed"])
+
+        delivery = policy["delivery"]
+        self.assertTrue(delivery["request_and_cost_ledgers_required"])
+        self.assertTrue(delivery["failed_or_missing_items_must_be_disclosed"])
 
 
 if __name__ == "__main__":
