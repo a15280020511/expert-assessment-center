@@ -96,10 +96,14 @@ jobs:
 
           root = Path("validation-artifacts/governance-plan")
           plan = json.loads((root / "governance-model-plan.json").read_text())
-          selection = json.loads((root / "v5-price-ranked-selection.json").read_text())
+          selection_audit = json.loads((root / "v5-price-ranked-selection.json").read_text())
+          delivery_selection = json.loads((root / "v5-selection.json").read_text())
           runtime = json.loads((root / "v5-runtime-config.json").read_text())
           graph = json.loads((root / "v5-execution-graph.json").read_text())
-          assert selection["plan_sha256"] == plan["plan_sha256"]
+          assert delivery_selection["governance_model_plan_sha256"] == plan["plan_sha256"]
+          assert selection_audit["provider_routing_mode"] == "unrestricted-openrouter"
+          assert selection_audit["provider_restrictions_applied"] is False
+          assert runtime["governance_model_plan_sha256"] == plan["plan_sha256"]
           assert runtime["governance_model_calls"] == 0
           assert runtime["model_loop_allowed"] is False
           assert runtime["provider_routing_mode"] == "unrestricted-openrouter"
