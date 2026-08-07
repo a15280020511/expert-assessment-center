@@ -62,6 +62,7 @@ jobs:
             tests.test_top50_pool_optimizer \
             tests.test_unique_company_price_ranking \
             tests.test_v5_constitution_policy \
+            tests.test_v5_dynamic_ranking_limit \
             tests.test_v5_governance_model_plan \
             tests.test_v5_governed_plan_orchestrator \
             tests.test_v5_task_adaptive_scoring \
@@ -87,6 +88,7 @@ jobs:
             --catalog-file tests/fixtures/models.json \
             --endpoint-file tests/fixtures/endpoints.json \
             --dry-run \
+            --ranking-limit 1000000 \
             --maximum-total-calls 8 \
             --maximum-recovery-calls 1 \
             --output-dir validation-artifacts/governance-plan
