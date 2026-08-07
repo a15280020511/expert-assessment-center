@@ -3,7 +3,9 @@
 Only intrinsic graph validity is enforced. Historical company uniqueness,
 approved-call capacity, exact Provider endpoint, price/context qualification and
 fixed recovery reserve gates are removed. OpenRouter receives the selected model
-identity and chooses the Provider freely.
+identity and chooses the Provider freely. The current-task standby inventory is
+preserved separately from the initially activated recovery pool so the runtime
+can promote additional candidates only after observing current-run failures.
 """
 from __future__ import annotations
 
@@ -41,7 +43,9 @@ def _functions(raw: Mapping[str, Any]) -> tuple[str, ...]:
     values = raw.get("functions")
     if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
         return ()
-    return tuple(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
+    return tuple(
+        dict.fromkeys(str(value).strip() for value in values if str(value).strip())
+    )
 
 
 def _required_outputs(
@@ -121,7 +125,9 @@ def _selected_edges(proposal: Mapping[str, Any]) -> tuple[SelectedEdge, ...]:
     )
 
 
-def _stages(node_ids: Sequence[str], edges: Sequence[SelectedEdge]) -> tuple[tuple[str, ...], ...]:
+def _stages(
+    node_ids: Sequence[str], edges: Sequence[SelectedEdge]
+) -> tuple[tuple[str, ...], ...]:
     graph = nx.DiGraph()
     graph.add_nodes_from(node_ids)
     graph.add_edges_from((edge.source, edge.target) for edge in edges)
@@ -163,11 +169,36 @@ def _recovery_row(raw: Mapping[str, Any], node: SelectedNode) -> dict[str, Any]:
         "provider_endpoint": f"{model}@openrouter-auto",
         "provider_slug": "openrouter-auto",
         "output_contract": dict(node.output_contract),
-        "estimated_quality": 0.0,
-        "quality_uncertainty": 0.0,
-        "estimated_cost": float(raw.get("estimated_task_cost_usd") or 0.0),
-        "failure_probability": 0.0,
+        "estimated_quality": float(raw.get("estimated_quality") or 0.0),
+        "quality_uncertainty": float(raw.get("quality_uncertainty") or 0.0),
+        "estimated_cost": float(
+            raw.get("estimated_task_cost_usd")
+            or raw.get("estimated_cost")
+            or 0.0
+        ),
+        "failure_probability": float(raw.get("failure_probability") or 0.0),
         "request_config": {},
+    }
+
+
+def _standby_row(raw: Mapping[str, Any]) -> dict[str, Any]:
+    model = str(raw.get("model") or "").strip()
+    return {
+        "candidate_id": f"standby:{model}",
+        "model": model,
+        "provider_endpoint": f"{model}@openrouter-auto",
+        "provider_slug": "openrouter-auto",
+        "estimated_quality": float(raw.get("estimated_quality") or 0.0),
+        "quality_uncertainty": float(raw.get("quality_uncertainty") or 0.0),
+        "estimated_cost": float(
+            raw.get("estimated_task_cost_usd")
+            or raw.get("estimated_cost")
+            or 0.0
+        ),
+        "failure_probability": float(raw.get("failure_probability") or 0.0),
+        "request_config": {},
+        "runtime_promotable": True,
+        "promotion_source": "current-task-ordered-standby",
     }
 
 
@@ -182,7 +213,13 @@ def materialize_proposal(
     approved_recovery_calls: int,
     cost_anomaly_usd: float | None,
 ) -> tuple[ExecutionGraph, GraphLimits, dict[str, Any]]:
-    del task_envelope, catalog, approved_total_calls, governance_calls_reserved, approved_recovery_calls
+    del (
+        task_envelope,
+        catalog,
+        approved_total_calls,
+        governance_calls_reserved,
+        approved_recovery_calls,
+    )
     work_map = _work_map(proposal)
     raw_nodes = _rows(proposal.get("nodes"))
     if not raw_nodes:
@@ -214,6 +251,23 @@ def materialize_proposal(
         ]
         for node in nodes
     }
+    standby_inventory = [
+        _standby_row(raw)
+        for raw in _rows(proposal.get("standby_models"))
+        if str(raw.get("model") or "").strip()
+    ]
+
+    feedback = proposal.get("runtime_feedback_replanning")
+    feedback = dict(feedback) if isinstance(feedback, Mapping) else {}
+    feedback.update(
+        {
+            "enabled": bool(standby_inventory),
+            "standby_inventory_count": len(standby_inventory),
+            "promotion_depth_fixed": False,
+            "promotion_trigger": "current-run-failure-or-quality-gate-feedback",
+            "cross_task_history_used": False,
+        }
+    )
 
     graph = ExecutionGraph(
         nodes=nodes,
@@ -228,6 +282,8 @@ def materialize_proposal(
         metadata={
             "work_items": [dict(row) for row in work_map.values()],
             "recovery_pool": recovery_pool,
+            "standby_inventory": standby_inventory,
+            "runtime_feedback_replanning": feedback,
             "selection_authority": "expert-assessment-center-dynamic",
             "provider_routing_mode": "unrestricted-openrouter",
             "provider_restrictions_applied": False,
@@ -238,26 +294,30 @@ def materialize_proposal(
         },
     )
     recovery_count = max((len(rows) for rows in recovery_pool.values()), default=0)
+    finite_runtime_candidates = recovery_count + len(standby_inventory)
     limits = GraphLimits(
         max_nodes=max(1, len(nodes)),
         max_edges=max(1, len(edges)),
         max_stages=max(1, len(stages)),
-        max_model_calls=max(1, len(nodes) + recovery_count),
-        max_retries=recovery_count,
-        max_replacements=recovery_count,
+        max_model_calls=max(1, len(nodes) + finite_runtime_candidates),
+        max_retries=finite_runtime_candidates,
+        max_replacements=finite_runtime_candidates,
         max_budget_usd=None,
         min_required_work_coverage=0.0,
         min_successful_content_nodes=0,
         allow_degraded_success=True,
         max_provider_share=1.0,
-        max_provider_failures=max(1, len(nodes) + recovery_count),
+        max_provider_failures=max(1, len(nodes) + finite_runtime_candidates),
         max_output_allowance_tokens=None,
     )
     audit = {
-        "schema_version": "v5-task-dynamic-materialization-1",
+        "schema_version": "v5-task-dynamic-materialization-2",
         "status": "PASS",
         "selected_node_count": len(nodes),
         "recovery_candidate_count": recovery_count,
+        "standby_candidate_count": len(standby_inventory),
+        "runtime_feedback_replanning_enabled": bool(standby_inventory),
+        "runtime_standby_promotion_depth_fixed": False,
         "company_uniqueness_gate": False,
         "call_budget_gate": False,
         "provider_endpoint_gate": False,
