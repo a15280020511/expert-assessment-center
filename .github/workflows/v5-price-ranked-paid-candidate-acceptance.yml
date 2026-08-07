@@ -36,7 +36,7 @@ jobs:
     steps:
       - name: Validate exact candidate command
         id: source
-        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const body = String(context.payload.comment?.body || '').trim();
@@ -500,7 +500,7 @@ jobs:
 
       - name: Publish candidate acceptance receipt
         if: always()
-        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           STATUS: ${{ steps.attest.outputs.status }}
           CANDIDATE_SHA: ${{ steps.source.outputs.candidate_sha }}
