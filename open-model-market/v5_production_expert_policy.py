@@ -26,6 +26,8 @@ EXPERT_ZDR_REQUIRED = False
 class ProductionExpertPromptPolicy(SoftResourcePromptPolicy):
     """Guarantee unrestricted OpenRouter Provider routing at send time."""
 
+    provider_lock_required = False
+
     def build_payload(
         self,
         node: SelectedNode,
