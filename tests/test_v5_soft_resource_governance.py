@@ -66,12 +66,13 @@ class SoftResourceGovernanceTests(unittest.TestCase):
             )
         )
         self.assertIn("Token 与费用实行软治理", constitution)
-        self.assertFalse(
-            policy["resource_governance"]["local_token_ceiling_allowed"]
-        )
-        self.assertFalse(
-            policy["resource_governance"]["estimated_cost_can_reject_or_stop"]
-        )
+        resource = policy["resource_governance"]
+        self.assertFalse(resource["local_token_ceiling_allowed"])
+        self.assertFalse(resource["estimated_cost_can_reject_execution"])
+        self.assertFalse(resource["cost_threshold_can_reject_execution"])
+        self.assertFalse(resource["actual_cost_can_invalidate_valid_output"])
+        self.assertTrue(resource["finite_execution_graph_required"])
+        self.assertFalse(resource["unbounded_recursive_retry_allowed"])
 
     def test_payload_removes_all_local_token_caps_and_adds_prompt_policy(self):
         payload = {
@@ -85,10 +86,7 @@ class SoftResourceGovernanceTests(unittest.TestCase):
         self.assertNotIn("max_completion_tokens", softened)
         self.assertNotIn("max_tokens", softened["reasoning"])
         self.assertEqual(softened["reasoning"]["effort"], "high")
-        self.assertIn(
-            SOFT_RESOURCE_INSTRUCTION,
-            softened["messages"][0]["content"],
-        )
+        self.assertIn(SOFT_RESOURCE_INSTRUCTION, softened["messages"][0]["content"])
 
     def test_cost_threshold_is_advisory_and_never_denies_or_invalidates(self):
         config = RuntimeConfig(
@@ -157,13 +155,9 @@ class SoftResourceGovernanceTests(unittest.TestCase):
             governance_cost=2.0,
         )
         self.assertEqual(result["actual_cost_usd"], 5.0)
-        self.assertTrue(
-            result["resource_governance"]["cost_advisory_exceeded"]
-        )
+        self.assertTrue(result["resource_governance"]["cost_advisory_exceeded"])
         self.assertFalse(
-            result["resource_governance"][
-                "cost_threshold_can_invalidate_result"
-            ]
+            result["resource_governance"]["cost_threshold_can_invalidate_result"]
         )
 
     def test_large_completion_advisory_is_not_rejected_by_config(self):
@@ -192,10 +186,7 @@ class SoftResourceGovernanceTests(unittest.TestCase):
             minimum_context_length=16_384,
             maximum_completion_tokens=1_000_000,
         )
-        self.assertEqual(
-            low["required_context_tokens"],
-            high["required_context_tokens"],
-        )
+        self.assertEqual(low["required_context_tokens"], high["required_context_tokens"])
         self.assertNotEqual(
             low["completion_capacity_advisory_tokens"],
             high["completion_capacity_advisory_tokens"],
@@ -206,8 +197,7 @@ class SoftResourceGovernanceTests(unittest.TestCase):
     def test_gpt_plan_schema_and_parser_have_no_local_maximum(self):
         token_schema = (
             _schema("soft_resource_fixture")["json_schema"]["schema"]
-            ["properties"]["nodes"]["items"]["properties"]
-            ["max_output_tokens"]
+            ["properties"]["nodes"]["items"]["properties"]["max_output_tokens"]
         )
         self.assertNotIn("maximum", token_schema)
         proposal = {
