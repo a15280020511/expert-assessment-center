@@ -9,12 +9,19 @@ ROOT = Path(__file__).resolve().parents[1]
 MARKET = ROOT / "open-model-market"
 sys.path.insert(0, str(MARKET))
 
+from v5_dynamic_pipeline import (  # noqa: E402
+    _dynamic_assignment_fields,
+    _expert_assignment_active,
+)
 from v5_governed_plan_orchestrator import (  # noqa: E402
     build_governed_proposal,
 )
 from v5_governance_model_plan import (  # noqa: E402
     GovernanceModelPlanError,
     plan_sha256,
+)
+from v5_production_expert_policy import (  # noqa: E402
+    EvidenceCompleteExecutionEngine,
 )
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "governance-ticket.json"
@@ -55,6 +62,93 @@ class GovernedPlanOrchestratorTests(unittest.TestCase):
         self.assertFalse(audit["provider_endpoint_resolution_performed"])
         self.assertEqual(audit["provider_routing_mode"], "unrestricted-openrouter")
         self.assertFalse(audit["provider_restrictions_applied"])
+
+    def test_dynamic_assignment_telemetry_uses_current_authority_not_top50(self) -> None:
+        plan = {
+            "selected_from_top50_reasoning_pool_only": False,
+            "candidate_pool_authority": "decision-system-governance",
+            "model_assignment_authority": "expert-assessment-center-dynamic-ortools",
+            "selected_models": [{"model": "vendor/model-a"}],
+            "optimizer": "ortools-cp-sat",
+            "optimizer_audit": {
+                "optimizer": "ortools-cp-sat",
+                "solver_status": "OPTIMAL",
+                "optimality_proven": True,
+                "fallback_used": False,
+            },
+        }
+        self.assertTrue(_expert_assignment_active(plan))
+        fields = _dynamic_assignment_fields(plan)
+        self.assertEqual(
+            "expert-assessment-center-dynamic-ortools",
+            fields["model_assignment_authority"],
+        )
+        self.assertEqual(
+            "expert-assessment-center-dynamic-ortools",
+            fields["selection_authority"],
+        )
+        self.assertTrue(fields["expert_center_pool_assignment_performed"])
+        self.assertTrue(fields["model_selection_performed_locally"])
+        self.assertTrue(fields["optimizer_present"])
+        self.assertTrue(fields["optimizer_used"])
+        self.assertEqual("ortools-cp-sat", fields["optimizer"])
+        self.assertTrue(fields["optimizer_optimality_proven"])
+
+    def test_successful_company_duplicates_exclude_failed_attempt_companies(self) -> None:
+        result = {
+            "node_results": [
+                {
+                    "node_id": "N1",
+                    "selected_model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+                    "resolved_model": "inclusionai/ling-2.6-flash",
+                    "status": "success_recovered",
+                    "attempts": [
+                        {
+                            "attempt_kind": "initial",
+                            "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+                            "status": "call_failed",
+                        },
+                        {
+                            "attempt_kind": "replacement",
+                            "model": "inclusionai/ling-2.6-flash",
+                            "response_model": "inclusionai/ling-2.6-flash",
+                            "status": "passed",
+                        },
+                    ],
+                },
+                {
+                    "node_id": "N2",
+                    "selected_model": "nvidia/nemotron-3-super-120b-a12b:free",
+                    "resolved_model": "inclusionai/ling-2.6-flash",
+                    "status": "success_recovered",
+                    "attempts": [
+                        {
+                            "attempt_kind": "initial",
+                            "model": "nvidia/nemotron-3-super-120b-a12b:free",
+                            "status": "call_failed",
+                        },
+                        {
+                            "attempt_kind": "replacement",
+                            "model": "inclusionai/ling-2.6-flash",
+                            "response_model": "inclusionai/ling-2.6-flash",
+                            "status": "passed",
+                        },
+                    ],
+                },
+            ]
+        }
+        audit = EvidenceCompleteExecutionEngine._actual_company_audit(result)
+        called_duplicates = audit["duplicate_called_companies_across_nodes"]
+        successful_duplicates = audit["duplicate_successful_companies"]
+        self.assertEqual("PASS", audit["status"])
+        self.assertIn("nvidia", called_duplicates)
+        self.assertIn("inclusionai", called_duplicates)
+        self.assertNotIn("nvidia", successful_duplicates)
+        self.assertEqual(["N1", "N2"], successful_duplicates["inclusionai"])
+        self.assertEqual(
+            "strict-successful-node-models-only",
+            audit["successful_company_duplicates_source"],
+        )
 
     def test_catalog_is_not_a_provider_or_model_admission_gate(self) -> None:
         ticket = load_ticket()

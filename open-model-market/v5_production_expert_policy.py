@@ -90,6 +90,12 @@ class EvidenceCompleteExecutionEngine(SoftResourceExecutionEngine):
         result: Mapping[str, Any],
     ) -> dict[str, Any]:
         audit = dict(super()._actual_company_audit(result))
+        strict_rows = audit.get("strict_successful_node_models")
+        if not isinstance(strict_rows, list):
+            strict_rows = []
+        successful_duplicates, _ = cls._company_conflicts(
+            [row for row in strict_rows if isinstance(row, Mapping)]
+        )
         audit.update(
             {
                 "status": "PASS",
@@ -97,6 +103,10 @@ class EvidenceCompleteExecutionEngine(SoftResourceExecutionEngine):
                 "company_uniqueness_constraint": False,
                 "duplicate_companies_allowed": True,
                 "duplicates_invalidate_execution": False,
+                "duplicate_successful_companies": successful_duplicates,
+                "successful_company_duplicates_source": (
+                    "strict-successful-node-models-only"
+                ),
             }
         )
         return audit
