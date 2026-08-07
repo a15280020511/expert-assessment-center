@@ -118,9 +118,7 @@ class ExecutionGraphValidatorTests(unittest.TestCase):
             entry_nodes=("review",),
             final_nodes=("analysis",),
         )
-        codes = {
-            issue.code for issue in validate_execution_graph(cyclic)
-        }
+        codes = {issue.code for issue in validate_execution_graph(cyclic)}
         self.assertIn("cycle", codes)
 
     def test_tool_fields_are_rejected_recursively(self):
@@ -130,9 +128,7 @@ class ExecutionGraphValidatorTests(unittest.TestCase):
             nodes=(
                 replace(
                     graph.nodes[0],
-                    request_config={
-                        "nested": {"tool_choice": "auto"}
-                    },
+                    request_config={"nested": {"tool_choice": "auto"}},
                 ),
                 *graph.nodes[1:],
             ),
@@ -140,7 +136,7 @@ class ExecutionGraphValidatorTests(unittest.TestCase):
         codes = {issue.code for issue in validate_execution_graph(bad)}
         self.assertIn("tool_field", codes)
 
-    def test_independent_nodes_cannot_exchange_or_reuse_model(self):
+    def test_independent_nodes_cannot_exchange_or_reuse_exact_model(self):
         graph = self.valid_graph()
         bad_nodes = (
             graph.nodes[0],
@@ -165,29 +161,21 @@ class ExecutionGraphValidatorTests(unittest.TestCase):
         codes = {issue.code for issue in validate_execution_graph(bad)}
         self.assertIn("independent_same_model", codes)
         self.assertIn("independent_visibility", codes)
-        self.assertIn("model_company_reuse", codes)
+        self.assertIn("model_identity_reuse", codes)
 
-    def test_same_company_different_models_are_rejected_globally(self):
+    def test_same_company_different_models_are_allowed_globally(self):
         graph = self.valid_graph()
-        bad = replace(
+        allowed = replace(
             graph,
             nodes=(
                 graph.nodes[0],
-                replace(
-                    graph.nodes[1],
-                    model="vendor-a/model-b",
-                ),
+                replace(graph.nodes[1], model="vendor-a/model-b"),
                 graph.nodes[2],
             ),
         )
-        issues = validate_execution_graph(bad)
-        company_issues = [
-            issue
-            for issue in issues
-            if issue.code == "model_company_reuse"
-        ]
-        self.assertEqual(len(company_issues), 1)
-        self.assertIn("vendor-a", company_issues[0].message)
+        codes = {issue.code for issue in validate_execution_graph(allowed)}
+        self.assertNotIn("model_identity_reuse", codes)
+        self.assertNotIn("model_company_reuse", codes)
 
     def test_required_work_is_hard_but_cost_threshold_is_advisory(self):
         graph = replace(

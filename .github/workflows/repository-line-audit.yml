@@ -47,9 +47,11 @@ jobs:
           from pathlib import Path
           report = json.loads(Path('audit-artifacts/repository-audit.json').read_text())
           counts = report['finding_counts']
-          assert counts['critical'] == 0, counts
-          assert counts['high'] == 0, counts
-          print(json.dumps(counts, ensure_ascii=False))
+          critical = int(counts.get('critical', 0) or 0)
+          high = int(counts.get('high', 0) or 0)
+          assert critical == 0, counts
+          assert high == 0, counts
+          print(json.dumps({**counts, 'critical': critical, 'high': high}, ensure_ascii=False))
           PY
 
       - name: Freeze reviewed source snapshot

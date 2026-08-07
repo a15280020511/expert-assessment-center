@@ -1,105 +1,78 @@
 # Expert Assessment Center
 
-本仓库是独立的专家研判中心。GPTs 是本中心与其他业务中心之间唯一的控制与证据中继；专家中心不得直接连接其他中心。
+本仓库是独立的专家研判中心。网页 GPTs 通过治理中心下发任务与候选模型信息；专家中心负责按当前任务动态组织专家并执行。专家中心不得直接连接其他业务中心。
 
-最高治理规则见 [`CONSTITUTION.md`](CONSTITUTION.md)。生产入口只认 `.github/workflows/execution-ticket.yml` 与 `production` 分支检出的源码。
+最高治理规则见 [`CONSTITUTION.md`](CONSTITUTION.md)。当前生产入口为 `.github/workflows/execution-ticket.yml`。
 
-## 当前唯一生产链
-
-```text
-任务票据与证据包
-→ 当次 OpenRouter 官方智能排名窗口内的合格精确端点目录
-→ 按预计任务成本从低到高排序
-→ 模型公司去重，选择 3–6 个专家（默认 4 个）
-→ NetworkX 校验有向无环图
-→ 并行独立分析
-→ 交叉审查
-→ 最终综合
-→ 确定性审计、Manifest、Artifact、独立复算与最终证明
-```
-
-### Claude 机制
-
-Claude 红队机制已从生产入口取消：
-
-- Claude 调用：`0`；
-- GPT 选模调用：`0`；
-- 其他治理模型调用：`0`；
-- 不存在 GPT→Claude→GPT 循环；
-- 不存在第二轮红队、递归 Agent 或备用治理运行时。
-
-旧 GPT/Claude 模块仅作为迁移期未接线代码保留，不被生产工作流、票据入口、审计链或 Artifact 证明链调用。删除旧模块必须在新运行时完成真实验收后单独进行，避免把结构切换与大规模清理混在同一生产变更中。
-
-## 价格排序规则
-
-“便宜”按预计完成本任务的一次调用成本计算，而不是只比较输入单价：
+## 当前生产链
 
 ```text
-预计调用成本
-= 预计输入 Token × 输入单价
-+ 预计输出 Token × 输出单价
+任务与治理候选模型清单
+→ 根据当前任务动态确定专家数量、角色、模型、协作关系和恢复候选
+→ OR-Tools / 启发式方法生成可执行组合
+→ NetworkX 校验有限 DAG
+→ OpenRouter 执行专家请求，Provider 由 OpenRouter 动态选择
+→ 汇总可用结果
+→ 发布报告与诊断证据
 ```
 
-选择顺序：
+## 动态专家原则
 
-1. 只保留官方智能排名窗口、上下文、原生输出容量、文本模态、精确 Provider 和隐私条件均合格的端点；
-2. 按预计任务成本升序排列；
-3. 同一模型公司只保留最便宜的合格端点；
-4. 从最便宜的不同公司端点中选择专家和有限恢复候选；
-5. 在已经选出的最低价集合内，将官方智能排名最强的模型分配给最终综合，第二强分配给交叉审查，其余承担并行独立分析。
+专家组合不存在固定 4+4、固定公司数量、公司去重、Top20/Top50-only、旗舰门槛、最低价门槛或固定角色拓扑。简单任务可以只需要一个专家；复杂任务可以增加独立分析、复核、对抗和综合节点。专家数量、角色、模型、主备关系及执行 DAG 均由当前任务决定。
 
-因此，系统不会为了便宜选入不满足任务客观能力条件的模型，也不会先用昂贵模型再做价格解释。
+OR-Tools 用于可行组合求解，但 `OPTIMAL` 不是执行资格门禁；可行解和必要的启发式回退均可进入执行。模型目录和历史排行榜可以作为候选信息，但不能成为唯一资格池。
 
-## 专家团组织方式
+## Provider 路由
 
-默认 4 个专家：
+生产专家请求采用 `unrestricted-openrouter`：
 
-```text
-独立分析专家 A ─┐
-                 ├→ 交叉审查专家 → 最终综合专家
-独立分析专家 B ─┘          ↑
-        └───────────────────┘
-```
+- 不发送 Provider `only` 或 `order`；
+- 不使用 ZDR、数据收集策略、Provider 价格、精确端点等条件筛掉上游服务器；
+- 不设置 `require_parameters` 作为 Provider 资格门槛；
+- 不禁止 OpenRouter fallback；
+- Provider 返回值只用于运行日志和诊断，不参与专家资格判断。
 
-边界为 3–6 个专家：
+旧 schema 中若仍出现 provider 字段，只能作为非绑定目录元数据，不能进入实际 OpenRouter 路由对象。
 
-- `3` 个：1 个独立分析 + 1 个交叉审查 + 1 个最终综合；
-- `4` 个：2 个独立分析 + 1 个交叉审查 + 1 个最终综合；
-- `5–6` 个：增加不同分析视角，仍只保留一次交叉审查和一次最终综合。
+## 已取消的业务门禁
 
-`networkx==3.6.1` 已在运行依赖中，用于 DAG 构建、拓扑校验和循环检测。没有加入 LangChain、CrewAI、AutoGen 等重型 Agent 框架，避免增加状态、递归、网络面和维护故障。
+以下规则不得阻断专家执行：
 
-## 硬约束
+- free-first 或免费 Canary 前置资格；
+- 当前 SHA 必须先取得免费资格证据；
+- production/main SHA 锁；
+- admission lock、ticket budget gate、重复提交资格门禁；
+- 固定调用次数、固定 4 主 + 4 备；
+- 公司唯一、治理公司不得担任专家；
+- Top20/Top50-only、旗舰、价格、Provider、ZDR 资格门槛；
+- OR-Tools 必须证明全局最优；
+- 独立 Artifact 复核通过后才允许发布已有专家结果。
 
-- 全部初始专家和恢复专家的模型公司全局不同；
-- 每个请求锁定一个精确 Provider，禁止 fallback；
-- 专家禁止浏览、工具、插件、MCP、代码执行和外部 API；
-- 任务串行准入，重复提交和并发任务失败关闭；
-- 调用与恢复总数不得超过票据批准上限；
-- 不读取跨任务历史，不保存跨任务权重；
-- 费用阈值只用于告警和审计，不以本地费用估算硬截断已授权任务；
-- 报告发布前必须完成确定性审计、Artifact 冻结和独立复算。
+费用、Canary、Artifact、模型排名和 Provider 观测可以继续记录为遥测或诊断证据，但不再作为专家资格门禁。
+
+## 保留的基础安全边界
+
+动态专家并不等于取消基础安全：
+
+- GitHub 身份与仓库权限校验；
+- Secret 不写入日志或 Artifact；
+- 专家执行节点禁止任意外部工具；
+- 专家中心与其他业务中心保持仓库隔离；
+- 执行图必须有限且无环，防止无限递归或无限重试；
+- 输入结构、JSON/schema 与证据完整性仍需可解析和可审计。
+
+这些边界只保护执行安全与数据完整性，不用于限制专家公司、模型、Provider、价格或组合方式。
 
 ## 主要生产组件
 
-- `v5_price_ranked_issue_ticket.py`：校验治理中心下发的不可变模型计划；
-- `v5_governance_model_plan.py`：校验任务哈希、计划哈希、模型公司和预算边界；
-- `v5_governed_plan_orchestrator.py`：仅解析治理指定模型的精确 Provider，并构建 NetworkX DAG；
-- `v5_price_ranked_pipeline.py`：按治理计划物化、执行与生成原始证据；
-- `v5_price_ranked_production_ticket.py`：正式生产入口；
-- `v5_price_ranked_evidence.py`：统一证据和调用账本；
-- `v5_price_ranked_execution_auditor.py`：生产前确定性审计；
-- `v5_price_ranked_independent_revalidation.py`：上传后独立复算；
-- `v5_price_ranked_artifact_manifest.py`：绑定运行产物与当前架构源码哈希。
+- `v5_price_ranked_issue_ticket.py`：从任务与治理候选信息生成动态执行票据；
+- `v5_top50_pool_optimizer.py`：历史命名的动态候选组合器，当前不再要求 Top50、4+4、公司唯一或 OPTIMAL；
+- `v5_governed_plan_orchestrator.py`：构建动态专家计划；
+- `v5_soft_proposal_materializer.py`：只执行结构性物化，不做公司/Provider/预算资格门禁；
+- `v5_dynamic_pipeline.py`：当前无业务门禁执行入口；
+- `v5_production_expert_policy.py`：在实际请求前删除 Provider 路由限制；
+- `v5_provider_lock.py`：兼容旧函数名，但只接受 unrestricted Provider routing。
 
 ## 测试纪律
 
-开发和维护按以下顺序执行：
-
-```text
-静态检查、单元测试与治理计划压力测试（0 次模型调用）
-→ 不在专家团中心执行任何测试选模或免费模型 Canary
-→ 用户明确授权的正式付费验收或生产任务
-```
-
-免费测试不能移动 `production`；生产晋级仍需同一 SHA、Run、Artifact ID、Digest 和最终证明全部通过。
+零费用测试、Canary 和静态审计用于发现代码问题，不再决定付费专家是否具备资格。测试本身也不得重新引入 production 锁、固定专家组合、公司唯一、Provider 锁或免费 Canary 前置。

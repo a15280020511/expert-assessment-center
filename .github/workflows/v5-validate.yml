@@ -1,4 +1,4 @@
-name: Validate V5 Governance-Plan Architecture
+name: Validate V5 Dynamic Expert Architecture
 
 on:
   pull_request:
@@ -13,20 +13,20 @@ permissions:
   contents: read
 
 concurrency:
-  group: v5-governance-plan-validate-${{ github.ref }}
+  group: v5-dynamic-expert-validate-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  validate-governance-plan:
+  validate-dynamic-experts:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: "3.12"
           cache: pip
@@ -40,87 +40,95 @@ jobs:
           python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
           python -m pip check
 
-      - name: Verify current architecture contract
+      - name: Verify dynamic gate-free architecture contract
         run: |
           set -euo pipefail
           PYTHONPATH=open-model-market python - <<'PY'
           import json
           from pathlib import Path
           policy = json.loads(Path('open-model-market/constitutional_policy.json').read_text())
-          assert policy['schema_version'] == 'v5-constitutional-policy-8-task-adaptive-value-ortools'
-          assert policy['candidate_pool']['pool_size'] == 50
-          assert policy['candidate_pool']['popularity_period'] == 'week'
+          assert policy['schema_version'] == 'v5-constitutional-policy-9-open-dynamic-experts'
+          admission = policy['execution_admission']
+          for key in (
+              'free_first_required', 'zero_call_qualification_required',
+              'free_canary_required', 'full_ci_pass_required_before_task_execution',
+              'exact_sha_evidence_required', 'paid_execution_requires_prior_qualification',
+          ):
+              assert admission[key] is False, key
+          pool = policy['candidate_pool']
+          assert pool['fixed_pool_size'] is None
+          for key in (
+              'top50_only', 'top20_only', 'weekly_rank_required',
+              'reasoning_rank_required', 'flagship_filter_required',
+              'price_filter_required', 'company_diversity_required',
+              'provider_endpoint_qualification_required', 'zdr_provider_qualification_required',
+          ):
+              assert pool[key] is False, key
+          matching = policy['dynamic_task_matching']
+          assert matching['required'] is True
+          assert matching['team_size'] == 'task-derived'
+          assert matching['recovery_size'] == 'task-derived'
+          assert matching['roles'] == 'task-derived'
+          assert matching['model_assignment'] == 'task-derived'
+          assert matching['company_mix'] == 'unconstrained'
+          assert matching['model_substitution_allowed'] is True
           optimizer = policy['optimizer_runtime']
           assert optimizer['engine'] == 'ortools-cp-sat'
-          assert optimizer['primary_expert_count'] == 4
-          assert optimizer['warm_recovery_count'] == 4
-          assert optimizer['required_solver_status'] == 'OPTIMAL'
-          assert optimizer['selection_principles'] == [
-              'concrete-problem-concrete-analysis',
-              'dynamic-adaptation',
-              'small-effort-large-return',
-          ]
-          assert optimizer['provider_metric_used'] is False
-          matching = policy['dynamic_task_matching']
-          assert matching['recomputed_from_current_task'] is True
-          assert matching['cross_task_history_allowed'] is False
-          assert matching['keyword_routing_allowed'] is False
-          assert matching['domain_hardcoding_allowed'] is False
-          privacy = policy['expert_endpoint_privacy']
-          assert privacy['provider_routing_mode'] == 'unrestricted-openrouter'
-          assert privacy['provider_allowlist_allowed'] is False
-          assert privacy['provider_order_allowed'] is False
-          assert privacy['openrouter_selects_provider'] is True
-          assert privacy['model_substitution_allowed'] is False
+          assert optimizer['optimality_required'] is False
+          assert optimizer['feasible_solution_allowed'] is True
+          assert optimizer['heuristic_fallback_allowed'] is True
+          assert optimizer['company_uniqueness_constraint'] is False
+          assert optimizer['top50_membership_constraint'] is False
+          assert optimizer['approved_budget_constraint'] is False
+          assert optimizer['provider_constraint'] is False
+          provider = policy['provider_routing']
+          assert provider['mode'] == 'unrestricted-openrouter'
+          assert provider['provider_allowlist_allowed'] is False
+          assert provider['provider_order_allowed'] is False
+          assert provider['provider_ignore_list_allowed'] is False
+          assert provider['provider_price_filter_allowed'] is False
+          assert provider['provider_zdr_filter_required'] is False
+          assert provider['exact_provider_lock_required'] is False
+          assert provider['openrouter_selects_provider'] is True
+          assert provider['provider_fallback_allowed'] is True
+          resource = policy['resource_governance']
+          assert resource['fixed_total_call_ceiling'] is False
+          assert resource['fixed_initial_call_ceiling'] is False
+          assert resource['fixed_recovery_call_ceiling'] is False
+          assert resource['finite_execution_graph_required'] is True
+          assert resource['unbounded_recursive_retry_allowed'] is False
           source = Path('open-model-market/v5_price_ranked_pipeline.py').read_text()
           assert 'provider_lock_required=False' in source
-          assert 'fetch_live_endpoint_payloads' not in source
           PY
 
-      - name: Run current architecture tests
+      - name: Compile dynamic expert runtime
+        run: |
+          set -euo pipefail
+          python -m compileall -q open-model-market tests
+
+      - name: Run dynamic architecture tests
         run: |
           set -euo pipefail
           PYTHONPATH=open-model-market python -m unittest -v \
-            tests.test_v5_task_adaptive_scoring \
-            tests.test_top50_pool_optimizer \
-            tests.test_v5_top50_ticket_gate_capacity \
-            tests.test_v5_constitution_policy \
-            tests.test_v5_planned_catalog_scope
+            tests.test_workflow_contract \
+            tests.test_legacy_runtime_removed \
+            tests.test_v5_constitution_policy
 
-      - name: Run exact Top50 4+4 zero-call materialization
+      - name: Verify active execution path has no Provider pinning
         run: |
           set -euo pipefail
-          rm -rf v5-validation-artifacts
-          mkdir -p v5-validation-artifacts
-          PYTHONPATH=open-model-market:. python - <<'PY'
-          import json
+          PYTHONPATH=open-model-market python - <<'PY'
           from pathlib import Path
-          from tests.test_top50_pool_optimizer import _packet
-          from v5_governance_model_plan import validate_governance_model_plan
-          from v5_top50_pool_optimizer import materialize_top50_selection
-
-          packet, receipt = materialize_top50_selection(_packet())
-          plan = validate_governance_model_plan(packet)
-          assert receipt['model_calls'] == 0
-          assert len(plan['selected_models']) == 4
-          assert len(plan['recovery_models']) == 4
-          assert len({r['company'] for r in [*plan['selected_models'], *plan['recovery_models']]}) == 8
-          assert plan['optimizer_audit']['optimality_proven'] is True
-          assert plan['task_adaptive_scoring_completed'] is True
-          assert plan['provider_routing_mode'] == 'unrestricted-openrouter'
-          Path('v5-validation-artifacts/materialized-ticket.json').write_text(
-              json.dumps(packet, ensure_ascii=False, indent=2)
-          )
-          Path('v5-validation-artifacts/selection-receipt.json').write_text(
-              json.dumps(receipt, ensure_ascii=False, indent=2)
-          )
+          for name in (
+              'v5_dynamic_pipeline.py',
+              'v5_price_ranked_pipeline.py',
+              'v5_production_expert_policy.py',
+              'v5_provider_lock.py',
+          ):
+              text = (Path('open-model-market') / name).read_text().casefold()
+              assert 'allow_fallbacks": false' not in text, name
+              assert "allow_fallbacks': false" not in text, name
+              assert 'require_parameters": true' not in text, name
+              assert 'provider.only' not in text, name
+              assert 'provider.order' not in text, name
           PY
-
-      - name: Upload V5 validation evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: v5-governance-plan-validation-${{ github.run_id }}
-          path: v5-validation-artifacts/
-          if-no-files-found: warn
-          retention-days: 14

@@ -45,7 +45,7 @@ jobs:
           python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
           python -m pip check
 
-      - name: Run adaptive scoring branch coverage and Top50 contracts
+      - name: Run adaptive scoring and dynamic candidate-pool contracts
         run: |
           set -euo pipefail
           mkdir -p full-load-evidence
@@ -58,14 +58,13 @@ jobs:
           coverage report --show-missing --fail-under=85 \
             2>&1 | tee full-load-evidence/coverage.log
 
-      - name: Produce deterministic Top50 full-load receipt
+      - name: Produce deterministic dynamic full-load receipt
         env:
           TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           PYTHONPATH=open-model-market:. python - <<'PY'
           import concurrent.futures
-          import copy
           import hashlib
           import json
           import os
@@ -73,61 +72,81 @@ jobs:
 
           from tests.test_top50_pool_optimizer import _packet
           from v5_governance_model_plan import validate_governance_model_plan
-          from v5_top50_pool_optimizer import (
-              Top50PoolOptimizationError,
-              materialize_top50_selection,
-          )
+          from v5_top50_pool_optimizer import materialize_top50_selection
 
-          def run_one(index: int) -> tuple[str, int]:
+          def run_one(index: int) -> tuple[str, int, int, int]:
               packet = _packet(complex_task=bool(index % 2))
               materialized, receipt = materialize_top50_selection(packet)
               plan = validate_governance_model_plan(materialized)
+              selected = list(plan['selected_models'])
+              recoveries = list(plan['recovery_models'])
+              standby = list(plan['expert_center_ordered_standby'])
+              audit = plan['optimizer_audit']
+
               assert receipt['model_calls'] == 0
-              assert len(plan['selected_models']) == 4
-              assert len(plan['recovery_models']) == 4
-              assert len({r['company'] for r in [*plan['selected_models'], *plan['recovery_models']]}) == 8
-              assert plan['optimizer_audit']['optimality_proven'] is True
+              assert len(selected) >= 1
+              assert len(recoveries) >= 0
+              assert len(selected) == plan['expert_count'] == receipt['primary_expert_count']
+              assert len(recoveries) == plan['recovery_count'] == receipt['recovery_count']
+              assert len(selected) + len(recoveries) + len(standby) == 50
+              assert audit['fixed_four_plus_four_used'] is False
+              assert audit['company_uniqueness_constraint_used'] is False
+              assert audit['top50_membership_constraint_used'] is False
+              assert audit['budget_constraint_used'] is False
+              assert audit['provider_constraint_used'] is False
+              assert audit['optimality_required_to_execute'] is False
+              assert audit['semantic_keyword_routing_used'] is False
+              if audit.get('fallback_used') is False:
+                  assert audit['solver_status'] in {'OPTIMAL', 'FEASIBLE'}
               assert plan['provider_routing_mode'] == 'unrestricted-openrouter'
+              assert plan['provider_restrictions_applied'] is False
               assert plan['selection_principles'] == [
                   'concrete-problem-concrete-analysis',
                   'dynamic-adaptation',
                   'small-effort-large-return',
               ]
+
               stable = {
                   'complex': bool(index % 2),
-                  'selected': [r['model'] for r in plan['selected_models']],
-                  'recovery': [r['model'] for r in plan['recovery_models']],
-                  'objective': plan['optimizer_audit']['objective_value'],
-                  'pressure': plan['task_demand_profile']['pressure']['overall'],
+                  'selected': [row['model'] for row in selected],
+                  'recovery': [row['model'] for row in recoveries],
+                  'expert_count': len(selected),
+                  'recovery_count': len(recoveries),
+                  'optimizer': audit['optimizer'],
+                  'solver_status': audit['solver_status'],
+                  'fallback_used': audit['fallback_used'],
+                  'pressure': audit['task_demand_profile']['pressure']['overall'],
               }
               digest = hashlib.sha256(
                   json.dumps(stable, sort_keys=True).encode()
               ).hexdigest()
-              return digest, stable['pressure']
+              return digest, stable['pressure'], len(selected), len(recoveries)
 
           with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
               results = list(pool.map(run_one, range(64)))
 
-          simple_digests = {digest for index, (digest, _) in enumerate(results) if index % 2 == 0}
-          complex_digests = {digest for index, (digest, _) in enumerate(results) if index % 2 == 1}
+          simple_digests = {digest for index, (digest, _, _, _) in enumerate(results) if index % 2 == 0}
+          complex_digests = {digest for index, (digest, _, _, _) in enumerate(results) if index % 2 == 1}
           assert len(simple_digests) == 1
           assert len(complex_digests) == 1
-          simple_pressure = results[0][1]
-          complex_pressure = results[1][1]
-          assert complex_pressure > simple_pressure
 
-          invalid = _packet()
-          invalid['approved_budget']['maximum_recovery_calls'] = 1
-          try:
-              materialize_top50_selection(invalid)
-          except Top50PoolOptimizationError:
-              invalid_budget_fails_closed = True
-          else:
-              invalid_budget_fails_closed = False
-          assert invalid_budget_fails_closed
+          simple_pressure, simple_primary, simple_recovery = results[0][1:]
+          complex_pressure, complex_primary, complex_recovery = results[1][1:]
+          assert complex_pressure > simple_pressure
+          assert complex_primary >= simple_primary
+          assert complex_primary + complex_recovery >= simple_primary + simple_recovery
+
+          # Budget metadata is advisory in v9. Deliberately tiny values must not
+          # reject or force the dynamic execution graph into an artificial shape.
+          budget_probe = _packet()
+          budget_probe['approved_budget'] = {'calls': 1, 'maximum_recovery_calls': 0}
+          budget_materialized, _ = materialize_top50_selection(budget_probe)
+          budget_plan = validate_governance_model_plan(budget_materialized)
+          assert budget_plan['expert_count'] >= 1
+          assert budget_plan['optimizer_audit']['budget_constraint_used'] is False
 
           receipt = {
-              'schema_version': 'v5-task-adaptive-top50-full-load-2',
+              'schema_version': 'v5-task-dynamic-full-load-3',
               'status': 'PASS',
               'target_sha': os.environ['TARGET_SHA'],
               'parallel_runs': 64,
@@ -136,11 +155,17 @@ jobs:
               'complex_deterministic_digest_count': len(complex_digests),
               'simple_task_pressure': simple_pressure,
               'complex_task_pressure': complex_pressure,
+              'simple_primary_expert_count': simple_primary,
+              'simple_recovery_count': simple_recovery,
+              'complex_primary_expert_count': complex_primary,
+              'complex_recovery_count': complex_recovery,
               'candidate_pool_authority': 'decision-system-governance',
               'model_assignment_authority': 'expert-assessment-center-ortools',
-              'optimizer': 'ortools-cp-sat',
-              'primary_expert_count': 4,
-              'warm_recovery_count': 4,
+              'optimizer': 'ortools-cp-sat-with-feasible-or-heuristic-fallback',
+              'fixed_four_plus_four_required': False,
+              'company_uniqueness_required': False,
+              'optimizer_optimality_required': False,
+              'budget_admission_gate_enabled': False,
               'selection_principles': [
                   'concrete-problem-concrete-analysis',
                   'dynamic-adaptation',
@@ -148,7 +173,6 @@ jobs:
               ],
               'provider_routing_mode': 'unrestricted-openrouter',
               'provider_metric_used': False,
-              'invalid_budget_fails_closed': invalid_budget_fails_closed,
               'model_calls': 0,
           }
           Path('full-load-evidence/full-load-receipt.json').write_text(

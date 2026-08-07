@@ -1,4 +1,4 @@
-name: Execution Ticket Price-Ranked Expert Team V5
+name: Dynamic Expert Team V5
 
 on:
   issue_comment:
@@ -10,443 +10,142 @@ permissions:
   actions: read
 
 jobs:
-  admit-ticket:
+  execute-dynamic-team:
     if: >-
       github.actor == github.repository_owner &&
       startsWith(github.event.issue.title, '[execution]') &&
-      (startsWith(github.event.comment.body, '/run-expert-team ') ||
-       startsWith(github.event.comment.body, '/retry-expert-team '))
+      (startsWith(github.event.comment.body, '/run-expert-team') ||
+       startsWith(github.event.comment.body, '/retry-expert-team'))
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    concurrency:
-      group: expert-production-admission
-      cancel-in-progress: false
-    outputs:
-      allowed: ${{ steps.lock.outputs.allowed }}
-      accepted: ${{ steps.ticket.outputs.accepted }}
-      calls: ${{ steps.ticket.outputs.calls }}
-      maximum_recovery_calls: ${{ steps.ticket.outputs.maximum_recovery_calls }}
-      maximum_initial_calls: ${{ steps.ticket.outputs.maximum_initial_calls }}
-      cost_anomaly_usd: ${{ steps.ticket.outputs.cost_anomaly_usd }}
-      task_id: ${{ steps.ticket.outputs.task_id }}
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      ISSUE_NUMBER: ${{ github.event.issue.number }}
-      RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-    steps:
-      - name: Checkout production source for admission
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: production
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Enforce frozen production control plane
-        shell: bash
-        run: |
-          set -euo pipefail
-          checked="$(git rev-parse HEAD)"
-          production="$(git ls-remote origin refs/heads/production | awk '{print $1}')"
-          main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
-          test -n "$production"
-          test -n "$main"
-          test "$checked" = "$production"
-          test "$main" = "$production"
-          printf '%s\n' "$checked" > checked-out-production-sha.txt
-
-      - name: Acquire serialized zero-call admission
-        id: lock
-        run: python open-model-market/v5_admission_lock.py
-
-      - name: Publish explicit busy rejection
-        if: steps.lock.outputs.allowed != 'true'
-        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
-        with:
-          script: |
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: `## EXECUTION_REJECTED\n\n${{ steps.lock.outputs.reason }}\n\n模型调用：\`0\`。当前生产任务完成后再提交唯一命令。\n- Run: \`${process.env.RUN_URL}\``
-            })
-
-      - name: Validate explicit price-ranked ticket command
-        if: steps.lock.outputs.allowed == 'true'
-        id: ticket
-        run: |
-          python open-model-market/v5_price_ranked_issue_ticket.py prepare \
-            --event-path "$GITHUB_EVENT_PATH" \
-            --output-dir ticket-artifacts
-
-      - name: Render admission status
-        if: steps.lock.outputs.allowed == 'true'
-        run: |
-          if [[ "${{ steps.ticket.outputs.accepted }}" == "true" ]]; then
-            phase=accepted
-          else
-            phase=rejected
-          fi
-          python open-model-market/v5_price_ranked_issue_ticket.py render \
-            --phase "$phase" \
-            --output-dir ticket-artifacts \
-            --run-url "$RUN_URL" > admission-status.md
-
-      - name: Upload admission evidence
-        if: always() && steps.lock.outputs.allowed == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ticket-admission-${{ github.run_id }}
-          path: |
-            ticket-artifacts/
-            admission-status.md
-            checked-out-production-sha.txt
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Publish admission status
-        if: steps.lock.outputs.allowed == 'true'
-        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
-        env:
-          STATUS_FILE: admission-status.md
-        with:
-          script: |
-            const fs = require('fs');
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: fs.readFileSync(process.env.STATUS_FILE, 'utf8')
-            })
-
-  execute-ticket:
-    needs: admit-ticket
-    if: needs.admit-ticket.outputs.allowed == 'true' && needs.admit-ticket.outputs.accepted == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 35
-    concurrency:
-      group: expert-production-global
-      cancel-in-progress: false
+    timeout-minutes: 45
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      ISSUE_NUMBER: ${{ github.event.issue.number }}
       RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      MODEL_MAX_RETRIES: "0"
-      MODEL_TIMEOUT_SECONDS: "240"
-      PARALLEL_WORKERS: "4"
       OPENROUTER_SITE_URL: https://github.com/${{ github.repository }}
-      OPENROUTER_APP_NAME: price-ranked-networkx-expert-team-v5
+      OPENROUTER_APP_NAME: dynamic-open-expert-team-v5
+      MODEL_TIMEOUT_SECONDS: "240"
     steps:
-      - name: Checkout pinned production source
+      - name: Checkout current main
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: production
-          fetch-depth: 0
+          ref: main
+          fetch-depth: 1
           persist-credentials: false
 
-      - name: Resolve authoritative execution source
-        id: source
-        shell: bash
-        run: |
-          set -euo pipefail
-          checked="$(git rev-parse HEAD)"
-          production="$(git ls-remote origin refs/heads/production | awk '{print $1}')"
-          main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
-          test -n "$production"
-          test -n "$main"
-          test "$checked" = "$production"
-          test "$main" = "$production"
-          echo "execution_sha=$checked" >> "$GITHUB_OUTPUT"
-          printf '%s\n' "$checked" > checked-out-production-sha.txt
-
-      - name: Download admitted ticket
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          name: ticket-admission-${{ github.run_id }}
-          path: admission-download
-
-      - name: Restore immutable admission evidence
-        run: |
-          rm -rf ticket-artifacts
-          cp -R admission-download/ticket-artifacts ticket-artifacts
-
-      - name: Install pinned runtime dependencies
+      - name: Install runtime dependencies
         run: |
           python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
           python -m pip check
 
-      - name: Enforce admitted price-ranked execution contract
+      - name: Fetch all governance candidate transport comments
         run: |
-          python open-model-market/v5_price_ranked_ticket_gate.py \
-            --output-dir ticket-artifacts \
-            --expected-calls "${{ needs.admit-ticket.outputs.calls }}" \
-            --expected-recovery-calls "${{ needs.admit-ticket.outputs.maximum_recovery_calls }}" \
-            --expected-cost-anomaly-usd "${{ needs.admit-ticket.outputs.cost_anomaly_usd }}"
+          set -euo pipefail
+          mkdir -p ticket-artifacts
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.issue.number }}/comments?per_page=100" \
+            | jq 'add // []' > ticket-artifacts/issue-comments.json
+          jq -e 'type == "array"' ticket-artifacts/issue-comments.json >/dev/null
 
-      - name: Execute explicit price-ranked production runtime
-        id: execute
-        continue-on-error: true
+      - name: Build task-dynamic expert plan
+        id: ticket
+        run: |
+          python open-model-market/v5_price_ranked_issue_ticket.py prepare \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --comments-path ticket-artifacts/issue-comments.json \
+            --output-dir ticket-artifacts
+
+      - name: Publish dynamic admission receipt
         env:
-          AUTHORITATIVE_EXECUTION_SHA: ${{ steps.source.outputs.execution_sha }}
+          ACCEPTED: ${{ steps.ticket.outputs.accepted }}
+        run: |
+          if [[ "$ACCEPTED" == "true" ]]; then phase=accepted; else phase=rejected; fi
+          python open-model-market/v5_price_ranked_issue_ticket.py render \
+            --phase "$phase" \
+            --output-dir ticket-artifacts \
+            --run-url "$RUN_URL" > admission-status.md
+          gh issue comment "${{ github.event.issue.number }}" --body-file admission-status.md
+
+      - name: Execute dynamic expert graph
+        id: execute
+        if: steps.ticket.outputs.accepted == 'true'
+        continue-on-error: true
         run: |
           task="$(cat ticket-artifacts/task.txt)"
+          calls="$(jq -r '.calls' ticket-artifacts/ticket-status.json)"
+          recovery="$(jq -r '.maximum_recovery_calls' ticket-artifacts/ticket-status.json)"
+          advisory="$(jq -r '.cost_anomaly_usd // empty' ticket-artifacts/ticket-status.json)"
           args=(
             --task "$task"
             --output-dir ticket-artifacts
-            --maximum-total-calls "${{ needs.admit-ticket.outputs.calls }}"
-            --maximum-recovery-calls "${{ needs.admit-ticket.outputs.maximum_recovery_calls }}"
+            --governance-plan-file ticket-artifacts/ticket.json
+            --ranking-limit 1000000
+            --maximum-total-calls "$calls"
+            --maximum-recovery-calls "$recovery"
             --require-live-catalog
           )
-          if [[ -n "${{ needs.admit-ticket.outputs.cost_anomaly_usd }}" ]]; then
-            args+=(--cost-anomaly-usd "${{ needs.admit-ticket.outputs.cost_anomaly_usd }}")
-          fi
-          python open-model-market/v5_price_ranked_production_ticket.py "${args[@]}"
+          if [[ -n "$advisory" ]]; then args+=(--cost-anomaly-usd "$advisory"); fi
+          python open-model-market/v5_dynamic_pipeline.py "${args[@]}"
 
-      - name: Prepare report publication package
-        id: prepare_report
-        continue-on-error: true
-        run: |
-          python open-model-market/publish_report.py \
-            --output-dir ticket-artifacts \
-            --comments-dir ticket-artifacts/report-comments \
-            --run-url "$RUN_URL"
-
-      - name: Audit complete price-ranked evidence before publication
-        id: audit
-        continue-on-error: true
-        run: |
-          python open-model-market/v5_price_ranked_execution_auditor.py \
-            --output-dir ticket-artifacts \
-            --execute-outcome "${{ steps.execute.outcome }}" \
-            --publish-outcome "${{ steps.prepare_report.outcome }}"
-
-      - name: Freeze primary artifact manifest after audit
-        id: manifest
-        continue-on-error: true
-        run: |
-          PYTHONPATH=open-model-market python - <<'PY'
-          from pathlib import Path
-          from v5_price_ranked_artifact_manifest import write_manifest
-          write_manifest(Path("ticket-artifacts"))
-          PY
-
-      - name: Upload primary ticket artifacts
-        id: ticket_artifact
-        if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: expert-ticket-${{ github.event.issue.number }}-${{ github.run_id }}
-          path: ticket-artifacts/
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Download uploaded primary artifact by immutable ID
-        id: artifact_download
-        if: steps.ticket_artifact.outcome == 'success'
-        continue-on-error: true
-        env:
-          ARTIFACT_ID: ${{ steps.ticket_artifact.outputs.artifact-id }}
-        run: |
-          set -euo pipefail
-          test -n "$ARTIFACT_ID"
-          rm -rf independently-downloaded-primary
-          mkdir -p independently-downloaded-primary
-          gh api \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
-            > uploaded-primary-artifact.zip
-          unzip -q uploaded-primary-artifact.zip -d independently-downloaded-primary
-
-      - name: Independently revalidate uploaded primary artifact
-        id: independent
-        if: steps.artifact_download.outcome == 'success'
-        continue-on-error: true
-        env:
-          AUTHORITATIVE_EXECUTION_SHA: ${{ steps.source.outputs.execution_sha }}
-          PRIMARY_ARTIFACT_DIGEST: ${{ steps.ticket_artifact.outputs.artifact-digest }}
-        run: |
-          set +e
-          cost_advisory="${{ needs.admit-ticket.outputs.cost_anomaly_usd }}"
-          if [[ -z "$cost_advisory" ]]; then cost_advisory=0; fi
-          # New zero-Claude implementation supersedes v5_independent_artifact_revalidation.py.
-          python open-model-market/v5_price_ranked_independent_revalidation.py \
-            --artifact-dir independently-downloaded-primary \
-            --expected-sha "$AUTHORITATIVE_EXECUTION_SHA" \
-            --expected-run-id "${{ github.run_id }}" \
-            --maximum-calls "${{ needs.admit-ticket.outputs.calls }}" \
-            --cost-advisory-usd "$cost_advisory" \
-            --archive uploaded-primary-artifact.zip \
-            --expected-artifact-digest "$PRIMARY_ARTIFACT_DIGEST" \
-            --output independent-revalidation.json
-          revalidation_exit=$?
-          set -e
-          status="$(jq -r '.status // "FAIL"' independent-revalidation.json 2>/dev/null || printf 'FAIL')"
-          echo "status=$status" >> "$GITHUB_OUTPUT"
-          test "$revalidation_exit" -eq 0
-          test "$status" = "PASS"
-
-      - name: Publish report only after audit and artifact freeze
-        id: publish
-        if: >-
-          steps.execute.outcome == 'success' &&
-          steps.prepare_report.outcome == 'success' &&
-          steps.audit.outputs.status == 'PASS' &&
-          steps.manifest.outcome == 'success' &&
-          steps.ticket_artifact.outcome == 'success' &&
-          steps.independent.outcome == 'success' &&
-          steps.independent.outputs.status == 'PASS'
+      - name: Publish whatever expert delivery exists
+        if: always() && steps.ticket.outputs.accepted == 'true'
         uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
         env:
-          COMMENT_DIR: ticket-artifacts/report-comments
+          EXECUTE_OUTCOME: ${{ steps.execute.outcome }}
         with:
           script: |
             const fs = require('fs');
-            const path = require('path');
-            const files = fs.readdirSync(process.env.COMMENT_DIR)
-              .filter(name => /^report-comment-\d+\.md$/.test(name))
-              .sort();
-            if (files.length === 0) {
-              throw new Error('No audited report comments found');
+            const issue_number = context.issue.number;
+            const candidates = [
+              'ticket-artifacts/expert-team-report.md',
+              'ticket-artifacts/final-report.md',
+              'ticket-artifacts/v5-final-report.md'
+            ];
+            let text = '';
+            let source = '';
+            for (const path of candidates) {
+              if (fs.existsSync(path)) {
+                text = fs.readFileSync(path, 'utf8').trim();
+                source = path;
+                if (text) break;
+              }
             }
-            for (const name of files) {
+            if (!text) {
+              for (const path of ['ticket-artifacts/v5-result.json','ticket-artifacts/v5-run-summary.json','ticket-artifacts/expert-team-error.json']) {
+                if (fs.existsSync(path)) {
+                  text = '```json\n' + fs.readFileSync(path, 'utf8').trim() + '\n```';
+                  source = path;
+                  break;
+                }
+              }
+            }
+            if (!text) {
+              text = `执行结束，但没有找到可发布正文。执行步骤状态：${process.env.EXECUTE_OUTCOME}`;
+              source = 'runtime-status';
+            }
+            const limit = 55000;
+            const parts = [];
+            for (let offset = 0; offset < text.length; offset += limit) {
+              parts.push(text.slice(offset, offset + limit));
+            }
+            if (parts.length === 0) parts.push(text);
+            for (let i = 0; i < parts.length; i++) {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: fs.readFileSync(path.join(process.env.COMMENT_DIR, name), 'utf8')
+                issue_number,
+                body: `## DYNAMIC_EXPERT_RESULT ${i + 1}/${parts.length}\n\n- Source: \`${source}\`\n- Run: \`${process.env.RUN_URL}\`\n- Execution step: \`${process.env.EXECUTE_OUTCOME}\`\n\n${parts[i]}`
               });
             }
 
-      - name: Render authoritative V5 final status
-        id: final
-        if: always()
-        env:
-          PRIMARY_ARTIFACT_ID: ${{ steps.ticket_artifact.outputs.artifact-id }}
-          PRIMARY_ARTIFACT_URL: ${{ steps.ticket_artifact.outputs.artifact-url }}
-          PRIMARY_ARTIFACT_DIGEST: ${{ steps.ticket_artifact.outputs.artifact-digest }}
-        run: |
-          effective_audit_outcome="${{ steps.audit.outcome }}"
-          if [[ "${{ steps.independent.outcome }}" != "success" || \
-                "${{ steps.independent.outputs.status }}" != "PASS" ]]; then
-            effective_audit_outcome="independent-artifact-revalidation-failed"
-          fi
-          python open-model-market/v5_final_status.py \
-            --output-dir ticket-artifacts \
-            --run-url "$RUN_URL" \
-            --ticket-upload-outcome "${{ steps.ticket_artifact.outcome }}" \
-            --audit-outcome "$effective_audit_outcome" \
-            --manifest-outcome "${{ steps.manifest.outcome }}" \
-            --artifact-id "$PRIMARY_ARTIFACT_ID" \
-            --artifact-url "$PRIMARY_ARTIFACT_URL" \
-            --artifact-digest "$PRIMARY_ARTIFACT_DIGEST" \
-            --independent-revalidation-file independent-revalidation.json \
-            | tee final-status.md
-
-      - name: Generate post-upload final attestation
-        id: attest
-        if: always()
-        env:
-          PRIMARY_ARTIFACT_ID: ${{ steps.ticket_artifact.outputs.artifact-id }}
-          PRIMARY_ARTIFACT_URL: ${{ steps.ticket_artifact.outputs.artifact-url }}
-          PRIMARY_ARTIFACT_DIGEST: ${{ steps.ticket_artifact.outputs.artifact-digest }}
-          AUTHORITATIVE_EXECUTION_SHA: ${{ steps.source.outputs.execution_sha }}
-        run: |
-          python open-model-market/v5_final_attestation.py \
-            --output-dir ticket-artifacts \
-            --primary-artifact-id "$PRIMARY_ARTIFACT_ID" \
-            --primary-artifact-digest "$PRIMARY_ARTIFACT_DIGEST" \
-            --primary-artifact-url "$PRIMARY_ARTIFACT_URL" \
-            --audit-status "${{ steps.final.outputs.status }}" \
-            --run-id "${{ github.run_id }}" \
-            --commit-sha "$AUTHORITATIVE_EXECUTION_SHA" \
-            --final-status-file final-status.md \
-            --independent-revalidation-file independent-revalidation.json \
-            --output final-attestation.json
-          python - <<'PY'
-          import hashlib
-          import json
-          from pathlib import Path
-
-          independent_path = Path("independent-revalidation.json")
-          if not independent_path.is_file():
-              raise SystemExit("independent artifact revalidation is missing")
-          independent = json.loads(independent_path.read_text(encoding="utf-8"))
-          if independent.get("schema_version") != "v5-independent-artifact-revalidation-3":
-              raise SystemExit("independent artifact revalidation schema is not current")
-          final_status = json.loads(
-              Path("ticket-artifacts/final-status.json").read_text(encoding="utf-8")
-          )
-          if final_status.get("status") in {"PASS", "DEGRADED"} and independent.get("status") != "PASS":
-              raise SystemExit("successful final status requires PASS independent revalidation")
-          attestation_path = Path("final-attestation.json")
-          attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
-          attestation["independent_artifact_revalidation"] = {
-              **independent,
-              "evidence_sha256": hashlib.sha256(independent_path.read_bytes()).hexdigest(),
-          }
-          attestation["evidence_chain"] = (
-              "frozen-business-evidence -> primary-artifact -> "
-              "independent-artifact-revalidation -> final-status -> "
-              "final-attestation-artifact"
-          )
-          attestation_path.write_text(
-              json.dumps(attestation, ensure_ascii=False, indent=2),
-              encoding="utf-8",
-          )
-          PY
-
-      - name: Upload final attestation artifact
-        id: proof_artifact
+      - name: Upload execution evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: final-attestation-${{ github.run_id }}
+          name: dynamic-expert-ticket-${{ github.event.issue.number }}-${{ github.run_id }}
           path: |
-            final-attestation.json
-            final-status.md
-            ticket-artifacts/final-status.json
-            independent-revalidation.json
-            checked-out-production-sha.txt
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Publish authoritative V5 final status
-        if: always()
-        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
-        env:
-          STATUS_FILE: final-status.md
-        with:
-          script: |
-            const fs = require('fs');
-            const fallback = `## V5_FINAL_STATUS: FAIL\n\nRun: ${process.env.RUN_URL}`;
-            const body = fs.existsSync(process.env.STATUS_FILE)
-              ? fs.readFileSync(process.env.STATUS_FILE, 'utf8')
-              : fallback;
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body
-            });
-
-      - name: Verify authoritative V5 final outcome
-        if: always()
-        run: |
-          set -euo pipefail
-          test "${{ steps.execute.outcome }}" = "success"
-          test "${{ steps.prepare_report.outcome }}" = "success"
-          test "${{ steps.audit.outcome }}" = "success"
-          test "${{ steps.audit.outputs.status }}" = "PASS"
-          test "${{ steps.manifest.outcome }}" = "success"
-          test "${{ steps.ticket_artifact.outcome }}" = "success"
-          test "${{ steps.artifact_download.outcome }}" = "success"
-          test "${{ steps.independent.outcome }}" = "success"
-          test "${{ steps.independent.outputs.status }}" = "PASS"
-          test "${{ steps.publish.outcome }}" = "success"
-          test "${{ steps.final.outputs.status }}" = "PASS"
-          test "${{ steps.attest.outcome }}" = "success"
-          test "${{ steps.proof_artifact.outcome }}" = "success"
+            ticket-artifacts/
+            admission-status.md
+          if-no-files-found: warn
+          retention-days: 30

@@ -1,9 +1,9 @@
-"""Production pipeline facade for signed Top-50 + Expert OR-Tools assignment.
+"""Production pipeline facade for signed governance plans + dynamic Expert assignment.
 
-Governance signs model candidates, the Expert Center assigns fixed model
-identities with CP-SAT, and OpenRouter selects the actual Provider without any
-Provider routing filter. Live catalog validation therefore checks model-level
-existence/capacity only; Provider endpoint inventory is not an eligibility gate.
+Governance supplies model candidates, the Expert Center assigns exact model identities,
+and OpenRouter selects the actual Provider without any Provider routing filter. Catalog
+validation therefore checks model-level existence/capacity only; Provider endpoint
+inventory is compatibility metadata and never an eligibility gate.
 """
 from __future__ import annotations
 
@@ -17,6 +17,11 @@ from v5_json_io import load_json_or_default, write_json
 for _name in dir(_legacy):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_legacy, _name)
+
+# Explicit aliases keep the active facade statically auditable instead of relying on
+# the compatibility globals export above.
+model_market = _legacy.model_market
+_load_mapping = _legacy._load_mapping
 
 
 def _top50(plan: Mapping[str, Any]) -> bool:
@@ -77,6 +82,7 @@ def _planned_ids(plan: Mapping[str, Any]) -> list[str]:
 def _candidate_map(plan: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     result: dict[str, Mapping[str, Any]] = {}
     for field in (
+        "expert_candidate_pool",
         "top50_expert_selectable_candidates",
         "selected_models",
         "recovery_models",
@@ -91,6 +97,32 @@ def _candidate_map(plan: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
             if model and model not in result:
                 result[model] = row
     return result
+
+
+def _model_catalog_row(model: Any) -> dict[str, Any]:
+    prompt = getattr(model, "prompt_price_per_million", None)
+    completion = getattr(model, "completion_price_per_million", None)
+    return {
+        "id": str(getattr(model, "id", "") or ""),
+        "context_length": int(getattr(model, "context_length", 0) or 0),
+        "supported_parameters": list(getattr(model, "supported_parameters", []) or []),
+        "pricing": {
+            "prompt": (float(prompt) / 1_000_000 if prompt is not None else None),
+            "completion": (
+                float(completion) / 1_000_000 if completion is not None else None
+            ),
+        },
+        "top_provider": {
+            "max_completion_tokens": int(
+                getattr(model, "max_completion_tokens", 0) or 0
+            )
+        },
+        "architecture": {
+            "input_modalities": list(getattr(model, "input_modalities", []) or []),
+            "output_modalities": list(getattr(model, "output_modalities", []) or []),
+        },
+        "ranks": dict(getattr(model, "ranks", {}) or {}),
+    }
 
 
 def _open_endpoint_payloads(
@@ -131,8 +163,12 @@ def _open_endpoint_payloads(
         pricing = model_row.get("pricing")
         if not isinstance(pricing, Mapping):
             pricing = {
-                "prompt": float(candidate.get("prompt_usd_per_million") or 0.0) / 1_000_000,
-                "completion": float(candidate.get("completion_usd_per_million") or 0.0) / 1_000_000,
+                "prompt": float(candidate.get("prompt_usd_per_million") or 0.0)
+                / 1_000_000,
+                "completion": float(
+                    candidate.get("completion_usd_per_million") or 0.0
+                )
+                / 1_000_000,
             }
         payloads[model_id] = {
             "data": {
@@ -153,6 +189,61 @@ def _open_endpoint_payloads(
             }
         }
     return payloads
+
+
+def _nonbinding_catalog(
+    model_ids: Sequence[str],
+    planned_catalog: Mapping[str, Any],
+    endpoint_payloads: Mapping[str, Mapping[str, Any]],
+    task_envelope: Mapping[str, Any],
+) -> dict[str, Any]:
+    rows = planned_catalog.get("data") if isinstance(planned_catalog.get("data"), list) else []
+    model_map = {
+        str(row.get("id") or "").strip(): row
+        for row in rows
+        if isinstance(row, Mapping) and str(row.get("id") or "").strip()
+    }
+    metadata: list[dict[str, Any]] = []
+    for model_id in model_ids:
+        row = model_map[model_id]
+        top_provider = row.get("top_provider") if isinstance(row.get("top_provider"), Mapping) else {}
+        payload = endpoint_payloads.get(model_id, {})
+        endpoint_rows = catalog_view._endpoint_rows(payload)  # noqa: SLF001
+        endpoint_contexts = [
+            int(value.get("context_length") or 0)
+            for value in endpoint_rows
+            if isinstance(value, Mapping)
+        ]
+        endpoint_completions = [
+            int(value.get("max_completion_tokens") or 0)
+            for value in endpoint_rows
+            if isinstance(value, Mapping)
+        ]
+        metadata.append(
+            {
+                "model": model_id,
+                "provider": "openrouter-auto",
+                "provider_endpoint": f"{model_id}@openrouter-auto",
+                "routing_constraint": False,
+                "context_length": max(
+                    [int(row.get("context_length") or 0), *endpoint_contexts]
+                ),
+                "max_completion_tokens": max(
+                    [int(top_provider.get("max_completion_tokens") or 0), *endpoint_completions]
+                ),
+                "supported_parameters": list(row.get("supported_parameters") or []),
+            }
+        )
+    return {
+        "schema_version": "v5-unrestricted-planned-model-catalog-1",
+        "catalog_scope": "governance-planned-models-only",
+        "planned_model_ids": list(model_ids),
+        "required_context_tokens": int(task_envelope.get("required_context_tokens") or 0),
+        "model_level_existence_validated": True,
+        "provider_endpoint_inventory_required": False,
+        "provider_endpoint_inventory_used_as_gate": False,
+        "endpoints": metadata,
+    }
 
 
 _original_task_state = _legacy._task_state
@@ -182,25 +273,22 @@ def _catalog_state(
     if not model_ids:
         raise RuntimeError("governance plan has no assigned models")
 
-    if args.catalog_file:
-        catalog_path = Path(args.catalog_file)
-        if not catalog_path.is_file():
-            raise RuntimeError(f"catalog file does not exist: {catalog_path}")
-        raw_catalog = catalog_view.load_catalog_file(catalog_path)
-        catalog_source = str(catalog_path)
-    else:
-        raw_catalog = catalog_view.fetch_live_model_catalog(run)
-        catalog_source = catalog_view.OPENROUTER_MODELS_API
+    models, catalog_source = model_market.fetch_catalog(run)
+    missing = [model_id for model_id in model_ids if model_id not in models]
+    if missing:
+        raise catalog_view.CatalogViewError(
+            "governance-planned models are absent from current model catalog: "
+            + ", ".join(missing)
+        )
+    planned_catalog = {
+        "data": [_model_catalog_row(models[model_id]) for model_id in model_ids]
+    }
 
-    planned_catalog = catalog_view.planned_live_model_catalog(
-        raw_catalog,
-        model_ids,
-    )
     if args.endpoint_file:
         endpoint_path = Path(args.endpoint_file)
         if not endpoint_path.is_file():
             raise RuntimeError(f"endpoint file does not exist: {endpoint_path}")
-        endpoint_payloads = catalog_view.load_endpoint_file(endpoint_path)
+        endpoint_payloads = _load_mapping(endpoint_path)
         endpoint_source = str(endpoint_path)
     else:
         endpoint_payloads = _open_endpoint_payloads(
@@ -210,17 +298,16 @@ def _catalog_state(
         )
         endpoint_source = "model-metadata-derived-openrouter-unrestricted"
 
-    catalog = catalog_view.compact_endpoint_catalog(
+    catalog = _nonbinding_catalog(
+        model_ids,
         planned_catalog,
         endpoint_payloads,
         task_envelope,
-        model_ids=model_ids,
-        allow_synthetic_endpoints=bool(args.allow_synthetic_endpoints),
     )
     value = dict(catalog)
     value.update(_assignment_fields(plan))
     value.update(_provider_fields())
-    value["catalog_scope"] = "governance-signed-top50-assigned-models-only"
+    value["catalog_scope"] = "governance-assigned-models-only"
     value["endpoint_catalog_role"] = "non-binding-availability-and-capacity-metadata-only"
     value["live_provider_endpoint_inventory_required"] = False
     return value, catalog_source, endpoint_source
