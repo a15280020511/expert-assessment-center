@@ -1,23 +1,22 @@
-"""Hierarchical dynamic candidate optimizer.
+"""Task-derived dynamic candidate optimizer.
 
-This is the production composition facade for the Expert Center.  It preserves
-all proven low-level OR-Tools/model-scoring behavior from
-``v5_top50_pool_optimizer`` but changes the planning order to:
+Production planning order:
+current ticket -> task-derived work DAG -> parameter-instance discovery ->
+parameter dependency graph -> conditional Optuna resolution -> role DAG ->
+OR-Tools model-role assignment -> current-run standby replanning.
 
-current ticket -> task decomposition -> required-parameter discovery ->
-parameter value resolution -> team/role derivation -> OR-Tools assignment.
-
-The parameter set itself is task-derived.  There are no model-business
-eligibility gates; no-tools remains the sole hard model boundary.
+No fixed role grammar or pre-activated business parameter template participates.
+No model-business eligibility gates are introduced; no-tools remains the sole hard
+model boundary.
 """
 from __future__ import annotations
 
 from typing import Any, Mapping
 
 import v5_top50_pool_optimizer as base
-from v5_hierarchical_task_planner import (
-    SCHEMA_VERSION as HIERARCHICAL_PLANNER_SCHEMA_VERSION,
-    build_hierarchical_planning_context,
+from v5_dynamic_parameter_graph import (
+    SCHEMA_VERSION as DYNAMIC_PARAMETER_GRAPH_SCHEMA_VERSION,
+    build_dynamic_planning_context,
 )
 
 
@@ -34,7 +33,7 @@ def _materialize(
     source_plan = dict(source)
     try:
         candidates = base._candidate_rows(source_plan)  # noqa: SLF001
-        planning = build_hierarchical_planning_context(packet, candidates)
+        planning = build_dynamic_planning_context(packet, candidates)
         profile = dict(planning["resolved_profile"])
         roles = [dict(row) for row in planning["role_plan"]]
         recovery_count = int(planning["recovery_count"])
@@ -60,15 +59,19 @@ def _materialize(
     parameter_requirements = dict(planning["parameter_requirements"])
     resolved_parameters = dict(planning["resolved_parameters"])
     decomposition = dict(planning["decomposition"])
+    parameter_coverage = dict(resolved_parameters.get("parameter_coverage_audit") or {})
+    if parameter_coverage.get("status") != "PASS":
+        raise HierarchicalOptimizationError("dynamic parameter coverage audit did not pass")
 
     audit = {
         **solver_audit,
-        "schema_version": "v5-hierarchical-dynamic-expert-composition-1",
-        "hierarchical_planner_schema_version": HIERARCHICAL_PLANNER_SCHEMA_VERSION,
+        "schema_version": "v5-task-derived-dynamic-expert-composition-1",
+        "dynamic_parameter_graph_schema_version": DYNAMIC_PARAMETER_GRAPH_SCHEMA_VERSION,
         "planning_sequence": list(planning["planning_sequence"]),
         "task_decomposition": decomposition,
         "parameter_requirements": parameter_requirements,
         "resolved_parameters": resolved_parameters,
+        "parameter_coverage_audit": parameter_coverage,
         "task_demand_profile": profile,
         "primary_expert_count": len(selected),
         "recovery_count": len(recoveries),
@@ -76,9 +79,8 @@ def _materialize(
         "selection_principles": list(base.PRINCIPLES),
         "task_adaptive_scoring_schema_version": base.TASK_SCORING_SCHEMA_VERSION,
         "recovery_resilience": {
-            "computed_ratio": float(resolved_parameters.get("recovery_ratio") or 0.0),
             "recovery_count": len(recoveries),
-            "selection_source": "hierarchical-current-task-parameter-resolution",
+            "selection_source": "task-derived-parameter-graph",
             "free_route_soft_penalty": 0,
             "primary_company_overlap_soft_penalty": 0,
             "recovery_company_concentration_soft_penalty": 0,
@@ -90,12 +92,15 @@ def _materialize(
         },
         "task_decomposition_completed": True,
         "parameter_requirement_discovery_completed": True,
+        "parameter_dependency_graph_completed": True,
         "parameter_values_resolved_before_team_composition": True,
         "team_and_roles_derived_after_parameter_resolution": True,
         "model_assignment_executed_after_parameter_resolution": True,
         "all_calculable_planning_parameters_dynamic": True,
+        "all_parameter_instances_current_task_derived": True,
         "fixed_parameter_template_used": False,
         "fixed_parameter_values_used": False,
+        "fixed_role_grammar_used": False,
         "hard_model_eligibility_gates": [],
         "only_hard_model_boundary": "no-tools",
         "tool_use_forbidden": True,
@@ -132,16 +137,18 @@ def _materialize(
             "expert_center_hierarchical_planning_completed": True,
             "task_decomposition_completed": True,
             "parameter_requirement_discovery_completed": True,
+            "parameter_dependency_graph_completed": True,
             "parameter_values_resolved_before_model_assignment": True,
             "planning_sequence": list(planning["planning_sequence"]),
             "task_decomposition": decomposition,
             "dynamic_parameter_requirements": parameter_requirements,
             "dynamic_parameter_values": resolved_parameters,
+            "parameter_coverage_audit": parameter_coverage,
             "selected_from_top20_reasoning_pool_only": False,
             "selected_from_top50_reasoning_pool_only": False,
             "selected_from_governance_candidate_pool": True,
             "candidate_pool_authority": "decision-system-governance",
-            "model_assignment_authority": "expert-assessment-center-hierarchical-dynamic-ortools",
+            "model_assignment_authority": "expert-assessment-center-task-derived-dynamic-ortools",
             "optimizer": str(audit["optimizer"]),
             "optimizer_audit": audit,
             "task_adaptive_scoring_completed": True,
@@ -153,6 +160,7 @@ def _materialize(
             "model_substitution_allowed": True,
             "fixed_team_size_required": False,
             "fixed_role_topology_required": False,
+            "fixed_role_grammar_required": False,
             "company_deduplication_required": False,
             "free_first_required": False,
             "canary_required_before_execution": False,
@@ -166,15 +174,14 @@ def _materialize(
             "tools_allowed": False,
             "only_hard_model_boundary": "no-tools",
             "all_calculable_planning_parameters_dynamic": True,
+            "all_parameter_instances_current_task_derived": True,
             "selection_policy": (
-                "governance reasoning-popularity candidates -> current ticket "
-                "decomposition into finite work graph -> discover task-required "
-                "planning parameters -> resolve parameter values from current "
-                "task/candidate signals -> derive team size, recovery depth and "
-                "role topology -> dynamic cost/intelligence/popularity/capacity/"
-                "marginal-return scoring -> OR-Tools model-role assignment -> "
-                "unrestricted OpenRouter Provider routing; no business eligibility "
-                "gates; hard model boundary=no-tools"
+                "governance reasoning-popularity candidates -> derive current-ticket finite "
+                "work DAG -> discover required parameter instances -> build parameter DAG -> "
+                "resolve conditional values with Optuna/direct derivation -> derive arbitrary "
+                "role DAG from work DAG -> OR-Tools model-role assignment -> current-run "
+                "feedback standby promotion -> unrestricted OpenRouter Provider routing; "
+                "no business eligibility gates; hard model boundary=no-tools"
             ),
         }
     )
@@ -182,12 +189,13 @@ def _materialize(
     selection_basis_sha256 = base._sha(plan)  # noqa: SLF001
 
     receipt = {
-        "schema_version": "expert-center-hierarchical-dynamic-selection-receipt-v1",
+        "schema_version": "expert-center-task-derived-dynamic-selection-receipt-v1",
         "selection_basis_sha256": selection_basis_sha256,
         "planning_sequence": list(planning["planning_sequence"]),
         "task_decomposition": decomposition,
         "parameter_requirements": parameter_requirements,
         "resolved_parameters": resolved_parameters,
+        "parameter_coverage_audit": parameter_coverage,
         "selected_models": [row["model"] for row in selected],
         "recovery_models": [row["model"] for row in recoveries],
         "primary_expert_count": len(selected),
