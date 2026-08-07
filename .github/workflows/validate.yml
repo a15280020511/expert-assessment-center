@@ -48,28 +48,29 @@ jobs:
       - name: Run full unittest gate
         run: |
           set -euo pipefail
-          python -m unittest discover -s tests -p 'test*.py' -v
+          mkdir -p validation-artifacts
+          python -m unittest discover -s tests -p 'test*.py' -v 2>&1 | tee validation-artifacts/unittest.log
 
       - name: Validate governance-plan execution boundary
         run: |
           set -euo pipefail
-          rm -rf validation-artifacts
-          mkdir -p validation-artifacts
-          cp tests/fixtures/governance-ticket.json validation-artifacts/ticket.json
+          rm -rf validation-artifacts/governance-plan
+          mkdir -p validation-artifacts/governance-plan
+          cp tests/fixtures/governance-ticket.json validation-artifacts/governance-plan/ticket.json
           python open-model-market/v5_price_ranked_pipeline.py \
             --task "仅依据题面比较A与B，禁止工具，输出已知事实和最终建议。" \
-            --governance-plan-file validation-artifacts/ticket.json \
+            --governance-plan-file validation-artifacts/governance-plan/ticket.json \
             --catalog-file tests/fixtures/models.json \
             --endpoint-file tests/fixtures/endpoints.json \
             --dry-run \
             --maximum-total-calls 8 \
             --maximum-recovery-calls 1 \
-            --output-dir validation-artifacts
+            --output-dir validation-artifacts/governance-plan
           python - <<'PY'
           import json
           from pathlib import Path
 
-          root = Path("validation-artifacts")
+          root = Path("validation-artifacts/governance-plan")
           plan = json.loads((root / "governance-model-plan.json").read_text())
           selection = json.loads((root / "v5-price-ranked-selection.json").read_text())
           runtime = json.loads((root / "v5-runtime-config.json").read_text())
