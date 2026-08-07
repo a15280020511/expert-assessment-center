@@ -19,6 +19,7 @@ jobs:
       - name: Checkout pinned source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Set up Python 3.12
@@ -31,16 +32,25 @@ jobs:
 
       - name: Inspect every repository file and source line
         run: |
-          set +e
+          set -euo pipefail
+          mkdir -p audit-artifacts
           python tools/repository_audit.py \
             --root . \
-            --output-dir audit-artifacts \
-            --fail-on medium
-          status=$?
-          if [[ -f audit-artifacts/repository-audit.json ]]; then
-            cat audit-artifacts/repository-audit.json
-          fi
-          exit "$status"
+            --json-output audit-artifacts/repository-audit.json \
+            --markdown-output audit-artifacts/repository-audit.md
+          cat audit-artifacts/repository-audit.json
+
+      - name: Assert Critical and High are zero
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('audit-artifacts/repository-audit.json').read_text())
+          counts = report['finding_counts']
+          assert counts['critical'] == 0, counts
+          assert counts['high'] == 0, counts
+          print(json.dumps(counts, ensure_ascii=False))
+          PY
 
       - name: Freeze reviewed source snapshot
         if: always()
