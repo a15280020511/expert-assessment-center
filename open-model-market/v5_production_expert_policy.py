@@ -1,8 +1,8 @@
-"""Production expert request policy and complete failed-result persistence.
+"""Production expert request and delivery policy.
 
-Provider routing is completely open. The production prompt policy does not add
-ZDR, data-collection, provider allowlists/orders, provider price constraints or
-other routing filters. Model identity remains fixed by the expert plan.
+Provider routing is completely open. Production requests contain no Provider
+allowlist/order/ZDR/data-collection/price routing filters. Company identity is
+retained as audit telemetry only and never invalidates an otherwise valid run.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ EXPERT_ZDR_REQUIRED = False
 
 
 class ProductionExpertPromptPolicy(SoftResourcePromptPolicy):
-    """Preserve unrestricted provider routing on production expert requests."""
+    """Guarantee unrestricted OpenRouter Provider routing at send time."""
 
     def build_payload(
         self,
@@ -33,6 +33,8 @@ class ProductionExpertPromptPolicy(SoftResourcePromptPolicy):
         upstream: Sequence[Mapping[str, Any]],
     ) -> dict[str, Any]:
         payload = super().build_payload(node, original_task, upstream)
+        # Historical prompt builders may construct a compatibility Provider
+        # object internally. It is never sent to OpenRouter in production.
         payload.pop("provider", None)
         assert_request_has_no_tools(
             payload,
@@ -42,7 +44,7 @@ class ProductionExpertPromptPolicy(SoftResourcePromptPolicy):
 
 
 class EvidenceCompleteExecutionEngine(SoftResourceExecutionEngine):
-    """Return failed results only after complete evidence has been persisted."""
+    """Persist complete evidence without company/provider business gates."""
 
     def _normalize_attempt(
         self,
@@ -79,6 +81,40 @@ class EvidenceCompleteExecutionEngine(SoftResourceExecutionEngine):
     @staticmethod
     def _raise_failed_result(result: Mapping[str, Any]) -> None:
         del result
+
+    @classmethod
+    def _actual_company_audit(
+        cls,
+        result: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        audit = dict(super()._actual_company_audit(result))
+        audit.update(
+            {
+                "status": "PASS",
+                "policy": "audit-only-company-observability",
+                "company_uniqueness_constraint": False,
+                "duplicate_companies_allowed": True,
+                "duplicates_invalidate_execution": False,
+            }
+        )
+        return audit
+
+    @staticmethod
+    def _constitutional_failure_reason(
+        result: Mapping[str, Any],
+        company_audit: Mapping[str, Any],
+        evidence_audit: Mapping[str, Any],
+        constraints: TaskConstraints,
+    ) -> str | None:
+        del company_audit
+        if evidence_audit["status"] != "PASS":
+            return "unsupported-evidence-or-quantity"
+        if (
+            result.get("completion_mode") == "degraded"
+            and not constraints.allow_degraded_success
+        ):
+            return "degradation-not-authorized-by-user"
+        return None
 
     @classmethod
     def _fail_constitutional_result(
