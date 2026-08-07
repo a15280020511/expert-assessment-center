@@ -1,9 +1,9 @@
 """Task-derived dynamic candidate optimizer.
 
 Pre-execution planning order:
-current ticket -> task-derived work DAG -> parameter-instance discovery ->
-parameter dependency graph -> conditional Optuna resolution -> role DAG ->
-structural role demand -> OR-Tools model-role assignment.
+current ticket -> constitutional no-tools route boundary -> task-derived work DAG ->
+parameter-instance discovery -> parameter dependency graph -> conditional Optuna
+resolution -> role DAG -> structural role demand -> OR-Tools model-role assignment.
 
 Current-run standby promotion is a separate execution/replanning phase, not a
 pre-execution planning step. No fixed role grammar, metric-role grammar or
@@ -20,10 +20,37 @@ from v5_dynamic_parameter_graph import (
     build_dynamic_planning_context,
 )
 from v5_dynamic_role_assignment import solve_dynamic_roles
+from v5_no_tools_policy import forbidden_model_route
 
 
 class HierarchicalOptimizationError(RuntimeError):
     """Raised only when the current ticket cannot form a finite executable plan."""
+
+
+def _partition_no_tools_routes(
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Apply the existing constitutional route boundary before optimization.
+
+    This is deliberately not a model-quality, price, company, provider or popularity
+    gate.  It only prevents the optimizer from assigning a route that the request
+    boundary would deterministically reject later under the same no-tools policy.
+    """
+    executable: list[dict[str, Any]] = []
+    rejected: list[dict[str, str]] = []
+    for row in rows:
+        model = str(row.get("model") or "").strip()
+        route = forbidden_model_route({"model": model})
+        if route:
+            rejected.append(
+                {
+                    "model": model,
+                    "reason": "constitutional-no-tools-route-incompatible",
+                }
+            )
+            continue
+        executable.append(dict(row))
+    return executable, rejected
 
 
 def _materialize(
@@ -34,7 +61,14 @@ def _materialize(
         raise HierarchicalOptimizationError("governance_model_plan is missing")
     source_plan = dict(source)
     try:
-        candidates = base._candidate_rows(source_plan)  # noqa: SLF001
+        governance_candidates = base._candidate_rows(source_plan)  # noqa: SLF001
+        candidates, no_tools_rejected = _partition_no_tools_routes(
+            governance_candidates
+        )
+        if not candidates:
+            raise HierarchicalOptimizationError(
+                "no candidate survives the constitutional no-tools route boundary"
+            )
         planning = build_dynamic_planning_context(packet, candidates)
         profile = dict(planning["resolved_profile"])
         roles = [dict(row) for row in planning["role_plan"]]
@@ -62,6 +96,19 @@ def _materialize(
         for row in candidates
         if str(row["model"]) not in selected_ids | recovery_ids
     ]
+    constitutional_candidate_boundary = {
+        "policy": "same-no-tools-route-policy-as-request-boundary",
+        "governance_candidate_count": len(governance_candidates),
+        "executable_candidate_count": len(candidates),
+        "rejected_candidate_count": len(no_tools_rejected),
+        "rejected_candidates": no_tools_rejected,
+        "business_eligibility_gate": False,
+        "price_gate": False,
+        "company_gate": False,
+        "provider_gate": False,
+        "popularity_gate": False,
+        "only_hard_model_boundary": "no-tools",
+    }
 
     parameter_requirements = dict(planning["parameter_requirements"])
     resolved_parameters = dict(planning["resolved_parameters"])
@@ -99,6 +146,7 @@ def _materialize(
         ),
         "planning_sequence": planning_sequence,
         "runtime_replanning": runtime_replanning,
+        "constitutional_candidate_boundary": constitutional_candidate_boundary,
         "task_decomposition": decomposition,
         "parameter_requirements": parameter_requirements,
         "resolved_parameters": resolved_parameters,
@@ -138,6 +186,8 @@ def _materialize(
         "fixed_parameter_values_used": False,
         "fixed_role_grammar_used": False,
         "hard_model_eligibility_gates": [],
+        "constitutional_no_tools_route_prefilter_applied": True,
+        "constitutional_no_tools_route_rejected_count": len(no_tools_rejected),
         "only_hard_model_boundary": "no-tools",
         "tool_use_forbidden": True,
         "fixed_team_size_used": False,
@@ -176,6 +226,7 @@ def _materialize(
             "parameter_dependency_graph_completed": True,
             "parameter_values_resolved_before_model_assignment": True,
             "role_scoring_derived_from_current_role_structure": True,
+            "constitutional_candidate_boundary": constitutional_candidate_boundary,
             "planning_sequence": planning_sequence,
             "runtime_replanning": runtime_replanning,
             "task_decomposition": decomposition,
@@ -218,14 +269,16 @@ def _materialize(
             "all_calculable_planning_parameters_dynamic": True,
             "all_parameter_instances_current_task_derived": True,
             "selection_policy": (
-                "governance reasoning-popularity candidates -> derive current-ticket "
-                "finite work DAG -> discover effective parameter instances -> build "
-                "parameter DAG -> resolve current values with NetworkX/Optuna -> derive "
-                "role DAG from work DAG -> derive each role's token/weight/capacity "
-                "demand directly from its current structural signals -> OR-Tools "
-                "model-role assignment -> execution performs current-run feedback "
-                "standby promotion; unrestricted OpenRouter Provider routing; no "
-                "business eligibility gates; hard model boundary=no-tools"
+                "governance reasoning-popularity candidates -> apply the same "
+                "constitutional no-tools model-route boundary used at request time -> "
+                "derive current-ticket finite work DAG -> discover effective parameter "
+                "instances -> build parameter DAG -> resolve current values with "
+                "NetworkX/Optuna -> derive role DAG from work DAG -> derive each role's "
+                "token/weight/capacity demand directly from its current structural "
+                "signals -> OR-Tools model-role assignment -> execution performs "
+                "current-run feedback standby promotion; unrestricted OpenRouter "
+                "Provider routing; no business eligibility gates; hard model "
+                "boundary=no-tools"
             ),
         }
     )
@@ -237,6 +290,7 @@ def _materialize(
         "selection_basis_sha256": selection_basis_sha256,
         "planning_sequence": planning_sequence,
         "runtime_replanning": runtime_replanning,
+        "constitutional_candidate_boundary": constitutional_candidate_boundary,
         "task_decomposition": decomposition,
         "parameter_requirements": parameter_requirements,
         "resolved_parameters": resolved_parameters,
@@ -250,6 +304,8 @@ def _materialize(
         "role_metric_mode": "current-generated-role-structural-signals",
         "metric_role_adapter_used": False,
         "fixed_metric_role_grammar_used": False,
+        "constitutional_no_tools_route_prefilter_applied": True,
+        "constitutional_no_tools_route_rejected_count": len(no_tools_rejected),
         "provider_routing_mode": "unrestricted-openrouter",
         "provider_restrictions_applied": False,
         "free_first_required": False,
