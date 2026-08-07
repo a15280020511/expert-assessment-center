@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MARKET = ROOT / "open-model-market"
 sys.path.insert(0, str(MARKET))
 
+from v5_constitutional_runtime import ConstitutionalPromptPolicy  # noqa: E402
 from v5_production_expert_policy import (  # noqa: E402
     EXPERT_DATA_COLLECTION_POLICY,
     EXPERT_ZDR_REQUIRED,
@@ -41,6 +42,16 @@ class ProductionExpertPolicyTests(unittest.TestCase):
         )
         return install_production_expert_policy(build_runtime(config, retry_policy=retry))
 
+    @staticmethod
+    def _prompt_node() -> SimpleNamespace:
+        return SimpleNamespace(
+            node_id="N1",
+            model="vendor/model",
+            output_contract={},
+            reasoning_profile={},
+            parameter_profile={},
+        )
+
     def test_expert_request_removes_all_provider_filters(self) -> None:
         base = {
             "model": "deepseek/model",
@@ -61,6 +72,77 @@ class ProductionExpertPolicyTests(unittest.TestCase):
         self.assertIsNone(EXPERT_DATA_COLLECTION_POLICY)
         self.assertFalse(EXPERT_ZDR_REQUIRED)
         self.assertNotIn("provider", payload)
+
+    def test_real_inheritance_chain_skips_exact_provider_assertion_only_in_production(self) -> None:
+        base = {
+            "model": "vendor/model",
+            "messages": [{"role": "system", "content": "base"}],
+            "provider": {
+                "only": [],
+                "allow_fallbacks": True,
+                "order": ["provider-a", "provider-b"],
+                "zdr": True,
+            },
+        }
+        constraints = SimpleNamespace(to_dict=lambda: {})
+        node = self._prompt_node()
+        common = (
+            patch(
+                "v5_constitutional_runtime.cost_hardening.hardened_build_node_payload",
+                return_value=base,
+            ),
+            patch(
+                "v5_constitutional_runtime.delivery_contract.project_task_for_node",
+                return_value="task",
+            ),
+            patch(
+                "v5_constitutional_runtime.compile_task_constraints",
+                return_value=constraints,
+            ),
+            patch(
+                "v5_constitutional_runtime.closed_world_numeric_prompt",
+                return_value="",
+            ),
+            patch(
+                "v5_constitutional_runtime.dynamic_prompt.dynamic_system_prompt",
+                return_value="system",
+            ),
+        )
+        with common[0], common[1], common[2], common[3], common[4]:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "provider.only must contain exactly one endpoint provider",
+            ):
+                ConstitutionalPromptPolicy().build_payload(node, "task", [])
+
+        common = (
+            patch(
+                "v5_constitutional_runtime.cost_hardening.hardened_build_node_payload",
+                return_value=base,
+            ),
+            patch(
+                "v5_constitutional_runtime.delivery_contract.project_task_for_node",
+                return_value="task",
+            ),
+            patch(
+                "v5_constitutional_runtime.compile_task_constraints",
+                return_value=constraints,
+            ),
+            patch(
+                "v5_constitutional_runtime.closed_world_numeric_prompt",
+                return_value="",
+            ),
+            patch(
+                "v5_constitutional_runtime.dynamic_prompt.dynamic_system_prompt",
+                return_value="system",
+            ),
+        )
+        with common[0], common[1], common[2], common[3], common[4]:
+            payload = ProductionExpertPromptPolicy().build_payload(node, "task", [])
+        self.assertNotIn("provider", payload)
+        self.assertNotIn("max_tokens", payload)
+        self.assertFalse(ProductionExpertPromptPolicy.provider_lock_required)
+        self.assertTrue(ConstitutionalPromptPolicy.provider_lock_required)
 
     def test_tool_fields_remain_forbidden_after_provider_opening(self) -> None:
         base = {
