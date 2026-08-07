@@ -1,9 +1,9 @@
-"""Constitutional soft governance for token and cost resources.
+"""Constitutional soft governance for token, cost and recovery resources.
 
-Token and cost estimates remain observable and auditable, but they are never
-used as business-level rejection or truncation gates. Operational safety
-limits such as the fixed governance chain, finite retry, timeout, provider lock
-and no-tool policy remain outside this module and continue to apply.
+Token and cost estimates are observable telemetry, never business-level stop
+conditions. Recovery identities and companies may be reused when the current
+finite execution graph selects them. Structural DAG safety, provider failure
+handling, evidence contracts and no-tools isolation remain enforced.
 """
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ from v5_constitutional_runtime import (
     ConstitutionalExecutionEngine,
     ConstitutionalPromptPolicy,
 )
-from v5_model_company import canonical_model_company
 from v5_runtime import (
     BudgetController,
     FailureCategory,
@@ -91,12 +90,11 @@ class SoftResourcePromptPolicy(ConstitutionalPromptPolicy):
 
 
 class SoftResourceBudgetController(BudgetController):
-    """Soft budget ledger plus a global use-once recovery identity guard."""
+    """Graph-derived budget ledger without model/company recovery uniqueness."""
 
     def __init__(self, config: RuntimeConfig, graph: ExecutionGraph) -> None:
         super().__init__(config, graph)
-        self.replacement_identities_reserved: set[tuple[str, str]] = set()
-        self.replacement_companies_reserved: set[str] = set()
+        self.replacement_reservations: list[dict[str, str]] = []
 
     def reserve_replacement_identity(
         self,
@@ -105,53 +103,41 @@ class SoftResourceBudgetController(BudgetController):
         node_id: str,
     ) -> tuple[bool, str]:
         identity = (str(model).strip(), str(provider_endpoint).strip())
-        company = canonical_model_company(identity[0])
-        with self._lock:
-            reason = ""
-            if not all(identity) or company == "unknown":
-                reason = "invalid-recovery-candidate-identity"
-            elif identity in self.replacement_identities_reserved:
-                reason = "recovery-candidate-already-consumed"
-            elif company in self.replacement_companies_reserved:
-                reason = "recovery-company-already-consumed"
-            if reason:
-                self.denials.append(
-                    {
-                        "node_id": node_id,
-                        "kind": "replacement-identity",
-                        "model": identity[0],
-                        "provider_endpoint": identity[1],
-                        "company": company,
-                        "reason": reason,
-                    }
-                )
-                return False, reason
-            self.replacement_identities_reserved.add(identity)
-            self.replacement_companies_reserved.add(company)
-            return True, ""
+        if not identity[0]:
+            self.denials.append(
+                {
+                    "node_id": node_id,
+                    "kind": "replacement-identity",
+                    "model": identity[0],
+                    "provider_endpoint": identity[1],
+                    "reason": "invalid-recovery-candidate-model",
+                }
+            )
+            return False, "invalid-recovery-candidate-model"
+        self.replacement_reservations.append(
+            {
+                "node_id": str(node_id),
+                "model": identity[0],
+                "provider_endpoint": identity[1],
+            }
+        )
+        return True, ""
 
     def snapshot(self) -> dict[str, Any]:
         value = dict(super().snapshot())
-        with self._lock:
-            value["global_recovery_identity_guard"] = {
-                "status": "PASS",
-                "policy": "each-governance-approved-recovery-model-and-company-once",
-                "reserved_identities": [
-                    {"model": model, "provider_endpoint": endpoint}
-                    for model, endpoint in sorted(
-                        self.replacement_identities_reserved
-                    )
-                ],
-                "reserved_companies": sorted(
-                    self.replacement_companies_reserved
-                ),
-                "duplicate_calls_allowed": False,
-            }
+        value["recovery_identity_policy"] = {
+            "status": "PASS",
+            "policy": "task-graph-selected-recovery-without-company-uniqueness",
+            "reservations": list(self.replacement_reservations),
+            "duplicate_model_calls_allowed": True,
+            "duplicate_company_calls_allowed": True,
+            "company_uniqueness_constraint": False,
+        }
         return value
 
 
 class SoftResourceExecutionEngine(ConstitutionalExecutionEngine):
-    """Run the constitutional engine without token or cost rejection gates."""
+    """Run the constitutional engine without token/cost/company business gates."""
 
     def _recorded_call(
         self,
@@ -211,7 +197,7 @@ class SoftResourceExecutionEngine(ConstitutionalExecutionEngine):
                 "cost_threshold_role": "advisory-telemetry-only",
                 "token_limit_enforced_by_runtime": False,
                 "resource_governance_mode": "prompt-led-soft-governance",
-                "global_recovery_identity_guard_required": True,
+                "recovery_company_uniqueness_required": False,
             }
         )
         return value
@@ -263,7 +249,8 @@ class SoftResourceExecutionEngine(ConstitutionalExecutionEngine):
             "local_token_ceiling_enforced": False,
             "cost_threshold_can_stop_execution": False,
             "cost_and_token_usage_audited": True,
-            "global_recovery_identity_guard": True,
+            "recovery_company_uniqueness_required": False,
+            "recovery_identity_reuse_allowed": True,
         }
         result = quality_integrity.enforce_result_integrity(result)
         if root is not None:
