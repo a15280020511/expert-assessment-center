@@ -1,7 +1,8 @@
 {
-  "schema_version": "v5-constitutional-policy-9-open-dynamic-experts",
+  "schema_version": "v5-constitutional-policy-10-fully-dynamic-no-tools",
   "authority": "CONSTITUTION.md",
   "fail_closed": false,
+  "only_hard_model_boundary": "no-tools",
   "execution_admission": {
     "free_first_required": false,
     "zero_call_qualification_required": false,
@@ -14,9 +15,16 @@
   },
   "candidate_pool": {
     "authority": "decision-system-governance",
+    "source": "openrouter-live-reasoning-most-popular-catalog",
+    "source_definition": {
+      "sort": "most-popular",
+      "supported_parameters": "reasoning",
+      "output_modalities": "text"
+    },
     "fixed_pool_size": null,
     "top50_only": false,
     "top20_only": false,
+    "fixed_top_n_allowed": false,
     "weekly_rank_required": false,
     "reasoning_rank_required": false,
     "flagship_filter_required": false,
@@ -26,10 +34,13 @@
     "expert_center_can_use_any_governance_supplied_candidate": true,
     "expert_center_can_rerank_and_assign": true,
     "provider_endpoint_qualification_required": false,
-    "zdr_provider_qualification_required": false
+    "zdr_provider_qualification_required": false,
+    "tool_use_forbidden": true,
+    "tools_allowed": false
   },
   "dynamic_task_matching": {
     "required": true,
+    "all_calculable_planning_parameters_dynamic": true,
     "principles": [
       "concrete_problem_concrete_analysis",
       "dynamic_adaptation",
@@ -37,11 +48,22 @@
     ],
     "current_task_only": true,
     "cross_task_history_allowed": false,
+    "task_volume": "task-derived",
+    "evidence_volume": "task-derived",
+    "constraint_pressure": "task-derived",
+    "delivery_pressure": "task-derived",
+    "prompt_token_estimate": "task-derived",
+    "completion_token_estimate": "task-derived",
+    "protocol_reserve": "task-derived",
+    "dependency_fan_in": "task-derived",
     "team_size": "task-derived",
     "recovery_size": "task-derived",
     "roles": "task-derived",
     "role_topology": "task-derived",
     "model_assignment": "task-derived",
+    "role_weights": "task-derived",
+    "solver_time": "task-derived",
+    "solver_seed": "task-derived-reproducible",
     "company_mix": "unconstrained",
     "fixed_team_size_allowed": false,
     "fixed_four_plus_four_allowed": false,
@@ -60,6 +82,7 @@
     "heuristic_fallback_allowed": true,
     "fixed_version_required": false,
     "fixed_worker_count_required": false,
+    "single_worker_for_reproducibility_allowed": true,
     "fixed_random_seed_required": false,
     "company_uniqueness_constraint": false,
     "top50_membership_constraint": false,
@@ -67,8 +90,11 @@
     "fixed_recovery_slot_constraint": false,
     "approved_budget_constraint": false,
     "provider_constraint": false,
+    "capacity_constraint": false,
     "capacity_metadata_is_advisory": true,
-    "cost_metadata_is_advisory": true
+    "cost_metadata_is_advisory": true,
+    "free_route_penalty_required": false,
+    "company_overlap_penalty_required": false
   },
   "provider_routing": {
     "mode": "unrestricted-openrouter",
@@ -80,7 +106,9 @@
     "provider_data_collection_filter_required": false,
     "exact_provider_lock_required": false,
     "openrouter_selects_provider": true,
-    "provider_fallback_allowed": true
+    "provider_fallback_allowed": true,
+    "provider_may_change_model_identity": false,
+    "model_substitution_authority": "expert-assessment-center-dynamic-recovery"
   },
   "resource_governance": {
     "fixed_total_call_ceiling": false,
@@ -111,12 +139,18 @@
     "expert_code_execution_allowed": false,
     "expert_database_lookup_allowed": false,
     "expert_external_api_allowed": false,
+    "request_tool_fields_forbidden": true,
+    "response_tool_evidence_forbidden": true,
     "reason": "execution experts remain isolated reasoning nodes; evidence collection belongs outside the expert runtime"
   },
-  "security_boundaries": {
+  "security_and_integrity_invariants": {
+    "these_are_model_business_gates": false,
     "authentication_required": true,
     "secret_protection_required": true,
     "repository_isolation_preserved": true,
+    "task_and_plan_hash_integrity_required": true,
+    "candidate_transport_integrity_required": true,
+    "finite_acyclic_dag_required": true,
     "arbitrary_network_egress_allowed": false,
     "model_plane_hosts": [
       "openrouter.ai"
@@ -136,6 +170,7 @@
     "ortools_optimality_proof_required": false,
     "task_adaptive_value_scoring_required": false,
     "unrestricted_provider_routing_required": true,
+    "no_tools_required": true,
     "automatic_merge_allowed": false,
     "automatic_production_ref_move_allowed": false
   }
