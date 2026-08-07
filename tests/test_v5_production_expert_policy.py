@@ -271,13 +271,21 @@ class ProductionExpertPolicyTests(unittest.TestCase):
         self.assertFalse(provider["exact_provider_lock_required"])
         self.assertTrue(provider["openrouter_selects_provider"])
         self.assertTrue(provider["provider_fallback_allowed"])
+        self.assertFalse(provider["provider_may_change_model_identity"])
+        self.assertEqual(
+            "expert-assessment-center-dynamic-recovery",
+            provider["model_substitution_authority"],
+        )
 
         tools = policy["tool_policy"]
         self.assertFalse(tools["expert_external_tools_allowed"])
         self.assertFalse(tools["expert_web_browsing_allowed"])
         self.assertFalse(tools["expert_external_api_allowed"])
+        self.assertTrue(tools["request_tool_fields_forbidden"])
+        self.assertTrue(tools["response_tool_evidence_forbidden"])
 
-        security = policy["security_boundaries"]
+        security = policy["security_and_integrity_invariants"]
+        self.assertFalse(security["these_are_model_business_gates"])
         self.assertTrue(security["authentication_required"])
         self.assertTrue(security["secret_protection_required"])
         self.assertTrue(security["repository_isolation_preserved"])
