@@ -77,17 +77,21 @@ class NoToolsNetworkPolicyTests(unittest.TestCase):
                 with self.assertRaises(NoToolsPolicyViolation):
                     assert_request_has_no_tools(request)
 
-    def test_router_and_online_models_are_rejected(self) -> None:
+    def test_router_and_online_models_are_rejected_but_batch_is_not_a_tool_route(self) -> None:
         for model in (
             "openrouter/free",
             "vendor/model:online",
-            "vendor/model:batch",
         ):
             with self.subTest(model=model):
                 with self.assertRaises(NoToolsPolicyViolation):
                     assert_request_has_no_tools(
                         {"model": model, "messages": []}
                     )
+        # Batch uses a different OpenRouter transport but does not itself grant
+        # tools/retrieval. It is filtered by the synchronous transport boundary.
+        assert_request_has_no_tools(
+            {"model": "vendor/model:batch", "messages": []}
+        )
         assert_request_has_no_tools(
             {"model": "vendor/exact-model", "messages": []}
         )
