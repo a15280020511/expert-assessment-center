@@ -217,18 +217,33 @@ class SoftResourceExecutionEngine(ConstitutionalExecutionEngine):
         limits: GraphLimits | None = None,
     ) -> dict[str, Any]:
         graph, limits = self._validated_graph(graph, limits)
+        # The active production path previously bypassed ExecutionEngine.execute_graph,
+        # so standby inventory was never initialized even though the graph carried it.
+        self._initialize_feedback(graph)
         preflight = self._preflight(graph, limits)
         root = Path(output_dir) if output_dir is not None else None
         if preflight["blockers"]:
             self._reject_preflight(root, preflight)
         budget = SoftResourceBudgetController(self.config, graph)
-        outputs, records = self._execute_stages(
-            graph,
-            run,
-            original_task,
-            call_fn or self._default_call,
-            budget,
-        )
+
+        # Legacy stage code reads self.config.total_call_limit. For the active run,
+        # point that compatibility field at the graph-derived finite capacity held by
+        # BudgetController, not at the requested CLI telemetry. BudgetController still
+        # owns reservation/reconciliation; this only prevents an old stage-break from
+        # truncating a valid current-task DAG.
+        requested_config = self.config
+        self.config = budget.config
+        try:
+            outputs, records = self._execute_stages(
+                graph,
+                run,
+                original_task,
+                call_fn or self._default_call,
+                budget,
+            )
+        finally:
+            self.config = requested_config
+
         state = self._delivery_state(graph, outputs, limits)
         blockers, missing_non_degradable = self._delivery_blockers(
             state, limits
@@ -248,6 +263,8 @@ class SoftResourceExecutionEngine(ConstitutionalExecutionEngine):
             "mode": "prompt-led-soft-governance",
             "local_token_ceiling_enforced": False,
             "cost_threshold_can_stop_execution": False,
+            "requested_call_ceiling_can_stop_execution": False,
+            "finite_call_capacity_source": "current-execution-graph-plus-recovery-and-standby",
             "cost_and_token_usage_audited": True,
             "recovery_company_uniqueness_required": False,
             "recovery_identity_reuse_allowed": True,

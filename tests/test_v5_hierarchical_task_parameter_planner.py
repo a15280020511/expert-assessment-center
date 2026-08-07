@@ -41,7 +41,11 @@ def _packet(*, complex_task: bool) -> dict[str, object]:
         "language": "zh-CN",
     }
     packet: dict[str, object] = {
-        "task_id": "hierarchical-fixture-complex" if complex_task else "hierarchical-fixture-simple",
+        "task_id": (
+            "hierarchical-fixture-complex"
+            if complex_task
+            else "hierarchical-fixture-simple"
+        ),
         "task": task,
         "governance_model_plan": {
             "candidate_pool_authority": "decision-system-governance",
@@ -77,6 +81,7 @@ class HierarchicalTaskParameterPlannerTests(unittest.TestCase):
         complex_value = decompose_task(_packet(complex_task=True))
         self.assertTrue(simple["finite_acyclic_by_construction"])
         self.assertTrue(complex_value["finite_acyclic_by_construction"])
+        self.assertEqual(simple["planner_authority"], "v5_dynamic_parameter_graph")
         self.assertGreater(
             complex_value["work_unit_count"],
             simple["work_unit_count"],
@@ -90,21 +95,28 @@ class HierarchicalTaskParameterPlannerTests(unittest.TestCase):
             simple["maximum_depth"],
         )
 
-    def test_required_parameter_set_is_task_derived(self) -> None:
+    def test_required_parameter_set_is_task_derived_and_effective(self) -> None:
         candidates = _candidates()
         simple_decomposition = decompose_task(_packet(complex_task=False))
         complex_decomposition = decompose_task(_packet(complex_task=True))
         simple = discover_parameter_requirements(simple_decomposition, candidates)
-        complex_value = discover_parameter_requirements(complex_decomposition, candidates)
+        complex_value = discover_parameter_requirements(
+            complex_decomposition,
+            candidates,
+        )
         self.assertFalse(simple["fixed_parameter_template_used"])
         self.assertFalse(complex_value["fixed_parameter_template_used"])
-        self.assertNotIn("evidence_pressure", simple["required_parameter_ids"])
-        self.assertIn("evidence_pressure", complex_value["required_parameter_ids"])
-        self.assertNotIn("validation_depth", simple["required_parameter_ids"])
-        self.assertIn("validation_depth", complex_value["required_parameter_ids"])
+        self.assertFalse(complex_value["legacy_fixed_parameter_catalog_used"])
+        self.assertNotIn("dependency_density", simple["required_parameter_ids"])
+        self.assertIn("dependency_density", complex_value["required_parameter_ids"])
+        self.assertNotIn("parallelism_ratio", simple["required_parameter_ids"])
+        self.assertIn("parallelism_ratio", complex_value["required_parameter_ids"])
         self.assertGreater(
             complex_value["required_parameter_count"],
             simple["required_parameter_count"],
+        )
+        self.assertTrue(
+            all(row.get("consumed_by") for row in complex_value["parameter_specs"])
         )
 
     def test_parameter_values_and_team_shape_change_with_task(self) -> None:
@@ -115,21 +127,22 @@ class HierarchicalTaskParameterPlannerTests(unittest.TestCase):
         complex_value = build_hierarchical_planning_context(
             _packet(complex_task=True), candidates
         )
+        self.assertEqual(simple["planning_sequence"][-1], "ortools-model-assignment")
         self.assertEqual(
-            simple["planning_sequence"],
-            [
-                "task-decomposition",
-                "parameter-requirement-discovery",
-                "parameter-value-resolution",
-                "team-and-role-derivation",
-                "ortools-model-assignment",
-            ],
+            simple["planner_authority"],
+            "v5_dynamic_parameter_graph",
+        )
+        self.assertFalse(simple["legacy_fixed_parameter_catalog_used"])
+        self.assertFalse(simple["legacy_fixed_role_grammar_used"])
+        self.assertTrue(
+            simple["resolved_parameters"][
+                "parameter_values_derived_from_current_task"
+            ]
         )
         self.assertTrue(
-            simple["resolved_parameters"]["parameter_values_derived_from_current_task"]
-        )
-        self.assertTrue(
-            complex_value["resolved_parameters"]["parameter_values_derived_from_current_task"]
+            complex_value["resolved_parameters"][
+                "parameter_values_derived_from_current_task"
+            ]
         )
         self.assertGreaterEqual(
             complex_value["primary_expert_count"],
@@ -139,13 +152,22 @@ class HierarchicalTaskParameterPlannerTests(unittest.TestCase):
             complex_value["recovery_count"],
             simple["recovery_count"],
         )
+        simple_values = simple["resolved_parameters"]["parameter_values"]
+        complex_values = complex_value["resolved_parameters"]["parameter_values"]
         self.assertNotEqual(
-            complex_value["resolved_parameters"]["work_graph_load"],
-            simple["resolved_parameters"]["work_graph_load"],
+            simple["decomposition"]["work_unit_count"],
+            complex_value["decomposition"]["work_unit_count"],
         )
         self.assertNotEqual(
-            complex_value["resolved_parameters"]["role_topology"],
             simple["resolved_parameters"]["role_topology"],
+            complex_value["resolved_parameters"]["role_topology"],
+        )
+        self.assertNotEqual(set(simple_values), set(complex_values))
+        self.assertEqual(
+            0,
+            complex_value["resolved_parameters"]["parameter_coverage_audit"][
+                "unconsumed_parameter_count"
+            ],
         )
 
     def test_optimizer_receipt_proves_hierarchical_order_and_open_gates(self) -> None:
@@ -158,13 +180,15 @@ class HierarchicalTaskParameterPlannerTests(unittest.TestCase):
         self.assertTrue(plan["task_decomposition_completed"])
         self.assertTrue(plan["parameter_requirement_discovery_completed"])
         self.assertTrue(plan["parameter_values_resolved_before_model_assignment"])
+        self.assertEqual(plan["planning_sequence"][-1], "ortools-model-assignment")
         self.assertEqual(
-            plan["planning_sequence"][-1],
-            "ortools-model-assignment",
+            plan["runtime_replanning"]["stage"],
+            "runtime-feedback-replanning",
         )
         self.assertEqual(audit["hard_model_eligibility_gates"], [])
         self.assertFalse(audit["fixed_parameter_template_used"])
         self.assertFalse(audit["fixed_parameter_values_used"])
+        self.assertFalse(audit["fixed_role_grammar_used"])
         self.assertFalse(audit["company_uniqueness_constraint_used"])
         self.assertFalse(audit["top50_membership_constraint_used"])
         self.assertFalse(audit["budget_constraint_used"])
@@ -173,6 +197,7 @@ class HierarchicalTaskParameterPlannerTests(unittest.TestCase):
         self.assertFalse(plan["tools_allowed"])
         self.assertEqual(plan["only_hard_model_boundary"], "no-tools")
         self.assertEqual(receipt["planning_sequence"], plan["planning_sequence"])
+        self.assertEqual(receipt["runtime_replanning"], plan["runtime_replanning"])
         self.assertEqual(receipt["model_calls"], 0)
 
     def test_domain_words_do_not_create_keyword_routing(self) -> None:
