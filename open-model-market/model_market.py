@@ -105,12 +105,15 @@ def build_run_config(args: argparse.Namespace) -> RunConfig:
     ).strip()
     if not task:
         raise ExpertTeamError("Task is required")
-    ranking = int(
-        getattr(args, "ranking_limit", None)
-        or catalog.get("maximum_models", MAX_CATALOG_MODELS)
-    )
-    if not 1 <= ranking <= MAX_CATALOG_MODELS:
-        raise ExpertTeamError("ranking_limit must be between 1 and 1000")
+    ranking_arg = getattr(args, "ranking_limit", None)
+    if ranking_arg is None:
+        ranking_arg = catalog.get("maximum_models", MAX_CATALOG_MODELS)
+    ranking = int(ranking_arg)
+    # V9 uses governance-supplied dynamic candidate inventories. ranking_limit is
+    # compatibility/advisory metadata and must not impose an artificial upper
+    # bound on the number of candidates the current task may carry.
+    if ranking <= 0:
+        raise ExpertTeamError("ranking_limit must be positive")
     completion_advisory = int(
         getattr(args, "max_completion_tokens", None)
         or execution.get("max_completion_tokens", 10_000)
