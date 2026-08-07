@@ -39,12 +39,14 @@ jobs:
           python -m pip install --disable-pip-version-check --no-input -r requirements-runtime.txt
           python -m pip check
 
-      - name: Fetch governance candidate transport comments
+      - name: Fetch all governance candidate transport comments
         run: |
+          set -euo pipefail
           mkdir -p ticket-artifacts
-          gh api \
+          gh api --paginate --slurp \
             "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.issue.number }}/comments?per_page=100" \
-            > ticket-artifacts/issue-comments.json
+            | jq 'add // []' > ticket-artifacts/issue-comments.json
+          jq -e 'type == "array"' ticket-artifacts/issue-comments.json >/dev/null
 
       - name: Build task-dynamic expert plan
         id: ticket
