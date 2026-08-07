@@ -129,15 +129,28 @@ jobs:
           assert 'only_hard_model_boundary' in dynamic
           assert 'model_substitution_allowed": True' in dynamic
           assert getattr(optimizer, 'HIERARCHICAL_TASK_PARAMETER_PLANNER_ACTIVE', False) is True
-          hierarchical = Path('open-model-market/v5_hierarchical_task_planner.py').read_text()
+
+          # There must be one planning implementation, not a legacy fixed planner
+          # beside the new Parameter Graph. The historical module is only a facade.
+          facade = Path('open-model-market/v5_hierarchical_task_planner.py').read_text()
+          assert 'v5_dynamic_parameter_graph' in facade
+          assert 'legacy_fixed_parameter_catalog_used' in facade
+          assert 'legacy_fixed_role_grammar_used' in facade
+          planner = Path('open-model-market/v5_dynamic_parameter_graph.py').read_text()
           for token in (
-              'task-decomposition',
-              'parameter-requirement-discovery',
-              'parameter-value-resolution',
-              'team-and-role-derivation',
+              'task-derived-work-dag',
+              'effective-parameter-instance-discovery',
+              'parameter-dependency-graph',
+              'conditional-optuna-team-and-recovery-resolution',
+              'task-dag-role-partition',
               'ortools-model-assignment',
+              'consumed_by',
+              'unconsumed_parameter_count',
           ):
-              assert token in hierarchical, token
+              assert token in planner, token
+          orchestrator = Path('open-model-market/v5_governed_plan_orchestrator.py').read_text()
+          assert 'depends_on_role_ids' in orchestrator
+          assert 'fixed_role_grammar_used' in orchestrator
           PY
 
       - name: Compile dynamic expert runtime
@@ -155,6 +168,7 @@ jobs:
             tests.test_v5_task_adaptive_scoring \
             tests.test_top50_pool_optimizer \
             tests.test_v5_hierarchical_task_parameter_planner \
+            tests.test_v5_task_derived_parameter_graph \
             tests.test_v5_no_tools_network_policy
 
       - name: Verify active execution path has no Provider pinning or model business gates
