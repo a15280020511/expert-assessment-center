@@ -1,0 +1,56 @@
+name: PR343 Verify Main Zero-Cost Qualification
+
+on:
+  push:
+    branches:
+      - feat/task-adaptive-value-optimizer-20260807
+
+permissions:
+  contents: write
+
+jobs:
+  verify-main:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Install validation dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -r open-model-market/requirements-runtime.txt ruff
+
+      - name: Validate exact checked-out main tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "VERIFIED_MAIN_SHA=$(git rev-parse HEAD)"
+          ruff check .
+          python -m compileall -q open-model-market tests tools
+          python -m unittest discover -s tests -p 'test_*.py'
+          python tools/repository_audit.py --root . --format json --fail-on high > /tmp/repository-audit.json
+          python - <<'PY'
+          import json
+          report = json.load(open('/tmp/repository-audit.json', encoding='utf-8'))
+          counts = report.get('finding_counts', {})
+          if counts.get('critical', 0) or counts.get('high', 0):
+              raise SystemExit(f'audit blockers remain: {counts}')
+          print(f'MAIN_ZERO_COST_PASS={counts}')
+          PY
+
+      - name: Mark verified main and self-delete
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout feat/task-adaptive-value-optimizer-20260807
+          rm -f .github/workflows/pr343-verify-main-zero-cost.yml
+          : > .pr343-main-zero-cost-qualified
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'ci: record verified merged main qualification'
+          git push origin HEAD:feat/task-adaptive-value-optimizer-20260807
