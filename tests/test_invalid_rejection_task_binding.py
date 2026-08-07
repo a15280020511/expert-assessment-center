@@ -5,41 +5,41 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW = (
-    ROOT / ".github" / "workflows" / "invalid-ticket-rejection.yml"
-).read_text(encoding="utf-8")
+PRIMARY = (ROOT / ".github" / "workflows" / "execution-ticket.yml").read_text(
+    encoding="utf-8"
+)
+SECONDARY = ROOT / ".github" / "workflows" / "invalid-ticket-rejection.yml"
 
 
 class InvalidRejectionTaskBindingTests(unittest.TestCase):
-    def test_rejection_is_bound_to_exact_command_task_id(self) -> None:
-        required = (
-            "Repair or publish one task-bound trusted zero-call rejection",
-            "unable to derive task identity from expert command",
-            "- Task ID: \\`${taskId}\\`",
-            "comment.body?.includes(taskLine)",
-            "## EXECUTION_REJECTED",
+    def test_secondary_invalid_ticket_admission_workflow_is_absent(self) -> None:
+        self.assertFalse(
+            SECONDARY.exists(),
+            "A second /run admission workflow can race the authoritative dynamic execution chain",
         )
-        missing = [item for item in required if item not in WORKFLOW]
-        self.assertEqual(missing, [])
 
-    def test_primary_unbound_comment_is_repaired_in_place(self) -> None:
-        self.assertIn("issues.updateComment", WORKFLOW)
-        self.assertIn("comment_id: unbound.id", WORKFLOW)
-        self.assertIn("!/^\\s*-\\s*Task ID", WORKFLOW)
-        self.assertIn("run: sleep 5", WORKFLOW)
-        self.assertNotIn("run: sleep 45", WORKFLOW)
+    def test_primary_chain_is_the_only_owner_command_admission_path(self) -> None:
+        self.assertIn("issue_comment:", PRIMARY)
+        self.assertIn("github.actor == github.repository_owner", PRIMARY)
+        self.assertIn("/run-expert-team", PRIMARY)
+        self.assertIn("/retry-expert-team", PRIMARY)
+        self.assertIn("v5_price_ranked_issue_ticket.py prepare", PRIMARY)
+        self.assertIn("v5_price_ranked_issue_ticket.py render", PRIMARY)
 
-    def test_rejection_workflow_has_no_model_secret(self) -> None:
-        self.assertNotIn("secrets.OPENROUTER_API_KEY", WORKFLOW)
-        self.assertNotIn("secrets.ANTHROPIC_API_KEY", WORKFLOW)
-        self.assertNotIn("secrets.OPENAI_API_KEY", WORKFLOW)
-        self.assertIn('test -z "${OPENROUTER_API_KEY:-}"', WORKFLOW)
+    def test_primary_chain_hydrates_transport_before_admission(self) -> None:
+        fetch = PRIMARY.index("Fetch all governance candidate transport comments")
+        prepare = PRIMARY.index("Build task-dynamic expert plan")
+        publish = PRIMARY.index("Publish dynamic admission receipt")
+        self.assertLess(fetch, prepare)
+        self.assertLess(prepare, publish)
+        self.assertIn("--comments-path ticket-artifacts/issue-comments.json", PRIMARY)
+        self.assertIn("gh api --paginate --slurp", PRIMARY)
 
-    def test_rejection_retry_is_bounded_by_comment_identity(self) -> None:
-        self.assertIn("botRejections", WORKFLOW)
-        self.assertIn("per_page: 100", WORKFLOW)
-        self.assertEqual(WORKFLOW.count("issues.createComment"), 1)
-        self.assertEqual(WORKFLOW.count("issues.updateComment"), 1)
+    def test_primary_rejection_and_execution_share_same_validator_checkout(self) -> None:
+        self.assertIn("name: Checkout current main", PRIMARY)
+        self.assertIn("ref: main", PRIMARY)
+        self.assertNotIn("ref: production", PRIMARY)
+        self.assertEqual(PRIMARY.count("v5_price_ranked_issue_ticket.py prepare"), 1)
 
 
 if __name__ == "__main__":
