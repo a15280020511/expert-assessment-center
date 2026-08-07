@@ -140,6 +140,7 @@ jobs:
             }
 
       - name: Upload execution evidence
+        id: evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -149,3 +150,80 @@ jobs:
             admission-status.md
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Publish authoritative governance terminal
+        if: always() && steps.ticket.outputs.accepted == 'true'
+        uses: actions/github-script@ff4b64fc288a21d5291396a384c1273f032e6333 # v9.0.0
+        env:
+          EXECUTE_OUTCOME: ${{ steps.execute.outcome }}
+          ARTIFACT_ID: ${{ steps.evidence.outputs.artifact-id }}
+          ARTIFACT_URL: ${{ steps.evidence.outputs.artifact-url }}
+          ARTIFACT_DIGEST: ${{ steps.evidence.outputs.artifact-digest }}
+        with:
+          script: |
+            const fs = require('fs');
+            const issue_number = context.issue.number;
+            const ticketPath = 'ticket-artifacts/ticket-status.json';
+            const summaryPath = 'ticket-artifacts/v5-execution-summary.json';
+            const ticket = fs.existsSync(ticketPath)
+              ? JSON.parse(fs.readFileSync(ticketPath, 'utf8'))
+              : {};
+            const summary = fs.existsSync(summaryPath)
+              ? JSON.parse(fs.readFileSync(summaryPath, 'utf8'))
+              : {};
+            const taskId = String(ticket.task_id || '').trim();
+            const artifactId = String(process.env.ARTIFACT_ID || '').trim();
+            const artifactUrl = String(process.env.ARTIFACT_URL || '').trim();
+            const artifactDigest = String(process.env.ARTIFACT_DIGEST || '')
+              .trim()
+              .replace(/^sha256:/i, '');
+            const artifactValid = /^\d+$/.test(artifactId)
+              && /^[0-9a-f]{64}$/i.test(artifactDigest)
+              && artifactUrl.endsWith(`/artifacts/${artifactId}`);
+
+            let heading = 'EXECUTION_FAILED';
+            const status = String(summary.status || '').trim();
+            const completion = String(summary.completion_mode || '').trim();
+            const quality = String(summary.quality_status || '').trim();
+            let terminalReason = String(summary.stop_reason || '').trim();
+            if (status === 'success' && completion === 'full' && quality === 'full_success') {
+              heading = 'EXECUTION_COMPLETED';
+            } else if (status === 'success' && completion === 'degraded') {
+              heading = 'EXECUTION_DEGRADED';
+            } else if (!terminalReason) {
+              terminalReason = `execution-step-${process.env.EXECUTE_OUTCOME || 'unknown'}`;
+            }
+            if (heading === 'EXECUTION_COMPLETED' && !artifactValid) {
+              heading = 'EXECUTION_FAILED';
+              terminalReason = 'success-evidence-artifact-identity-invalid';
+            }
+
+            const totalCalls = summary.total_model_calls ?? summary.model_calls ?? '';
+            const actualCost = summary.actual_cost_usd ?? '';
+            const providerMode = summary.provider_routing_mode ?? '';
+            const lines = [
+              `## ${heading}`,
+              '',
+              `- Task ID: \`${taskId}\``,
+              `- Execution status: \`${status || 'missing'}\``,
+              `- Completion mode: \`${completion || 'missing'}\``,
+              `- Quality status: \`${quality || 'missing'}\``,
+              `- Stop reason: \`${terminalReason || 'none'}\``,
+              `- Total model calls: \`${totalCalls}\``,
+              `- Actual cost USD: \`${actualCost}\``,
+              `- Provider routing mode: \`${providerMode || 'missing'}\``,
+              `- Run: \`${process.env.RUN_URL}\``,
+              `- Artifact topology: \`single-self-contained-v9-artifact\``,
+              `- Primary Artifact ID: \`${artifactId}\``,
+              `- Primary Artifact digest: \`${artifactDigest}\``,
+              `- Primary Artifact: ${artifactUrl}`,
+              `- Final attestation Artifact ID: \`${artifactId}\``,
+              `- Final attestation Artifact digest: \`${artifactDigest}\``,
+              `- Final attestation Artifact: ${artifactUrl}`,
+            ];
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number,
+              body: lines.join('\n'),
+            });
