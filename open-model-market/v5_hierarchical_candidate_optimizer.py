@@ -3,12 +3,12 @@
 Pre-execution planning order:
 current ticket -> task-derived work DAG -> parameter-instance discovery ->
 parameter dependency graph -> conditional Optuna resolution -> role DAG ->
-OR-Tools model-role assignment.
+structural role demand -> OR-Tools model-role assignment.
 
 Current-run standby promotion is a separate execution/replanning phase, not a
-pre-execution planning step. No fixed role grammar or pre-activated business
-parameter template participates. No model-business eligibility gates are
-introduced; no-tools remains the sole hard model boundary.
+pre-execution planning step. No fixed role grammar, metric-role grammar or
+pre-activated business parameter template participates. No model-business
+eligibility gates are introduced; no-tools remains the sole hard model boundary.
 """
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from v5_dynamic_parameter_graph import (
     SCHEMA_VERSION as DYNAMIC_PARAMETER_GRAPH_SCHEMA_VERSION,
     build_dynamic_planning_context,
 )
+from v5_dynamic_role_assignment import solve_dynamic_roles
 
 
 class HierarchicalOptimizationError(RuntimeError):
@@ -37,8 +38,13 @@ def _materialize(
         planning = build_dynamic_planning_context(packet, candidates)
         profile = dict(planning["resolved_profile"])
         roles = [dict(row) for row in planning["role_plan"]]
+        # ``metric_role_id`` is a historical scoring adapter.  It is deliberately
+        # removed before the active assignment stage: model-role scoring now reads
+        # the actual current role structure directly.
+        for role in roles:
+            role.pop("metric_role_id", None)
         recovery_count = int(planning["recovery_count"])
-        selected, recoveries, solver_audit = base._solve(  # noqa: SLF001
+        selected, recoveries, solver_audit = solve_dynamic_roles(
             candidates,
             profile,
             roles,
@@ -87,7 +93,7 @@ def _materialize(
 
     audit = {
         **solver_audit,
-        "schema_version": "v5-task-derived-dynamic-expert-composition-2",
+        "schema_version": "v5-task-derived-dynamic-expert-composition-3",
         "dynamic_parameter_graph_schema_version": (
             DYNAMIC_PARAMETER_GRAPH_SCHEMA_VERSION
         ),
@@ -103,9 +109,12 @@ def _materialize(
         "role_plan": roles,
         "selection_principles": list(base.PRINCIPLES),
         "task_adaptive_scoring_schema_version": base.TASK_SCORING_SCHEMA_VERSION,
+        "role_metric_mode": "current-generated-role-structural-signals",
+        "metric_role_adapter_used": False,
+        "fixed_metric_role_grammar_used": False,
         "recovery_resilience": {
             "recovery_count": len(recoveries),
-            "selection_source": "task-derived-parameter-graph",
+            "selection_source": "heaviest-current-generated-role",
             "free_route_soft_penalty": 0,
             "primary_company_overlap_soft_penalty": 0,
             "recovery_company_concentration_soft_penalty": 0,
@@ -120,6 +129,7 @@ def _materialize(
         "parameter_dependency_graph_completed": True,
         "parameter_values_resolved_before_team_composition": True,
         "team_and_roles_derived_after_parameter_resolution": True,
+        "role_scoring_derived_from_current_role_structure": True,
         "model_assignment_executed_after_parameter_resolution": True,
         "runtime_feedback_replanning_separate_from_planning": True,
         "all_calculable_planning_parameters_dynamic": True,
@@ -165,6 +175,7 @@ def _materialize(
             "parameter_requirement_discovery_completed": True,
             "parameter_dependency_graph_completed": True,
             "parameter_values_resolved_before_model_assignment": True,
+            "role_scoring_derived_from_current_role_structure": True,
             "planning_sequence": planning_sequence,
             "runtime_replanning": runtime_replanning,
             "task_decomposition": decomposition,
@@ -190,6 +201,8 @@ def _materialize(
             "fixed_team_size_required": False,
             "fixed_role_topology_required": False,
             "fixed_role_grammar_required": False,
+            "fixed_metric_role_grammar_required": False,
+            "metric_role_adapter_used": False,
             "company_deduplication_required": False,
             "free_first_required": False,
             "canary_required_before_execution": False,
@@ -208,10 +221,11 @@ def _materialize(
                 "governance reasoning-popularity candidates -> derive current-ticket "
                 "finite work DAG -> discover effective parameter instances -> build "
                 "parameter DAG -> resolve current values with NetworkX/Optuna -> derive "
-                "role DAG from work DAG -> OR-Tools model-role assignment; execution "
-                "then performs current-run feedback standby promotion; unrestricted "
-                "OpenRouter Provider routing; no business eligibility gates; hard model "
-                "boundary=no-tools"
+                "role DAG from work DAG -> derive each role's token/weight/capacity "
+                "demand directly from its current structural signals -> OR-Tools "
+                "model-role assignment -> execution performs current-run feedback "
+                "standby promotion; unrestricted OpenRouter Provider routing; no "
+                "business eligibility gates; hard model boundary=no-tools"
             ),
         }
     )
@@ -219,7 +233,7 @@ def _materialize(
     selection_basis_sha256 = base._sha(plan)  # noqa: SLF001
 
     receipt = {
-        "schema_version": "expert-center-task-derived-dynamic-selection-receipt-v2",
+        "schema_version": "expert-center-task-derived-dynamic-selection-receipt-v3",
         "selection_basis_sha256": selection_basis_sha256,
         "planning_sequence": planning_sequence,
         "runtime_replanning": runtime_replanning,
@@ -233,6 +247,9 @@ def _materialize(
         "recovery_count": len(recoveries),
         "standby_count": len(standby),
         "optimizer_audit": audit,
+        "role_metric_mode": "current-generated-role-structural-signals",
+        "metric_role_adapter_used": False,
+        "fixed_metric_role_grammar_used": False,
         "provider_routing_mode": "unrestricted-openrouter",
         "provider_restrictions_applied": False,
         "free_first_required": False,
