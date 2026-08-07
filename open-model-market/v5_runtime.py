@@ -200,14 +200,9 @@ class ExecutionEngine(_legacy.ExecutionEngine):
             node,
             kind,
         )
-        if (
-            attempt is not None
-            and self._category(attempt) == FailureCategory.PROVIDER_INVALID_RESPONSE
-        ):
-            budget.fail_endpoint(
-                node.provider_endpoint,
-                FailureCategory.PROVIDER_INVALID_RESPONSE,
-            )
+        invalid = _legacy.FailureCategory.PROVIDER_INVALID_RESPONSE
+        if attempt is not None and self._category(attempt) == invalid:
+            budget.fail_endpoint(node.provider_endpoint, invalid)
         return attempt
 
 
