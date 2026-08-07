@@ -41,6 +41,19 @@
   "dynamic_task_matching": {
     "required": true,
     "all_calculable_planning_parameters_dynamic": true,
+    "planning_sequence": [
+      "task-decomposition",
+      "parameter-requirement-discovery",
+      "parameter-value-resolution",
+      "team-and-role-derivation",
+      "ortools-model-assignment"
+    ],
+    "task_decomposition": "task-derived-before-parameter-selection",
+    "parameter_requirement_discovery": "task-and-candidate-derived-before-value-resolution",
+    "parameter_value_resolution": "current-task-derived-before-team-composition",
+    "parameter_set_task_derived": true,
+    "fixed_parameter_template_allowed": false,
+    "fixed_parameter_values_allowed": false,
     "principles": [
       "concrete_problem_concrete_analysis",
       "dynamic_adaptation",
