@@ -1,10 +1,11 @@
 """Task-dynamic production runtime facade.
 
 The legacy executor is retained for I/O and state-machine compatibility, while
-this facade removes historical business ceilings. Call/recovery capacity is
-derived from the current finite execution graph. Provider routing stays open and
-company identity is audit telemetry only. Structural safety, no-tools, evidence
-contracts and finite DAG execution remain enforced.
+this facade removes historical business ceilings. Call/recovery capacity and
+runtime resilience telemetry are derived from the current finite execution
+graph. Provider routing stays open and company identity is audit telemetry only.
+Structural safety, no-tools, evidence contracts and finite DAG execution remain
+enforced.
 """
 from __future__ import annotations
 
@@ -15,6 +16,10 @@ from typing import Any, Callable, Mapping, Sequence
 import v5_runtime_legacy as _legacy
 from execution_graph import ExecutionGraph, GraphLimits, SelectedNode
 from execution_graph_validator import validate_execution_graph
+from v5_no_tools_policy import (
+    assert_request_has_no_tools,
+    assert_response_has_no_tools,
+)
 
 _LegacyExecutionEngine = _legacy.ExecutionEngine
 
@@ -33,8 +38,8 @@ class RuntimeConfig:
     tools_allowed: bool = False
     live_catalog_required: bool = False
     provider_lock_required: bool = False
-    cost_risk_multiplier: float = 1.18
-    max_provider_failures: int = 2
+    cost_risk_multiplier: float = 1.0
+    max_provider_failures: int = 1
 
     def __post_init__(self) -> None:
         if int(self.total_call_limit) < 1:
@@ -73,7 +78,9 @@ class RuntimeConfig:
             "fixed_call_ceiling_applied": False,
             "team_size_source": "current-execution-graph",
             "recovery_capacity_source": "unique-current-run-recovery-identities",
+            "runtime_resilience_parameters_dynamic": True,
             "failed_model_circuit_scope": "current-run-only",
+            "tool_use_forbidden": True,
         }
 
 
@@ -97,9 +104,30 @@ def _recovery_capacity(graph: ExecutionGraph) -> int:
     return len(identities)
 
 
+def _dynamic_resilience_parameters(
+    graph: ExecutionGraph,
+) -> tuple[float, int]:
+    """Derive runtime resilience telemetry from this execution graph only."""
+    initial = max(1, len(graph.nodes))
+    recovery = max(0, _recovery_capacity(graph))
+    graph_width = max(1, initial + recovery)
+    cost_risk_multiplier = 1.0 + min(
+        1.0,
+        math.log2(graph_width + 1) / 10.0,
+    )
+    max_provider_failures = max(
+        1,
+        math.ceil(recovery / max(1, initial)),
+    )
+    return float(cost_risk_multiplier), int(max_provider_failures)
+
+
 def _dynamic_config(config: RuntimeConfig, graph: ExecutionGraph) -> RuntimeConfig:
     initial = max(1, len(graph.nodes))
     recovery = max(0, _recovery_capacity(graph))
+    cost_risk_multiplier, max_provider_failures = _dynamic_resilience_parameters(
+        graph
+    )
     return RuntimeConfig(
         total_call_limit=initial + recovery,
         recovery_call_limit=recovery,
@@ -107,11 +135,10 @@ def _dynamic_config(config: RuntimeConfig, graph: ExecutionGraph) -> RuntimeConf
         tools_allowed=False,
         live_catalog_required=config.live_catalog_required,
         provider_lock_required=False,
-        cost_risk_multiplier=config.cost_risk_multiplier,
-        # One model identity that has already failed with a provider/runtime
-        # transport error is skipped for the rest of this run. This is not a
-        # Provider allowlist and carries no state across tasks.
-        max_provider_failures=1,
+        cost_risk_multiplier=cost_risk_multiplier,
+        # Current-run circuit depth scales with the graph's recovery breadth.
+        # It carries no state across tasks and is not a Provider allowlist.
+        max_provider_failures=max_provider_failures,
     )
 
 
@@ -129,8 +156,11 @@ class BudgetController(_legacy.BudgetController):
                 "fixed_call_ceiling_applied": False,
                 "call_capacity_source": "current-execution-graph",
                 "recovery_capacity_source": "unique-current-run-recovery-identities",
+                "runtime_resilience_parameters_dynamic": True,
                 "failed_model_circuit_scope": "current-run-only",
-                "failed_model_circuit_threshold": 1,
+                "failed_model_circuit_threshold": int(
+                    self.config.max_provider_failures
+                ),
                 "requested_total_call_telemetry": int(
                     self.requested_config.total_call_limit
                 ),
@@ -191,13 +221,25 @@ class ExecutionEngine(_LegacyExecutionEngine):
         node: SelectedNode,
         kind: str,
     ) -> Any:
+        # Explicit top-level no-tools enforcement wraps the actual model request
+        # and raw response.  openrouter_api enforces the same boundary again at
+        # transport level, giving production a two-layer fail-closed guarantee.
+        def guarded_call_fn(
+            run_config: Any,
+            payload: Mapping[str, Any],
+        ) -> tuple[Mapping[str, Any], float]:
+            assert_request_has_no_tools(payload)
+            response, cost = call_fn(run_config, payload)
+            assert_response_has_no_tools(response)
+            return response, cost
+
         attempt = super()._recorded_call(
             selected,
             attempts,
             original_task,
             upstream,
             run,
-            call_fn,
+            guarded_call_fn,
             budget,
             node,
             kind,
