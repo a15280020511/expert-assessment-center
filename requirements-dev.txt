@@ -3,5 +3,5 @@ networkx==3.6.1
 ortools==9.15.6755
 optuna==4.9.0
 ruff==0.16.0
-coverage==7.15.2
+coverage==7.15.3
 hypothesis==6.160.0
