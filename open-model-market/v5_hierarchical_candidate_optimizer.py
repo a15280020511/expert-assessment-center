@@ -1,14 +1,14 @@
 """Task-derived dynamic candidate optimizer.
 
 Pre-execution planning order:
-current ticket -> task-derived work DAG -> parameter-instance discovery ->
-parameter dependency graph -> conditional Optuna resolution -> role DAG ->
-structural role demand -> OR-Tools model-role assignment.
+current ticket -> structural execution-transport compatibility -> task-derived work DAG
+-> parameter-instance discovery -> parameter dependency graph -> conditional Optuna
+resolution -> role DAG -> structural role demand -> OR-Tools model-role assignment.
 
-Current-run standby promotion is a separate execution/replanning phase, not a
-pre-execution planning step. No fixed role grammar, metric-role grammar or
-pre-activated business parameter template participates. No model-business
-eligibility gates are introduced; no-tools remains the sole hard model boundary.
+Current-run standby promotion is a separate execution/replanning phase. No fixed role
+or metric-role grammar participates. No business model gate is introduced; no-tools
+remains the sole hard model boundary, while exact identity and executable transport
+remain structural protocol invariants.
 """
 from __future__ import annotations
 
@@ -20,27 +20,30 @@ from v5_dynamic_parameter_graph import (
     build_dynamic_planning_context,
 )
 from v5_dynamic_role_assignment import solve_dynamic_roles
+from v5_execution_transport import filter_executable_candidates
 
 
 class HierarchicalOptimizationError(RuntimeError):
     """Raised only when the current ticket cannot form a finite executable plan."""
 
 
-def _materialize(
-    packet: Mapping[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]]:
+def _materialize(packet: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     source = packet.get("governance_model_plan")
     if not isinstance(source, Mapping):
         raise HierarchicalOptimizationError("governance_model_plan is missing")
     source_plan = dict(source)
     try:
-        candidates = base._candidate_rows(source_plan)  # noqa: SLF001
+        governance_candidates = base._candidate_rows(source_plan)  # noqa: SLF001
+        candidates, transport_audit = filter_executable_candidates(governance_candidates)
+        if not candidates:
+            raise HierarchicalOptimizationError(
+                "governance candidate inventory contains no route compatible with "
+                "the active synchronous execution transport"
+            )
         planning = build_dynamic_planning_context(packet, candidates)
         profile = dict(planning["resolved_profile"])
         roles = [dict(row) for row in planning["role_plan"]]
-        # ``metric_role_id`` is a historical scoring adapter.  It is deliberately
-        # removed before the active assignment stage: model-role scoring now reads
-        # the actual current role structure directly.
+        # Historical metric-role adapters must never reach active assignment.
         for role in roles:
             role.pop("metric_role_id", None)
         recovery_count = int(planning["recovery_count"])
@@ -50,7 +53,7 @@ def _materialize(
             roles,
             recovery_count,
         )
-    except Exception as exc:  # noqa: BLE001 - normalize planner failure boundary
+    except Exception as exc:  # noqa: BLE001
         if isinstance(exc, HierarchicalOptimizationError):
             raise
         raise HierarchicalOptimizationError(str(exc)) from exc
@@ -66,20 +69,17 @@ def _materialize(
     parameter_requirements = dict(planning["parameter_requirements"])
     resolved_parameters = dict(planning["resolved_parameters"])
     decomposition = dict(planning["decomposition"])
-    parameter_coverage = dict(
-        resolved_parameters.get("parameter_coverage_audit") or {}
-    )
+    parameter_coverage = dict(resolved_parameters.get("parameter_coverage_audit") or {})
     if parameter_coverage.get("status") != "PASS":
-        raise HierarchicalOptimizationError(
-            "dynamic parameter coverage audit did not pass"
-        )
+        raise HierarchicalOptimizationError("dynamic parameter coverage audit did not pass")
 
     planning_sequence = [
         str(value)
         for value in planning.get("planning_sequence") or []
         if str(value) != "runtime-feedback-replanning"
     ]
-    if not planning_sequence or planning_sequence[-1] != "ortools-model-assignment":
+    planning_sequence.insert(0, "structural-execution-transport-compatibility")
+    if planning_sequence[-1] != "ortools-model-assignment":
         raise HierarchicalOptimizationError(
             "pre-execution planning must terminate at OR-Tools model assignment"
         )
@@ -93,17 +93,21 @@ def _materialize(
 
     audit = {
         **solver_audit,
-        "schema_version": "v5-task-derived-dynamic-expert-composition-3",
-        "dynamic_parameter_graph_schema_version": (
-            DYNAMIC_PARAMETER_GRAPH_SCHEMA_VERSION
-        ),
+        "schema_version": "v5-task-derived-dynamic-expert-composition-current-role-transport",
+        "dynamic_parameter_graph_schema_version": DYNAMIC_PARAMETER_GRAPH_SCHEMA_VERSION,
         "planning_sequence": planning_sequence,
+        "execution_transport_compatibility": transport_audit,
         "runtime_replanning": runtime_replanning,
         "task_decomposition": decomposition,
         "parameter_requirements": parameter_requirements,
         "resolved_parameters": resolved_parameters,
         "parameter_coverage_audit": parameter_coverage,
         "task_demand_profile": profile,
+        "governance_candidate_count": transport_audit["governance_candidate_count"],
+        "executable_candidate_count": transport_audit["executable_candidate_count"],
+        "structurally_excluded_route_count": transport_audit[
+            "structurally_excluded_route_count"
+        ],
         "primary_expert_count": len(selected),
         "recovery_count": len(recoveries),
         "role_plan": roles,
@@ -139,6 +143,8 @@ def _materialize(
         "fixed_role_grammar_used": False,
         "hard_model_eligibility_gates": [],
         "only_hard_model_boundary": "no-tools",
+        "structural_execution_transport_boundary": True,
+        "business_model_gate_used": False,
         "tool_use_forbidden": True,
         "fixed_team_size_used": False,
         "fixed_four_plus_four_used": False,
@@ -177,6 +183,7 @@ def _materialize(
             "parameter_values_resolved_before_model_assignment": True,
             "role_scoring_derived_from_current_role_structure": True,
             "planning_sequence": planning_sequence,
+            "execution_transport_compatibility": transport_audit,
             "runtime_replanning": runtime_replanning,
             "task_decomposition": decomposition,
             "dynamic_parameter_requirements": parameter_requirements,
@@ -186,6 +193,13 @@ def _materialize(
             "selected_from_top50_reasoning_pool_only": False,
             "selected_from_governance_candidate_pool": True,
             "candidate_pool_authority": "decision-system-governance",
+            "governance_candidate_count": transport_audit["governance_candidate_count"],
+            "expert_center_executable_candidate_count": transport_audit[
+                "executable_candidate_count"
+            ],
+            "expert_center_structurally_excluded_route_count": transport_audit[
+                "structurally_excluded_route_count"
+            ],
             "model_assignment_authority": (
                 "expert-assessment-center-task-derived-dynamic-ortools"
             ),
@@ -215,17 +229,18 @@ def _materialize(
             "tool_use_forbidden": True,
             "tools_allowed": False,
             "only_hard_model_boundary": "no-tools",
+            "structural_execution_transport_boundary": True,
             "all_calculable_planning_parameters_dynamic": True,
             "all_parameter_instances_current_task_derived": True,
             "selection_policy": (
-                "governance reasoning-popularity candidates -> derive current-ticket "
-                "finite work DAG -> discover effective parameter instances -> build "
-                "parameter DAG -> resolve current values with NetworkX/Optuna -> derive "
-                "role DAG from work DAG -> derive each role's token/weight/capacity "
-                "demand directly from its current structural signals -> OR-Tools "
-                "model-role assignment -> execution performs current-run feedback "
-                "standby promotion; unrestricted OpenRouter Provider routing; no "
-                "business eligibility gates; hard model boundary=no-tools"
+                "governance reasoning-popularity candidates -> retain routes executable "
+                "by the active synchronous transport -> derive current-ticket finite work "
+                "DAG -> discover effective parameter instances -> build parameter DAG -> "
+                "resolve current values with NetworkX/Optuna -> derive role DAG -> derive "
+                "each role's demand from current structural signals -> OR-Tools model-role "
+                "assignment -> current-run feedback standby promotion; unrestricted "
+                "OpenRouter Provider routing; no business eligibility gates; hard model "
+                "boundary=no-tools; exact identity/executable transport are structural"
             ),
         }
     )
@@ -233,9 +248,10 @@ def _materialize(
     selection_basis_sha256 = base._sha(plan)  # noqa: SLF001
 
     receipt = {
-        "schema_version": "expert-center-task-derived-dynamic-selection-receipt-current-role",
+        "schema_version": "expert-center-task-derived-dynamic-selection-receipt-current-role-transport",
         "selection_basis_sha256": selection_basis_sha256,
         "planning_sequence": planning_sequence,
+        "execution_transport_compatibility": transport_audit,
         "runtime_replanning": runtime_replanning,
         "task_decomposition": decomposition,
         "parameter_requirements": parameter_requirements,
@@ -256,6 +272,7 @@ def _materialize(
         "tool_use_forbidden": True,
         "tools_allowed": False,
         "only_hard_model_boundary": "no-tools",
+        "structural_execution_transport_boundary": True,
         "model_calls": 0,
     }
     receipt["receipt_sha256"] = base._sha(receipt)  # noqa: SLF001
