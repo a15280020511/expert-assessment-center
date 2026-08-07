@@ -140,11 +140,16 @@ def build_governed_proposal(
                 "depends_on_role_ids": [role_ids[parent] for parent in parent_indices],
             }
         )
+        # The arbitrary topology lives in source/target edges. ``relation_type`` is
+        # a protocol enum owned by execution_graph_validator and must remain one of
+        # its structural values. Using the canonical ``dependency`` relation keeps
+        # the dynamic DAG fully expressive without creating a second relation
+        # vocabulary that the runtime rejects before any model call.
         edges.extend(
             {
                 "source": node_ids[parent],
                 "target": node_ids[index],
-                "relation_type": "declared-task-dependency",
+                "relation_type": "dependency",
             }
             for parent in parent_indices
         )
@@ -175,7 +180,7 @@ def build_governed_proposal(
         },
     }
     audit = {
-        "schema_version": "v5-exact-dynamic-role-dag-materialization-1",
+        "schema_version": "v5-exact-dynamic-role-dag-materialization-2",
         "status": "PASS",
         "candidate_pool_authority": "decision-system-governance",
         "model_assignment_authority": "expert-assessment-center-dynamic-ortools",
@@ -184,6 +189,8 @@ def build_governed_proposal(
         "standby_model_count": len(standbys),
         "role_ids": role_ids,
         "declared_dependency_edge_count": len(edges),
+        "execution_relation_type": "dependency",
+        "dependency_semantics": "current-plan-declared-role-dependency",
         "terminal_node_count": len(final_nodes),
         "runtime_feedback_replanning_enabled": bool(standbys),
         "runtime_standby_promotion_depth_fixed": False,
