@@ -1,87 +1,104 @@
-"""Task-adaptive Top-50 validation compatibility layer for governance model plans."""
+"""Structural validation for task-dynamic governance expert plans.
+
+Business qualification gates are intentionally absent. The validator checks
+only that a plan is representable and contains executable model identities;
+team size, company mix, role topology, pool membership, budget, ranking source,
+optimizer status and recovery count are not admission constraints.
+"""
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Mapping, Sequence
 
 import v5_governance_model_plan_legacy as _legacy
-from v5_top50_plan_validation import (
-    Top50PlanValidationError,
-    validate_top50_contract,
-)
-
-for _name in dir(_legacy):
-    if not _name.startswith("__"):
-        globals()[_name] = getattr(_legacy, _name)
-
 
 GovernanceModelPlanError = _legacy.GovernanceModelPlanError
 SCHEMA_VERSION = _legacy.SCHEMA_VERSION
 SELECTION_AUTHORITY = _legacy.SELECTION_AUTHORITY
-plan_sha256 = _legacy.plan_sha256
-task_sha256 = _legacy.task_sha256
 
 
-def _validate_top50_identity_sets(
-    selected: Sequence[Mapping[str, Any]],
-    recoveries: Sequence[Mapping[str, Any]],
-) -> None:
-    """Keep global model/company uniqueness without legacy static-price ordering."""
-    models: set[str] = set()
-    companies: set[str] = set()
-    for field, rows in (("selected_models", selected), ("recovery_models", recoveries)):
-        for index, row in enumerate(rows):
-            model, company, _ = _legacy._validate_model_row(  # noqa: SLF001
-                row,
-                field=field,
-                index=index,
-            )
-            if model in models:
-                raise GovernanceModelPlanError(
-                    f"duplicate model across task-global Top-50 assignment: {model}"
-                )
-            if company in companies:
-                raise GovernanceModelPlanError(
-                    f"duplicate model company across task-global Top-50 assignment: {company}"
-                )
-            if field == "recovery_models" and row.get("slot") != index + 1:
-                raise GovernanceModelPlanError(
-                    "recovery model slots must be contiguous"
-                )
-            models.add(model)
-            companies.add(company)
+def _canonical(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+        default=str,
+    ).encode("utf-8")
 
 
-def _validate_top50_plan(
-    ticket: Mapping[str, Any],
-    plan_value: Mapping[str, Any],
-) -> dict[str, Any]:
-    plan = dict(plan_value)
-    _legacy._validate_plan_envelope(ticket, plan)  # noqa: SLF001
-    selected = _legacy._model_rows(plan.get("selected_models"), "selected_models")  # noqa: SLF001
-    recoveries = _legacy._model_rows(plan.get("recovery_models"), "recovery_models")  # noqa: SLF001
-    expert_count, recovery_count = _legacy._validated_counts(  # noqa: SLF001
-        plan,
-        selected,
-        recoveries,
-    )
-    _validate_top50_identity_sets(selected, recoveries)
-    try:
-        validate_top50_contract(plan, selected, recoveries)
-    except Top50PlanValidationError as exc:
-        raise GovernanceModelPlanError(str(exc)) from exc
-    _legacy._validate_roles(selected)  # noqa: SLF001
-    _legacy._validate_budget(ticket, expert_count, recovery_count)  # noqa: SLF001
-    return plan
+def plan_sha256(plan: Mapping[str, Any]) -> str:
+    value = dict(plan)
+    value.pop("plan_sha256", None)
+    return hashlib.sha256(_canonical(value)).hexdigest()
+
+
+def task_sha256(value: Any) -> str:
+    if isinstance(value, Mapping):
+        task = value.get("task", value)
+    else:
+        task = value
+    return hashlib.sha256(_canonical(task)).hexdigest()
+
+
+def _rows(value: Any, field: str, *, required: bool) -> list[dict[str, Any]]:
+    if value is None and not required:
+        return []
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise GovernanceModelPlanError(f"{field} must be an array")
+    rows: list[dict[str, Any]] = []
+    for index, raw in enumerate(value):
+        if not isinstance(raw, Mapping):
+            raise GovernanceModelPlanError(f"{field}[{index}] must be an object")
+        row = dict(raw)
+        model = str(row.get("model") or row.get("id") or "").strip()
+        if not model:
+            raise GovernanceModelPlanError(f"{field}[{index}] model is missing")
+        row["model"] = model
+        row.setdefault(
+            "company", model.split("/", 1)[0] if "/" in model else "unknown"
+        )
+        row.setdefault("slot", index + 1)
+        rows.append(row)
+    if required and not rows:
+        raise GovernanceModelPlanError("selected_models must contain at least one expert")
+    return rows
 
 
 def validate_governance_model_plan(
     ticket: Mapping[str, Any],
     plan: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    plan_value = _legacy._require_plan(ticket, plan)  # noqa: SLF001
-    if plan_value.get("selected_from_top50_reasoning_pool_only") is True:
-        return _validate_top50_plan(ticket, plan_value)
-    return _legacy.validate_governance_model_plan(ticket, plan_value)
+    value = plan
+    if value is None:
+        candidate = ticket.get("governance_model_plan")
+        if not isinstance(candidate, Mapping):
+            raise GovernanceModelPlanError("governance_model_plan is missing")
+        value = candidate
+    if not isinstance(value, Mapping):
+        raise GovernanceModelPlanError("governance model plan must be an object")
+
+    normalized = dict(value)
+    selected = _rows(normalized.get("selected_models"), "selected_models", required=True)
+    recoveries = _rows(normalized.get("recovery_models"), "recovery_models", required=False)
+    normalized["selected_models"] = selected
+    normalized["recovery_models"] = recoveries
+    normalized["expert_count"] = len(selected)
+    normalized["recovery_count"] = len(recoveries)
+    normalized.setdefault("selection_authority", "expert-assessment-center-dynamic")
+    normalized["fixed_team_size_required"] = False
+    normalized["fixed_role_topology_required"] = False
+    normalized["company_uniqueness_required"] = False
+    normalized["candidate_pool_membership_required"] = False
+    normalized["optimizer_optimality_required"] = False
+    normalized["budget_admission_gate_enabled"] = False
+    normalized["provider_routing_mode"] = "unrestricted-openrouter"
+    normalized["provider_restrictions_applied"] = False
+    normalized["model_substitution_allowed"] = True
+    normalized["plan_sha256"] = plan_sha256(normalized)
+    return normalized
 
 
 __all__ = [
