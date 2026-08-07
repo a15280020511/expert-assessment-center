@@ -1,15 +1,14 @@
-"""Build a task-dynamic expert DAG from the current expert plan.
+"""Materialize the exact current-task role DAG selected by the Expert Center.
 
-The orchestrator does not impose a fixed team size, 4+4 layout, company mix,
-Top50 membership, fixed role family, exact Provider endpoint, or fixed topology.
-It materializes whatever current-task role plan the Expert Center selected while
-ensuring the graph is finite and acyclic. Ordered standby candidates are carried
-forward as a runtime-feedback inventory; they are not pre-activated as recovery
-calls and may only be promoted after current-run failure/quality evidence is
-observed.
+This layer does not invent a role family or topology. Role identities, functions,
+assigned work and dependencies come from the current plan; NetworkX only validates
+that the resulting graph is finite and acyclic. Governance remains candidate-pool
+authority, Expert Center remains model/role assignment authority, and OpenRouter
+remains unrestricted Provider-routing authority.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping, Sequence
 
 import networkx as nx
@@ -21,44 +20,63 @@ class GovernedPlanOrchestrationError(RuntimeError):
     """Raised only when a dynamic plan cannot form a finite executable DAG."""
 
 
-def _role_kind(row: Mapping[str, Any], index: int, count: int) -> str:
-    explicit = str(row.get("role_kind") or "").strip().casefold()
-    if explicit in {"independent", "review", "synthesis"}:
-        return explicit
-    if count == 1 or index == count - 1:
-        return "synthesis"
-    return "independent"
+def _rows(value: Any) -> list[Any]:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return list(value)
+    return []
 
 
-def _functions(kind: str) -> list[str]:
-    if kind == "review":
-        return ["cross_review", "adversarial_testing", "conflict_resolution"]
-    if kind == "synthesis":
-        return ["final_synthesis", "decision_integration", "output_contract_completion"]
-    return ["independent_analysis", "evidence_assessment", "assumption_testing"]
+def _slug(value: Any, fallback: str) -> str:
+    text = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(value or "").strip()).strip("-")
+    return (text[:64] or fallback).casefold()
 
 
-def _node_id(index: int, kind: str) -> str:
-    return f"expert-{index + 1}-{kind}"
+def _role_id(row: Mapping[str, Any], index: int) -> str:
+    return str(row.get("role_id") or f"role-{index + 1}").strip() or f"role-{index + 1}"
 
 
-def _work_id(index: int, kind: str) -> str:
-    return f"work-{index + 1}-{kind}"
+def _node_id(row: Mapping[str, Any], index: int) -> str:
+    return f"expert-{index + 1}-{_slug(_role_id(row, index), 'role')}"
+
+
+def _work_id(row: Mapping[str, Any], index: int) -> str:
+    return f"work-{index + 1}-{_slug(_role_id(row, index), 'role')}"
+
+
+def _functions(row: Mapping[str, Any]) -> list[str]:
+    explicit = [str(value).strip() for value in _rows(row.get("functions")) if str(value).strip()]
+    if explicit:
+        return list(dict.fromkeys(explicit))
+    kind = str(row.get("role_kind") or "task-role").strip()
+    return [f"execute:{_slug(kind, 'task-role')}", "assumption-testing"]
 
 
 def _dependencies(
-    kinds: Sequence[str],
-    index: int,
-) -> list[int]:
-    kind = kinds[index]
-    if kind == "independent":
-        return []
-    if kind == "review":
-        prior_independents = [i for i in range(index) if kinds[i] == "independent"]
-        return prior_independents or list(range(index))
-    # Synthesis receives every already-completed perspective. A sole synthesis
-    # expert has no dependency and directly completes the task.
-    return list(range(index))
+    selected: Sequence[Mapping[str, Any]],
+) -> tuple[list[str], list[list[int]]]:
+    role_ids = [_role_id(row, index) for index, row in enumerate(selected)]
+    if len(role_ids) != len(set(role_ids)):
+        raise GovernedPlanOrchestrationError("dynamic role plan contains duplicate role_id")
+    index_by_role = {role_id: index for index, role_id in enumerate(role_ids)}
+    dependencies: list[list[int]] = []
+    for index, row in enumerate(selected):
+        raw = row.get("depends_on_role_ids") or row.get("dependencies") or []
+        parents: list[int] = []
+        for value in _rows(raw):
+            role_id = str(value).strip()
+            if not role_id:
+                continue
+            if role_id not in index_by_role:
+                raise GovernedPlanOrchestrationError(
+                    f"role {_role_id(row, index)} depends on unknown role {role_id}"
+                )
+            parent = index_by_role[role_id]
+            if parent == index:
+                raise GovernedPlanOrchestrationError("dynamic role cannot depend on itself")
+            if parent not in parents:
+                parents.append(parent)
+        dependencies.append(parents)
+    return role_ids, dependencies
 
 
 def build_governed_proposal(
@@ -69,12 +87,8 @@ def build_governed_proposal(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     del catalog, task_envelope
     plan = validate_governance_model_plan(ticket)
-    selected = list(plan.get("selected_models") or [])
-    recoveries = [
-        dict(row)
-        for row in plan.get("recovery_models") or []
-        if isinstance(row, Mapping)
-    ]
+    selected = [dict(row) for row in plan.get("selected_models") or [] if isinstance(row, Mapping)]
+    recoveries = [dict(row) for row in plan.get("recovery_models") or [] if isinstance(row, Mapping)]
     standbys = [
         dict(row)
         for row in plan.get("expert_center_ordered_standby") or []
@@ -83,68 +97,67 @@ def build_governed_proposal(
     if not selected:
         raise GovernedPlanOrchestrationError("dynamic expert plan has no selected models")
 
-    kinds = [_role_kind(row, index, len(selected)) for index, row in enumerate(selected)]
-    if "synthesis" not in kinds:
-        kinds[-1] = "synthesis"
+    role_ids, dependencies = _dependencies(selected)
+    node_ids = [_node_id(row, index) for index, row in enumerate(selected)]
+    work_ids = [_work_id(row, index) for index, row in enumerate(selected)]
+
+    graph = nx.DiGraph()
+    graph.add_nodes_from(node_ids)
+    for index, parents in enumerate(dependencies):
+        for parent in parents:
+            graph.add_edge(node_ids[parent], node_ids[index])
+    if not nx.is_directed_acyclic_graph(graph):
+        raise GovernedPlanOrchestrationError("dynamic expert graph is cyclic")
 
     work_items: list[dict[str, Any]] = []
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, str]] = []
-
-    for index, (row, kind) in enumerate(zip(selected, kinds, strict=True)):
-        dependency_indices = _dependencies(kinds, index)
-        work_id = _work_id(index, kind)
-        node_id = _node_id(index, kind)
-        dependencies = [_work_id(parent, kinds[parent]) for parent in dependency_indices]
+    for index, row in enumerate(selected):
+        parent_indices = dependencies[index]
+        assigned_units = [str(value) for value in _rows(row.get("assigned_work_units")) if str(value).strip()]
+        role_kind = str(row.get("role_kind") or "dynamic:task-role").strip() or "dynamic:task-role"
         work_items.append(
             {
-                "work_id": work_id,
-                "objective": str(row.get("role") or f"动态{kind}专家处理当前任务"),
-                "dependencies": dependencies,
-                "required_outputs": [
-                    "核心判断",
-                    "关键依据",
-                    "不确定性与反例",
-                    "可执行结论",
-                ],
+                "work_id": work_ids[index],
+                "objective": str(row.get("role") or f"动态任务角色 {role_ids[index]}").strip(),
+                "dependencies": [work_ids[parent] for parent in parent_indices],
+                "source_work_unit_ids": assigned_units,
+                "required_outputs": ["核心判断", "关键依据", "不确定性与反例", "可执行结论"],
             }
         )
         nodes.append(
             {
-                "node_id": node_id,
-                "work_ids": [work_id],
-                "role": str(row.get("role") or f"动态{kind}专家"),
-                "role_kind": kind,
-                "functions": _functions(kind),
+                "node_id": node_ids[index],
+                "work_ids": [work_ids[index]],
+                "role_id": role_ids[index],
+                "role": str(row.get("role") or f"动态任务角色 {role_ids[index]}").strip(),
+                "role_kind": role_kind,
+                "functions": _functions(row),
                 "model": str(row.get("model") or ""),
-                "reasoning_effort": "high" if kind in {"review", "synthesis"} else "medium",
-                "estimated_task_cost_usd": float(
-                    row.get("estimated_task_cost_usd") or 0.0
-                ),
+                "reasoning_effort": str(row.get("reasoning_effort") or "medium"),
+                "estimated_task_cost_usd": float(row.get("estimated_task_cost_usd") or 0.0),
+                "assigned_work_units": assigned_units,
+                "depends_on_role_ids": [role_ids[parent] for parent in parent_indices],
             }
         )
         edges.extend(
             {
-                "source": _node_id(parent, kinds[parent]),
-                "target": node_id,
-                "relation_type": "review" if kind == "review" else "synthesis",
+                "source": node_ids[parent],
+                "target": node_ids[index],
+                "relation_type": "declared-task-dependency",
             }
-            for parent in dependency_indices
+            for parent in parent_indices
         )
 
-    graph = nx.DiGraph()
-    graph.add_nodes_from(str(row["node_id"]) for row in nodes)
-    graph.add_edges_from((row["source"], row["target"]) for row in edges)
-    if not nx.is_directed_acyclic_graph(graph):
-        raise GovernedPlanOrchestrationError("dynamic expert graph is cyclic")
-
-    final_nodes = [
-        str(nodes[index]["node_id"])
-        for index, kind in enumerate(kinds)
-        if kind == "synthesis" and graph.out_degree(str(nodes[index]["node_id"])) == 0
-    ]
+    explicitly_final = {
+        node_ids[index]
+        for index, row in enumerate(selected)
+        if row.get("final_role") is True
+    }
+    sink_nodes = {node for node in node_ids if graph.out_degree(node) == 0}
+    final_nodes = sorted(explicitly_final or sink_nodes)
     if not final_nodes:
-        final_nodes = [str(nodes[-1]["node_id"])]
+        raise GovernedPlanOrchestrationError("dynamic expert graph has no terminal node")
 
     proposal = {
         "work_items": work_items,
@@ -154,26 +167,31 @@ def build_governed_proposal(
         "recovery_models": recoveries,
         "standby_models": standbys,
         "runtime_feedback_replanning": {
-            "enabled": True,
+            "enabled": bool(standbys),
             "promotion_source": "current-run-failure-and-quality-feedback",
             "promotion_depth_fixed": False,
-            "standby_order_source": "current-task-hierarchical-optimizer",
+            "standby_order_source": "current-task-dynamic-optimizer",
             "cross_task_history_used": False,
         },
     }
     audit = {
-        "schema_version": "v5-task-dynamic-plan-materialization-2",
+        "schema_version": "v5-exact-dynamic-role-dag-materialization-1",
         "status": "PASS",
         "candidate_pool_authority": "decision-system-governance",
         "model_assignment_authority": "expert-assessment-center-dynamic-ortools",
         "selected_model_count": len(selected),
         "recovery_model_count": len(recoveries),
         "standby_model_count": len(standbys),
-        "runtime_feedback_replanning_enabled": True,
+        "role_ids": role_ids,
+        "declared_dependency_edge_count": len(edges),
+        "terminal_node_count": len(final_nodes),
+        "runtime_feedback_replanning_enabled": bool(standbys),
         "runtime_standby_promotion_depth_fixed": False,
         "fixed_team_size_used": False,
         "fixed_four_plus_four_used": False,
         "fixed_role_topology_used": False,
+        "fixed_role_grammar_used": False,
+        "role_dependencies_recomputed_from_role_kind": False,
         "company_uniqueness_constraint_used": False,
         "top50_membership_constraint_used": False,
         "optimizer_optimality_required": False,
