@@ -26,8 +26,8 @@ def resign(value: dict) -> None:
 def ticket() -> dict:
     value = json.loads(FIXTURE.read_text(encoding="utf-8"))
     plan = value["governance_model_plan"]
-    # Keep historical qualification metadata solely to prove that v9 treats it
-    # as advisory compatibility data rather than an execution admission gate.
+    # Historical qualification metadata is retained solely to prove that v9
+    # treats it as compatibility/advisory data rather than an admission gate.
     plan["price_ranked_models"] = [
         dict(row) for row in plan["selected_models"] + plan["recovery_models"]
     ]
@@ -47,10 +47,11 @@ def ticket() -> dict:
 
 class DynamicNonGatingCompatibilityTests(unittest.TestCase):
     def test_legacy_qualification_metadata_does_not_block_execution(self) -> None:
-        plan = validate_governance_model_plan(ticket())
-        self.assertFalse(plan["company_uniqueness_required"])
-        self.assertFalse(plan["budget_admission_gate_enabled"])
-        self.assertEqual(plan["provider_routing_mode"], "unrestricted-openrouter")
+        value = ticket()
+        plan = validate_governance_model_plan(value)
+        self.assertEqual(plan["plan_sha256"], value["governance_model_plan"]["plan_sha256"])
+        self.assertEqual(plan["company_uniqueness_scope"], "legacy-fixture-only")
+        self.assertEqual(plan["flagship_definition"], "legacy-fixture-only")
 
     def test_price_ranking_metadata_is_optional(self) -> None:
         value = ticket()
@@ -117,7 +118,10 @@ class DynamicNonGatingCompatibilityTests(unittest.TestCase):
         selected[1]["company"] = selected[0]["company"]
         resign(value)
         plan = validate_governance_model_plan(value)
-        self.assertEqual(plan["selected_models"][0]["company"], plan["selected_models"][1]["company"])
+        self.assertEqual(
+            plan["selected_models"][0]["company"],
+            plan["selected_models"][1]["company"],
+        )
 
 
 if __name__ == "__main__":
