@@ -2,15 +2,14 @@
 
 Business qualification gates are intentionally absent. The validator preserves
 only protocol/integrity invariants: an accepted governance schema, governance
-selection authority, task binding, canonical plan integrity and executable model
-identities. Team size, company mix, role topology, pool membership, price,
-flagship labels, budget, ranking source, optimizer status and recovery count are
-not admission constraints.
+selection authority, task binding, canonical plan integrity, executable unique
+model identities and the absence of explicit Provider pinning.
 
-Execution-plan integrity hashes every plan field except ``plan_sha256`` itself.
-The validator may add deterministic v9 annotations during first normalization;
-it then emits a new hash covering that normalized result. Re-validating that
-normalized result is therefore idempotent and fail-closed.
+It deliberately does not rewrite policy/business fields. Dynamic team size,
+company mix, role topology, pool membership, price/flagship metadata, budget,
+ranking source, optimizer status and recovery policy belong to the sender and
+optimizer. A valid producer plan therefore keeps the same ``plan_sha256`` after
+validation.
 """
 from __future__ import annotations
 
@@ -101,6 +100,12 @@ def _validate_protocol_envelope(
     if expected_task_sha != observed_task_sha:
         raise GovernanceModelPlanError("governance model plan task hash mismatch")
 
+    provider_mode = str(plan.get("provider_routing_mode") or "").strip()
+    if provider_mode and provider_mode != "unrestricted-openrouter":
+        raise GovernanceModelPlanError("governance model plan explicitly restricts Provider routing")
+    if plan.get("provider_restrictions_applied") is True:
+        raise GovernanceModelPlanError("governance model plan explicitly applies Provider restrictions")
+
 
 def _validate_unique_model_identities(
     selected: Sequence[Mapping[str, Any]],
@@ -115,6 +120,14 @@ def _validate_unique_model_identities(
                     f"duplicate model identity across execution graph: {field}[{index}]={model}"
                 )
             seen.add(model)
+
+
+def _validate_declared_count(plan: Mapping[str, Any], field: str, observed: int) -> None:
+    if field not in plan:
+        return
+    value = plan.get(field)
+    if isinstance(value, bool) or not isinstance(value, int) or value != observed:
+        raise GovernanceModelPlanError(f"{field} must equal the materialized model count")
 
 
 def validate_governance_model_plan(
@@ -134,7 +147,6 @@ def validate_governance_model_plan(
 
     _validate_protocol_envelope(ticket, value)
 
-    # Verify the producer's exact canonical execution plan before normalization.
     incoming_sha = str(value.get("plan_sha256") or "").strip()
     if not incoming_sha:
         raise GovernanceModelPlanError("governance model plan sha256 is missing")
@@ -149,24 +161,16 @@ def validate_governance_model_plan(
     selected = _rows(normalized.get("selected_models"), "selected_models", required=True)
     recoveries = _rows(normalized.get("recovery_models"), "recovery_models", required=False)
     _validate_unique_model_identities(selected, recoveries)
+    _validate_declared_count(normalized, "expert_count", len(selected))
+    _validate_declared_count(normalized, "recovery_count", len(recoveries))
+
+    # _rows only fills missing representational defaults. Correct producer plans
+    # already contain these values; if normalization changes representation, the
+    # hash is recomputed over the exact normalized result.
     normalized["selected_models"] = selected
     normalized["recovery_models"] = recoveries
-    normalized["expert_count"] = len(selected)
-    normalized["recovery_count"] = len(recoveries)
-
-    # v9 policy annotations. These are descriptive/non-admission controls, not
-    # eligibility gates. Provider remains unrestricted and the Expert Center may
-    # dynamically compose from governance-supplied candidates.
-    normalized["fixed_team_size_required"] = False
-    normalized["fixed_role_topology_required"] = False
-    normalized["company_uniqueness_required"] = False
-    normalized["candidate_pool_membership_required"] = False
-    normalized["optimizer_optimality_required"] = False
-    normalized["budget_admission_gate_enabled"] = False
-    normalized["provider_routing_mode"] = "unrestricted-openrouter"
-    normalized["provider_restrictions_applied"] = False
-    normalized["model_substitution_allowed"] = True
-    normalized["expert_center_reranking_allowed"] = True
+    normalized.setdefault("expert_count", len(selected))
+    normalized.setdefault("recovery_count", len(recoveries))
     normalized["plan_sha256"] = plan_sha256(normalized)
     return normalized
 
