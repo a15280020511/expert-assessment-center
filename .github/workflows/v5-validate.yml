@@ -46,6 +46,7 @@ jobs:
           set -euo pipefail
           PYTHONPATH=open-model-market python - <<'PY'
           import json
+          import v5_top50_pool_optimizer as optimizer
           from pathlib import Path
           policy = json.loads(Path('open-model-market/constitutional_policy.json').read_text())
           assert policy['schema_version'] == 'v5-constitutional-policy-10-fully-dynamic-no-tools'
@@ -88,11 +89,11 @@ jobs:
           assert matching['solver_seed'] == 'task-derived-reproducible'
           assert matching['company_mix'] == 'unconstrained'
           assert matching['model_substitution_allowed'] is True
-          optimizer = policy['optimizer_runtime']
-          assert optimizer['engine'] == 'ortools-cp-sat'
-          assert optimizer['optimality_required'] is False
-          assert optimizer['feasible_solution_allowed'] is True
-          assert optimizer['heuristic_fallback_allowed'] is True
+          optimizer_runtime = policy['optimizer_runtime']
+          assert optimizer_runtime['engine'] == 'ortools-cp-sat'
+          assert optimizer_runtime['optimality_required'] is False
+          assert optimizer_runtime['feasible_solution_allowed'] is True
+          assert optimizer_runtime['heuristic_fallback_allowed'] is True
           for key in (
               'company_uniqueness_constraint', 'top50_membership_constraint',
               'fixed_role_slot_constraint', 'fixed_recovery_slot_constraint',
@@ -100,7 +101,7 @@ jobs:
               'capacity_constraint', 'free_route_penalty_required',
               'company_overlap_penalty_required',
           ):
-              assert optimizer[key] is False, key
+              assert optimizer_runtime[key] is False, key
           provider = policy['provider_routing']
           assert provider['mode'] == 'unrestricted-openrouter'
           assert provider['provider_allowlist_allowed'] is False
@@ -127,6 +128,16 @@ jobs:
           dynamic = Path('open-model-market/v5_dynamic_pipeline.py').read_text()
           assert 'only_hard_model_boundary' in dynamic
           assert 'model_substitution_allowed": True' in dynamic
+          assert getattr(optimizer, 'HIERARCHICAL_TASK_PARAMETER_PLANNER_ACTIVE', False) is True
+          hierarchical = Path('open-model-market/v5_hierarchical_task_planner.py').read_text()
+          for token in (
+              'task-decomposition',
+              'parameter-requirement-discovery',
+              'parameter-value-resolution',
+              'team-and-role-derivation',
+              'ortools-model-assignment',
+          ):
+              assert token in hierarchical, token
           PY
 
       - name: Compile dynamic expert runtime
@@ -143,12 +154,14 @@ jobs:
             tests.test_v5_constitution_policy \
             tests.test_v5_task_adaptive_scoring \
             tests.test_top50_pool_optimizer \
+            tests.test_v5_hierarchical_task_parameter_planner \
             tests.test_v5_no_tools_network_policy
 
       - name: Verify active execution path has no Provider pinning or model business gates
         run: |
           set -euo pipefail
           PYTHONPATH=open-model-market python - <<'PY'
+          import v5_top50_pool_optimizer as optimizer
           from pathlib import Path
           for name in (
               'v5_dynamic_pipeline.py',
@@ -167,4 +180,5 @@ jobs:
           no_tools = (Path('open-model-market') / 'v5_no_tools_policy.py').read_text().casefold()
           for token in ('tools', 'tool_choice', 'function_call', 'web_search', 'mcp'):
               assert token in no_tools, token
+          assert getattr(optimizer, 'HIERARCHICAL_TASK_PARAMETER_PLANNER_ACTIVE', False) is True
           PY
