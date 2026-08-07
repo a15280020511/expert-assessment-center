@@ -78,6 +78,7 @@ jobs:
 
           expression_open = '$' + '{{'
           expression_close = '}' + '}'
+          uses_prefix = 'uses' + ': '
           violations = []
           for path in (root / '.github/workflows').glob('*.yml'):
               if path.name == 'governance-topology-validate.yml':
@@ -87,8 +88,8 @@ jobs:
                   'HF_TOKEN: ' + expression_open + ' secrets.HF_TOKEN ' + expression_close,
                   'HF_NUMERIC_BASELINE_DATASET_REPO: ' + expression_open,
                   'repository_dispatch:',
-                  'uses: a15280020511/evidence-data-center',
-                  'uses: a15280020511/compute-simulation-center',
+                  uses_prefix + 'a15280020511/evidence-data-center',
+                  uses_prefix + 'a15280020511/compute-simulation-center',
               )
               for pattern in forbidden_patterns:
                   if pattern in text:
