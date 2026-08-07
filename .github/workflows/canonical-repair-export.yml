@@ -17,15 +17,15 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
-      - name: Package source without git metadata
+      - name: Package exact tracked source
         shell: bash
         run: |
           set -euo pipefail
-          tar --exclude=.git --exclude=repair-source.tar.gz -czf repair-source.tar.gz .
+          git archive --format=tar.gz --output=/tmp/repair-source.tar.gz HEAD
       - name: Upload exact source snapshot
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: canonical-repair-source-${{ github.run_id }}
-          path: repair-source.tar.gz
+          path: /tmp/repair-source.tar.gz
           if-no-files-found: error
           retention-days: 1
