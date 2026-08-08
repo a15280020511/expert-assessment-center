@@ -123,11 +123,17 @@ def forbidden_request_fields(request: Mapping[str, Any]) -> set[str]:
 
 
 def forbidden_model_route(request: Mapping[str, Any]) -> str:
+    """Return routes that violate the model no-tools/exact-identity boundary.
+
+    ``:batch`` is intentionally not handled here. It does not grant tools or external
+    retrieval; it requires a different OpenRouter asynchronous transport. The active
+    synchronous executor handles that separately before model assignment.
+    """
     model = str(request.get("model") or "").strip()
     folded = model.casefold()
     if folded.startswith("openrouter/"):
         return model
-    if any(marker in folded for marker in (":online", ":batch")):
+    if ":online" in folded:
         return model
     return ""
 

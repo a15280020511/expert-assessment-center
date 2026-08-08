@@ -1,8 +1,13 @@
 """OR-Tools assignment for arbitrary task-derived roles.
 
 Unlike the compatibility optimizer, this active solver never maps generated roles into
-a fixed semantic role family before scoring.  Each role is scored from its own current
+a fixed semantic role family before scoring. Each role is scored from its own current
 structural profile, while recovery is scored against the heaviest role in this run.
+
+The active solver uses a single worker, a task-derived seed and a task-derived
+*deterministic* search budget. Wall-clock limits are intentionally not used for the
+normal assignment stop condition because concurrent runner scheduling can otherwise
+change which FEASIBLE solution is observed for the same task.
 """
 from __future__ import annotations
 
@@ -62,7 +67,7 @@ def solve_dynamic_roles(
             sum(active[index, role_index] for index in range(len(candidates))) == 1
         )
 
-    # Exact model identity cannot occupy two graph positions at once.  This is a
+    # Exact model identity cannot occupy two graph positions at once. This is a
     # structural integrity invariant, not a model/company/provider eligibility gate.
     for index in range(len(candidates)):
         model.add(
@@ -94,19 +99,32 @@ def solve_dynamic_roles(
         )
     model.minimize(sum(terms))
 
-    solver_profile = base._dynamic_solver_profile(  # noqa: SLF001
+    # Reuse the existing task-derived budget calculation, but interpret the numeric
+    # search allowance as deterministic CP-SAT time rather than wall-clock seconds.
+    # This keeps the budget task-adaptive and finite while making equal inputs
+    # reproducible under different CPU contention levels.
+    base_solver_profile = base._dynamic_solver_profile(  # noqa: SLF001
         profile,
         len(candidates),
         len(roles),
         recovery_count,
     )
+    deterministic_limit = float(base_solver_profile["max_time_in_seconds"])
+    solver_profile = {
+        **base_solver_profile,
+        "max_deterministic_time": deterministic_limit,
+        "wall_clock_stop_condition_used": False,
+        "search_budget_mode": "task-derived-deterministic-time",
+    }
+    solver_profile.pop("max_time_in_seconds", None)
+
     solver = cp_model.CpSolver()
     solver.parameters.num_search_workers = int(
         solver_profile["num_search_workers"]
     )
     solver.parameters.random_seed = int(solver_profile["random_seed"])
-    solver.parameters.max_time_in_seconds = float(
-        solver_profile["max_time_in_seconds"]
+    solver.parameters.max_deterministic_time = float(
+        solver_profile["max_deterministic_time"]
     )
     status = solver.solve(model)
     accepted_statuses = {cp_model.OPTIMAL, cp_model.FEASIBLE}
@@ -129,6 +147,7 @@ def solve_dynamic_roles(
             "metric_role_adapter_used": False,
             "fixed_metric_role_grammar_used": False,
             "semantic_role_routing_used": False,
+            "deterministic_assignment_reproducibility_required": True,
         }
         if not fallback:
             value.update(
@@ -209,7 +228,10 @@ def solve_dynamic_roles(
     for index, row in enumerate(candidates):
         if solver.value(recovery[index]) == 1:
             backups.append(
-                base._annotate(row, recovery_metrics[str(row["model"])])  # noqa: SLF001
+                base._annotate(  # noqa: SLF001
+                    row,
+                    recovery_metrics[str(row["model"])],
+                )
             )
     backups = base._annotate_recovery_rows(backups)  # noqa: SLF001
     return selected, backups, audit(fallback=False)

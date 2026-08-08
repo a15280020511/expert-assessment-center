@@ -10,10 +10,17 @@ on:
       - "open-model-market/v5_top50_plan_validation.py"
       - "open-model-market/v5_governance_model_plan.py"
       - "open-model-market/v5_dynamic_pipeline.py"
+      - "open-model-market/v5_hierarchical_candidate_optimizer.py"
+      - "open-model-market/v5_execution_transport.py"
+      - "open-model-market/v5_no_tools_policy.py"
       - "open-model-market/v5_runtime.py"
+      - "open-model-market/v5_soft_resource_governance.py"
       - "tests/test_v5_task_adaptive_scoring.py"
       - "tests/test_top50_pool_optimizer.py"
       - "tests/test_v5_dynamic_recovery_resilience.py"
+      - "tests/test_v5_execution_transport.py"
+      - "tests/test_v5_no_tools_network_policy.py"
+      - "tests/test_v5_production_standby_promotion.py"
       - ".github/workflows/v5-price-ranked-full-load.yml"
       - "requirements*.txt"
 
@@ -62,6 +69,15 @@ jobs:
           coverage report --show-missing --fail-under=85 \
             2>&1 | tee full-load-evidence/coverage.log
 
+      - name: Run no-tools, execution-transport and production standby regressions
+        run: |
+          set -euo pipefail
+          PYTHONPATH=open-model-market python -m unittest -v \
+            tests.test_v5_no_tools_network_policy \
+            tests.test_v5_execution_transport \
+            tests.test_v5_production_standby_promotion \
+            2>&1 | tee full-load-evidence/transport-and-standby-tests.log
+
       - name: Produce deterministic dynamic full-load receipt
         env:
           TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -76,11 +92,11 @@ jobs:
 
           from tests.test_top50_pool_optimizer import _packet
           from v5_governance_model_plan import validate_governance_model_plan
-          from v5_top50_pool_optimizer import materialize_top50_selection
+          from v5_hierarchical_candidate_optimizer import materialize_candidate_pool_selection
 
           def run_one(index: int) -> tuple[str, int, int, int, int]:
               packet = _packet(complex_task=bool(index % 2))
-              materialized, receipt = materialize_top50_selection(packet)
+              materialized, receipt = materialize_candidate_pool_selection(packet)
               plan = validate_governance_model_plan(materialized)
               selected = list(plan['selected_models'])
               recoveries = list(plan['recovery_models'])
@@ -93,10 +109,13 @@ jobs:
               assert len(recoveries) >= 0
               assert len(selected) == plan['expert_count'] == receipt['primary_expert_count']
               assert len(recoveries) == plan['recovery_count'] == receipt['recovery_count']
-              assert len(selected) + len(recoveries) + len(standby) == len(candidates)
+              assert len(selected) + len(recoveries) + len(standby) == plan['expert_center_executable_candidate_count']
+              assert plan['expert_center_executable_candidate_count'] <= len(candidates)
               assert audit['fixed_four_plus_four_used'] is False
               assert audit['fixed_team_size_used'] is False
               assert audit['fixed_role_topology_used'] is False
+              assert audit['fixed_metric_role_grammar_used'] is False
+              assert audit['metric_role_adapter_used'] is False
               assert audit['company_uniqueness_constraint_used'] is False
               assert audit['top50_membership_constraint_used'] is False
               assert audit['budget_constraint_used'] is False
@@ -111,6 +130,7 @@ jobs:
               assert audit['all_calculable_planning_parameters_dynamic'] is True
               assert audit['hard_model_eligibility_gates'] == []
               assert audit['only_hard_model_boundary'] == 'no-tools'
+              assert audit['structural_execution_transport_boundary'] is True
               assert audit['tool_use_forbidden'] is True
               if audit.get('fallback_used') is False:
                   assert audit['solver_status'] in {'OPTIMAL', 'FEASIBLE'}
@@ -127,7 +147,8 @@ jobs:
 
               stable = {
                   'complex': bool(index % 2),
-                  'candidate_count': len(candidates),
+                  'governance_candidate_count': len(candidates),
+                  'executable_candidate_count': plan['expert_center_executable_candidate_count'],
                   'selected': [row['model'] for row in selected],
                   'recovery': [row['model'] for row in recoveries],
                   'expert_count': len(selected),
@@ -147,7 +168,7 @@ jobs:
                   stable['pressure'],
                   len(selected),
                   len(recoveries),
-                  len(candidates),
+                  stable['executable_candidate_count'],
               )
 
           with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
@@ -178,7 +199,7 @@ jobs:
           # reject or force the dynamic execution graph into an artificial shape.
           budget_probe = _packet()
           budget_probe['approved_budget'] = {'calls': 1, 'maximum_recovery_calls': 0}
-          budget_materialized, _ = materialize_top50_selection(budget_probe)
+          budget_materialized, _ = materialize_candidate_pool_selection(budget_probe)
           budget_plan = validate_governance_model_plan(budget_materialized)
           assert budget_plan['expert_count'] >= 1
           assert budget_plan['optimizer_audit']['budget_constraint_used'] is False
@@ -204,6 +225,7 @@ jobs:
               'all_calculable_planning_parameters_dynamic': True,
               'hard_model_eligibility_gates': [],
               'only_hard_model_boundary': 'no-tools',
+              'structural_execution_transport_boundary': True,
               'tool_use_forbidden': True,
               'fixed_four_plus_four_required': False,
               'company_uniqueness_required': False,
