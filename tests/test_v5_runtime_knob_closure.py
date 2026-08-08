@@ -11,7 +11,12 @@ MARKET = ROOT / "open-model-market"
 sys.path.insert(0, str(MARKET))
 
 from v5_production_expert_policy import EvidenceCompleteExecutionEngine  # noqa: E402
-from v5_runtime import FailureCategory, RuntimeAttempt, RuntimeConfig  # noqa: E402
+from v5_runtime import (  # noqa: E402
+    FailureCategory,
+    RetryPolicy,
+    RuntimeAttempt,
+    RuntimeConfig,
+)
 from v5_runtime_request_binding import (  # noqa: E402
     audit_bound_request,
     bind_request_knobs,
@@ -35,6 +40,16 @@ class RuntimeKnobClosureTests(unittest.TestCase):
                 "required_fields": ["核心判断", "关键依据", "不确定性", "结论"],
                 "final_delivery_node": final,
             },
+        )
+
+    @staticmethod
+    def _runtime(config: RuntimeConfig):
+        return build_runtime(
+            config,
+            retry_policy=RetryPolicy(
+                retry_same_endpoint_categories=(),
+                maximum_same_endpoint_retries_per_node=0,
+            ),
         )
 
     def test_reasoning_and_dynamic_allowance_are_bound(self) -> None:
@@ -70,7 +85,7 @@ class RuntimeKnobClosureTests(unittest.TestCase):
             cost_anomaly_usd=None,
             provider_lock_required=False,
         )
-        runtime = build_runtime(config)
+        runtime = self._runtime(config)
         engine = EvidenceCompleteExecutionEngine(
             runtime.config,
             prompt_policy=runtime.prompt_policy,
@@ -127,7 +142,7 @@ class RuntimeKnobClosureTests(unittest.TestCase):
             cost_anomaly_usd=None,
             provider_lock_required=False,
         )
-        runtime = build_runtime(config)
+        runtime = self._runtime(config)
         engine = EvidenceCompleteExecutionEngine(
             runtime.config,
             prompt_policy=runtime.prompt_policy,
@@ -181,7 +196,7 @@ class RuntimeKnobClosureTests(unittest.TestCase):
             cost_anomaly_usd=None,
             provider_lock_required=False,
         )
-        runtime = build_runtime(config)
+        runtime = self._runtime(config)
         engine = EvidenceCompleteExecutionEngine(
             runtime.config,
             prompt_policy=runtime.prompt_policy,
