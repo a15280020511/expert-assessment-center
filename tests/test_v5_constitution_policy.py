@@ -77,7 +77,7 @@ class ConstitutionPolicyTests(unittest.TestCase):
         self.assertTrue(pool["tool_use_forbidden"])
         self.assertFalse(pool["tools_allowed"])
 
-    def test_all_calculable_team_parameters_are_task_derived(self) -> None:
+    def test_all_calculable_team_and_execution_parameters_are_dynamic(self) -> None:
         matching = self.policy["dynamic_task_matching"]
         self.assertTrue(matching["required"])
         self.assertTrue(matching["all_calculable_planning_parameters_dynamic"])
@@ -104,6 +104,10 @@ class ConstitutionPolicyTests(unittest.TestCase):
         self.assertEqual(matching["solver_seed"], "task-derived-reproducible")
         self.assertEqual(matching["reasoning_effort"], "task-derived-and-request-bound")
         self.assertEqual(matching["output_transport_allowance"], "current-request-derived")
+        self.assertEqual(
+            matching["model_timeout_effective"],
+            "current-request-derived-under-finite-safety-cap",
+        )
         self.assertEqual(matching["company_mix"], "unconstrained")
         self.assertFalse(matching["fixed_team_size_allowed"])
         self.assertFalse(matching["fixed_four_plus_four_allowed"])
@@ -162,16 +166,33 @@ class ConstitutionPolicyTests(unittest.TestCase):
             "estimated_cost_can_reject_execution",
             "actual_cost_can_invalidate_valid_output",
             "local_token_ceiling_allowed",
+            "fixed_model_timeout_used_as_effective_request_timeout",
         ):
             self.assertFalse(resources[key], key)
         self.assertTrue(resources["dynamic_transport_allowance_allowed"])
         self.assertFalse(resources["dynamic_transport_allowance_is_task_admission_gate"])
         self.assertFalse(resources["dynamic_transport_allowance_can_invalidate_valid_output"])
         self.assertTrue(resources["truncation_can_recompute_transport_allowance"])
+        self.assertTrue(resources["dynamic_model_timeout_required"])
+        self.assertTrue(resources["model_timeout_safety_cap_required"])
+        self.assertFalse(resources["model_timeout_safety_cap_is_business_gate"])
+        self.assertTrue(resources["timeout_feedback_can_recompute_effective_timeout"])
         self.assertTrue(resources["team_and_recovery_counts_come_from_current_execution_graph"])
         self.assertTrue(resources["finite_execution_graph_required"])
         self.assertFalse(resources["infinite_model_loop_allowed"])
         self.assertFalse(resources["unbounded_recursive_retry_allowed"])
+
+    def test_quality_gate_uses_observable_contract_not_hidden_fixed_heuristics(self) -> None:
+        quality = self.policy["quality_governance"]
+        self.assertEqual(
+            quality["gate_source"],
+            "observable-current-contract-and-evidence-signals",
+        )
+        self.assertFalse(quality["fixed_answer_length_gate_used"])
+        self.assertFalse(quality["fixed_business_quality_weight_coefficients_used"])
+        self.assertFalse(quality["fixed_numeric_quality_threshold_gate_used"])
+        self.assertEqual(quality["quality_score_role"], "telemetry-only")
+        self.assertTrue(quality["final_evidence_validation_fail_closed"])
 
     def test_expert_tools_remain_hard_forbidden(self) -> None:
         tools = self.policy["tool_policy"]
@@ -197,6 +218,7 @@ class ConstitutionPolicyTests(unittest.TestCase):
         self.assertTrue(integrity["candidate_transport_integrity_required"])
         self.assertTrue(integrity["finite_acyclic_dag_required"])
         self.assertTrue(integrity["semantic_relatedness_is_not_dependency"])
+        self.assertTrue(integrity["finite_model_timeout_safety_cap_required"])
         self.assertFalse(integrity["arbitrary_network_egress_allowed"])
         self.assertEqual(integrity["model_plane_hosts"], ["openrouter.ai"])
         self.assertEqual(integrity["control_plane_hosts"], ["api.github.com"])
