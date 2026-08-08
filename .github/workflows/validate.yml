@@ -70,6 +70,7 @@ jobs:
             tests.test_v5_production_expert_policy \
             tests.test_v5_soft_resource_governance \
             tests.test_v5_task_constraints \
+            tests.test_v5_task_scope_quality_circuit \
             tests.test_v5_deterministic_answer_normalization \
             tests.test_v5_fact_label_purity_normalization \
             tests.test_v5_fact_provenance_semantic_normalization \
