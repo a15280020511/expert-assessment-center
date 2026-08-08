@@ -5,6 +5,11 @@ assigned work and dependencies come from the current plan; NetworkX only validat
 that the resulting graph is finite and acyclic. Governance remains candidate-pool
 authority, Expert Center remains model/role assignment authority, and OpenRouter
 remains unrestricted Provider-routing authority.
+
+Before the proposal crosses the executable boundary, all still-mutable request
+parameters are closed from the current task and the exact governed role graph. This
+prevents compatibility plans from bypassing ParameterDesign and relying on hidden
+request defaults.
 """
 from __future__ import annotations
 
@@ -13,6 +18,7 @@ from typing import Any, Mapping, Sequence
 
 import networkx as nx
 
+from v5_executable_parameter_closure import close_executable_proposal_parameters
 from v5_governance_model_plan import validate_governance_model_plan
 
 
@@ -218,8 +224,13 @@ def build_governed_proposal(
             "cross_task_history_used": False,
         },
     }
+    proposal, parameter_closure = close_executable_proposal_parameters(
+        ticket,
+        proposal,
+        [*selected, *recoveries, *standbys],
+    )
     audit = {
-        "schema_version": "v5-exact-dynamic-role-dag-materialization-5-deferred-effort-closure",
+        "schema_version": "v5-exact-dynamic-role-dag-materialization-6-parameter-closure",
         "status": "PASS",
         "candidate_pool_authority": "decision-system-governance",
         "model_assignment_authority": "expert-assessment-center-dynamic-ortools",
@@ -233,15 +244,16 @@ def build_governed_proposal(
         "terminal_node_count": len(final_nodes),
         "runtime_feedback_replanning_enabled": bool(standbys),
         "runtime_standby_promotion_depth_fixed": False,
+        "runtime_parameter_closure": parameter_closure,
         "request_resource_parameter_profile_propagated": all(
             bool(
                 (row.get("parameter_profile") or {}).get(
                     "runtime_resource_parameter_ids"
                 )
             )
-            for row in selected
+            for row in proposal["nodes"]
         ),
-        "reasoning_effort_closure_boundary": "executable-proposal-materialization-and-request-binding",
+        "reasoning_effort_closure_boundary": "before-executable-materialization",
         "hidden_reasoning_effort_default_used": False,
         "cost_effectiveness_priority": True,
         "soft_token_and_cost_efficiency": True,
