@@ -9,14 +9,12 @@ otherwise valid task result.
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Mapping, Sequence
 
 from execution_graph import SelectedNode
 
-SCHEMA_VERSION = "current-request-runtime-knob-binding-2"
-# OpenRouter's normalized gateway effort levels. The ratios mirror the gateway
-# documentation and are used only to reserve enough *visible* output after
-# reasoning consumes part of max_tokens.
+SCHEMA_VERSION = "current-request-runtime-knob-binding-3"
 _REASONING_RATIO = {
     "max": 0.95,
     "xhigh": 0.95,
@@ -35,6 +33,10 @@ _EFFORT_ORDER = {
     "xhigh": 5,
     "max": 6,
 }
+_NUMBERED_DELIVERY_RE = re.compile(
+    r"(?:^|[。；;！？!?\n])\s*(?:第?[一二三四五六七八九十百]+|\d+)\s*[）)\.、]",
+    re.MULTILINE,
+)
 
 
 def _mapping_attr(value: Any, name: str) -> Mapping[str, Any]:
@@ -60,13 +62,20 @@ def _effort(node: SelectedNode) -> str:
     raw = str(profile.get("effort") or "medium").casefold()
     if raw in _EFFORT_ORDER:
         return raw
-    # The legacy saturation recovery asks for visible-output-only execution by
-    # setting reasoning_enabled=False. Some reasoning models declare reasoning
-    # mandatory and reject `none`, so `minimal` is the safe gateway-level
-    # adaptation when the profile has no recognized effort value.
     if profile.get("reasoning_enabled") is False:
         return "minimal"
     return "medium"
+
+
+def _explicit_delivery_units(node: SelectedNode, original_task: str) -> int:
+    """Count structural user-facing deliverables without semantic routing."""
+    if _mapping_attr(node, "output_contract").get("final_delivery_node") is not True:
+        return 1
+    numbered = len(_NUMBERED_DELIVERY_RE.findall(str(original_task or "")))
+    contract_fields = len(
+        _mapping_attr(node, "output_contract").get("required_fields", [])
+    )
+    return max(1, numbered, contract_fields)
 
 
 def _visible_output_requirement(
@@ -82,9 +91,18 @@ def _visible_output_requirement(
     fan_in = len(upstream)
     effort_rank = _EFFORT_ORDER[_effort(node)]
     structural_units = max(1, required_fields + work_units + fan_in + effort_rank)
-    contract_floor = max(256, 192 * max(1, required_fields))
-    pressure_multiplier = 1.0 + math.log2(structural_units + 1) / 4.0
-    protocol_reserve = math.ceil(math.sqrt(estimated_prompt_tokens * structural_units))
+    base_contract_floor = max(256, 192 * max(1, required_fields))
+    explicit_delivery_units = _explicit_delivery_units(node, original_task)
+    # A final task with many explicitly numbered deliverables needs more visible
+    # room than four generic outer headings. Reuse the existing contract floor
+    # and scale it sub-linearly from the current task's structural cardinality.
+    contract_floor = math.ceil(
+        base_contract_floor * math.sqrt(max(1, explicit_delivery_units))
+    )
+    pressure_multiplier = 1.0 + math.log2(structural_units + explicit_delivery_units + 1) / 4.0
+    protocol_reserve = math.ceil(
+        math.sqrt(estimated_prompt_tokens * (structural_units + explicit_delivery_units))
+    )
     return int(
         max(
             contract_floor,
@@ -98,13 +116,6 @@ def dynamic_output_allowance(
     original_task: str,
     upstream: Sequence[Mapping[str, Any]],
 ) -> int:
-    """Reserve enough total output for reasoning plus current-task visible text.
-
-    OpenRouter counts reasoning tokens inside output tokens. Therefore the
-    transport allowance is reverse-computed from the visible-output requirement
-    and the current role's effort ratio instead of using the provider/model's
-    native maximum. This remains request shaping, not a task budget or gate.
-    """
     visible_required = _visible_output_requirement(node, original_task, upstream)
     effort = _effort(node)
     reasoning_ratio = _REASONING_RATIO[effort]
@@ -128,10 +139,10 @@ def bind_request_knobs(
     original_task: str,
     upstream: Sequence[Mapping[str, Any]],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Return sendable request fields plus an audit record."""
     effort = _effort(node)
     visible_required = _visible_output_requirement(node, original_task, upstream)
     allowance = dynamic_output_allowance(node, original_task, upstream)
+    explicit_delivery_units = _explicit_delivery_units(node, original_task)
     config = {
         "reasoning": {"effort": effort, "exclude": True},
         "max_tokens": allowance,
@@ -144,6 +155,8 @@ def bind_request_knobs(
         "reasoning_effort_bound": effort,
         "reasoning_output_ratio_assumption": _REASONING_RATIO[effort],
         "visible_output_requirement_tokens": visible_required,
+        "explicit_delivery_unit_count": explicit_delivery_units,
+        "explicit_delivery_unit_source": "current-task-structural-numbering-and-output-contract",
         "dynamic_output_allowance_tokens": allowance,
         "output_allowance_is_task_admission_gate": False,
         "output_allowance_is_result_validity_gate": False,
@@ -155,7 +168,6 @@ def bind_request_knobs(
 
 
 def audit_bound_request(node: SelectedNode, payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Fail closed when a computed execution knob was not consumed."""
     planned_effort = _effort(node)
     reasoning = payload.get("reasoning")
     bound_effort = (
