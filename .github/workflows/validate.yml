@@ -74,6 +74,7 @@ jobs:
             tests.test_v5_fact_label_purity_normalization \
             tests.test_v5_fact_provenance_semantic_normalization \
             tests.test_v5_explicit_task_delivery_contract \
+            tests.test_v5_continuous_spatiotemporal_replanning \
             tests.test_workflow_contract \
             2>&1 | tee validation-artifacts/unittest.log
 
