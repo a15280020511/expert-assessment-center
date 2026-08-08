@@ -1,5 +1,5 @@
 {
-  "schema_version": "v5-constitutional-policy-10-fully-dynamic-no-tools",
+  "schema_version": "v5-constitutional-policy-11-runtime-knob-closure",
   "authority": "CONSTITUTION.md",
   "fail_closed": false,
   "only_hard_model_boundary": "no-tools",
@@ -41,12 +41,23 @@
   "dynamic_task_matching": {
     "required": true,
     "all_calculable_planning_parameters_dynamic": true,
+    "runtime_parameter_lifecycle_required": true,
+    "runtime_knob_coverage_required": true,
+    "parameter_lifecycle": [
+      "discover",
+      "resolve",
+      "bind",
+      "consume",
+      "observe",
+      "recompute-from-current-run-feedback"
+    ],
     "planning_sequence": [
       "task-decomposition",
       "parameter-requirement-discovery",
       "parameter-value-resolution",
       "team-and-role-derivation",
-      "ortools-model-assignment"
+      "ortools-model-assignment",
+      "runtime-request-binding"
     ],
     "task_decomposition": "task-derived-before-parameter-selection",
     "parameter_requirement_discovery": "task-and-candidate-derived-before-value-resolution",
@@ -54,6 +65,8 @@
     "parameter_set_task_derived": true,
     "fixed_parameter_template_allowed": false,
     "fixed_parameter_values_allowed": false,
+    "computed_but_unused_allowed": false,
+    "semantic_relatedness_can_create_hard_dependency": false,
     "principles": [
       "concrete_problem_concrete_analysis",
       "dynamic_adaptation",
@@ -77,6 +90,8 @@
     "role_weights": "task-derived",
     "solver_time": "task-derived",
     "solver_seed": "task-derived-reproducible",
+    "reasoning_effort": "task-derived-and-request-bound",
+    "output_transport_allowance": "current-request-derived",
     "company_mix": "unconstrained",
     "fixed_team_size_allowed": false,
     "fixed_four_plus_four_allowed": false,
@@ -132,6 +147,10 @@
     "estimated_cost_can_reject_execution": false,
     "actual_cost_can_invalidate_valid_output": false,
     "local_token_ceiling_allowed": false,
+    "dynamic_transport_allowance_allowed": true,
+    "dynamic_transport_allowance_is_task_admission_gate": false,
+    "dynamic_transport_allowance_can_invalidate_valid_output": false,
+    "truncation_can_recompute_transport_allowance": true,
     "team_and_recovery_counts_come_from_current_execution_graph": true,
     "finite_execution_graph_required": true,
     "infinite_model_loop_allowed": false,
@@ -143,7 +162,8 @@
     "minimum_required_work_coverage_gate": false,
     "minimum_successful_node_gate": false,
     "failed_or_missing_items_must_be_disclosed": true,
-    "request_and_cost_ledgers_required": true
+    "request_and_cost_ledgers_required": true,
+    "runtime_knob_coverage_must_be_audited": true
   },
   "tool_policy": {
     "expert_external_tools_allowed": false,
@@ -164,6 +184,7 @@
     "task_and_plan_hash_integrity_required": true,
     "candidate_transport_integrity_required": true,
     "finite_acyclic_dag_required": true,
+    "semantic_relatedness_is_not_dependency": true,
     "arbitrary_network_egress_allowed": false,
     "model_plane_hosts": [
       "openrouter.ai"
@@ -182,6 +203,7 @@
     "signed_weekly_top50_pool_required": false,
     "ortools_optimality_proof_required": false,
     "task_adaptive_value_scoring_required": false,
+    "runtime_knob_coverage_required": true,
     "unrestricted_provider_routing_required": true,
     "no_tools_required": true,
     "automatic_merge_allowed": false,
