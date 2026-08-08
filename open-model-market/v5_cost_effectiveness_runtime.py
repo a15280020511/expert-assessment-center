@@ -79,10 +79,14 @@ class CostEffectiveContinuousExecutionEngine(
                     "top_before": before[:8],
                     "top_after": after[:8],
                     "policy": (
-                        "current-quality-risk-then-preserved-cost-signal-then-"
+                        "current-quality-risk-then-cost-marginal-return-then-"
                         "company-heterogeneity"
                     ),
                     "standby_catalog_price_signal_supported": True,
+                    "standby_cost_signal_sources": [
+                        "estimated-task-cost-usd-when-available",
+                        "current-catalog-price-rank-signal-otherwise",
+                    ],
                     "cost_effectiveness_priority": True,
                     "cost_is_execution_gate": False,
                     "company_diversity_is_execution_gate": False,
@@ -97,11 +101,15 @@ class CostEffectiveContinuousExecutionEngine(
                 "cost_effectiveness_priority": True,
                 "runtime_candidate_priority": [
                     "current-task-quality-and-current-failure-risk",
-                    "current-task-expected-cost-or-preserved-catalog-price-signal",
+                    "current-task-expected-cost-and-marginal-return",
                     "company-heterogeneity-on-higher-priority-tie",
                     "stable-model-identity",
                 ],
                 "standby_catalog_price_signal_supported": True,
+                "standby_cost_signal_sources": [
+                    "estimated-task-cost-usd-when-available",
+                    "current-catalog-price-rank-signal-otherwise",
+                ],
                 "token_and_cost_soft_control": True,
                 "cost_is_execution_gate": False,
                 "company_diversity_is_execution_gate": False,
