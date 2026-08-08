@@ -91,7 +91,7 @@ class DynamicRoleScoringTests(unittest.TestCase):
         current_roles = roles()
         shapes = [role_structural_profile(current_profile, role) for role in current_roles]
         self.assertLess(shapes[0]["required_context_tokens"], shapes[-1]["required_context_tokens"])
-        self.assertNotEqual(shapes[0]["weights"], shapes[-1]["weights"])
+        self.assertNotEqual(shapes[0]["weight_strengths"], shapes[-1]["weight_strengths"])
         self.assertTrue(all(not row["fixed_metric_role_class_used"] for row in shapes))
         self.assertTrue(all(not row["semantic_role_routing_used"] for row in shapes))
         self.assertTrue(all(not row["fixed_business_weight_coefficients_used"] for row in shapes))
@@ -107,6 +107,7 @@ class DynamicRoleScoringTests(unittest.TestCase):
             "completion_tokens",
             "required_context_tokens",
             "weights",
+            "weight_strengths",
             "structural_pressure",
         ):
             self.assertEqual(original_shape[key], renamed_shape[key])
