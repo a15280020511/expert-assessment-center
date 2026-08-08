@@ -7,6 +7,7 @@ on:
       - "CONSTITUTION.md"
       - "open-model-market/v5_task_adaptive_scoring.py"
       - "open-model-market/v5_top50_pool_optimizer.py"
+      - "open-model-market/v5_dynamic_role_assignment.py"
       - "open-model-market/v5_parameter_design_planner.py"
       - "open-model-market/v5_hierarchical_candidate_optimizer.py"
       - "open-model-market/v5_governance_model_plan.py"
@@ -14,6 +15,7 @@ on:
       - "open-model-market/v5_runtime.py"
       - "tests/test_v5_task_adaptive_scoring.py"
       - "tests/test_top50_pool_optimizer.py"
+      - "tests/test_v5_initial_company_heterogeneity.py"
       - "tests/test_v5_parameter_design_meta.py"
       - "tests/test_v5_dynamic_recovery_resilience.py"
       - ".github/workflows/v5-price-ranked-full-load.yml"
@@ -59,6 +61,7 @@ jobs:
             -m unittest \
             tests.test_v5_task_adaptive_scoring \
             tests.test_top50_pool_optimizer \
+            tests.test_v5_initial_company_heterogeneity \
             tests.test_v5_parameter_design_meta \
             tests.test_v5_dynamic_recovery_resilience -v \
             2>&1 | tee full-load-evidence/targeted-tests.log
@@ -101,6 +104,21 @@ jobs:
               assert audit['fixed_team_size_used'] is False
               assert audit['fixed_role_topology_used'] is False
               assert audit['company_uniqueness_constraint_used'] is False
+              assert audit['company_heterogeneity_soft_objective'] is True
+              assert audit['company_diversity_is_execution_gate'] is False
+              assert audit['hard_company_diversity_constraint'] is False
+              assert audit['cross_task_company_history_used'] is False
+              assert audit['assigned_position_count'] == len(selected) + len(recoveries)
+              assert 1 <= audit['assigned_distinct_company_count'] <= audit['assigned_position_count']
+              assert 0.0 < audit['company_heterogeneity_ratio'] <= 1.0
+              assert audit['same_company_position_reuse_count'] == (
+                  audit['assigned_position_count'] - audit['assigned_distinct_company_count']
+              )
+              assert audit['objective_priority'] == [
+                  'current-task-role-quality-risk-objective',
+                  'maximize-distinct-company-coverage',
+                  'stable-deterministic-tie-break',
+              ]
               assert audit['top50_membership_constraint_used'] is False
               assert audit['budget_constraint_used'] is False
               assert audit['price_gate_used'] is False
@@ -145,6 +163,9 @@ jobs:
                   'fallback_used': audit['fallback_used'],
                   'dynamic_solver_profile': audit['dynamic_solver_profile'],
                   'pressure': audit['task_demand_profile']['pressure']['overall'],
+                  'company_sequence': audit['assigned_company_sequence'],
+                  'distinct_company_count': audit['assigned_distinct_company_count'],
+                  'company_heterogeneity_ratio': audit['company_heterogeneity_ratio'],
               }
               digest = hashlib.sha256(
                   json.dumps(stable, sort_keys=True).encode()
@@ -187,9 +208,11 @@ jobs:
           budget_plan = validate_governance_model_plan(budget_materialized)
           assert budget_plan['expert_count'] >= 1
           assert budget_plan['optimizer_audit']['budget_constraint_used'] is False
+          assert budget_plan['optimizer_audit']['company_heterogeneity_soft_objective'] is True
+          assert budget_plan['optimizer_audit']['company_diversity_is_execution_gate'] is False
 
           receipt = {
-              'schema_version': 'v5-fully-dynamic-full-load-6-production-design',
+              'schema_version': 'v5-fully-dynamic-full-load-7-company-heterogeneity',
               'status': 'PASS',
               'target_sha': os.environ['TARGET_SHA'],
               'parallel_runs': 64,
@@ -214,6 +237,9 @@ jobs:
               'tool_use_forbidden': True,
               'fixed_four_plus_four_required': False,
               'company_uniqueness_required': False,
+              'company_heterogeneity_soft_objective': True,
+              'company_diversity_is_execution_gate': False,
+              'company_heterogeneity_priority': 'after-current-task-quality-risk-before-stable-tie-break',
               'optimizer_optimality_required': False,
               'budget_admission_gate_enabled': False,
               'selection_principles': [
