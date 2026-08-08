@@ -17,13 +17,18 @@ class ConstitutionPolicyTests(unittest.TestCase):
             (MARKET / "constitutional_policy.json").read_text(encoding="utf-8")
         )
 
-    def test_v10_fully_dynamic_policy_is_active(self) -> None:
+    def test_v11_runtime_knob_closure_policy_is_active(self) -> None:
         self.assertEqual(
             self.policy["schema_version"],
-            "v5-constitutional-policy-10-fully-dynamic-no-tools",
+            "v5-constitutional-policy-11-runtime-knob-closure",
         )
         self.assertEqual(self.policy["authority"], "CONSTITUTION.md")
         self.assertEqual(self.policy["only_hard_model_boundary"], "no-tools")
+        matching = self.policy["dynamic_task_matching"]
+        self.assertTrue(matching["runtime_parameter_lifecycle_required"])
+        self.assertTrue(matching["runtime_knob_coverage_required"])
+        self.assertFalse(matching["computed_but_unused_allowed"])
+        self.assertFalse(matching["semantic_relatedness_can_create_hard_dependency"])
 
     def test_execution_has_no_free_first_or_exact_sha_qualification_gate(self) -> None:
         admission = self.policy["execution_admission"]
@@ -97,6 +102,8 @@ class ConstitutionPolicyTests(unittest.TestCase):
         ):
             self.assertEqual(matching[key], "task-derived", key)
         self.assertEqual(matching["solver_seed"], "task-derived-reproducible")
+        self.assertEqual(matching["reasoning_effort"], "task-derived-and-request-bound")
+        self.assertEqual(matching["output_transport_allowance"], "current-request-derived")
         self.assertEqual(matching["company_mix"], "unconstrained")
         self.assertFalse(matching["fixed_team_size_allowed"])
         self.assertFalse(matching["fixed_four_plus_four_allowed"])
@@ -157,6 +164,10 @@ class ConstitutionPolicyTests(unittest.TestCase):
             "local_token_ceiling_allowed",
         ):
             self.assertFalse(resources[key], key)
+        self.assertTrue(resources["dynamic_transport_allowance_allowed"])
+        self.assertFalse(resources["dynamic_transport_allowance_is_task_admission_gate"])
+        self.assertFalse(resources["dynamic_transport_allowance_can_invalidate_valid_output"])
+        self.assertTrue(resources["truncation_can_recompute_transport_allowance"])
         self.assertTrue(resources["team_and_recovery_counts_come_from_current_execution_graph"])
         self.assertTrue(resources["finite_execution_graph_required"])
         self.assertFalse(resources["infinite_model_loop_allowed"])
@@ -185,6 +196,7 @@ class ConstitutionPolicyTests(unittest.TestCase):
         self.assertTrue(integrity["task_and_plan_hash_integrity_required"])
         self.assertTrue(integrity["candidate_transport_integrity_required"])
         self.assertTrue(integrity["finite_acyclic_dag_required"])
+        self.assertTrue(integrity["semantic_relatedness_is_not_dependency"])
         self.assertFalse(integrity["arbitrary_network_egress_allowed"])
         self.assertEqual(integrity["model_plane_hosts"], ["openrouter.ai"])
         self.assertEqual(integrity["control_plane_hosts"], ["api.github.com"])
@@ -197,6 +209,7 @@ class ConstitutionPolicyTests(unittest.TestCase):
         self.assertFalse(promotion["signed_weekly_top50_pool_required"])
         self.assertFalse(promotion["ortools_optimality_proof_required"])
         self.assertFalse(promotion["task_adaptive_value_scoring_required"])
+        self.assertTrue(promotion["runtime_knob_coverage_required"])
         self.assertTrue(promotion["unrestricted_provider_routing_required"])
         self.assertTrue(promotion["no_tools_required"])
         self.assertFalse(promotion["automatic_merge_allowed"])
