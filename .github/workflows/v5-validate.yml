@@ -1,6 +1,14 @@
 name: Validate V5 Fully Dynamic Expert Architecture
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "CONSTITUTION.md"
+      - "open-model-market/**"
+      - "tests/**"
+      - ".github/workflows/**"
+      - "requirements*.txt"
   pull_request:
     paths:
       - "CONSTITUTION.md"
@@ -48,10 +56,12 @@ jobs:
           import json
           import v5_top50_pool_optimizer as optimizer
           from pathlib import Path
+
           policy = json.loads(Path('open-model-market/constitutional_policy.json').read_text())
-          assert policy['schema_version'] == 'v5-constitutional-policy-11-runtime-knob-closure'
+          assert policy['schema_version'] == 'v5-constitutional-policy-12-parameter-design-closure'
           assert policy['authority'] == 'CONSTITUTION.md'
           assert policy['only_hard_model_boundary'] == 'no-tools'
+
           admission = policy['execution_admission']
           for key in (
               'free_first_required', 'zero_call_qualification_required',
@@ -59,6 +69,7 @@ jobs:
               'exact_sha_evidence_required', 'paid_execution_requires_prior_qualification',
           ):
               assert admission[key] is False, key
+
           pool = policy['candidate_pool']
           assert pool['source'] == 'openrouter-live-reasoning-most-popular-catalog'
           assert pool['source_definition']['sort'] == 'most-popular'
@@ -75,17 +86,30 @@ jobs:
               assert pool[key] is False, key
           assert pool['tool_use_forbidden'] is True
           assert pool['tools_allowed'] is False
+
           matching = policy['dynamic_task_matching']
           assert matching['required'] is True
           assert matching['all_calculable_planning_parameters_dynamic'] is True
           assert matching['runtime_parameter_lifecycle_required'] is True
           assert matching['runtime_knob_coverage_required'] is True
+          assert matching['parameter_design_required'] is True
+          assert matching['parameter_design_before_resolution_required'] is True
           assert matching['computed_but_unused_allowed'] is False
           assert matching['semantic_relatedness_can_create_hard_dependency'] is False
+          assert matching['constitutional_invariants_must_not_be_disguised_as_dynamic'] is True
           assert matching['parameter_lifecycle'] == [
-              'discover', 'resolve', 'bind', 'consume', 'observe',
+              'task-model', 'discover-decisions', 'design-parameters',
+              'instantiate-parameters', 'resolve', 'bind', 'consume', 'observe',
               'recompute-from-current-run-feedback',
           ]
+          assert matching['parameter_design_dimensions'] == [
+              'value_type', 'domain', 'resolver', 'dependencies',
+              'consumer_binding', 'recompute_trigger',
+          ]
+          assert set(matching['parameter_design_allowed_classes']) == {
+              'constitutional_invariant', 'infrastructure_invariant',
+              'current_task_derived', 'current_run_feedback_derived',
+          }
           for key in (
               'task_volume', 'evidence_volume', 'constraint_pressure',
               'delivery_pressure', 'prompt_token_estimate',
@@ -100,6 +124,7 @@ jobs:
           assert matching['output_transport_allowance'] == 'current-request-derived'
           assert matching['company_mix'] == 'unconstrained'
           assert matching['model_substitution_allowed'] is True
+
           optimizer_runtime = policy['optimizer_runtime']
           assert optimizer_runtime['engine'] == 'ortools-cp-sat'
           assert optimizer_runtime['optimality_required'] is False
@@ -113,6 +138,7 @@ jobs:
               'company_overlap_penalty_required',
           ):
               assert optimizer_runtime[key] is False, key
+
           provider = policy['provider_routing']
           assert provider['mode'] == 'unrestricted-openrouter'
           assert provider['provider_allowlist_allowed'] is False
@@ -125,6 +151,7 @@ jobs:
           assert provider['provider_fallback_allowed'] is True
           assert provider['provider_may_change_model_identity'] is False
           assert provider['model_substitution_authority'] == 'expert-assessment-center-dynamic-recovery'
+
           resource = policy['resource_governance']
           assert resource['fixed_total_call_ceiling'] is False
           assert resource['fixed_initial_call_ceiling'] is False
@@ -139,15 +166,30 @@ jobs:
           assert resource['truncation_can_recompute_transport_allowance'] is True
           assert resource['finite_execution_graph_required'] is True
           assert resource['unbounded_recursive_retry_allowed'] is False
+
+          dependencies = policy['runtime_dependencies']
+          assert dependencies['must_match_constitution'] is True
+          assert set(dependencies['allowed']) == {'jsonschema', 'networkx', 'ortools', 'optuna'}
+          assert dependencies['additional_runtime_dependencies_allowed_without_constitution_change'] is False
+          runtime_requirements = {
+              line.split('==', 1)[0].strip()
+              for line in Path('requirements-runtime.txt').read_text().splitlines()
+              if line.strip() and not line.lstrip().startswith('#')
+          }
+          assert runtime_requirements == {'jsonschema', 'networkx', 'ortools', 'optuna'}
+
           delivery = policy['delivery']
+          assert delivery['parameter_design_must_be_audited'] is True
           assert delivery['runtime_knob_coverage_must_be_audited'] is True
           security = policy['security_and_integrity_invariants']
           assert security['semantic_relatedness_is_not_dependency'] is True
           production = policy['production_promotion']
+          assert production['parameter_design_coverage_required'] is True
           assert production['runtime_knob_coverage_required'] is True
           tools = policy['tool_policy']
           assert tools['request_tool_fields_forbidden'] is True
           assert tools['response_tool_evidence_forbidden'] is True
+
           source = Path('open-model-market/v5_price_ranked_pipeline.py').read_text()
           assert 'provider_lock_required=False' in source
           dynamic = Path('open-model-market/v5_dynamic_pipeline.py').read_text()
@@ -155,24 +197,21 @@ jobs:
           assert 'model_substitution_allowed": True' in dynamic
           assert getattr(optimizer, 'HIERARCHICAL_TASK_PARAMETER_PLANNER_ACTIVE', False) is True
 
-          # There must be one planning implementation, not a legacy fixed planner
-          # beside the new Parameter Graph. The historical module is only a facade.
-          facade = Path('open-model-market/v5_hierarchical_task_planner.py').read_text()
-          assert 'v5_dynamic_parameter_graph' in facade
-          assert 'legacy_fixed_parameter_catalog_used' in facade
-          assert 'legacy_fixed_role_grammar_used' in facade
-          planner = Path('open-model-market/v5_dynamic_parameter_graph.py').read_text()
+          active = Path('open-model-market/v5_hierarchical_candidate_optimizer.py').read_text()
+          assert 'from v5_parameter_design_planner import' in active
+          assert 'parameter_design_completed_before_parameter_resolution' in active
+          design = Path('open-model-market/v5_parameter_design_planner.py').read_text()
           for token in (
-              'task-derived-work-dag',
-              'effective-parameter-instance-discovery',
-              'parameter-dependency-graph',
-              'conditional-optuna-team-and-recovery-resolution',
-              'task-dag-role-partition',
-              'ortools-model-assignment',
-              'consumed_by',
-              'unconsumed_parameter_count',
+              'decision-first-then-design-then-parameter-instance',
+              'parameter_design_completed_before_value_resolution',
+              'constitutional_invariant', 'infrastructure_invariant',
+              'current_task_derived', 'current_run_feedback_derived',
           ):
-              assert token in planner, token
+              assert token in design, token
+          planner = Path('open-model-market/v5_runtime_parameter_planner.py').read_text()
+          assert 'current-decisions-first-then-generate-parameter-identities' in planner
+          assert 'parameter_ids_are_generated_after_decision_discovery' in planner
+          assert 'fixed_business_parameter_catalog_used' in planner
           orchestrator = Path('open-model-market/v5_governed_plan_orchestrator.py').read_text()
           assert 'depends_on_role_ids' in orchestrator
           assert 'fixed_role_grammar_used' in orchestrator
@@ -198,6 +237,7 @@ jobs:
             tests.test_workflow_contract \
             tests.test_legacy_runtime_removed \
             tests.test_v5_constitution_policy \
+            tests.test_v5_parameter_design_meta \
             tests.test_v5_task_adaptive_scoring \
             tests.test_top50_pool_optimizer \
             tests.test_v5_hierarchical_task_parameter_planner \
@@ -205,7 +245,10 @@ jobs:
             tests.test_v5_no_tools_network_policy \
             tests.test_v5_runtime_knob_closure \
             tests.test_v5_runtime_knob_audit \
-            tests.test_v5_task_work_graph_independence
+            tests.test_v5_task_work_graph_independence \
+            tests.test_v5_runtime_generated_parameters \
+            tests.test_v5_dynamic_role_scoring \
+            tests.test_v5_hierarchical_production_entry
 
       - name: Verify active execution path has no Provider pinning or model business gates
         run: |
@@ -230,5 +273,7 @@ jobs:
           no_tools = (Path('open-model-market') / 'v5_no_tools_policy.py').read_text().casefold()
           for token in ('tools', 'tool_choice', 'function_call', 'web_search', 'mcp'):
               assert token in no_tools, token
+          active = (Path('open-model-market') / 'v5_hierarchical_candidate_optimizer.py').read_text()
+          assert 'from v5_parameter_design_planner import' in active
           assert getattr(optimizer, 'HIERARCHICAL_TASK_PARAMETER_PLANNER_ACTIVE', False) is True
           PY

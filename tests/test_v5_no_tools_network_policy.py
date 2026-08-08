@@ -349,10 +349,12 @@ class NoToolsNetworkPolicyTests(unittest.TestCase):
             )
         )
         self.assertEqual(
-            "v5-constitutional-policy-11-runtime-knob-closure",
+            "v5-constitutional-policy-12-parameter-design-closure",
             policy["schema_version"],
         )
+        self.assertEqual("CONSTITUTION.md", policy["authority"])
         self.assertEqual("no-tools", policy["only_hard_model_boundary"])
+        self.assertTrue(policy["dynamic_task_matching"]["parameter_design_required"])
         tools = policy["tool_policy"]
         self.assertTrue(tools["request_tool_fields_forbidden"])
         self.assertTrue(tools["response_tool_evidence_forbidden"])

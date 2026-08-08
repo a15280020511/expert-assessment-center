@@ -2,13 +2,13 @@
 
 Pre-execution order:
 current ticket -> constitutional no-tools route boundary -> current work DAG ->
-required decision discovery -> generated ParameterSpec identities -> parameter DAG ->
-current-signal/Optuna resolution -> role DAG -> current-signal model scoring ->
+required decision discovery -> parameter design -> generated ParameterSpec identities ->
+parameter DAG -> current-signal resolution -> role DAG -> current-signal model scoring ->
 OR-Tools model-role assignment.
 
 Runtime standby promotion is a separate current-run replanning phase. Stable control
-surface names describe infrastructure capabilities only; business parameter identities
-and values are generated after the current decisions are known.
+surface names describe infrastructure capabilities only; business parameter identities,
+designs and values are generated after the current decisions are known.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from typing import Any, Mapping
 
 import v5_top50_pool_optimizer as base
 from v5_no_tools_policy import forbidden_model_route
-from v5_runtime_parameter_planner import (
+from v5_parameter_design_planner import (
     PRINCIPLES,
     SCHEMA_VERSION as DYNAMIC_PARAMETER_GRAPH_SCHEMA_VERSION,
     build_runtime_planning_context,
@@ -69,6 +69,11 @@ def _materialize(
                 "no candidate survives the constitutional no-tools route boundary"
             )
         planning = build_runtime_planning_context(packet, candidates)
+        design_audit = dict(planning.get("parameter_design_audit") or {})
+        if design_audit.get("status") != "PASS":
+            raise HierarchicalOptimizationError(
+                "parameter design audit did not pass before value resolution"
+            )
         profile = dict(planning["resolved_profile"])
         roles = [dict(row) for row in planning["role_plan"]]
         recovery_count = int(planning["recovery_count"])
@@ -134,7 +139,7 @@ def _materialize(
 
     audit = {
         **solver_audit,
-        "schema_version": "current-ticket-generated-expert-composition-1",
+        "schema_version": "current-ticket-generated-expert-composition-2",
         "dynamic_parameter_graph_schema_version": (
             DYNAMIC_PARAMETER_GRAPH_SCHEMA_VERSION
         ),
@@ -146,6 +151,7 @@ def _materialize(
         "constitutional_candidate_boundary": constitutional_candidate_boundary,
         "task_decomposition": decomposition,
         "parameter_requirements": parameter_requirements,
+        "parameter_design_audit": design_audit,
         "resolved_parameters": resolved_parameters,
         "parameter_coverage_audit": parameter_coverage,
         "task_demand_profile": profile,
@@ -176,6 +182,8 @@ def _materialize(
         "task_decomposition_completed": True,
         "parameter_requirement_discovery_completed": True,
         "required_decision_discovery_completed": True,
+        "parameter_design_completed_before_parameter_resolution": True,
+        "parameter_design_status": design_audit.get("status"),
         "parameter_ids_generated_after_decision_discovery": True,
         "parameter_dependency_graph_completed": True,
         "parameter_values_resolved_before_team_composition": True,
@@ -184,6 +192,7 @@ def _materialize(
         "model_assignment_executed_after_parameter_resolution": True,
         "runtime_feedback_replanning_separate_from_planning": True,
         "all_calculable_planning_parameters_dynamic": True,
+        "all_parameter_design_dimensions_classified": True,
         "all_parameter_instances_current_task_derived": True,
         "fixed_parameter_template_used": False,
         "fixed_business_parameter_catalog_used": False,
@@ -229,6 +238,8 @@ def _materialize(
             "task_decomposition_completed": True,
             "parameter_requirement_discovery_completed": True,
             "required_decision_discovery_completed": True,
+            "parameter_design_completed_before_parameter_resolution": True,
+            "parameter_design_audit": design_audit,
             "parameter_ids_generated_after_decision_discovery": True,
             "parameter_dependency_graph_completed": True,
             "parameter_values_resolved_before_model_assignment": True,
@@ -278,15 +289,17 @@ def _materialize(
             "tools_allowed": False,
             "only_hard_model_boundary": "no-tools",
             "all_calculable_planning_parameters_dynamic": True,
+            "all_parameter_design_dimensions_classified": True,
             "all_parameter_instances_current_task_derived": True,
             "selection_policy": (
                 "governance candidates -> constitutional no-tools route boundary -> "
-                "current-ticket work DAG -> discover required decisions -> generate "
-                "opaque current ParameterSpec identities -> generated parameter DAG -> "
-                "resolve current values with graph signals and conditional Optuna -> "
-                "derive arbitrary current role DAG and empirical reasoning effort -> "
-                "normalize current role/task scoring strengths without fixed business "
-                "coefficients -> OR-Tools assignment -> current-run standby replanning"
+                "current-ticket work DAG -> discover required decisions -> design each "
+                "active parameter and classify invariant/task/run-derived dimensions -> "
+                "generate opaque current ParameterSpec identities -> parameter DAG -> "
+                "resolve current values with current signals -> derive arbitrary current "
+                "role DAG and empirical reasoning effort -> normalize current role/task "
+                "scoring strengths without fixed business coefficients -> OR-Tools "
+                "assignment -> current-run standby replanning"
             ),
         }
     )
@@ -294,13 +307,14 @@ def _materialize(
     selection_basis_sha256 = base._sha(plan)  # noqa: SLF001
 
     receipt = {
-        "schema_version": "expert-center-generated-parameter-selection-receipt-1",
+        "schema_version": "expert-center-generated-parameter-selection-receipt-2",
         "selection_basis_sha256": selection_basis_sha256,
         "planning_sequence": planning_sequence,
         "runtime_replanning": runtime_replanning,
         "constitutional_candidate_boundary": constitutional_candidate_boundary,
         "task_decomposition": decomposition,
         "parameter_requirements": parameter_requirements,
+        "parameter_design_audit": design_audit,
         "resolved_parameters": resolved_parameters,
         "parameter_coverage_audit": parameter_coverage,
         "selected_models": [row["model"] for row in selected],
@@ -313,6 +327,8 @@ def _materialize(
         "metric_role_adapter_used": False,
         "fixed_metric_role_grammar_used": False,
         "fixed_business_weight_coefficients_used": False,
+        "parameter_design_completed_before_parameter_resolution": True,
+        "all_parameter_design_dimensions_classified": True,
         "parameter_ids_generated_after_decision_discovery": True,
         "constitutional_no_tools_route_prefilter_applied": True,
         "constitutional_no_tools_route_rejected_count": len(no_tools_rejected),
