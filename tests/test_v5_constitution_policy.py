@@ -17,18 +17,57 @@ class ConstitutionPolicyTests(unittest.TestCase):
             (MARKET / "constitutional_policy.json").read_text(encoding="utf-8")
         )
 
-    def test_v11_runtime_knob_closure_policy_is_active(self) -> None:
+    def test_v12_parameter_design_closure_policy_is_active(self) -> None:
         self.assertEqual(
             self.policy["schema_version"],
-            "v5-constitutional-policy-11-runtime-knob-closure",
+            "v5-constitutional-policy-12-parameter-design-closure",
         )
         self.assertEqual(self.policy["authority"], "CONSTITUTION.md")
         self.assertEqual(self.policy["only_hard_model_boundary"], "no-tools")
         matching = self.policy["dynamic_task_matching"]
         self.assertTrue(matching["runtime_parameter_lifecycle_required"])
         self.assertTrue(matching["runtime_knob_coverage_required"])
+        self.assertTrue(matching["parameter_design_required"])
+        self.assertTrue(matching["parameter_design_before_resolution_required"])
         self.assertFalse(matching["computed_but_unused_allowed"])
         self.assertFalse(matching["semantic_relatedness_can_create_hard_dependency"])
+        self.assertTrue(
+            matching["constitutional_invariants_must_not_be_disguised_as_dynamic"]
+        )
+        self.assertEqual(
+            matching["parameter_lifecycle"],
+            [
+                "task-model",
+                "discover-decisions",
+                "design-parameters",
+                "instantiate-parameters",
+                "resolve",
+                "bind",
+                "consume",
+                "observe",
+                "recompute-from-current-run-feedback",
+            ],
+        )
+        self.assertEqual(
+            matching["parameter_design_dimensions"],
+            [
+                "value_type",
+                "domain",
+                "resolver",
+                "dependencies",
+                "consumer_binding",
+                "recompute_trigger",
+            ],
+        )
+        self.assertEqual(
+            set(matching["parameter_design_allowed_classes"]),
+            {
+                "constitutional_invariant",
+                "infrastructure_invariant",
+                "current_task_derived",
+                "current_run_feedback_derived",
+            },
+        )
 
     def test_execution_has_no_free_first_or_exact_sha_qualification_gate(self) -> None:
         admission = self.policy["execution_admission"]
@@ -194,6 +233,18 @@ class ConstitutionPolicyTests(unittest.TestCase):
         self.assertEqual(quality["quality_score_role"], "telemetry-only")
         self.assertTrue(quality["final_evidence_validation_fail_closed"])
 
+    def test_runtime_dependency_allowlist_matches_constitution(self) -> None:
+        dependencies = self.policy["runtime_dependencies"]
+        self.assertTrue(dependencies["must_match_constitution"])
+        self.assertEqual(
+            set(dependencies["allowed"]),
+            {"jsonschema", "networkx", "ortools", "optuna"},
+        )
+        self.assertFalse(
+            dependencies["additional_runtime_dependencies_allowed_without_constitution_change"]
+        )
+        self.assertFalse(dependencies["heavy_agent_orchestration_framework_allowed"])
+
     def test_expert_tools_remain_hard_forbidden(self) -> None:
         tools = self.policy["tool_policy"]
         for key in (
@@ -223,7 +274,7 @@ class ConstitutionPolicyTests(unittest.TestCase):
         self.assertEqual(integrity["model_plane_hosts"], ["openrouter.ai"])
         self.assertEqual(integrity["control_plane_hosts"], ["api.github.com"])
 
-    def test_production_model_policy_requires_only_open_provider_and_no_tools(self) -> None:
+    def test_production_model_policy_requires_parameter_design_runtime_coverage_and_no_tools(self) -> None:
         promotion = self.policy["production_promotion"]
         self.assertFalse(promotion["zero_cost_ci_required"])
         self.assertFalse(promotion["zero_cost_free_canary_required"])
@@ -231,6 +282,7 @@ class ConstitutionPolicyTests(unittest.TestCase):
         self.assertFalse(promotion["signed_weekly_top50_pool_required"])
         self.assertFalse(promotion["ortools_optimality_proof_required"])
         self.assertFalse(promotion["task_adaptive_value_scoring_required"])
+        self.assertTrue(promotion["parameter_design_coverage_required"])
         self.assertTrue(promotion["runtime_knob_coverage_required"])
         self.assertTrue(promotion["unrestricted_provider_routing_required"])
         self.assertTrue(promotion["no_tools_required"])
