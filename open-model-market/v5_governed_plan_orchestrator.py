@@ -20,9 +20,6 @@ class GovernedPlanOrchestrationError(RuntimeError):
     """Raised only when a dynamic plan cannot form a finite executable DAG."""
 
 
-_REASONING_EFFORTS = {"low", "medium", "high"}
-
-
 def _rows(value: Any) -> list[Any]:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         return list(value)
@@ -56,16 +53,6 @@ def _functions(row: Mapping[str, Any]) -> list[str]:
         return list(dict.fromkeys(explicit))
     kind = str(row.get("role_kind") or "task-role").strip()
     return [f"execute:{_slug(kind, 'task-role')}", "assumption-testing"]
-
-
-def _reasoning_effort(row: Mapping[str, Any], role_id: str) -> str:
-    """Require the planner's current-task effort instead of inventing a default."""
-    effort = str(row.get("reasoning_effort") or "").strip().casefold()
-    if effort not in _REASONING_EFFORTS:
-        raise GovernedPlanOrchestrationError(
-            f"dynamic role {role_id} has no valid task-derived reasoning_effort"
-        )
-    return effort
 
 
 def _dependencies(
@@ -154,6 +141,7 @@ def build_governed_proposal(
             if isinstance(parameter_profile, Mapping)
             else {}
         )
+        effort = str(row.get("reasoning_effort") or "").strip().casefold()
         work_items.append(
             {
                 "work_id": work_ids[index],
@@ -181,10 +169,10 @@ def build_governed_proposal(
                 "role_kind": role_kind,
                 "functions": _functions(row),
                 "model": str(row.get("model") or ""),
-                "reasoning_effort": _reasoning_effort(row, role_ids[index]),
-                "reasoning_effort_source": str(
-                    row.get("reasoning_effort_source")
-                    or "current-task-planner-materialized-value"
+                "reasoning_effort": effort or None,
+                "reasoning_effort_source": (
+                    str(row.get("reasoning_effort_source") or "").strip()
+                    or None
                 ),
                 "estimated_task_cost_usd": float(
                     row.get("estimated_task_cost_usd") or 0.0
@@ -231,7 +219,7 @@ def build_governed_proposal(
         },
     }
     audit = {
-        "schema_version": "v5-exact-dynamic-role-dag-materialization-4-no-hidden-effort-default",
+        "schema_version": "v5-exact-dynamic-role-dag-materialization-5-deferred-effort-closure",
         "status": "PASS",
         "candidate_pool_authority": "decision-system-governance",
         "model_assignment_authority": "expert-assessment-center-dynamic-ortools",
@@ -253,7 +241,7 @@ def build_governed_proposal(
             )
             for row in selected
         ),
-        "reasoning_effort_required_from_current_task_planner": True,
+        "reasoning_effort_closure_boundary": "executable-proposal-materialization-and-request-binding",
         "hidden_reasoning_effort_default_used": False,
         "cost_effectiveness_priority": True,
         "soft_token_and_cost_efficiency": True,
