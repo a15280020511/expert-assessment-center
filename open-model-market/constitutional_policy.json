@@ -1,5 +1,5 @@
 {
-  "schema_version": "v5-constitutional-policy-11-runtime-knob-closure",
+  "schema_version": "v5-constitutional-policy-12-parameter-design-closure",
   "authority": "CONSTITUTION.md",
   "fail_closed": false,
   "only_hard_model_boundary": "no-tools",
@@ -43,8 +43,28 @@
     "all_calculable_planning_parameters_dynamic": true,
     "runtime_parameter_lifecycle_required": true,
     "runtime_knob_coverage_required": true,
+    "parameter_design_required": true,
+    "parameter_design_before_resolution_required": true,
+    "parameter_design_dimensions": [
+      "value_type",
+      "domain",
+      "resolver",
+      "dependencies",
+      "consumer_binding",
+      "recompute_trigger"
+    ],
+    "parameter_design_allowed_classes": [
+      "constitutional_invariant",
+      "infrastructure_invariant",
+      "current_task_derived",
+      "current_run_feedback_derived"
+    ],
+    "constitutional_invariants_must_not_be_disguised_as_dynamic": true,
     "parameter_lifecycle": [
-      "discover",
+      "task-model",
+      "discover-decisions",
+      "design-parameters",
+      "instantiate-parameters",
       "resolve",
       "bind",
       "consume",
@@ -53,15 +73,19 @@
     ],
     "planning_sequence": [
       "task-decomposition",
-      "parameter-requirement-discovery",
+      "required-decision-discovery",
+      "parameter-design",
+      "parameter-instance-construction",
       "parameter-value-resolution",
       "team-and-role-derivation",
       "ortools-model-assignment",
       "runtime-request-binding"
     ],
-    "task_decomposition": "task-derived-before-parameter-selection",
+    "task_decomposition": "task-derived-before-decision-discovery",
+    "required_decision_discovery": "task-and-candidate-derived-before-parameter-design",
+    "parameter_design": "current-decision-plus-invariant-classification-before-parameter-instantiation",
     "parameter_requirement_discovery": "task-and-candidate-derived-before-value-resolution",
-    "parameter_value_resolution": "current-task-derived-before-team-composition",
+    "parameter_value_resolution": "current-task-derived-after-parameter-design-before-team-composition",
     "parameter_set_task_derived": true,
     "fixed_parameter_template_allowed": false,
     "fixed_parameter_values_allowed": false,
@@ -174,6 +198,17 @@
     "final_evidence_validation_fail_closed": true,
     "internal_fact_label_only_mismatch_can_be_audited_warning": true
   },
+  "runtime_dependencies": {
+    "must_match_constitution": true,
+    "allowed": {
+      "jsonschema": "protocol-and-structure-validation",
+      "networkx": "finite-dag-orchestration-and-cycle-validation",
+      "ortools": "model-role-recovery-combination-optimization",
+      "optuna": "finite-low-dimensional-current-task-shape-search"
+    },
+    "additional_runtime_dependencies_allowed_without_constitution_change": false,
+    "heavy_agent_orchestration_framework_allowed": false
+  },
   "delivery": {
     "full_success_required_to_return_useful_output": false,
     "degraded_delivery_allowed": true,
@@ -181,6 +216,7 @@
     "minimum_successful_node_gate": false,
     "failed_or_missing_items_must_be_disclosed": true,
     "request_and_cost_ledgers_required": true,
+    "parameter_design_must_be_audited": true,
     "runtime_knob_coverage_must_be_audited": true
   },
   "tool_policy": {
@@ -222,6 +258,7 @@
     "signed_weekly_top50_pool_required": false,
     "ortools_optimality_proof_required": false,
     "task_adaptive_value_scoring_required": false,
+    "parameter_design_coverage_required": true,
     "runtime_knob_coverage_required": true,
     "unrestricted_provider_routing_required": true,
     "no_tools_required": true,
