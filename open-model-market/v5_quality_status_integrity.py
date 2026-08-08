@@ -203,12 +203,21 @@ def _rewrite_request_audit(root: Path, integrity_status: str) -> None:
     graph = load_json_or_default(root / "v5-execution-graph.json", {})
     if not isinstance(graph, Mapping):
         graph = {}
-    knob_audit = audit_runtime_knob_coverage(graph, requests)
+    node_results = load_json_or_default(root / "v5-node-results.json", [])
+    if not isinstance(node_results, list):
+        node_results = []
+    knob_audit = audit_runtime_knob_coverage(graph, requests, node_results)
     audit["runtime_knob_coverage"] = knob_audit
     audit["runtime_knob_coverage_status"] = knob_audit["status"]
     audit["computed_runtime_knob_but_unused_count"] = len(
         knob_audit["computed_but_unused"]
     )
+    audit["dynamic_model_timeout_binding_status"] = knob_audit[
+        "dynamic_timeout_binding_status"
+    ]
+    audit["attempts_with_dynamic_model_timeout_binding"] = knob_audit[
+        "attempts_with_dynamic_timeout_binding"
+    ]
     write_json(audit_path, audit)
 
 
