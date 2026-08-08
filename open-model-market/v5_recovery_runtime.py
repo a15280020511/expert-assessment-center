@@ -28,6 +28,7 @@ from v5_replacement_truncation_rebind import (
 )
 from v5_run387_hardening import install_run387_hardening
 from v5_soft_resource_governance import build_runtime
+from v5_task_scope_quality_circuit import install_task_scope_quality_circuit
 from v5_runtime import ProductionRuntime, RetryPolicy, RuntimeConfig
 
 
@@ -54,6 +55,7 @@ def build_production_runtime(config: RuntimeConfig) -> ProductionRuntime:
     runtime = install_continuous_spatiotemporal_replanning(runtime)
     runtime = install_replacement_truncation_rebind(runtime)
     runtime = install_cost_effective_continuous_runtime(runtime)
+    runtime = install_task_scope_quality_circuit(runtime)
     runtime = install_cost_effective_final_payload_policy(runtime)
     install_final_request_audit_hardening()
     return runtime
