@@ -73,6 +73,7 @@ class ParameterDesignMetaTests(unittest.TestCase):
             sequence.index("current-signal-resolution-and-optuna"),
         )
         self.assertTrue(context["parameter_design_completed_before_value_resolution"])
+        self.assertTrue(context["parameter_specs_constructed_from_design"])
         self.assertEqual(context["parameter_design_audit"]["status"], "PASS")
 
     def test_every_parameter_design_dimension_is_classified(self) -> None:
@@ -89,9 +90,7 @@ class ParameterDesignMetaTests(unittest.TestCase):
         }
         graph = build_current_work_graph(packet)
         decisions = discover_required_decisions(graph, candidates())
-        profile = {
-            "pressure": {"overall": 50},
-        }
+        profile = {"pressure": {"overall": 50}}
         design = design_required_parameters(graph, decisions, candidates(), profile)
         self.assertEqual(design["status"], "PASS")
         self.assertEqual(design["design_count"], len(decisions))
@@ -112,25 +111,34 @@ class ParameterDesignMetaTests(unittest.TestCase):
                 self.assertIn(dimension["classification"], ALLOWED_CLASSES)
                 self.assertTrue(dimension["reason"])
 
-    def test_parameter_specs_carry_pre_resolution_design_evidence(self) -> None:
+    def test_parameter_specs_are_constructed_from_design(self) -> None:
         context = build_runtime_planning_context(
             {"task": {"question": "给出判断"}},
             candidates(),
         )
         requirements = context["parameter_requirements"]
         self.assertTrue(
-            requirements["parameter_design_completed_before_value_resolution"]
+            requirements["parameter_design_completed_before_parameter_instantiation"]
         )
-        self.assertFalse(requirements["parameter_design_missing_parameter_ids"])
+        self.assertTrue(requirements["parameter_specs_constructed_from_design"])
+        self.assertTrue(requirements["parameter_ids_are_generated_after_parameter_design"])
         for spec in requirements["parameter_specs"]:
+            self.assertTrue(spec["parameter_spec_constructed_from_design"])
             self.assertIn("parameter_design", spec)
             self.assertEqual(
                 spec["parameter_design"]["decision_id"],
                 spec["decision_id"],
             )
+            self.assertEqual(
+                spec["domain"],
+                spec["parameter_design"]["dimensions"]["domain"]["effective"],
+            )
 
     def test_active_optimizer_uses_parameter_design_planner(self) -> None:
         source = (MARKET / "v5_hierarchical_candidate_optimizer.py").read_text(
+            encoding="utf-8"
+        )
+        design_source = (MARKET / "v5_parameter_design_planner.py").read_text(
             encoding="utf-8"
         )
         self.assertIn("from v5_parameter_design_planner import", source)
@@ -139,6 +147,8 @@ class ParameterDesignMetaTests(unittest.TestCase):
             source,
         )
         self.assertIn("parameter_design_completed_before_parameter_resolution", source)
+        self.assertIn("build_parameter_requirements_from_design", design_source)
+        self.assertNotIn("base.discover_parameter_requirements(", design_source)
 
 
 if __name__ == "__main__":
