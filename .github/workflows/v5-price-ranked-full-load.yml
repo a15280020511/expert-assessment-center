@@ -7,12 +7,14 @@ on:
       - "CONSTITUTION.md"
       - "open-model-market/v5_task_adaptive_scoring.py"
       - "open-model-market/v5_top50_pool_optimizer.py"
-      - "open-model-market/v5_top50_plan_validation.py"
+      - "open-model-market/v5_parameter_design_planner.py"
+      - "open-model-market/v5_hierarchical_candidate_optimizer.py"
       - "open-model-market/v5_governance_model_plan.py"
       - "open-model-market/v5_dynamic_pipeline.py"
       - "open-model-market/v5_runtime.py"
       - "tests/test_v5_task_adaptive_scoring.py"
       - "tests/test_top50_pool_optimizer.py"
+      - "tests/test_v5_parameter_design_meta.py"
       - "tests/test_v5_dynamic_recovery_resilience.py"
       - ".github/workflows/v5-price-ranked-full-load.yml"
       - "requirements*.txt"
@@ -57,6 +59,7 @@ jobs:
             -m unittest \
             tests.test_v5_task_adaptive_scoring \
             tests.test_top50_pool_optimizer \
+            tests.test_v5_parameter_design_meta \
             tests.test_v5_dynamic_recovery_resilience -v \
             2>&1 | tee full-load-evidence/targeted-tests.log
           coverage report --show-missing --fail-under=85 \
@@ -109,6 +112,8 @@ jobs:
               assert audit['optimizer_optimality_required'] is False
               assert audit['semantic_keyword_routing_used'] is False
               assert audit['all_calculable_planning_parameters_dynamic'] is True
+              assert audit['parameter_design_completed_before_parameter_resolution'] is True
+              assert audit['parameter_design_status'] == 'PASS'
               assert audit['hard_model_eligibility_gates'] == []
               assert audit['only_hard_model_boundary'] == 'no-tools'
               assert audit['tool_use_forbidden'] is True
@@ -184,7 +189,7 @@ jobs:
           assert budget_plan['optimizer_audit']['budget_constraint_used'] is False
 
           receipt = {
-              'schema_version': 'v5-fully-dynamic-full-load-4',
+              'schema_version': 'v5-fully-dynamic-full-load-5-parameter-design',
               'status': 'PASS',
               'target_sha': os.environ['TARGET_SHA'],
               'parallel_runs': 64,
@@ -202,6 +207,7 @@ jobs:
               'model_assignment_authority': 'expert-assessment-center-dynamic-ortools',
               'optimizer': 'ortools-cp-sat-with-feasible-or-heuristic-fallback',
               'all_calculable_planning_parameters_dynamic': True,
+              'parameter_design_completed_before_parameter_resolution': True,
               'hard_model_eligibility_gates': [],
               'only_hard_model_boundary': 'no-tools',
               'tool_use_forbidden': True,
