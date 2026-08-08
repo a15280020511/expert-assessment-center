@@ -1,14 +1,29 @@
 name: Validate Runtime Generated Parameters
 
 on:
-  pull_request:
+  push:
+    branches: [main]
     paths:
       - "open-model-market/v5_task_work_graph.py"
       - "open-model-market/v5_runtime_parameter_planner.py"
+      - "open-model-market/v5_parameter_design_planner.py"
       - "open-model-market/v5_runtime_role_scoring.py"
       - "open-model-market/v5_runtime_role_assignment.py"
       - "open-model-market/v5_hierarchical_candidate_optimizer.py"
       - "tests/test_v5_runtime_generated_parameters.py"
+      - "tests/test_v5_parameter_design_meta.py"
+      - "tests/test_v5_dynamic_role_scoring.py"
+      - ".github/workflows/runtime-generated-parameters-validate.yml"
+  pull_request:
+    paths:
+      - "open-model-market/v5_task_work_graph.py"
+      - "open-model-market/v5_runtime_parameter_planner.py"
+      - "open-model-market/v5_parameter_design_planner.py"
+      - "open-model-market/v5_runtime_role_scoring.py"
+      - "open-model-market/v5_runtime_role_assignment.py"
+      - "open-model-market/v5_hierarchical_candidate_optimizer.py"
+      - "tests/test_v5_runtime_generated_parameters.py"
+      - "tests/test_v5_parameter_design_meta.py"
       - "tests/test_v5_dynamic_role_scoring.py"
       - ".github/workflows/runtime-generated-parameters-validate.yml"
   workflow_dispatch:
@@ -46,15 +61,17 @@ jobs:
           python -m compileall -q \
             open-model-market/v5_task_work_graph.py \
             open-model-market/v5_runtime_parameter_planner.py \
+            open-model-market/v5_parameter_design_planner.py \
             open-model-market/v5_runtime_role_scoring.py \
             open-model-market/v5_runtime_role_assignment.py \
             open-model-market/v5_hierarchical_candidate_optimizer.py
 
-      - name: Run generated parameter and role scoring regressions
+      - name: Run generated parameter, design and role scoring regressions
         run: |
           set -euo pipefail
           PYTHONPATH=open-model-market python -m unittest -v \
             tests.test_v5_runtime_generated_parameters \
+            tests.test_v5_parameter_design_meta \
             tests.test_v5_dynamic_role_scoring \
             tests.test_v5_no_tools_candidate_prefilter \
             tests.test_v5_hierarchical_production_entry
@@ -65,11 +82,17 @@ jobs:
           PYTHONPATH=open-model-market python - <<'PY'
           from pathlib import Path
           source = Path('open-model-market/v5_hierarchical_candidate_optimizer.py').read_text()
+          assert 'from v5_parameter_design_planner import' in source
           assert 'build_runtime_planning_context' in source
           assert 'solve_runtime_roles' in source
           assert 'from v5_dynamic_parameter_graph import' not in source
           assert 'from v5_dynamic_role_assignment import' not in source
           assert 'metric_role_id' not in source
+          design = Path('open-model-market/v5_parameter_design_planner.py').read_text()
+          assert 'decision-first-then-design-then-parameter-instance' in design
+          assert 'parameter_design_completed_before_value_resolution' in design
+          assert 'constitutional_invariant' in design
+          assert 'current_task_derived' in design
           planner = Path('open-model-market/v5_runtime_parameter_planner.py').read_text()
           assert 'current-decisions-first-then-generate-parameter-identities' in planner
           assert 'parameter_ids_are_generated_after_decision_discovery' in planner
