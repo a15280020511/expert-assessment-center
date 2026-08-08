@@ -187,34 +187,41 @@ def _price_telemetry(raw: Mapping[str, Any]) -> dict[str, Any]:
     prompt = max(0.0, _number(raw.get("prompt_usd_per_million"), 0.0))
     completion = max(0.0, _number(raw.get("completion_usd_per_million"), 0.0))
     rank = max(0.0, _number(raw.get("price_rank_usd_per_million"), 0.0))
-    explicit_task = raw.get("estimated_task_cost_usd")
-    explicit_cost = raw.get("estimated_cost")
-    task_cost = max(0.0, _number(explicit_task, -1.0))
-    if task_cost < 0:
-        task_cost = max(0.0, _number(explicit_cost, 0.0))
+    task_cost_available = raw.get("estimated_task_cost_usd") not in {None, ""}
+    compatibility_cost_available = raw.get("estimated_cost") not in {None, ""}
+    if task_cost_available:
+        task_cost = max(0.0, _number(raw.get("estimated_task_cost_usd"), 0.0))
+    elif compatibility_cost_available:
+        task_cost = max(0.0, _number(raw.get("estimated_cost"), 0.0))
+    else:
+        task_cost = 0.0
     zero_cost = bool(
         raw.get("zero_cost_candidate") is True
         or model.casefold().endswith(":free")
-        or (
-            (prompt > 0.0 or completion > 0.0 or rank > 0.0)
-            and prompt == 0.0
-            and completion == 0.0
-            and rank == 0.0
-        )
     )
     # Runtime recovery ordering needs a monotonic soft cost signal even when a
     # task-specific dollar estimate was not emitted for standby rows.  The
     # per-million price rank is not represented as actual task spend; it is kept
     # separately and used only as a tie-break signal.
-    cost_rank_signal = task_cost if task_cost > 0.0 else rank
-    if cost_rank_signal <= 0.0 and not zero_cost:
+    if task_cost_available or compatibility_cost_available:
+        cost_rank_signal = task_cost
+        cost_rank_source = "task-or-compatibility-estimate"
+    elif rank > 0.0:
+        cost_rank_signal = rank
+        cost_rank_source = "catalog-price-rank-usd-per-million"
+    else:
         cost_rank_signal = prompt + completion
+        cost_rank_source = "catalog-prompt-plus-completion-usd-per-million"
     return {
         "estimated_task_cost_usd": task_cost,
+        "estimated_task_cost_available": bool(
+            task_cost_available or compatibility_cost_available
+        ),
         "prompt_usd_per_million": prompt,
         "completion_usd_per_million": completion,
         "price_rank_usd_per_million": rank,
         "cost_rank_signal": max(0.0, cost_rank_signal),
+        "cost_rank_signal_source": cost_rank_source,
         "zero_cost_candidate": zero_cost,
         "cost_rank_signal_is_execution_gate": False,
     }
