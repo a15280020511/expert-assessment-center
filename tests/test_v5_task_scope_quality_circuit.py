@@ -8,10 +8,10 @@ ROOT = Path(__file__).resolve().parents[1]
 MARKET = ROOT / "open-model-market"
 sys.path.insert(0, str(MARKET))
 
-from v5_run387_hardening import task_obligation_violations  # noqa: E402
 from v5_runtime import FailureCategory, RuntimeAttempt  # noqa: E402
 from v5_task_constraints import normalized_quantities  # noqa: E402
 from v5_task_scope_quality_circuit import (  # noqa: E402
+    business_task_obligation_violations,
     project_business_task,
     repeated_deterministic_quality_signal,
 )
@@ -63,8 +63,8 @@ class TaskScopeQualityCircuitTests(unittest.TestCase):
         self.assertIn("缺乏实时证据的2026年福州精确工资", projected)
         self.assertIn("最终报告必须明确区分事实/一般经验", projected)
 
-        answer = """总体建议：以稳定和长期可持续为目标，优先比较快递与保安；外卖更偏向收入弹性和短期过渡，网约车高度依赖已有车辆条件。\n\n|情形|建议|\n|---|---|\n|总体|快递/保安优先比较|"""
-        violations = task_obligation_violations(projected, answer)
+        answer = """事实/一般经验：四类工作在资本投入、天气暴露、劳动强度和平台依赖方面存在结构性差异。\n推断：以稳定和长期可持续为目标，应优先比较快递与保安。\n建议：外卖更偏向收入弹性和短期过渡，网约车高度依赖已有车辆条件。\n\n|情形|建议|\n|---|---|\n|总体|快递/保安优先比较|"""
+        violations = business_task_obligation_violations(projected, answer)
         self.assertFalse(
             any("goal-recommendation:性价比优先" in row for row in violations)
         )
@@ -87,6 +87,29 @@ class TaskScopeQualityCircuitTests(unittest.TestCase):
         projected, audit = project_business_task(task)
         self.assertEqual(task, projected)
         self.assertFalse(audit["projection_applied"])
+
+    def test_user_business_cost_effectiveness_goal_is_preserved(self) -> None:
+        task = "比较A与B，性价比优先，并给出最终建议。"
+        projected, audit = project_business_task(task)
+        self.assertEqual(task, projected)
+        self.assertFalse(audit["projection_applied"])
+        violations = business_task_obligation_violations(
+            projected,
+            "建议选择A方案。",
+        )
+        self.assertIn(
+            "missing-task-obligation:goal-recommendation:性价比优先",
+            violations,
+        )
+
+    def test_explicit_business_calculation_still_requires_calculated_class(self) -> None:
+        task = "明确区分事实、计算结果和建议，并计算A与B的总成本。"
+        answer = "事实：A与B的输入已给定。建议：选择A。"
+        violations = business_task_obligation_violations(task, answer)
+        self.assertIn(
+            "missing-task-obligation:classification:calculated",
+            violations,
+        )
 
     def test_repeated_same_deterministic_obligation_across_three_models_opens_signal(self) -> None:
         reason = "missing-task-obligation:decision-table"
