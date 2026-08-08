@@ -26,6 +26,13 @@ PRODUCTION_POLICY_EVIDENCE = {
     "only_hard_model_boundary": "no-tools",
     "model_substitution_allowed": True,
     "provider_routing_mode": "unrestricted-openrouter",
+    "continuous_spatiotemporal_replanning": True,
+    "recompute_after_each_model_attempt": True,
+    "recompute_before_each_retry_or_replacement": True,
+    "recompute_when_candidate_space_changes": True,
+    "current_run_feedback_persists_across_replacement_models": True,
+    "finite_execution_graph_invariant_preserved": True,
+    "cross_task_history_used": False,
 }
 ROUTED_BATCH_BUSINESS_GATE_DISABLED = True
 ONLINE_TOOL_ROUTE_REMAINS_FORBIDDEN = ":online" in _graph_validator._FORBIDDEN_MODEL_TERMS

@@ -97,6 +97,11 @@ jobs:
           assert matching['computed_but_unused_allowed'] is False
           assert matching['semantic_relatedness_can_create_hard_dependency'] is False
           assert matching['constitutional_invariants_must_not_be_disguised_as_dynamic'] is True
+          assert matching['continuous_spatiotemporal_replanning_required'] is True
+          assert matching['recompute_after_each_model_attempt'] is True
+          assert matching['recompute_after_each_quality_gate'] is True
+          assert matching['recompute_before_each_retry_or_replacement'] is True
+          assert matching['current_run_feedback_persists_across_replacement_models'] is True
           assert matching['parameter_lifecycle'] == [
               'task-model', 'discover-decisions', 'design-parameters',
               'instantiate-parameters', 'resolve', 'bind', 'consume', 'observe',
@@ -195,6 +200,7 @@ jobs:
           dynamic = Path('open-model-market/v5_dynamic_pipeline.py').read_text()
           assert 'only_hard_model_boundary' in dynamic
           assert 'model_substitution_allowed": True' in dynamic
+          assert 'continuous_spatiotemporal_replanning": True' in dynamic
           assert getattr(optimizer, 'HIERARCHICAL_TASK_PARAMETER_PLANNER_ACTIVE', False) is True
 
           active = Path('open-model-market/v5_hierarchical_candidate_optimizer.py').read_text()
@@ -248,7 +254,8 @@ jobs:
             tests.test_v5_task_work_graph_independence \
             tests.test_v5_runtime_generated_parameters \
             tests.test_v5_dynamic_role_scoring \
-            tests.test_v5_hierarchical_production_entry
+            tests.test_v5_hierarchical_production_entry \
+            tests.test_v5_continuous_spatiotemporal_replanning
 
       - name: Verify active execution path has no Provider pinning or model business gates
         run: |
@@ -270,6 +277,7 @@ jobs:
               assert 'provider.order' not in text, name
           dynamic = (Path('open-model-market') / 'v5_dynamic_pipeline.py').read_text().casefold()
           assert 'model_substitution_allowed": true' in dynamic
+          assert 'continuous_spatiotemporal_replanning": true' in dynamic
           no_tools = (Path('open-model-market') / 'v5_no_tools_policy.py').read_text().casefold()
           for token in ('tools', 'tool_choice', 'function_call', 'web_search', 'mcp'):
               assert token in no_tools, token
