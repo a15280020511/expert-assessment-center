@@ -20,6 +20,7 @@ from v5_runtime import (
     extract_actual_cost,
 )
 from v5_runtime_request_binding import audit_bound_request, bind_request_knobs
+from v5_runtime_timeout import dynamic_model_timeout_seconds, with_model_timeout
 from v5_soft_resource_governance import (
     SoftResourceExecutionEngine,
     SoftResourcePromptPolicy,
@@ -140,6 +141,49 @@ class EvidenceCompleteExecutionEngine(SoftResourceExecutionEngine):
                 }
             )
 
+    def _recorded_call(
+        self,
+        selected: SelectedNode,
+        attempts: list[Any],
+        original_task: str,
+        upstream: Sequence[Mapping[str, Any]],
+        run: Any,
+        call_fn: Any,
+        budget: Any,
+        node: SelectedNode,
+        kind: str,
+    ) -> Any:
+        timeout_audit: dict[str, Any] = {}
+
+        def timed_call(
+            run_config: Any,
+            payload: Mapping[str, Any],
+        ) -> tuple[Mapping[str, Any], float]:
+            nonlocal timeout_audit
+            safety_cap = int(getattr(run_config, "model_timeout_seconds", 240))
+            effective, timeout_audit = dynamic_model_timeout_seconds(
+                node,
+                payload,
+                safety_cap,
+            )
+            active_run = with_model_timeout(run_config, effective)
+            return call_fn(active_run, payload)
+
+        attempt = super()._recorded_call(
+            selected,
+            attempts,
+            original_task,
+            upstream,
+            run,
+            timed_call,
+            budget,
+            node,
+            kind,
+        )
+        if attempt is not None and timeout_audit:
+            attempt.answer_transformations.append(dict(timeout_audit))
+        return attempt
+
     def _record_feedback(self, attempt: Any | None) -> None:
         super()._record_feedback(attempt)
         if attempt is None:
@@ -159,6 +203,15 @@ class EvidenceCompleteExecutionEngine(SoftResourceExecutionEngine):
             # current-run feedback only; nothing survives into the next task.
             self._hard_failed_model_ids.add(model)
 
+    @staticmethod
+    def _timeout_binding(attempt: RuntimeAttempt | None) -> Mapping[str, Any]:
+        if attempt is None:
+            return {}
+        for row in reversed(attempt.answer_transformations):
+            if isinstance(row, Mapping) and row.get("type") == "dynamic-model-timeout-binding":
+                return row
+        return {}
+
     def _replacement_adaptation(
         self,
         replacement: SelectedNode,
@@ -170,54 +223,100 @@ class EvidenceCompleteExecutionEngine(SoftResourceExecutionEngine):
             source,
             reasoning_saturated,
         )
-        if source is None or self._category(source) != FailureCategory.OUTPUT_TRUNCATED:
+        if source is None:
             return adapted, inherited
 
-        request = source.request if isinstance(source.request, Mapping) else {}
-        usage = source.usage if isinstance(source.usage, Mapping) else {}
-        try:
-            previous_allowance = max(1, int(request.get("max_tokens") or 1))
-        except (TypeError, ValueError):
-            previous_allowance = 1
-        try:
-            observed_completion = max(0, int(usage.get("completion_tokens") or 0))
-        except (TypeError, ValueError):
-            observed_completion = 0
-        observed_pressure = min(
-            1.0,
-            observed_completion / max(1, previous_allowance),
-        )
-        # A genuine truncation means the prior reservation was insufficient.
-        # The next reservation grows from actual current-run pressure rather
-        # than a fixed business token ceiling.
-        multiplier = 1.0 + max(0.25, observed_pressure)
+        category = self._category(source)
+        components: list[dict[str, Any]] = []
+        if inherited is not None:
+            components.append(dict(inherited))
         profile = dict(adapted.parameter_profile)
-        try:
-            inherited_multiplier = float(
-                profile.get("dynamic_output_allowance_multiplier", 1.0)
+
+        if category == FailureCategory.OUTPUT_TRUNCATED:
+            request = source.request if isinstance(source.request, Mapping) else {}
+            usage = source.usage if isinstance(source.usage, Mapping) else {}
+            try:
+                previous_allowance = max(1, int(request.get("max_tokens") or 1))
+            except (TypeError, ValueError):
+                previous_allowance = 1
+            try:
+                observed_completion = max(0, int(usage.get("completion_tokens") or 0))
+            except (TypeError, ValueError):
+                observed_completion = 0
+            observed_pressure = min(
+                1.0,
+                observed_completion / max(1, previous_allowance),
             )
-        except (TypeError, ValueError):
-            inherited_multiplier = 1.0
-        profile["dynamic_output_allowance_multiplier"] = round(
-            max(1.0, inherited_multiplier) * multiplier,
-            6,
-        )
+            multiplier = 1.0 + max(0.25, observed_pressure)
+            try:
+                inherited_multiplier = float(
+                    profile.get("dynamic_output_allowance_multiplier", 1.0)
+                )
+            except (TypeError, ValueError):
+                inherited_multiplier = 1.0
+            profile["dynamic_output_allowance_multiplier"] = round(
+                max(1.0, inherited_multiplier) * multiplier,
+                6,
+            )
+            components.append(
+                {
+                    "policy": "current-run-truncation-derived-output-allowance-v1",
+                    "previous_output_allowance_tokens": previous_allowance,
+                    "observed_completion_tokens": observed_completion,
+                    "observed_allowance_pressure": round(observed_pressure, 6),
+                    "next_allowance_multiplier": profile["dynamic_output_allowance_multiplier"],
+                    "task_admission_gate": False,
+                    "result_validity_gate": False,
+                }
+            )
+
+        if category == FailureCategory.PROVIDER_TIMEOUT:
+            binding = self._timeout_binding(source)
+            try:
+                previous_timeout = max(
+                    1,
+                    int(binding.get("effective_timeout_seconds") or 1),
+                )
+            except (TypeError, ValueError):
+                previous_timeout = 1
+            observed_pressure = min(
+                1.0,
+                float(source.latency_seconds) / max(1.0, float(previous_timeout)),
+            )
+            multiplier = 1.0 + max(0.25, observed_pressure)
+            try:
+                inherited_timeout_multiplier = float(
+                    profile.get("dynamic_model_timeout_multiplier", 1.0)
+                )
+            except (TypeError, ValueError):
+                inherited_timeout_multiplier = 1.0
+            profile["dynamic_model_timeout_multiplier"] = round(
+                max(1.0, inherited_timeout_multiplier) * multiplier,
+                6,
+            )
+            components.append(
+                {
+                    "policy": "current-run-timeout-derived-deadline-v1",
+                    "previous_effective_timeout_seconds": previous_timeout,
+                    "observed_latency_seconds": float(source.latency_seconds),
+                    "observed_timeout_pressure": round(observed_pressure, 6),
+                    "next_timeout_multiplier": profile["dynamic_model_timeout_multiplier"],
+                    "safety_cap_relaxed": False,
+                }
+            )
+
+        if not components:
+            return adapted, None
         adapted = replace(adapted, parameter_profile=profile)
-        audit = {
+        return adapted, {
             "type": "recovery-request-adaptation",
-            "policy": "current-run-truncation-derived-output-allowance-v1",
+            "policy": "current-run-failure-derived-request-rebinding-v1",
             "source_model": source.model,
             "replacement_model": adapted.model,
-            "previous_output_allowance_tokens": previous_allowance,
-            "observed_completion_tokens": observed_completion,
-            "observed_allowance_pressure": round(observed_pressure, 6),
-            "next_allowance_multiplier": profile["dynamic_output_allowance_multiplier"],
-            "task_admission_gate": False,
-            "result_validity_gate": False,
+            "trigger_category": category.value,
+            "components": components,
+            "cross_task_history_used": False,
         }
-        if inherited is not None:
-            audit["inherited_adaptation"] = inherited
-        return adapted, audit
 
     def _recover_node(
         self,
