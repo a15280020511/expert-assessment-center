@@ -9,6 +9,9 @@ MARKET = ROOT / "open-model-market"
 sys.path.insert(0, str(MARKET))
 
 from execution_graph import ExecutionGraph, SelectedNode  # noqa: E402
+from v5_cost_effectiveness_runtime import (  # noqa: E402
+    CostEffectiveContinuousExecutionEngine,
+)
 from v5_credit_aware_recovery import (  # noqa: E402
     CreditAwareTaskScopedExecutionEngine,
     dynamic_zero_cost_recovery_depth,
@@ -20,6 +23,7 @@ from v5_runtime import (  # noqa: E402
     RuntimeAttempt,
     RuntimeConfig,
 )
+from v5_soft_proposal_materializer import _standby_row  # noqa: E402
 import v5_task_scope_quality_circuit as task_scope  # noqa: E402
 
 
@@ -116,6 +120,59 @@ class CreditAwareRecoveryTests(unittest.TestCase):
             )
         )
 
+    def test_standby_materialization_preserves_catalog_price_signal(self) -> None:
+        paid = _standby_row(
+            {
+                "model": "vendor/paid",
+                "prompt_usd_per_million": 0.4,
+                "completion_usd_per_million": 1.6,
+                "price_rank_usd_per_million": 1.0,
+            }
+        )
+        free = _standby_row(
+            {
+                "model": "vendor/free:free",
+                "prompt_usd_per_million": 0.0,
+                "completion_usd_per_million": 0.0,
+                "price_rank_usd_per_million": 0.0,
+            }
+        )
+        self.assertFalse(paid["estimated_task_cost_available"])
+        self.assertEqual(1.0, paid["cost_rank_signal"])
+        self.assertFalse(paid["zero_cost_candidate"])
+        self.assertTrue(free["zero_cost_candidate"])
+        self.assertEqual(0.0, free["cost_rank_signal"])
+        self.assertFalse(free["cost_rank_signal_is_execution_gate"])
+
+    def test_soft_recovery_rank_consumes_preserved_catalog_signal(self) -> None:
+        expensive = {
+            "model": "vendor/expensive",
+            "estimated_quality": 0.8,
+            "failure_probability": 0.1,
+            "estimated_task_cost_usd": 0.0,
+            "estimated_task_cost_available": False,
+            "estimated_cost": 0.0,
+            "cost_rank_signal": 5.0,
+        }
+        cheap = {
+            "model": "vendor/cheap",
+            "estimated_quality": 0.8,
+            "failure_probability": 0.1,
+            "estimated_task_cost_usd": 0.0,
+            "estimated_task_cost_available": False,
+            "estimated_cost": 0.0,
+            "cost_rank_signal": 0.5,
+        }
+        ranked = sorted(
+            [expensive, cheap],
+            key=lambda row: CostEffectiveContinuousExecutionEngine._failure_rank_key(
+                row,
+                FailureCategory.PROVIDER_TIMEOUT,
+                set(),
+            ),
+        )
+        self.assertEqual(["vendor/cheap", "vendor/expensive"], [row["model"] for row in ranked])
+
     def test_zero_cost_depth_is_current_space_and_pressure_derived(self) -> None:
         selected = node(pressure=0.53)
         self.assertEqual(2, dynamic_zero_cost_recovery_depth(selected, 14))
@@ -154,6 +211,7 @@ class CreditAwareRecoveryTests(unittest.TestCase):
                 "model": "nvidia/recovery:free",
                 "provider_endpoint": "nvidia/recovery:free@openrouter-auto",
                 "estimated_cost": 0.0,
+                "zero_cost_candidate": True,
             },
         ]
         attempts = [credit_attempt(selected)]
