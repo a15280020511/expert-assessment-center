@@ -13,6 +13,8 @@ Every design dimension is classified as one of:
 
 A parameter cannot proceed to value resolution unless its type, domain, resolver,
 dependencies, consumer binding, and recompute trigger are all classified and auditable.
+ParameterSpec instances are constructed from the effective design, not directly from the
+pre-design decision record.
 """
 from __future__ import annotations
 
@@ -20,10 +22,12 @@ import hashlib
 import json
 from typing import Any, Mapping, Sequence
 
+import networkx as nx
+
 import v5_runtime_parameter_planner as base
 
-SCHEMA_VERSION = "runtime-parameter-design-meta-1"
-PARAMETER_DESIGN_SCHEMA_VERSION = "runtime-parameter-design-spec-1"
+SCHEMA_VERSION = "runtime-parameter-design-meta-2"
+PARAMETER_DESIGN_SCHEMA_VERSION = "runtime-parameter-design-spec-2"
 PRINCIPLES = base.PRINCIPLES
 
 _ALLOWED_CLASSES = {
@@ -52,11 +56,11 @@ def _classify_resolver(resolver: str) -> str:
     value = str(resolver or "")
     if value == "ortools-cp-sat":
         return "constitutional_invariant"
-    if value.startswith("networkx-"):
-        return "infrastructure_invariant"
     if value == "current-run-feedback":
         return "current_run_feedback_derived"
-    return "current_task_derived"
+    # Algorithm identity is infrastructure. Its search space, role signals and
+    # values are still generated from the current task in the resolver itself.
+    return "infrastructure_invariant"
 
 
 def _effective_domain(
@@ -114,6 +118,35 @@ def _effective_domain(
     )
 
 
+def _designed_dependency_surfaces(
+    surface: str,
+    active_surfaces: set[str],
+) -> list[str]:
+    """Derive effective parameter dataflow after the active decisions are known.
+
+    Structural signals feed partitioning; they do not depend on the partition result.
+    Downstream role/model/recovery decisions consume the resolved partition. Runtime
+    replanning consumes the initial recovery allocation and current-run feedback.
+    """
+    rules: dict[str, tuple[str, ...]] = {
+        "parallel-structure-signal": (),
+        "dependency-coupling-signal": (),
+        "work-dag-partitioning": (
+            "parallel-structure-signal",
+            "dependency-coupling-signal",
+        ),
+        "role-model-objective-balance": ("work-dag-partitioning",),
+        "role-reasoning-effort": ("work-dag-partitioning",),
+        "initial-recovery-allocation": ("work-dag-partitioning",),
+        "candidate-role-binding": (
+            "work-dag-partitioning",
+            "role-model-objective-balance",
+        ),
+        "runtime-standby-replanning": ("initial-recovery-allocation",),
+    }
+    return [value for value in rules.get(surface, ()) if value in active_surfaces]
+
+
 def design_required_parameters(
     graph: Mapping[str, Any],
     decisions: Sequence[Mapping[str, Any]],
@@ -121,6 +154,11 @@ def design_required_parameters(
     profile: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Design each discovered parameter before ParameterSpec construction/resolution."""
+    active_surfaces = {
+        str(row.get("control_surface") or "")
+        for row in decisions
+        if str(row.get("control_surface") or "")
+    }
     designs: list[dict[str, Any]] = []
     for decision in decisions:
         domain, domain_class, domain_reason = _effective_domain(
@@ -130,15 +168,11 @@ def design_required_parameters(
         )
         resolver = str(decision.get("resolver") or "")
         surface = str(decision.get("control_surface") or "")
-        type_class = (
-            "infrastructure_invariant"
-            if str(decision.get("value_type") or "") in {"assignment", "runtime-policy"}
-            else "current_task_derived"
-        )
+        dependencies = _designed_dependency_surfaces(surface, active_surfaces)
         recompute_class = (
             "current_run_feedback_derived"
             if "current-run" in str(decision.get("recompute_trigger") or "")
-            else "current_task_derived"
+            else "infrastructure_invariant"
         )
         design = {
             "schema_version": PARAMETER_DESIGN_SCHEMA_VERSION,
@@ -148,6 +182,8 @@ def design_required_parameters(
                     "graph": graph,
                     "candidate_count": len(candidates),
                     "profile_pressure": profile.get("pressure"),
+                    "dependencies": dependencies,
+                    "domain": domain,
                 }
             ),
             "decision_id": str(decision.get("decision_id") or ""),
@@ -156,8 +192,8 @@ def design_required_parameters(
             "dimensions": {
                 "value_type": {
                     "effective": str(decision.get("value_type") or ""),
-                    "classification": type_class,
-                    "reason": "type follows the discovered decision and its execution contract",
+                    "classification": "infrastructure_invariant",
+                    "reason": "runtime consumer contract determines representation type; task determines whether the decision exists",
                 },
                 "domain": {
                     "effective": domain,
@@ -168,14 +204,13 @@ def design_required_parameters(
                     "effective": resolver,
                     "classification": _classify_resolver(resolver),
                     "reason": (
-                        "OR-Tools/no-tools and graph machinery are declared infrastructure; "
-                        "task search spaces and signal normalization are current-task derived"
+                        "resolver identity is an audited implementation capability; its current search space, signals and values are task/run derived"
                     ),
                 },
                 "dependencies": {
-                    "effective": "materialize-after-active-decision-set-is-known",
+                    "effective": dependencies,
                     "classification": "current_task_derived",
-                    "reason": "inactive decisions must not create parameter dependency edges",
+                    "reason": "dependency edges are materialized only among decisions active for this task and follow actual dataflow",
                 },
                 "consumer_binding": {
                     "effective": list(decision.get("consumed_by") or []),
@@ -185,7 +220,7 @@ def design_required_parameters(
                 "recompute_trigger": {
                     "effective": str(decision.get("recompute_trigger") or ""),
                     "classification": recompute_class,
-                    "reason": "trigger is tied to the signals that can invalidate this design/value",
+                    "reason": "trigger semantics are fixed to the signals that invalidate the parameter; activation comes from current task/run changes",
                 },
             },
             "source_signals": list(decision.get("source_signals") or []),
@@ -231,38 +266,118 @@ def design_required_parameters(
     }
 
 
-def _attach_designs(
-    requirements: Mapping[str, Any],
+def build_parameter_requirements_from_design(
+    decisions: Sequence[Mapping[str, Any]],
     design_audit: Mapping[str, Any],
 ) -> dict[str, Any]:
-    result = dict(requirements)
-    by_decision = {
-        str(row.get("decision_id") or ""): row
-        for row in design_audit.get("designs") or []
-        if isinstance(row, Mapping)
+    """Construct ParameterSpec identities from effective ParameterDesign records."""
+    if design_audit.get("status") != "PASS":
+        raise RuntimeError("parameter design audit failed before ParameterSpec construction")
+
+    decision_by_surface = {
+        str(row.get("control_surface") or ""): row
+        for row in decisions
+        if str(row.get("control_surface") or "")
     }
+    design_by_surface = {
+        str(row.get("control_surface") or ""): row
+        for row in design_audit.get("designs") or []
+        if isinstance(row, Mapping) and str(row.get("control_surface") or "")
+    }
+    if set(decision_by_surface) != set(design_by_surface):
+        raise RuntimeError("decision/design surface coverage mismatch")
+
+    surface_graph = nx.DiGraph()
+    surface_graph.add_nodes_from(decision_by_surface)
+    for surface, design in design_by_surface.items():
+        dimensions = design.get("dimensions")
+        if not isinstance(dimensions, Mapping):
+            raise RuntimeError(f"parameter design has no dimensions: {surface}")
+        dependency_row = dimensions.get("dependencies")
+        dependencies = (
+            list(dependency_row.get("effective") or [])
+            if isinstance(dependency_row, Mapping)
+            else []
+        )
+        for parent in dependencies:
+            if parent not in decision_by_surface:
+                raise RuntimeError(
+                    f"parameter design dependency is not active: {parent}->{surface}"
+                )
+            surface_graph.add_edge(str(parent), surface)
+    if not nx.is_directed_acyclic_graph(surface_graph):
+        raise RuntimeError("designed parameter dependency graph is cyclic")
+
+    by_surface_parameter_id: dict[str, str] = {}
     specs: list[dict[str, Any]] = []
-    missing: list[str] = []
-    for raw in requirements.get("parameter_specs") or []:
-        if not isinstance(raw, Mapping):
-            continue
-        spec = dict(raw)
-        design = by_decision.get(str(spec.get("decision_id") or ""))
-        if design is None:
-            missing.append(str(spec.get("parameter_id") or ""))
-        else:
-            spec["parameter_design"] = dict(design)
-            domain = design.get("dimensions", {}).get("domain", {})
-            if isinstance(domain, Mapping) and "effective" in domain:
-                spec["designed_domain"] = domain["effective"]
+    for surface in nx.topological_sort(surface_graph):
+        decision = dict(decision_by_surface[surface])
+        design = dict(design_by_surface[surface])
+        dimensions = design["dimensions"]
+        dependency_surfaces = list(dimensions["dependencies"]["effective"] or [])
+        depends_on = [by_surface_parameter_id[parent] for parent in dependency_surfaces]
+
+        designed_decision = dict(decision)
+        designed_decision["value_type"] = dimensions["value_type"]["effective"]
+        designed_decision["domain"] = dimensions["domain"]["effective"]
+        designed_decision["resolver"] = dimensions["resolver"]["effective"]
+        designed_decision["consumed_by"] = dimensions["consumer_binding"]["effective"]
+        designed_decision["recompute_trigger"] = dimensions["recompute_trigger"]["effective"]
+        designed_decision["provenance"] = {
+            **dict(decision.get("provenance") or {}),
+            "parameter_design_id": design["design_id"],
+            "parameter_design_sha256": _digest(design, 64),
+        }
+
+        spec = base._parameter_from_decision(  # noqa: SLF001
+            designed_decision,
+            depends_on=depends_on,
+        )
+        spec["parameter_design"] = design
+        spec["parameter_design_id"] = design["design_id"]
+        spec["parameter_design_sha256"] = _digest(design, 64)
+        spec["parameter_spec_constructed_from_design"] = True
         specs.append(spec)
-    result["parameter_specs"] = specs
-    result["parameter_design_audit"] = dict(design_audit)
-    result["parameter_design_missing_parameter_ids"] = missing
-    result["parameter_design_completed_before_value_resolution"] = not missing
-    if missing or design_audit.get("status") != "PASS":
-        raise RuntimeError("parameter design coverage failed before value resolution")
-    return result
+        by_surface_parameter_id[surface] = str(spec["parameter_id"])
+
+    parameter_graph = nx.DiGraph()
+    parameter_graph.add_nodes_from(str(row["parameter_id"]) for row in specs)
+    for row in specs:
+        parameter_graph.add_edges_from(
+            (str(parent), str(row["parameter_id"]))
+            for parent in row.get("depends_on") or []
+        )
+    if not nx.is_directed_acyclic_graph(parameter_graph):
+        raise RuntimeError("generated designed ParameterSpec graph is cyclic")
+
+    return {
+        "schema_version": base.PARAMETER_SCHEMA_VERSION,
+        "design_schema_version": PARAMETER_DESIGN_SCHEMA_VERSION,
+        "discovery_mode": "current-decisions-first-then-design-then-generate-parameter-identities",
+        "required_decisions": [dict(row) for row in decisions],
+        "parameter_design_audit": dict(design_audit),
+        "parameter_specs": specs,
+        "required_parameter_ids": [str(row["parameter_id"]) for row in specs],
+        "required_parameter_count": len(specs),
+        "dependency_edges": [
+            {"from": str(a), "to": str(b)}
+            for a, b in parameter_graph.edges()
+        ],
+        "control_surface_to_parameter_id": by_surface_parameter_id,
+        "parameter_design_completed_before_parameter_instantiation": True,
+        "parameter_specs_constructed_from_design": True,
+        "parameter_ids_are_generated_after_decision_discovery": True,
+        "parameter_ids_are_generated_after_parameter_design": True,
+        "legacy_business_parameter_names_used_as_parameter_ids": False,
+        "fixed_parameter_template_used": False,
+        "fixed_business_parameter_catalog_used": False,
+        "control_surface_catalog_is_infrastructure": True,
+        "all_parameter_instances_current_task_derived": True,
+        "unused_parameter_specs_allowed": False,
+        "semantic_keyword_routing_used": False,
+        "cross_task_history_used": False,
+        "only_hard_model_boundary": "no-tools",
+    }
 
 
 def build_runtime_planning_context(
@@ -282,8 +397,10 @@ def build_runtime_planning_context(
     if design_audit["status"] != "PASS":
         raise RuntimeError("parameter design audit failed")
 
-    requirements = base.discover_parameter_requirements(graph, candidates)
-    requirements = _attach_designs(requirements, design_audit)
+    requirements = build_parameter_requirements_from_design(
+        decisions,
+        design_audit,
+    )
     resolved = base.resolve_parameter_values(
         graph,
         requirements,
@@ -334,6 +451,8 @@ def build_runtime_planning_context(
         "parameter_optimizer": dict(resolved["optimization"]),
         "parameter_values_derived_from_current_task": True,
         "parameter_ids_generated_after_decision_discovery": True,
+        "parameter_ids_generated_after_parameter_design": True,
+        "parameter_specs_constructed_from_design": True,
         "parameter_design_completed_before_value_resolution": True,
         "fixed_parameter_values_used": False,
         "fixed_business_objective_coefficients_used": False,
@@ -363,10 +482,12 @@ def build_runtime_planning_context(
         "recovery_count": int(resolved["recovery_size"]),
         "all_calculable_planning_parameters_dynamic": True,
         "parameter_design_completed_before_value_resolution": True,
+        "parameter_specs_constructed_from_design": True,
         "all_parameter_design_dimensions_classified": True,
         "all_parameter_instances_current_task_derived": True,
         "all_parameter_instances_have_active_consumers": True,
         "parameter_ids_generated_after_decision_discovery": True,
+        "parameter_ids_generated_after_parameter_design": True,
         "fixed_parameter_template_used": False,
         "fixed_business_parameter_catalog_used": False,
         "fixed_business_objective_coefficients_used": False,
@@ -386,6 +507,7 @@ __all__ = [
     "PARAMETER_DESIGN_SCHEMA_VERSION",
     "PRINCIPLES",
     "SCHEMA_VERSION",
+    "build_parameter_requirements_from_design",
     "build_runtime_planning_context",
     "design_required_parameters",
 ]
