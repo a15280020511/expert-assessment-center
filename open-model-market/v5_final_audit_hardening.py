@@ -1,18 +1,24 @@
-"""Ensure the final production audit retains Runtime Knob Coverage.
+"""Ensure the final production audit retains runtime and assignment truth.
 
-Run #387 proved that the execution engine computed this audit but a later
-pipeline writer replaced ``v5-request-audit.json``. This wrapper is installed
-before the pipeline reaches its final request-audit phase and recomputes the
-coverage after the last ordinary request-audit writer.
+Run #387 proved that the execution engine computed Runtime Knob Coverage but a later
+pipeline writer replaced ``v5-request-audit.json``. Live Governance #300 then proved
+that the same final writer could also retain the historical
+``selection_authority=decision-system-governance`` field after Expert Center OR-Tools
+had actually assigned the current-task models. This wrapper runs after the last
+ordinary request-audit writer and restores both observable truths.
 """
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Mapping
 
 import v5_price_ranked_pipeline_legacy as pipeline_legacy
 import v5_quality_status_integrity as quality_integrity
-from v5_json_io import load_json_or_default
+from v5_dynamic_assignment_truth import (
+    assignment_fields,
+    expert_dynamic_assignment_active,
+)
+from v5_json_io import load_json_or_default, write_json
 
 
 def _integrity_status(root: Path) -> str:
@@ -24,6 +30,48 @@ def _integrity_status(root: Path) -> str:
         if isinstance(integrity, Mapping) and str(integrity.get("status") or ""):
             return str(integrity.get("status"))
     return "UNKNOWN"
+
+
+def _materialized_plan(root: Path) -> dict[str, Any]:
+    value = load_json_or_default(root / "governance-model-plan.json", {})
+    if isinstance(value, Mapping) and value:
+        return dict(value)
+    ticket = load_json_or_default(root / "ticket.json", {})
+    if isinstance(ticket, Mapping) and isinstance(
+        ticket.get("governance_model_plan"), Mapping
+    ):
+        return dict(ticket["governance_model_plan"])
+    return {}
+
+
+def rewrite_request_audit_assignment_truth(root: Path) -> dict[str, Any]:
+    """Rewrite only assignment-authority telemetry from the materialized plan."""
+    path = Path(root) / "v5-request-audit.json"
+    raw = load_json_or_default(path, {})
+    if not isinstance(raw, Mapping):
+        raise RuntimeError("final request audit is missing")
+    document = dict(raw)
+    plan = _materialized_plan(Path(root))
+    if plan:
+        fields = assignment_fields(plan)
+        document.update(fields)
+        active = expert_dynamic_assignment_active(plan)
+        document["assignment_truth_status"] = "PASS"
+        document["assignment_truth_source"] = "materialized-governance-model-plan"
+        document["candidate_pool_authority_is_governance"] = (
+            document.get("candidate_pool_authority") == "decision-system-governance"
+        )
+        document["current_task_assignment_is_expert_owned"] = bool(
+            active
+            and str(document.get("selection_authority") or "").startswith(
+                "expert-assessment-center"
+            )
+            and document.get("model_selection_performed_locally") is True
+        )
+        if active and not document["current_task_assignment_is_expert_owned"]:
+            raise RuntimeError("final request audit lost Expert assignment authority")
+    write_json(path, document)
+    return document
 
 
 def install_final_request_audit_hardening() -> None:
@@ -42,9 +90,7 @@ def install_final_request_audit_hardening() -> None:
             root,
             _integrity_status(root),
         )
-        audit = load_json_or_default(root / "v5-request-audit.json", {})
-        if not isinstance(audit, Mapping):
-            raise RuntimeError("final request audit is missing")
+        audit = rewrite_request_audit_assignment_truth(root)
         if audit.get("runtime_knob_coverage_status") != "PASS":
             raise RuntimeError(
                 "runtime knob coverage failed after final request-audit write"
@@ -54,4 +100,7 @@ def install_final_request_audit_hardening() -> None:
     pipeline_legacy._request_audit = hardened_request_audit  # noqa: SLF001
 
 
-__all__ = ["install_final_request_audit_hardening"]
+__all__ = [
+    "install_final_request_audit_hardening",
+    "rewrite_request_audit_assignment_truth",
+]
