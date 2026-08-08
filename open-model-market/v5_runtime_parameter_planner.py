@@ -142,7 +142,10 @@ def _task_profile(
         (
             _ratio(depth, units),
             _ratio(width, units),
-            _ratio(int(graph.get("dependency_edge_count") or 0), max(1, units * (units - 1) / 2)),
+            _ratio(
+                int(graph.get("dependency_edge_count") or 0),
+                max(1, units * (units - 1) / 2),
+            ),
         )
     )
     overall_pressure = mean(
@@ -158,14 +161,20 @@ def _task_profile(
     plan = _mapping(packet.get("governance_model_plan"))
     governance_context_floor = max(0, int(plan.get("required_context_tokens") or 0))
     expected_prompt_tokens = max(governance_context_floor, total_characters)
-    structural_delivery = max(1, len(delivery), len(graph.get("sink_unit_ids") or []))
+    structural_delivery = max(
+        1,
+        len(delivery),
+        len(graph.get("sink_unit_ids") or []),
+    )
     expected_completion_tokens = max(
         1,
         math.ceil(math.sqrt(total_characters + 1)) * structural_delivery,
     )
     protocol_reserve_tokens = max(
         1,
-        math.ceil(math.sqrt(expected_prompt_tokens * expected_completion_tokens)),
+        math.ceil(
+            math.sqrt(expected_prompt_tokens * expected_completion_tokens)
+        ),
     )
 
     contexts = sorted(
@@ -200,7 +209,9 @@ def _task_profile(
             "known_context_count": len(contexts),
             "known_completion_count": len(completions),
             "median_context_tokens": int(median(contexts)) if contexts else 0,
-            "median_completion_tokens": int(median(completions)) if completions else 0,
+            "median_completion_tokens": (
+                int(median(completions)) if completions else 0
+            ),
             "maximum_context_tokens": max(contexts, default=0),
             "maximum_completion_tokens": max(completions, default=0),
         },
@@ -275,50 +286,98 @@ def discover_required_decisions(
         decisions.extend(
             [
                 _decision(
-                    purpose="choose an executable partitioning of this current work DAG",
+                    purpose=(
+                        "choose an executable partitioning of this current work DAG"
+                    ),
                     control_surface="work-dag-partitioning",
                     value_type="integer",
-                    domain={"min": 1, "max_source": "min(current-candidates,current-work-units)"},
-                    source_signals=("work_unit_count", "maximum_depth", "maximum_parallel_width", "dependency_edge_count"),
+                    domain={
+                        "min": 1,
+                        "max_source": (
+                            "min(current-candidates,current-work-units)"
+                        ),
+                    },
+                    source_signals=(
+                        "work_unit_count",
+                        "maximum_depth",
+                        "maximum_parallel_width",
+                        "dependency_edge_count",
+                    ),
                     consumed_by=("current-work-dag-role-partitioner",),
                     resolver="optuna-current-search-space",
-                    objective_contribution="balance current parallel coverage, coupling and load without fixed relative weights",
+                    objective_contribution=(
+                        "balance current parallel coverage, coupling and load "
+                        "without fixed relative weights"
+                    ),
                     recompute_trigger="current-work-graph-change",
                     graph=graph,
                 ),
                 _decision(
-                    purpose="bind one executable current candidate identity to each generated role",
+                    purpose=(
+                        "bind one executable current candidate identity to each "
+                        "generated role"
+                    ),
                     control_surface="candidate-role-binding",
                     value_type="assignment",
-                    domain={"source": "current-executable-candidate-inventory"},
-                    source_signals=("generated-role-graph", "current-executable-candidate-inventory"),
+                    domain={
+                        "source": "current-executable-candidate-inventory"
+                    },
+                    source_signals=(
+                        "generated-role-graph",
+                        "current-executable-candidate-inventory",
+                    ),
                     consumed_by=("current-role-ortools-assignment",),
                     resolver="ortools-cp-sat",
-                    objective_contribution="minimize the current role-specific normalized model objective",
-                    recompute_trigger="generated-role-graph-or-candidate-inventory-change",
+                    objective_contribution=(
+                        "minimize the current role-specific normalized model "
+                        "objective"
+                    ),
+                    recompute_trigger=(
+                        "generated-role-graph-or-candidate-inventory-change"
+                    ),
                     graph=graph,
                 ),
                 _decision(
-                    purpose="derive the model objective balance used by each current generated role",
+                    purpose=(
+                        "derive the model objective balance used by each current "
+                        "generated role"
+                    ),
                     control_surface="role-model-objective-balance",
                     value_type="policy",
                     domain={"mode": "current-signal-normalization"},
-                    source_signals=("current-task-pressure", "current-role-structure", "current-candidate-ranks"),
+                    source_signals=(
+                        "current-task-pressure",
+                        "current-role-structure",
+                        "current-candidate-ranks",
+                    ),
                     consumed_by=("current-role-model-scoring",),
                     resolver="normalized-current-signals",
-                    objective_contribution="derive relative model objective weights from current role and task signals only",
+                    objective_contribution=(
+                        "derive relative model objective weights from current role "
+                        "and task signals only"
+                    ),
                     recompute_trigger="current-role-or-task-signal-change",
                     graph=graph,
                 ),
                 _decision(
-                    purpose="quantize current role demand into the request protocol reasoning-effort enum",
+                    purpose=(
+                        "quantize current role demand into the request protocol "
+                        "reasoning-effort enum"
+                    ),
                     control_surface="role-reasoning-effort",
                     value_type="policy",
-                    domain={"protocol_values": ["low", "medium", "high"]},
-                    source_signals=("current-role-structural-demand-distribution",),
+                    domain={
+                        "protocol_values": ["low", "medium", "high"]
+                    },
+                    source_signals=(
+                        "current-role-structural-demand-distribution",
+                    ),
                     consumed_by=("current-role-prompt-profile",),
                     resolver="empirical-current-role-extrema",
-                    objective_contribution="use higher protocol effort only for relatively heavier current roles",
+                    objective_contribution=(
+                        "use higher protocol effort only for relatively heavier "
+                        "current roles"
+                    ),
                     recompute_trigger="generated-role-graph-change",
                     graph=graph,
                 ),
@@ -327,14 +386,18 @@ def discover_required_decisions(
     if width > 1:
         decisions.append(
             _decision(
-                purpose="represent parallel work that the current DAG can actually expose",
+                purpose=(
+                    "represent parallel work that the current DAG can actually expose"
+                ),
                 control_surface="parallel-structure-signal",
                 value_type="float",
                 domain={"min": 0, "max": 1},
                 source_signals=("maximum_parallel_width", "work_unit_count"),
                 consumed_by=("current-partition-objective",),
                 resolver="networkx-current-graph-ratio",
-                objective_contribution="reward partitions that cover currently independent work",
+                objective_contribution=(
+                    "reward partitions that cover currently independent work"
+                ),
                 recompute_trigger="current-work-graph-change",
                 graph=graph,
             )
@@ -342,14 +405,23 @@ def discover_required_decisions(
     if edges > 0:
         decisions.append(
             _decision(
-                purpose="represent coupling in the current DAG so partitioning does not destroy dependencies",
+                purpose=(
+                    "represent coupling in the current DAG so partitioning does not "
+                    "destroy dependencies"
+                ),
                 control_surface="dependency-coupling-signal",
                 value_type="float",
                 domain={"min": 0, "max": 1},
                 source_signals=("dependency_edge_count", "work_unit_count"),
-                consumed_by=("current-partition-objective", "current-role-quotient-dag"),
+                consumed_by=(
+                    "current-partition-objective",
+                    "current-role-quotient-dag",
+                ),
                 resolver="networkx-current-graph-density",
-                objective_contribution="penalize unnecessary splitting when current dependency coupling is high",
+                objective_contribution=(
+                    "penalize unnecessary splitting when current dependency "
+                    "coupling is high"
+                ),
                 recompute_trigger="current-work-graph-change",
                 graph=graph,
             )
@@ -358,27 +430,57 @@ def discover_required_decisions(
         decisions.extend(
             [
                 _decision(
-                    purpose="activate only the initial recovery identities justified by current graph pressure",
+                    purpose=(
+                        "activate only the initial recovery identities justified by "
+                        "current graph pressure"
+                    ),
                     control_surface="initial-recovery-allocation",
                     value_type="integer",
-                    domain={"min": 0, "max_source": "current-candidates-minus-primary"},
-                    source_signals=("current-work-graph", "current-task-pressure", "current-candidate-count"),
-                    consumed_by=("current-recovery-ortools-selection", "runtime-initial-recovery-pool"),
+                    domain={
+                        "min": 0,
+                        "max_source": "current-candidates-minus-primary",
+                    },
+                    source_signals=(
+                        "current-work-graph",
+                        "current-task-pressure",
+                        "current-candidate-count",
+                    ),
+                    consumed_by=(
+                        "current-recovery-ortools-selection",
+                        "runtime-initial-recovery-pool",
+                    ),
                     resolver="optuna-current-search-space",
-                    objective_contribution="match recovery breadth to current structural and task pressure",
-                    recompute_trigger="current-work-graph-or-candidate-inventory-change",
+                    objective_contribution=(
+                        "match recovery breadth to current structural and task "
+                        "pressure"
+                    ),
+                    recompute_trigger=(
+                        "current-work-graph-or-candidate-inventory-change"
+                    ),
                     graph=graph,
                 ),
                 _decision(
-                    purpose="allow additional standby promotion only from current-run failure and quality feedback",
+                    purpose=(
+                        "allow additional standby promotion only from current-run "
+                        "failure and quality feedback"
+                    ),
                     control_surface="runtime-standby-replanning",
                     value_type="runtime-policy",
                     domain={"history_scope": "current-run-only"},
-                    source_signals=("current-run-failure-rate", "current-run-quality-failure-rate", "standby-remaining"),
+                    source_signals=(
+                        "current-run-failure-rate",
+                        "current-run-quality-failure-rate",
+                        "standby-remaining",
+                    ),
                     consumed_by=("runtime-feedback-replanner",),
                     resolver="current-run-feedback",
-                    objective_contribution="recover current necessary nodes without a fixed promotion depth",
-                    recompute_trigger="current-run-failure-or-quality-feedback",
+                    objective_contribution=(
+                        "recover current necessary nodes without a fixed promotion "
+                        "depth"
+                    ),
+                    recompute_trigger=(
+                        "current-run-failure-or-quality-feedback"
+                    ),
                     graph=graph,
                 ),
             ]
@@ -418,9 +520,15 @@ def _parameter_from_decision(
         "control_surface": str(decision["control_surface"]),
         "decision_id": str(decision["decision_id"]),
     }
-    errors = sorted(_SPEC_VALIDATOR.iter_errors(spec), key=lambda row: list(row.path))
+    errors = sorted(
+        _SPEC_VALIDATOR.iter_errors(spec),
+        key=lambda row: list(row.path),
+    )
     if errors:
-        raise RuntimeError("generated ParameterSpec failed schema validation: " + errors[0].message)
+        raise RuntimeError(
+            "generated ParameterSpec failed schema validation: "
+            + errors[0].message
+        )
     return spec
 
 
@@ -441,25 +549,43 @@ def discover_parameter_requirements(
         "runtime-standby-replanning": ("initial-recovery-allocation",),
     }
     for decision in decisions:
-        deps = [by_surface[value] for value in dependency_surfaces.get(str(decision["control_surface"]), ()) if value in by_surface]
+        deps = [
+            by_surface[value]
+            for value in dependency_surfaces.get(
+                str(decision["control_surface"]), ()
+            )
+            if value in by_surface
+        ]
         spec = _parameter_from_decision(decision, depends_on=deps)
         specs.append(spec)
-        by_surface[str(decision["control_surface"])] = str(spec["parameter_id"])
+        by_surface[str(decision["control_surface"])] = str(
+            spec["parameter_id"]
+        )
 
     graph_value = nx.DiGraph()
     graph_value.add_nodes_from(str(row["parameter_id"]) for row in specs)
     for row in specs:
-        graph_value.add_edges_from((parent, str(row["parameter_id"])) for parent in row["depends_on"])
+        graph_value.add_edges_from(
+            (parent, str(row["parameter_id"]))
+            for parent in row["depends_on"]
+        )
     if not nx.is_directed_acyclic_graph(graph_value):
         raise RuntimeError("generated parameter dependency graph is cyclic")
     return {
         "schema_version": PARAMETER_SCHEMA_VERSION,
-        "discovery_mode": "current-decisions-first-then-generate-parameter-identities",
+        "discovery_mode": (
+            "current-decisions-first-then-generate-parameter-identities"
+        ),
         "required_decisions": decisions,
         "parameter_specs": specs,
-        "required_parameter_ids": [str(row["parameter_id"]) for row in specs],
+        "required_parameter_ids": [
+            str(row["parameter_id"]) for row in specs
+        ],
         "required_parameter_count": len(specs),
-        "dependency_edges": [{"from": str(a), "to": str(b)} for a, b in graph_value.edges()],
+        "dependency_edges": [
+            {"from": str(a), "to": str(b)}
+            for a, b in graph_value.edges()
+        ],
         "control_surface_to_parameter_id": by_surface,
         "parameter_ids_are_generated_after_decision_discovery": True,
         "legacy_business_parameter_names_used_as_parameter_ids": False,
@@ -474,7 +600,9 @@ def discover_parameter_requirements(
     }
 
 
-def _surface_specs(requirements: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+def _surface_specs(
+    requirements: Mapping[str, Any],
+) -> dict[str, Mapping[str, Any]]:
     return {
         str(row["control_surface"]): row
         for row in requirements.get("parameter_specs") or []
@@ -497,19 +625,45 @@ def _optimize_shape(
     possible_edges = max(1.0, units * max(1, units - 1) / 2.0)
     coupling_signal = _ratio(edges, possible_edges)
     depth_signal = _ratio(depth, units)
-    overall_signal = _ratio(float(_mapping(profile.get("pressure")).get("overall") or 0), 100)
-    resilience_signal = max(coupling_signal, depth_signal, overall_signal)
+    overall_signal = _ratio(
+        float(_mapping(profile.get("pressure")).get("overall") or 0),
+        100,
+    )
+    resilience_signal = max(
+        coupling_signal,
+        depth_signal,
+        overall_signal,
+    )
 
     def objective(trial: optuna.Trial) -> float:
         team = trial.suggest_int("partition", 1, upper)
         remaining = max(0, candidate_count - team)
-        recovery = trial.suggest_int("recovery", 0, remaining) if "initial-recovery-allocation" in surfaces and remaining else 0
-        parallel_loss = max(0.0, float(width - team)) / max(1, width)
-        split_loss = coupling_signal * _ratio(team - 1, max(1, units - 1))
+        recovery = (
+            trial.suggest_int("recovery", 0, remaining)
+            if "initial-recovery-allocation" in surfaces and remaining
+            else 0
+        )
+        parallel_loss = parallel_signal * (
+            max(0.0, float(width - team)) / max(1, width)
+        )
+        split_loss = coupling_signal * _ratio(
+            team - 1,
+            max(1, units - 1),
+        )
         load_target = units / max(1, width)
-        load_loss = abs(units / team - load_target) / max(1.0, float(units))
-        recovery_target = min(remaining, math.ceil(team * resilience_signal))
-        recovery_loss = abs(recovery - recovery_target) / max(1, remaining) if remaining else 0.0
+        load_loss = abs(units / team - load_target) / max(
+            1.0,
+            float(units),
+        )
+        recovery_target = min(
+            remaining,
+            math.ceil(team * resilience_signal),
+        )
+        recovery_loss = (
+            abs(recovery - recovery_target) / max(1, remaining)
+            if remaining
+            else 0.0
+        )
         losses = [parallel_loss, split_loss, load_loss]
         if "initial-recovery-allocation" in surfaces:
             losses.append(recovery_loss)
@@ -517,13 +671,35 @@ def _optimize_shape(
 
     search_space = upper * max(1, candidate_count)
     trial_count = max(1, math.ceil(math.sqrt(search_space)))
-    seed = int(_digest({"graph": graph, "candidates": candidate_count, "surfaces": sorted(surfaces)}, 8), 16) % 2_147_483_647
-    study = optuna.create_study(direction="minimize", sampler=optuna.samplers.TPESampler(seed=seed))
+    seed = int(
+        _digest(
+            {
+                "graph": graph,
+                "candidates": candidate_count,
+                "surfaces": sorted(surfaces),
+            },
+            8,
+        ),
+        16,
+    ) % 2_147_483_647
+    study = optuna.create_study(
+        direction="minimize",
+        sampler=optuna.samplers.TPESampler(seed=seed),
+    )
     try:
-        study.optimize(objective, n_trials=trial_count, n_jobs=1, show_progress_bar=False)
+        study.optimize(
+            objective,
+            n_trials=trial_count,
+            n_jobs=1,
+            show_progress_bar=False,
+        )
         team = int(study.best_params.get("partition") or 1)
         remaining = max(0, candidate_count - team)
-        recovery = int(study.best_params.get("recovery") or 0) if remaining else 0
+        recovery = (
+            int(study.best_params.get("recovery") or 0)
+            if remaining
+            else 0
+        )
         audit = {
             "optimizer": "optuna-tpe-current-search-space",
             "trial_count": len(study.trials),
@@ -532,12 +708,17 @@ def _optimize_shape(
             "seed": seed,
             "fallback_used": False,
             "fixed_business_objective_coefficients_used": False,
-            "objective_aggregation": "unweighted-mean-of-current-active-losses",
+            "objective_aggregation": (
+                "unweighted-mean-of-current-active-losses"
+            ),
         }
     except Exception as exc:  # noqa: BLE001
         team = max(1, min(upper, width))
         remaining = max(0, candidate_count - team)
-        recovery = min(remaining, math.ceil(team * resilience_signal))
+        recovery = min(
+            remaining,
+            math.ceil(team * resilience_signal),
+        )
         audit = {
             "optimizer": "deterministic-current-signal-fallback",
             "trial_count": 0,
@@ -548,7 +729,11 @@ def _optimize_shape(
             "fixed_business_objective_coefficients_used": False,
             "objective_aggregation": "current-graph-signals",
         }
-    return team, max(0, min(candidate_count - team, recovery)), audit
+    return (
+        team,
+        max(0, min(candidate_count - team, recovery)),
+        audit,
+    )
 
 
 def resolve_parameter_values(
@@ -558,14 +743,21 @@ def resolve_parameter_values(
     profile: Mapping[str, Any],
 ) -> dict[str, Any]:
     surfaces = _surface_specs(requirements)
-    team, recovery, optimization = _optimize_shape(graph, profile, max(1, len(candidates)), surfaces)
+    team, recovery, optimization = _optimize_shape(
+        graph,
+        profile,
+        max(1, len(candidates)),
+        surfaces,
+    )
     units = max(1, int(graph.get("work_unit_count") or 1))
     width = max(1, int(graph.get("maximum_parallel_width") or 1))
     edges = max(0, int(graph.get("dependency_edge_count") or 0))
     possible_edges = max(1.0, units * max(1, units - 1) / 2.0)
     surface_values: dict[str, Any] = {
         "work-dag-partitioning": team,
-        "candidate-role-binding": "resolve-after-current-role-dag-with-ortools-cp-sat",
+        "candidate-role-binding": (
+            "resolve-after-current-role-dag-with-ortools-cp-sat"
+        ),
         "role-model-objective-balance": {
             "mode": "normalize-current-role-and-task-signals",
             "fixed_business_coefficients": False,
@@ -575,9 +767,14 @@ def resolve_parameter_values(
             "fixed-role-kind-mapping": False,
         },
         "parallel-structure-signal": round(_ratio(width, units), 8),
-        "dependency-coupling-signal": round(_ratio(edges, possible_edges), 8),
+        "dependency-coupling-signal": round(
+            _ratio(edges, possible_edges),
+            8,
+        ),
         "initial-recovery-allocation": recovery,
-        "runtime-standby-replanning": "recompute-from-current-run-feedback",
+        "runtime-standby-replanning": (
+            "recompute-from-current-run-feedback"
+        ),
     }
     values: dict[str, Any] = {}
     for spec in requirements.get("parameter_specs") or []:
@@ -586,7 +783,9 @@ def resolve_parameter_values(
         surface = str(spec.get("control_surface") or "")
         parameter_id = str(spec.get("parameter_id") or "")
         if surface not in surface_values:
-            raise RuntimeError(f"generated parameter has no resolver output: {surface}")
+            raise RuntimeError(
+                f"generated parameter has no resolver output: {surface}"
+            )
         values[parameter_id] = {
             "value": surface_values[surface],
             "control_surface": surface,
@@ -600,15 +799,33 @@ def resolve_parameter_values(
 
     required = set(requirements.get("required_parameter_ids") or [])
     resolved = set(values)
-    unconsumed = [parameter_id for parameter_id, row in values.items() if not row.get("consumed_by")]
-    unexplained = [parameter_id for parameter_id, row in values.items() if not row.get("derived_from") or not row.get("provenance")]
-    fixed = [parameter_id for parameter_id, row in values.items() if row.get("fixed_default_used") is True]
+    unconsumed = [
+        parameter_id
+        for parameter_id, row in values.items()
+        if not row.get("consumed_by")
+    ]
+    unexplained = [
+        parameter_id
+        for parameter_id, row in values.items()
+        if not row.get("derived_from") or not row.get("provenance")
+    ]
+    fixed = [
+        parameter_id
+        for parameter_id, row in values.items()
+        if row.get("fixed_default_used") is True
+    ]
     missing = sorted(required - resolved)
     extra = sorted(resolved - required)
-    coverage_pass = not (unconsumed or unexplained or fixed or missing or extra)
+    coverage_pass = not (
+        unconsumed or unexplained or fixed or missing or extra
+    )
     return {
         "values": values,
-        "control_surface_values": {surface: value for surface, value in surface_values.items() if surface in surfaces},
+        "control_surface_values": {
+            surface: value
+            for surface, value in surface_values.items()
+            if surface in surfaces
+        },
         "team_size": team,
         "recovery_size": recovery,
         "optimization": optimization,
@@ -616,7 +833,11 @@ def resolve_parameter_values(
             "status": "PASS" if coverage_pass else "FAIL",
             "required_parameter_count": len(required),
             "resolved_parameter_count": len(resolved),
-            "dynamic_parameter_count": sum(1 for row in values.values() if row.get("dynamic") is True),
+            "dynamic_parameter_count": sum(
+                1
+                for row in values.values()
+                if row.get("dynamic") is True
+            ),
             "fixed_business_parameter_count": len(fixed),
             "unexplained_parameter_count": len(unexplained),
             "unconsumed_parameter_count": len(unconsumed),
@@ -633,8 +854,15 @@ def resolve_parameter_values(
     }
 
 
-def _role_plan(graph_value: Mapping[str, Any], team_size: int) -> list[dict[str, Any]]:
-    units = [dict(row) for row in graph_value.get("work_units") or [] if isinstance(row, Mapping)]
+def _role_plan(
+    graph_value: Mapping[str, Any],
+    team_size: int,
+) -> list[dict[str, Any]]:
+    units = [
+        dict(row)
+        for row in graph_value.get("work_units") or []
+        if isinstance(row, Mapping)
+    ]
     if not units:
         return []
     graph = nx.DiGraph()
@@ -645,11 +873,16 @@ def _role_plan(graph_value: Mapping[str, Any], team_size: int) -> list[dict[str,
         if isinstance(row, Mapping)
     )
     if not nx.is_directed_acyclic_graph(graph):
-        raise RuntimeError("current work graph became cyclic before role partitioning")
+        raise RuntimeError(
+            "current work graph became cyclic before role partitioning"
+        )
     order = list(nx.topological_sort(graph))
     by_id = {str(row["unit_id"]): row for row in units}
     team_size = max(1, min(int(team_size), len(order)))
-    total_weight = sum(int(by_id[unit_id].get("structural_weight") or 1) for unit_id in order)
+    total_weight = sum(
+        int(by_id[unit_id].get("structural_weight") or 1)
+        for unit_id in order
+    )
     target = total_weight / team_size
     buckets: list[list[str]] = [[]]
     bucket_weight = 0.0
@@ -658,13 +891,21 @@ def _role_plan(graph_value: Mapping[str, Any], team_size: int) -> list[dict[str,
         assigned = sum(len(bucket) for bucket in buckets)
         remaining_units = len(order) - assigned
         remaining_buckets = team_size - len(buckets)
-        if len(buckets) < team_size and buckets[-1] and bucket_weight + weight > target and remaining_units > remaining_buckets:
+        if (
+            len(buckets) < team_size
+            and buckets[-1]
+            and bucket_weight + weight > target
+            and remaining_units > remaining_buckets
+        ):
             buckets.append([])
             bucket_weight = 0.0
         buckets[-1].append(unit_id)
         bucket_weight += weight
     while len(buckets) < team_size:
-        largest_index = max(range(len(buckets)), key=lambda index: len(buckets[index]))
+        largest_index = max(
+            range(len(buckets)),
+            key=lambda index: len(buckets[index]),
+        )
         bucket = buckets[largest_index]
         if len(bucket) <= 1:
             break
@@ -672,7 +913,11 @@ def _role_plan(graph_value: Mapping[str, Any], team_size: int) -> list[dict[str,
         buckets.insert(largest_index + 1, bucket[split:])
         buckets[largest_index] = bucket[:split]
 
-    unit_to_bucket = {unit_id: index for index, bucket in enumerate(buckets) for unit_id in bucket}
+    unit_to_bucket = {
+        unit_id: index
+        for index, bucket in enumerate(buckets)
+        for unit_id in bucket
+    }
     role_edges = {
         (unit_to_bucket[source], unit_to_bucket[target])
         for source, target in graph.edges()
@@ -687,10 +932,17 @@ def _role_plan(graph_value: Mapping[str, Any], team_size: int) -> list[dict[str,
     role_ids: list[str] = []
     role_demands: list[float] = []
     for index, bucket in enumerate(buckets):
-        signature = _digest({"bucket": bucket, "edges": sorted(role_edges)})[:10]
+        signature = _digest(
+            {"bucket": bucket, "edges": sorted(role_edges)}
+        )[:10]
         role_ids.append(f"role-{index + 1}-{signature}")
-        work_demand = sum(int(by_id[value].get("structural_weight") or 1) for value in bucket)
-        dependency_demand = role_graph.in_degree(index) + role_graph.out_degree(index)
+        work_demand = sum(
+            int(by_id[value].get("structural_weight") or 1)
+            for value in bucket
+        )
+        dependency_demand = (
+            role_graph.in_degree(index) + role_graph.out_degree(index)
+        )
         role_demands.append(float(work_demand + dependency_demand))
 
     minimum = min(role_demands)
@@ -708,8 +960,19 @@ def _role_plan(graph_value: Mapping[str, Any], team_size: int) -> list[dict[str,
 
     roles: list[dict[str, Any]] = []
     for index, bucket in enumerate(buckets):
-        kinds = sorted({str(by_id[unit_id].get("source_kind") or "task-unit") for unit_id in bucket})
-        dependencies = sorted(role_ids[parent] for parent in role_graph.predecessors(index))
+        kinds = sorted(
+            {
+                str(
+                    by_id[unit_id].get("source_kind")
+                    or "task-unit"
+                )
+                for unit_id in bucket
+            }
+        )
+        dependencies = sorted(
+            role_ids[parent]
+            for parent in role_graph.predecessors(index)
+        )
         functions = ["analyze:" + value for value in kinds]
         if dependencies:
             functions.append("integrate:declared-upstream")
@@ -717,15 +980,21 @@ def _role_plan(graph_value: Mapping[str, Any], team_size: int) -> list[dict[str,
             {
                 "role_id": role_ids[index],
                 "role_kind": "dynamic:" + "+".join(kinds),
-                "role": "动态任务角色：完成当前工作图分配单元并只沿声明依赖吸收上游结果",
+                "role": (
+                    "动态任务角色：完成当前工作图分配单元并只沿声明依赖吸收上游结果"
+                ),
                 "assigned_work_units": list(bucket),
                 "depends_on_role_ids": dependencies,
                 "functions": functions,
                 "reasoning_effort": efforts[index],
-                "reasoning_effort_source": "current-role-demand-extrema",
+                "reasoning_effort_source": (
+                    "current-role-demand-extrema"
+                ),
                 "role_structural_demand": role_demands[index],
                 "final_role": role_graph.out_degree(index) == 0,
-                "role_source_signal": "current-ticket-work-dag-partition",
+                "role_source_signal": (
+                    "current-ticket-work-dag-partition"
+                ),
             }
         )
     return roles
@@ -738,26 +1007,45 @@ def build_runtime_planning_context(
     graph = build_current_work_graph(packet)
     requirements = discover_parameter_requirements(graph, candidates)
     profile = _task_profile(packet, graph, candidates)
-    resolved = resolve_parameter_values(graph, requirements, candidates, profile)
+    resolved = resolve_parameter_values(
+        graph,
+        requirements,
+        candidates,
+        profile,
+    )
     coverage = dict(resolved["parameter_coverage_audit"])
     if coverage.get("status") != "PASS":
         raise RuntimeError("generated parameter coverage audit failed")
     roles = _role_plan(graph, int(resolved["team_size"]))
     profile = {
         **profile,
-        "active_generated_parameter_ids": list(requirements["required_parameter_ids"]),
-        "active_parameter_count": int(requirements["required_parameter_count"]),
-        "parameter_identity_mode": "generated-after-current-decision-discovery",
-        "model_scoring_policy": resolved["control_surface_values"].get("role-model-objective-balance", {}),
-        "reasoning_effort_policy": resolved["control_surface_values"].get("role-reasoning-effort", {}),
+        "active_generated_parameter_ids": list(
+            requirements["required_parameter_ids"]
+        ),
+        "active_parameter_count": int(
+            requirements["required_parameter_count"]
+        ),
+        "parameter_identity_mode": (
+            "generated-after-current-decision-discovery"
+        ),
+        "model_scoring_policy": resolved[
+            "control_surface_values"
+        ].get("role-model-objective-balance", {}),
+        "reasoning_effort_policy": resolved[
+            "control_surface_values"
+        ].get("role-reasoning-effort", {}),
         "fixed_parameter_template_used": False,
         "fixed_business_parameter_catalog_used": False,
         "fixed_business_weight_coefficients_used": False,
     }
     resolved_parameters = {
-        "active_parameter_ids": list(requirements["required_parameter_ids"]),
+        "active_parameter_ids": list(
+            requirements["required_parameter_ids"]
+        ),
         "parameter_values": dict(resolved["values"]),
-        "control_surface_values": dict(resolved["control_surface_values"]),
+        "control_surface_values": dict(
+            resolved["control_surface_values"]
+        ),
         "team_size": len(roles),
         "recovery_size": int(resolved["recovery_size"]),
         "role_count": len(roles),
@@ -765,8 +1053,12 @@ def build_runtime_planning_context(
             {
                 "role_id": row["role_id"],
                 "role_kind": row["role_kind"],
-                "depends_on_role_ids": list(row["depends_on_role_ids"]),
-                "assigned_work_units": list(row["assigned_work_units"]),
+                "depends_on_role_ids": list(
+                    row["depends_on_role_ids"]
+                ),
+                "assigned_work_units": list(
+                    row["assigned_work_units"]
+                ),
                 "reasoning_effort": row["reasoning_effort"],
             }
             for row in roles
