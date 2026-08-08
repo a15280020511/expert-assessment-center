@@ -73,6 +73,7 @@ jobs:
             tests.test_v5_task_constraints \
             tests.test_v5_task_scope_quality_circuit \
             tests.test_v5_final_delivery_semantics \
+            tests.test_v5_generic_heading_typo_normalization \
             tests.test_v5_deterministic_answer_normalization \
             tests.test_v5_fact_label_purity_normalization \
             tests.test_v5_fact_provenance_semantic_normalization \
