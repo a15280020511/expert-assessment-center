@@ -5,14 +5,14 @@ only checks equalities the model explicitly emitted. Whole-task obligation cover
 belongs only on final delivery nodes / the final report; applying it to internal
 analysis nodes would create unnecessary recovery calls.
 
-The live E2E governance run #300 additionally proved that a final answer can look
-substantive while still omitting an explicitly requested scenario/table/transition,
-or while reversing the semantic direction of a high/low-estimate sensitivity label.
-Those checks are compiled only from explicit task wording and remain final-delivery
-obligations rather than internal-node requirements.
+Live production runs #300 and #303 further proved that the checker itself must not
+misread chained equalities, percentage direction clauses, or intermediate threshold
+algebra. The active validators below therefore parse only observable local equations
+and explicit final-delivery wording; they never inspect hidden reasoning.
 """
 from __future__ import annotations
 
+import ast
 import re
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping, Sequence
@@ -29,21 +29,16 @@ from v5_runtime import BudgetController, ExecutionFailure, FailureCategory, Runt
 
 _PERCENT_RE = re.compile(r"(?<!\d)(\d+(?:\.\d+)?)\s*%")
 _SCENARIO_HINT_RE = re.compile(
-    r"(?:分别|情景|场景|变化|敏感|误差|高估|低估|当前值|上调|下调|±)",
-    re.I,
+    r"(?:分别|情景|场景|变化|敏感|误差|高估|低估|当前值|上调|下调|±)", re.I
 )
 _TABLE_REQUEST_RE = re.compile(r"(?:决策表|对比表|比较表|表格|表形式)", re.I)
-_TABLE_SEPARATOR_RE = re.compile(
-    r"^\s*\|?(?:\s*:?-{3,}:?\s*\|){2,}\s*$"
-)
+_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?(?:\s*:?-{3,}:?\s*\|){2,}\s*$")
 _TABLE_CLASSIFICATION_TASK_RE = re.compile(
-    r"(?:事实|题面).{0,40}(?:派生|计算).{0,40}(?:判断|推断|建议|推荐|结论)",
-    re.I,
+    r"(?:事实|题面).{0,40}(?:派生|计算).{0,40}(?:判断|推断|建议|推荐|结论)", re.I
 )
 _ALL_OPTION_THRESHOLD_RE = re.compile(
     r"(?:(?:各|全部).{0,8}(?:方案|选项).{0,14}(?:临界|切换)|"
-    r"(?:临界|切换).{0,14}(?:各|全部).{0,8}(?:方案|选项))",
-    re.I,
+    r"(?:临界|切换).{0,14}(?:各|全部).{0,8}(?:方案|选项))", re.I
 )
 _OPTION_LABEL_RE = re.compile(r"(?<![A-Za-z])([A-H])(?![A-Za-z])")
 _THRESHOLD_PAIR_RE = re.compile(
@@ -51,8 +46,8 @@ _THRESHOLD_PAIR_RE = re.compile(
     re.I,
 )
 _ACTUAL_RELATIVE_RE = re.compile(
-    r"实际.{0,12}(?:为|是)?\s*(?:预期|估计|题面|基准).{0,8}"
-    r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>倍|%)",
+    r"实际[^0-9。；;\n]{0,24}?(?:预期|估计|题面|基准)"
+    r"[^0-9。；;\n]{0,16}?(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>倍|%)",
     re.I,
 )
 _HIGH_ESTIMATE_RE = re.compile(r"高估\s*\d+(?:\.\d+)?\s*%", re.I)
@@ -61,6 +56,12 @@ _LINEAR_PAIR_RE = re.compile(
     r"(?P<left>-?\d+(?:\.\d+)?\s*[+\-]\s*\d*(?:\.\d+)?\s*(?P<var>[LlXx]))"
     r"\s*[=＝]\s*"
     r"(?P<right>-?\d+(?:\.\d+)?\s*[+\-]\s*\d*(?:\.\d+)?\s*(?P=var))"
+)
+_CONST_EXPR_END_RE = re.compile(
+    r"(?P<expr>-?\d+(?:\.\d+)?(?:\s*[+\-*/×÷]\s*-?\d+(?:\.\d+)?)+)\s*`?\s*$"
+)
+_CONST_EXPR_START_RE = re.compile(
+    r"^\s*`?\s*(?P<expr>-?\d+(?:\.\d+)?(?:\s*[+\-*/×÷]\s*-?\d+(?:\.\d+)?)*)"
 )
 
 
@@ -87,9 +88,8 @@ def _percent_values(text: str) -> set[Decimal]:
 def _requested_scenario_percentages(task: str) -> set[Decimal]:
     requested: set[Decimal] = set()
     for clause in re.split(r"[。；;\n]+", str(task or "")):
-        if not _SCENARIO_HINT_RE.search(clause):
-            continue
-        requested.update(_percent_values(clause))
+        if _SCENARIO_HINT_RE.search(clause):
+            requested.update(_percent_values(clause))
     return requested
 
 
@@ -107,12 +107,23 @@ def _option_labels(task: str) -> list[str]:
     return list(dict.fromkeys(match.group(1).upper() for match in _OPTION_LABEL_RE.finditer(task)))
 
 
+def _threshold_pairs(text: str) -> set[frozenset[str]]:
+    pairs: set[frozenset[str]] = set()
+    for match in _THRESHOLD_PAIR_RE.finditer(str(text or "")):
+        left, right = match.group(1).upper(), match.group(2).upper()
+        if left != right:
+            pairs.add(frozenset((left, right)))
+    return pairs
+
+
 def _threshold_pair_coverage(answer: str, labels: Sequence[str]) -> set[str]:
     graph: dict[str, set[str]] = {label: set() for label in labels}
-    for match in _THRESHOLD_PAIR_RE.finditer(str(answer or "")):
-        left = match.group(1).upper()
-        right = match.group(2).upper()
-        if left not in graph or right not in graph or left == right:
+    for pair in _threshold_pairs(answer):
+        values = list(pair)
+        if len(values) != 2:
+            continue
+        left, right = values
+        if left not in graph or right not in graph:
             continue
         graph[left].add(right)
         graph[right].add(left)
@@ -130,24 +141,92 @@ def _threshold_pair_coverage(answer: str, labels: Sequence[str]) -> set[str]:
 
 
 def scenario_direction_violations(answer: str) -> list[str]:
-    """Reject high/low estimate labels whose stated actual direction is reversed."""
+    """Check high/low labels only against the actual ratio in the same clause."""
     violations: list[str] = []
     for line_number, line in enumerate(str(answer or "").splitlines(), 1):
-        relation = _ACTUAL_RELATIVE_RE.search(line)
-        if relation is None:
+        clauses = [value.strip() for value in re.split(r"[；;。]+", line) if value.strip()]
+        for clause_index, clause in enumerate(clauses, 1):
+            relation = _ACTUAL_RELATIVE_RE.search(clause)
+            if relation is None:
+                continue
+            value = _decimal(relation.group("value"))
+            if value is None:
+                continue
+            ratio = value / Decimal(100) if relation.group("unit") == "%" else value
+            if _HIGH_ESTIMATE_RE.search(clause) and ratio >= Decimal(1):
+                violations.append(
+                    "scenario-direction-inconsistency:"
+                    f"line-{line_number}-clause-{clause_index}:high-estimate-actual-not-lower"
+                )
+            if _LOW_ESTIMATE_RE.search(clause) and ratio <= Decimal(1):
+                violations.append(
+                    "scenario-direction-inconsistency:"
+                    f"line-{line_number}-clause-{clause_index}:low-estimate-actual-not-higher"
+                )
+    return _dedupe(violations)
+
+
+def _decimal_from_ast(node: ast.AST) -> Decimal:
+    if isinstance(node, ast.Expression):
+        return _decimal_from_ast(node.body)
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return Decimal(str(node.value))
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+        value = _decimal_from_ast(node.operand)
+        return value if isinstance(node.op, ast.UAdd) else -value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div)):
+        left = _decimal_from_ast(node.left)
+        right = _decimal_from_ast(node.right)
+        if isinstance(node.op, ast.Add):
+            return left + right
+        if isinstance(node.op, ast.Sub):
+            return left - right
+        if isinstance(node.op, ast.Mult):
+            return left * right
+        if right == 0:
+            raise InvalidOperation("division by zero")
+        return left / right
+    raise InvalidOperation("unsupported arithmetic syntax")
+
+
+def _evaluate_constant(expression: str) -> Decimal:
+    normalized = expression.replace("×", "*").replace("÷", "/")
+    return _decimal_from_ast(ast.parse(normalized, mode="eval"))
+
+
+def _rounding_tolerance(text: str) -> Decimal:
+    decimals = len(text.partition(".")[2]) if "." in text else 0
+    return Decimal(1).scaleb(-decimals) / Decimal(2)
+
+
+def _robust_constant_arithmetic_violations(answer: str) -> list[str]:
+    """Validate chained constant equalities pairwise instead of truncating at first '='."""
+    violations: list[str] = []
+    for line_number, line in enumerate(str(answer or "").splitlines(), 1):
+        parts = re.split(r"[=＝]", line)
+        if len(parts) < 2:
             continue
-        value = _decimal(relation.group("value"))
-        if value is None:
-            continue
-        ratio = value / Decimal(100) if relation.group("unit") == "%" else value
-        if _HIGH_ESTIMATE_RE.search(line) and ratio >= Decimal(1):
-            violations.append(
-                f"scenario-direction-inconsistency:line-{line_number}:high-estimate-actual-not-lower"
-            )
-        if _LOW_ESTIMATE_RE.search(line) and ratio <= Decimal(1):
-            violations.append(
-                f"scenario-direction-inconsistency:line-{line_number}:low-estimate-actual-not-higher"
-            )
+        for pair_index in range(len(parts) - 1):
+            left_match = _CONST_EXPR_END_RE.search(parts[pair_index])
+            right_match = _CONST_EXPR_START_RE.search(parts[pair_index + 1])
+            if left_match is None or right_match is None:
+                continue
+            left_text = left_match.group("expr")
+            right_text = right_match.group("expr")
+            try:
+                expected = _evaluate_constant(left_text)
+                stated = _evaluate_constant(right_text)
+            except (InvalidOperation, SyntaxError, ValueError):
+                continue
+            if re.fullmatch(r"-?\d+(?:\.\d+)?", right_text.strip()):
+                tolerance = _rounding_tolerance(right_text.strip())
+            else:
+                tolerance = Decimal("0.000000001")
+            if abs(expected - stated) > tolerance:
+                violations.append(
+                    "arithmetic-inconsistency:"
+                    f"line-{line_number}-pair-{pair_index + 1}:{left_text}={right_text}"
+                )
     return _dedupe(violations)
 
 
@@ -169,8 +248,20 @@ def _parse_linear(expression: str, variable: str) -> tuple[Decimal, Decimal] | N
     return coefficient, constant
 
 
+def _final_stated_threshold(line: str, variable: str) -> str | None:
+    approximate = re.findall(r"(?:≈|~=)\s*(-?\d+(?:\.\d+)?)", line)
+    if approximate:
+        return approximate[-1]
+    token = re.compile(
+        rf"\b{re.escape(variable)}(?:_[A-Za-z]{{1,8}})?\b\s*[=＝]\s*"
+        r"(-?\d+(?:\.\d+)?)(?!\s*[+\-*/×÷])",
+        re.I,
+    )
+    matches = list(token.finditer(line))
+    return matches[-1].group(1) if matches else None
+
+
 def _robust_linear_threshold_violations(answer: str) -> list[str]:
-    """Validate exposed linear thresholds without misreading chained equations."""
     violations: list[str] = []
     for line_number, line in enumerate(str(answer or "").splitlines(), 1):
         pair = _LINEAR_PAIR_RE.search(line)
@@ -181,17 +272,9 @@ def _robust_linear_threshold_violations(answer: str) -> list[str]:
         right = _parse_linear(pair.group("right"), variable)
         if left is None or right is None:
             continue
-        token = (
-            re.compile(
-                r"\b[Ll](?:_[A-Za-z]{1,8})?\b\s*(?:≈|~=|=|＝)\s*(-?\d+(?:\.\d+)?)"
-            )
-            if variable.lower() == "l"
-            else re.compile(r"\b[xX]\b\s*(?:≈|~=|=|＝)\s*(-?\d+(?:\.\d+)?)")
-        )
-        stated_matches = list(token.finditer(line))
-        if not stated_matches:
+        stated_text = _final_stated_threshold(line, variable)
+        if not stated_text:
             continue
-        stated_text = stated_matches[-1].group(1)
         stated = _decimal(stated_text)
         if stated is None:
             continue
@@ -201,8 +284,7 @@ def _robust_linear_threshold_violations(answer: str) -> list[str]:
         if denominator == 0:
             continue
         expected = (right_constant - left_constant) / denominator
-        decimals = len(stated_text.partition(".")[2]) if "." in stated_text else 0
-        tolerance = Decimal(2).scaleb(-decimals)
+        tolerance = Decimal(2).scaleb(-len(stated_text.partition(".")[2]))
         if abs(expected - stated) > tolerance:
             violations.append(
                 "linear-threshold-inconsistency:"
@@ -212,17 +294,21 @@ def _robust_linear_threshold_violations(answer: str) -> list[str]:
 
 
 def arithmetic_consistency_violations(answer: str) -> list[str]:
-    """Keep constant arithmetic checks and replace the chain-prone linear parser."""
+    """Replace both chain-prone legacy constant and linear parsers."""
     legacy = [
         value
         for value in _legacy_arithmetic_consistency_violations(answer)
         if not value.startswith("linear-threshold-inconsistency:")
+        and not value.startswith("arithmetic-inconsistency:")
     ]
-    return _dedupe([*legacy, *_robust_linear_threshold_violations(answer)])
+    return _dedupe([
+        *legacy,
+        *_robust_constant_arithmetic_violations(answer),
+        *_robust_linear_threshold_violations(answer),
+    ])
 
 
 def production_task_obligation_violations(task: str, answer: str) -> list[str]:
-    """Extend run-387 obligations with explicit live-E2E delivery semantics."""
     task_text = str(task or "")
     rendered = str(answer or "")
     violations = list(task_obligation_violations(task_text, rendered))
@@ -240,11 +326,7 @@ def production_task_obligation_violations(task: str, answer: str) -> list[str]:
     table_present = _has_markdown_table(rendered)
     if table_requested and not table_present:
         violations.append("missing-task-obligation:decision-table")
-    if (
-        table_requested
-        and table_present
-        and _TABLE_CLASSIFICATION_TASK_RE.search(task_text)
-    ):
+    if table_requested and table_present and _TABLE_CLASSIFICATION_TASK_RE.search(task_text):
         table_text = "\n".join(_table_lines(rendered))
         groups = {
             "fact": ("事实", "题面", "已知"),
@@ -257,14 +339,22 @@ def production_task_obligation_violations(task: str, answer: str) -> list[str]:
                     f"missing-task-obligation:decision-table-classification:{name}"
                 )
 
+    requested_pairs = _threshold_pairs(task_text)
+    observed_pairs = _threshold_pairs(rendered)
+    for pair in sorted(requested_pairs, key=lambda value: sorted(value)):
+        if pair not in observed_pairs:
+            violations.append(
+                "missing-task-obligation:explicit-threshold-pair:"
+                + "↔".join(sorted(pair))
+            )
+
     labels = _option_labels(task_text)
     if len(labels) >= 3 and _ALL_OPTION_THRESHOLD_RE.search(task_text):
         connected = _threshold_pair_coverage(rendered, labels)
         missing = [label for label in labels if label not in connected]
         if missing:
             violations.append(
-                "missing-task-obligation:threshold-transition-coverage:"
-                + ",".join(missing)
+                "missing-task-obligation:threshold-transition-coverage:" + ",".join(missing)
             )
 
     violations.extend(scenario_direction_violations(rendered))
@@ -276,7 +366,6 @@ def work_product_evidence_validator(
     answer: str,
     constraints: base_constraints.TaskConstraints | None = None,
 ) -> list[str]:
-    """Evidence + explicit math consistency for every node, no whole-task coverage."""
     active = constraints or base_constraints.compile_task_constraints(task)
     violations = list(base_constraints.validate_answer_evidence(task, answer, active))
     violations.extend(arithmetic_consistency_violations(answer))
@@ -289,11 +378,7 @@ def _final_attempt_obligation_failure(
     original_task: str,
     attempt: RuntimeAttempt | None,
 ) -> RuntimeAttempt | None:
-    if (
-        attempt is None
-        or not attempt.answer
-        or node.output_contract.get("final_delivery_node") is not True
-    ):
+    if attempt is None or not attempt.answer or node.output_contract.get("final_delivery_node") is not True:
         return attempt
     obligations = production_task_obligation_violations(original_task, attempt.answer)
     if not obligations:
@@ -316,7 +401,6 @@ def _final_attempt_obligation_failure(
 
 
 def install_final_semantic_gate() -> None:
-    """Install final-only semantic obligations after run-387 base hardening."""
     constitutional_legacy.validate_answer_evidence = work_product_evidence_validator
 
     cls = HeterogeneousEvidenceExecutionEngine
@@ -339,23 +423,10 @@ def install_final_semantic_gate() -> None:
         attempt_index: int,
     ) -> RuntimeAttempt | None:
         attempt = original_attempt(
-            self,
-            node,
-            selected_node_id,
-            kind,
-            original_task,
-            upstream,
-            run,
-            call_fn,
-            budget,
-            attempt_index,
+            self, node, selected_node_id, kind, original_task, upstream,
+            run, call_fn, budget, attempt_index,
         )
-        return _final_attempt_obligation_failure(
-            self,
-            node,
-            original_task,
-            attempt,
-        )
+        return _final_attempt_obligation_failure(self, node, original_task, attempt)
 
     @staticmethod
     def final_aware_evidence_audit(
@@ -367,10 +438,7 @@ def install_final_semantic_gate() -> None:
     ) -> dict[str, Any]:
         payload = dict(
             original_evidence_audit(
-                original_task,
-                answer,
-                constraints,
-                after_failure=after_failure,
+                original_task, answer, constraints, after_failure=after_failure
             )
         )
         obligations = production_task_obligation_violations(original_task, answer)
