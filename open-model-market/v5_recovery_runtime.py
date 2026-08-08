@@ -2,15 +2,21 @@
 
 Expert composition and recovery order are supplied by the signed candidate pool
 and OR-Tools assignment before execution. Token and cost resources are governed
-through prompts and audit telemetry rather than local rejection or truncation
-gates. The installed production expert policy removes every Provider routing
-field, leaving OpenRouter free to choose a Provider for each fixed model.
+through dynamic soft optimization and audit telemetry rather than local rejection
+gates. The final request is measured after prompt assembly, while current-run
+feedback continuously recomputes output/timeout/recovery decisions.
 """
 from __future__ import annotations
 
 from v5_compound_fact_provenance import install_compound_fact_provenance
 from v5_continuous_spatiotemporal_replanning import (
     install_continuous_spatiotemporal_replanning,
+)
+from v5_cost_effectiveness_request_policy import (
+    install_cost_effective_final_payload_policy,
+)
+from v5_cost_effectiveness_runtime import (
+    install_cost_effective_continuous_runtime,
 )
 from v5_final_semantic_gate import install_final_semantic_gate
 from v5_priority_preserving_heterogeneity import (
@@ -29,10 +35,9 @@ def build_production_runtime(config: RuntimeConfig) -> ProductionRuntime:
     """Build the production executor with unrestricted Provider routing.
 
     Final request-audit hardening is imported only after this module has fully
-    initialized.  That module legitimately references the legacy pipeline
-    compatibility facade, which in turn imports this public factory.  Keeping
-    that compatibility-only import at call time removes the cold-start cycle
-    without changing runtime behavior or hiding it through test import order.
+    initialized. That module legitimately references the compatibility facade,
+    which in turn imports this public factory. Keeping the compatibility-only
+    import at call time removes the cold-start cycle without changing behavior.
     """
     from v5_final_audit_hardening import install_final_request_audit_hardening
 
@@ -48,6 +53,8 @@ def build_production_runtime(config: RuntimeConfig) -> ProductionRuntime:
     runtime = install_priority_preserving_heterogeneity(runtime)
     runtime = install_continuous_spatiotemporal_replanning(runtime)
     runtime = install_replacement_truncation_rebind(runtime)
+    runtime = install_cost_effective_continuous_runtime(runtime)
+    runtime = install_cost_effective_final_payload_policy(runtime)
     install_final_request_audit_hardening()
     return runtime
 
