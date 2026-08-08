@@ -78,9 +78,9 @@ class TaskScopeQualityCircuitTests(unittest.TestCase):
     def test_control_plane_numbers_are_not_authoritative_business_quantities(self) -> None:
         projected, _ = project_business_task(RUN407_TASK)
         quantities = normalized_quantities(projected)
-        self.assertNotIn(("3", "", "人"), quantities)
-        self.assertNotIn(("4", "", "人"), quantities)
-        self.assertIn(("2026", "", "年"), quantities)
+        self.assertNotIn(("3", "", "people"), quantities)
+        self.assertNotIn(("4", "", "people"), quantities)
+        self.assertIn(("2026", "", "year"), quantities)
 
     def test_plain_task_without_transport_marker_is_unchanged(self) -> None:
         task = "比较A与B，并给出建议。"
