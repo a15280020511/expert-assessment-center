@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from v5_json_io import load_json_or_default, write_json
+from v5_runtime_knob_audit import audit_runtime_knob_coverage
 
 STRICT_SUCCESS_STATUSES = {
     "success",
@@ -192,12 +193,22 @@ def _rewrite_request_audit(root: Path, integrity_status: str) -> None:
     audit["dynamic_output_allowance_sent"] = dynamic_allowance
     audit["artificial_token_ceiling_sent"] = False
     audit["output_allowance_policy"] = (
-        "dynamic-reasoning-aware-truncation-protection-not-billed-assumption"
+        "current-request-derived-transport-reservation-not-task-admission-gate"
         if dynamic_allowance
         else "provider-default-no-explicit-allowance"
     )
     audit["quality_integrity_status"] = integrity_status
     audit["request_count"] = int(audit.get("request_count") or len(requests))
+
+    graph = load_json_or_default(root / "v5-execution-graph.json", {})
+    if not isinstance(graph, Mapping):
+        graph = {}
+    knob_audit = audit_runtime_knob_coverage(graph, requests)
+    audit["runtime_knob_coverage"] = knob_audit
+    audit["runtime_knob_coverage_status"] = knob_audit["status"]
+    audit["computed_runtime_knob_but_unused_count"] = len(
+        knob_audit["computed_but_unused"]
+    )
     write_json(audit_path, audit)
 
 
