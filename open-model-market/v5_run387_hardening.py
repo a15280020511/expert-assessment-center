@@ -1,12 +1,8 @@
 """Production hardening derived from real run #387.
 
-This module closes four gaps observed in the 2026-08-08 production run:
-1. task-explicit semantic obligations could be empty while headings existed;
-2. deterministic normalization removed legitimate task-derived quantities;
-3. truncation immediately switched companies instead of first repairing request shape;
-4. recovery ordering did not prefer cross-company heterogeneity when quality/risk tied.
-
-Company diversity remains a soft execution objective, never a model eligibility gate.
+Closes semantic false-green delivery, derived-number deletion, truncation waste,
+and avoidable same-company recovery concentration. Company diversity is always
+soft: task quality and current-run failure risk remain higher-priority signals.
 """
 from __future__ import annotations
 
@@ -22,26 +18,38 @@ from execution_graph import SelectedNode
 from v5_model_company import canonical_model_company
 from v5_production_expert_policy import EvidenceCompleteExecutionEngine
 from v5_runtime import ExecutionEngine as DynamicExecutionEngine
-from v5_runtime import FailureCategory, ProductionRuntime, RuntimeAttempt
+from v5_runtime import FailureCategory, ProductionRuntime
 
-
-_CALC_REQUEST_RE = re.compile(r"(?:计算|测算|算出|总成本|期望成本|预期成本|成本计算)", re.I)
-_AUDITABLE_CALC_RE = re.compile(r"(?:展示|给出|列出).{0,12}(?:计算|算式|公式)|可复核.{0,8}计算", re.I)
+_CALC_REQUEST_RE = re.compile(
+    r"(?:计算|测算|算出|总成本|期望成本|预期成本|成本计算)", re.I
+)
+_AUDITABLE_CALC_RE = re.compile(
+    r"(?:展示|给出|列出).{0,12}(?:计算|算式|公式)|可复核.{0,8}计算", re.I
+)
 _THRESHOLD_RE = re.compile(r"(?:临界值|阈值|切换条件|转换条件|拐点)", re.I)
 _SENSITIVITY_RE = re.compile(r"(?:敏感性|敏感度|敏感)", re.I)
 _ERROR_SCENARIO_RE = re.compile(r"(?:±\s*\d+(?:\.\d+)?\s*%|误差|高估|低估)", re.I)
-_DISTINGUISH_RE = re.compile(r"(?:区分|分别标明|明确标明).{0,30}(?:事实|确定数据).{0,30}(?:计算|判断|建议)", re.I)
+_DISTINGUISH_RE = re.compile(
+    r"(?:区分|分别标明|明确标明).{0,30}(?:事实|确定数据).{0,30}(?:计算|判断|建议)",
+    re.I,
+)
 _GOAL_RE = re.compile(
-    r"(?:^|[，,、；;：:\s])([\u4e00-\u9fff]{2,8}(?:优先|均衡))(?=[，,、；;\s三四五六七八九十])"
+    r"(?:^|[，,、；;：:\s])([\u4e00-\u9fff]{2,8}(?:优先|均衡))"
+    r"(?=[，,、；;\s三四五六七八九十])"
 )
 _NUMERIC_CALC_RE = re.compile(
-    r"\d+(?:\.\d+)?[^\n]{0,50}[+\-*/×÷][^\n]{0,50}\d+(?:\.\d+)?[^\n]{0,50}[=＝][^\n]{0,20}-?\d+(?:\.\d+)?"
+    r"\d+(?:\.\d+)?[^\n]{0,50}[+\-*/×÷][^\n]{0,50}\d+(?:\.\d+)?"
+    r"[^\n]{0,50}[=＝][^\n]{0,20}-?\d+(?:\.\d+)?"
 )
 _CONSTANT_EQUATION_RE = re.compile(
-    r"(?P<expr>-?\d+(?:\.\d+)?(?:\s*[+\-*/×÷]\s*-?\d+(?:\.\d+)?)+)\s*[=＝]\s*(?P<result>-?\d+(?:\.\d+)?)"
+    r"(?P<expr>-?\d+(?:\.\d+)?"
+    r"(?:\s*[+\-*/×÷]\s*-?\d+(?:\.\d+)?)+)"
+    r"\s*[=＝]\s*(?P<result>-?\d+(?:\.\d+)?)"
 )
 _LINEAR_THRESHOLD_RE = re.compile(
-    r"(?P<left>[+\-\d.Ll\s]+)[=＝](?P<right>[+\-\d.Ll\s]+?)(?:→|->|⇒|，|,|；|;).{0,40}?[Ll]\s*(?:≈|~=|=|＝)\s*(?P<stated>-?\d+(?:\.\d+)?)"
+    r"(?P<left>[+\-\d.Ll\s]+)[=＝](?P<right>[+\-\d.Ll\s]+?)"
+    r"(?:→|->|⇒|，|,|；|;).{0,40}?[Ll]\s*(?:≈|~=|=|＝)\s*"
+    r"(?P<stated>-?\d+(?:\.\d+)?)"
 )
 
 
@@ -55,14 +63,19 @@ def _introduced_quantities(task: str, text: str) -> set[str]:
     )
 
 
-def _context_windows(answer: str, pattern: re.Pattern[str], radius: int = 3) -> list[str]:
+def _context_windows(
+    answer: str,
+    pattern: re.Pattern[str],
+    radius: int = 3,
+) -> list[str]:
     lines = answer.splitlines()
     result: list[str] = []
     for index, line in enumerate(lines):
-        if pattern.search(line):
-            lo = max(0, index - 1)
-            hi = min(len(lines), index + radius + 1)
-            result.append("\n".join(lines[lo:hi]))
+        if not pattern.search(line):
+            continue
+        lo = max(0, index - 1)
+        hi = min(len(lines), index + radius + 1)
+        result.append("\n".join(lines[lo:hi]))
     return result
 
 
@@ -72,12 +85,7 @@ def _explicit_goal_labels(task: str) -> list[str]:
 
 
 def task_obligation_violations(task: str, answer: str) -> list[str]:
-    """Validate only obligations explicitly requested by the current task.
-
-    No domain keyword selects a model or fixed role. The checks compile observable
-    delivery obligations from the task itself and verify that the final answer has
-    substantive payload, not merely the requested heading/marker text.
-    """
+    """Compile observable final-delivery obligations from the current task."""
     task_text = str(task or "")
     rendered = str(answer or "").strip()
     violations: list[str] = []
@@ -92,27 +100,34 @@ def task_obligation_violations(task: str, answer: str) -> list[str]:
             violations.append("missing-task-obligation:auditable-numeric-calculation")
 
     if _THRESHOLD_RE.search(task_text):
-        threshold_windows = _context_windows(rendered, _THRESHOLD_RE)
-        threshold_derived = set().union(
-            *(_introduced_quantities(task_text, window) for window in threshold_windows)
-        ) if threshold_windows else set()
-        if not threshold_windows or not threshold_derived:
-            violations.append("missing-task-obligation:derived-threshold-or-switch-condition")
+        windows = _context_windows(rendered, _THRESHOLD_RE)
+        derived = (
+            set().union(*(_introduced_quantities(task_text, value) for value in windows))
+            if windows
+            else set()
+        )
+        if not windows or not derived:
+            violations.append(
+                "missing-task-obligation:derived-threshold-or-switch-condition"
+            )
 
     if _SENSITIVITY_RE.search(task_text):
         if not _SENSITIVITY_RE.search(rendered):
             violations.append("missing-task-obligation:sensitivity-analysis")
         if _ERROR_SCENARIO_RE.search(task_text):
-            scenario_windows = _context_windows(
+            windows = _context_windows(
                 rendered,
                 re.compile(r"(?:±|误差|高估|低估|情景|上限|下限|敏感)", re.I),
                 radius=5,
             )
-            scenario_derived = set().union(
-                *(_introduced_quantities(task_text, window) for window in scenario_windows)
-            ) if scenario_windows else set()
-            # A two-sided error request needs observable lower/upper derived states.
-            if len(scenario_derived) < 2:
+            derived = (
+                set().union(
+                    *(_introduced_quantities(task_text, value) for value in windows)
+                )
+                if windows
+                else set()
+            )
+            if len(derived) < 2:
                 violations.append("missing-task-obligation:two-sided-error-scenarios")
 
     for label in _explicit_goal_labels(task_text):
@@ -145,7 +160,8 @@ def _decimal_from_ast(node: ast.AST) -> Decimal:
         value = _decimal_from_ast(node.operand)
         return value if isinstance(node.op, ast.UAdd) else -value
     if isinstance(node, ast.BinOp) and isinstance(
-        node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div)
+        node.op,
+        (ast.Add, ast.Sub, ast.Mult, ast.Div),
     ):
         left = _decimal_from_ast(node.left)
         right = _decimal_from_ast(node.right)
@@ -163,8 +179,7 @@ def _decimal_from_ast(node: ast.AST) -> Decimal:
 
 def _evaluate_constant_expression(expression: str) -> Decimal:
     normalized = expression.replace("×", "*").replace("÷", "/")
-    tree = ast.parse(normalized, mode="eval")
-    return _decimal_from_ast(tree)
+    return _decimal_from_ast(ast.parse(normalized, mode="eval"))
 
 
 def _rounding_tolerance(stated_text: str, approximate: bool = False) -> Decimal:
@@ -196,11 +211,7 @@ def _linear_terms(expression: str) -> tuple[Decimal, Decimal] | None:
 
 
 def arithmetic_consistency_violations(answer: str) -> list[str]:
-    """Check explicit arithmetic the model chose to expose.
-
-    This is mathematical consistency, not a quality-score heuristic. Expressions
-    without an observable equality are ignored; no hidden chain of thought is used.
-    """
+    """Validate only arithmetic explicitly exposed in the answer."""
     violations: list[str] = []
     for line_number, line in enumerate(str(answer or "").splitlines(), 1):
         for match in _CONSTANT_EQUATION_RE.finditer(line):
@@ -209,33 +220,36 @@ def arithmetic_consistency_violations(answer: str) -> list[str]:
                 stated = Decimal(match.group("result"))
             except (InvalidOperation, SyntaxError, ValueError):
                 continue
-            tolerance = _rounding_tolerance(match.group("result"), approximate=False)
+            tolerance = _rounding_tolerance(match.group("result"))
             if abs(expected - stated) > tolerance:
                 violations.append(
-                    f"arithmetic-inconsistency:line-{line_number}:{match.group('expr')}={match.group('result')}"
+                    "arithmetic-inconsistency:"
+                    f"line-{line_number}:{match.group('expr')}={match.group('result')}"
                 )
 
         linear = _LINEAR_THRESHOLD_RE.search(line)
-        if linear:
-            left = _linear_terms(linear.group("left"))
-            right = _linear_terms(linear.group("right"))
-            if left is None or right is None:
-                continue
-            a1, b1 = left
-            a2, b2 = right
-            denominator = a1 - a2
-            if denominator == 0:
-                continue
-            expected = (b2 - b1) / denominator
-            try:
-                stated = Decimal(linear.group("stated"))
-            except InvalidOperation:
-                continue
-            tolerance = _rounding_tolerance(linear.group("stated"), approximate=True)
-            if abs(expected - stated) > tolerance:
-                violations.append(
-                    f"linear-threshold-inconsistency:line-{line_number}:expected={expected}:stated={stated}"
-                )
+        if not linear:
+            continue
+        left = _linear_terms(linear.group("left"))
+        right = _linear_terms(linear.group("right"))
+        if left is None or right is None:
+            continue
+        a1, b1 = left
+        a2, b2 = right
+        denominator = a1 - a2
+        if denominator == 0:
+            continue
+        expected = (b2 - b1) / denominator
+        try:
+            stated = Decimal(linear.group("stated"))
+        except InvalidOperation:
+            continue
+        tolerance = _rounding_tolerance(linear.group("stated"), approximate=True)
+        if abs(expected - stated) > tolerance:
+            violations.append(
+                "linear-threshold-inconsistency:"
+                f"line-{line_number}:expected={expected}:stated={stated}"
+            )
     return _dedupe(violations)
 
 
@@ -270,12 +284,10 @@ def hardened_normalize_answer(
     output_contract: Mapping[str, Any],
     constraints: base_constraints.TaskConstraints,
 ) -> tuple[str, dict[str, Any]]:
-    """Preserve provenance-backed derived quantities while deleting inventions."""
+    """Keep local derived values; remove only unsupported introduced quantities."""
     original = str(answer or "")
-    working, mixed_label_actions = base_normalization._split_mixed_fact_labels(original)
-    working, inferential_relabels = base_normalization._relabel_inferential_facts(
-        task, working
-    )
+    working, mixed_actions = base_normalization._split_mixed_fact_labels(original)
+    working, inferential = base_normalization._relabel_inferential_facts(task, working)
     removed: list[dict[str, Any]] = []
     preserved: list[dict[str, Any]] = []
 
@@ -283,10 +295,13 @@ def hardened_normalize_answer(
         allowed = base_normalization._normalized_quantities(task)
         kept: list[str] = []
         for line_number, line in enumerate(working.splitlines(), 1):
-            line_quantities = base_normalization._normalized_quantities(line)
-            unsupported = sorted(line_quantities - allowed)
+            unsupported = sorted(base_normalization._normalized_quantities(line) - allowed)
             if unsupported:
-                quantity_violations = _quantity_violations_for_line(task, line, constraints)
+                quantity_violations = _quantity_violations_for_line(
+                    task,
+                    line,
+                    constraints,
+                )
                 if quantity_violations:
                     removed.append(
                         {
@@ -317,8 +332,8 @@ def hardened_normalize_answer(
             or removed
             or preserved
             or h2_audit.get("applied")
-            or mixed_label_actions
-            or inferential_relabels
+            or mixed_actions
+            or inferential
         ),
         "source_sha256": base_normalization._sha(original),
         "normalized_sha256": base_normalization._sha(normalized),
@@ -330,10 +345,10 @@ def hardened_normalize_answer(
         "preserved_derived_quantity_line_count": len(preserved),
         "preserved_derived_quantity_lines": preserved,
         "derived_quantities_preserved_when_proven": True,
-        "mixed_fact_label_split_count": len(mixed_label_actions),
-        "mixed_fact_label_splits": mixed_label_actions,
-        "inferential_fact_relabel_count": len(inferential_relabels),
-        "inferential_fact_relabels": inferential_relabels,
+        "mixed_fact_label_split_count": len(mixed_actions),
+        "mixed_fact_label_splits": mixed_actions,
+        "inferential_fact_relabel_count": len(inferential),
+        "inferential_fact_relabels": inferential,
         "h2_normalization": h2_audit,
         "new_external_facts_added": False,
         "new_quantities_added": False,
@@ -344,7 +359,7 @@ def hardened_normalize_answer(
 
 
 class HeterogeneousEvidenceExecutionEngine(EvidenceCompleteExecutionEngine):
-    """Prefer heterogeneity after task quality/risk, and repair truncation first."""
+    """Repair truncation first and prefer unused companies on soft ties."""
 
     def _ensure_production_failure_state(self) -> None:
         super()._ensure_production_failure_state()
@@ -376,12 +391,10 @@ class HeterogeneousEvidenceExecutionEngine(EvidenceCompleteExecutionEngine):
         cost = cls._number(row, "estimated_cost", 0.0)
         model = str(row.get("model") or "")
         company = canonical_model_company(model)
-        repeated_company = int(company in tried_companies and company != "unknown")
-        # Capability / observed failure-risk remain ahead of diversity. Diversity
-        # breaks the next soft dimension before cost/model identity.
+        repeated = int(company in tried_companies and company != "unknown")
         if category_value == FailureCategory.QUALITY_GATE_FAILED.value:
-            return (-quality, failure, repeated_company, cost, model)
-        return (failure, -quality, repeated_company, cost, model)
+            return (-quality, failure, repeated, cost, model)
+        return (failure, -quality, repeated, cost, model)
 
     def _diversify_rows(
         self,
@@ -405,11 +418,10 @@ class HeterogeneousEvidenceExecutionEngine(EvidenceCompleteExecutionEngine):
                 if str(row.get("model") or "") not in self._standby_claimed
             ]
             tried = set(self._attempted_company_sequence)
-            ranked = sorted(
+            self._standby_inventory = sorted(
                 (dict(row) for row in self._standby_inventory),
                 key=lambda row: self._failure_rank_key(row, category, tried),
             )
-            self._standby_inventory = ranked
             after = [
                 str(row.get("model") or "")
                 for row in self._standby_inventory
@@ -422,7 +434,9 @@ class HeterogeneousEvidenceExecutionEngine(EvidenceCompleteExecutionEngine):
                     "order_changed": before != after,
                     "top_before": before[:8],
                     "top_after": after[:8],
-                    "policy": "task-quality-risk-first-then-company-heterogeneity-before-cost",
+                    "policy": (
+                        "task-quality-risk-first-then-company-heterogeneity-before-cost"
+                    ),
                     "company_diversity_is_execution_gate": False,
                     "cross_task_history_used": False,
                 }
@@ -432,16 +446,13 @@ class HeterogeneousEvidenceExecutionEngine(EvidenceCompleteExecutionEngine):
         self._ensure_production_failure_state()
         self._ensure_feedback_state()
         with self._feedback_lock:
-            eligible: list[Mapping[str, Any]] = []
-            for row in self._standby_inventory:
-                model = str(row.get("model") or "").strip()
-                if (
-                    not model
-                    or model in self._standby_claimed
-                    or model in self._hard_failed_model_ids
-                ):
-                    continue
-                eligible.append(row)
+            eligible = [
+                row
+                for row in self._standby_inventory
+                if str(row.get("model") or "").strip()
+                and str(row.get("model") or "").strip() not in self._standby_claimed
+                and str(row.get("model") or "").strip() not in self._hard_failed_model_ids
+            ]
             if not eligible:
                 return None
             tried = set(self._attempted_company_sequence)
@@ -467,15 +478,9 @@ class HeterogeneousEvidenceExecutionEngine(EvidenceCompleteExecutionEngine):
         call: Any,
     ) -> tuple[Any | None, tuple[Any, SelectedNode] | None, SelectedNode]:
         self._ensure_production_failure_state()
-
-        # A truncation is first treated as a request-shape problem. Reuse the
-        # same model exactly once with a feedback-derived larger allowance before
-        # paying for a different model/company.
         if category == FailureCategory.OUTPUT_TRUNCATED and attempts:
             source = attempts[-1]
-            adapted, adaptation = self._replacement_adaptation(
-                selected, source, False
-            )
+            adapted, adaptation = self._replacement_adaptation(selected, source, False)
             retried = call(adapted, "retry")
             if retried is not None:
                 if adaptation is not None:
@@ -483,10 +488,16 @@ class HeterogeneousEvidenceExecutionEngine(EvidenceCompleteExecutionEngine):
                 self._same_model_truncation_retries.append(
                     {
                         "model": selected.model,
-                        "source_attempt_index": int(getattr(source, "attempt_index", 0)),
-                        "retry_attempt_index": int(getattr(retried, "attempt_index", 0)),
+                        "source_attempt_index": int(
+                            getattr(source, "attempt_index", 0)
+                        ),
+                        "retry_attempt_index": int(
+                            getattr(retried, "attempt_index", 0)
+                        ),
                         "status": str(getattr(retried, "status", "")),
-                        "policy": "same-model-feedback-rebind-before-cross-model-recovery",
+                        "policy": (
+                            "same-model-feedback-rebind-before-cross-model-recovery"
+                        ),
                     }
                 )
                 if retried.status == "passed":
@@ -537,16 +548,15 @@ class HeterogeneousEvidenceExecutionEngine(EvidenceCompleteExecutionEngine):
                 "attempted_company_sequence": sequence,
                 "distinct_attempted_company_count": len(set(sequence)),
                 "same_model_truncation_retry_before_substitution": True,
-                "same_model_truncation_retries": list(self._same_model_truncation_retries),
+                "same_model_truncation_retries": list(
+                    self._same_model_truncation_retries
+                ),
             }
         )
         return value
 
     @classmethod
-    def _actual_company_audit(
-        cls,
-        result: Mapping[str, Any],
-    ) -> dict[str, Any]:
+    def _actual_company_audit(cls, result: Mapping[str, Any]) -> dict[str, Any]:
         audit = dict(super()._actual_company_audit(result))
         rows = audit.get("all_called_models")
         rows = rows if isinstance(rows, list) else []
@@ -555,9 +565,13 @@ class HeterogeneousEvidenceExecutionEngine(EvidenceCompleteExecutionEngine):
             for row in rows
             if isinstance(row, Mapping) and str(row.get("model") or "").strip()
         ]
-        sequence = [company for company in sequence if company and company != "unknown"]
+        sequence = [value for value in sequence if value and value != "unknown"]
         consecutive = [
-            {"left_call": index, "right_call": index + 1, "company": sequence[index - 1]}
+            {
+                "left_call": index,
+                "right_call": index + 1,
+                "company": sequence[index - 1],
+            }
             for index in range(1, len(sequence))
             if sequence[index - 1] == sequence[index]
         ]
@@ -573,7 +587,9 @@ class HeterogeneousEvidenceExecutionEngine(EvidenceCompleteExecutionEngine):
         )
         audit.update(
             {
-                "company_heterogeneity_policy": "soft-task-quality-risk-first-diversity-preference",
+                "company_heterogeneity_policy": (
+                    "soft-task-quality-risk-first-diversity-preference"
+                ),
                 "company_diversity_is_execution_gate": False,
                 "called_company_sequence": sequence,
                 "called_company_count": calls,
@@ -586,7 +602,9 @@ class HeterogeneousEvidenceExecutionEngine(EvidenceCompleteExecutionEngine):
                     first_repeat - 1 if first_repeat is not None else distinct
                 ),
                 "heterogeneity_observation": (
-                    "all-calls-distinct-company" if distinct == calls else "mixed-company-reuse"
+                    "all-calls-distinct-company"
+                    if distinct == calls
+                    else "mixed-company-reuse"
                 ),
             }
         )
@@ -594,13 +612,9 @@ class HeterogeneousEvidenceExecutionEngine(EvidenceCompleteExecutionEngine):
 
 
 def install_run387_hardening(runtime: ProductionRuntime) -> ProductionRuntime:
-    """Install semantic truthfulness and heterogeneity without new hard gates."""
-    # ConstitutionalExecutionEngine resolves these module globals at runtime.
-    # Patch the active compatibility module explicitly so both per-attempt and
-    # final evidence checks use the hardened semantics.
+    """Install final semantic truthfulness and company-diversity soft policy."""
     constitutional_legacy.validate_answer_evidence = hardened_validate_answer_evidence
     constitutional_legacy.normalize_answer = hardened_normalize_answer
-
     runtime.execution_engine = HeterogeneousEvidenceExecutionEngine(
         runtime.config,
         prompt_policy=runtime.prompt_policy,
