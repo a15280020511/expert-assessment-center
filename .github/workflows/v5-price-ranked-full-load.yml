@@ -92,11 +92,11 @@ jobs:
 
           from tests.test_top50_pool_optimizer import _packet
           from v5_governance_model_plan import validate_governance_model_plan
-          from v5_top50_pool_optimizer import materialize_top50_selection
+          from v5_hierarchical_candidate_optimizer import materialize_candidate_pool_selection
 
           def run_one(index: int) -> tuple[str, int, int, int, int]:
               packet = _packet(complex_task=bool(index % 2))
-              materialized, receipt = materialize_top50_selection(packet)
+              materialized, receipt = materialize_candidate_pool_selection(packet)
               plan = validate_governance_model_plan(materialized)
               selected = list(plan['selected_models'])
               recoveries = list(plan['recovery_models'])
@@ -199,7 +199,7 @@ jobs:
           # reject or force the dynamic execution graph into an artificial shape.
           budget_probe = _packet()
           budget_probe['approved_budget'] = {'calls': 1, 'maximum_recovery_calls': 0}
-          budget_materialized, _ = materialize_top50_selection(budget_probe)
+          budget_materialized, _ = materialize_candidate_pool_selection(budget_probe)
           budget_plan = validate_governance_model_plan(budget_materialized)
           assert budget_plan['expert_count'] >= 1
           assert budget_plan['optimizer_audit']['budget_constraint_used'] is False
