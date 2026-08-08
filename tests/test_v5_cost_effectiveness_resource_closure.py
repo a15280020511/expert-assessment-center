@@ -212,14 +212,26 @@ class CostEffectivenessResourceClosureTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "hidden medium fallback"):
             planning_module._adjust_roles(invalid)  # noqa: SLF001
 
-    def test_governed_proposal_cannot_invent_medium_reasoning_effort(self) -> None:
-        import v5_governed_plan_orchestrator as orchestrator
+    def test_executable_materializer_cannot_invent_medium_reasoning_effort(self) -> None:
+        import v5_soft_proposal_materializer as materializer
 
+        raw = {
+            "node_id": "n1",
+            "model": "vendor/model",
+            "work_ids": ["w1"],
+            "functions": ["analysis"],
+        }
+        work_map = {"w1": {"required_outputs": ["结论"]}}
         with self.assertRaisesRegex(
-            orchestrator.GovernedPlanOrchestrationError,
-            "task-derived reasoning_effort",
+            materializer.ProposalValidationError,
+            "current-task-derived reasoning_effort",
         ):
-            orchestrator._reasoning_effort({}, "r1")  # noqa: SLF001
+            materializer._selected_node(  # noqa: SLF001
+                raw,
+                work_map,
+                "完成当前任务",
+                {"n1"},
+            )
 
     def test_request_binding_cannot_invent_medium_reasoning_effort(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "medium fallback is forbidden"):
