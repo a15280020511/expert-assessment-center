@@ -3,20 +3,20 @@
 Real production run gov-311-expert / Expert #407 showed two independent issues:
 
 1. The ticket transport intentionally appends execution/control requirements to the
-   user task for auditability.  Semantic delivery gates then treated those control
-   clauses as business-answer obligations (for example ``性价比优先`` and dynamic
-   parameter calculation), contaminating both obligation compilation and the
-   closed-world quantity set.
+   user task for auditability. Semantic delivery gates then treated those control
+   clauses as business-answer obligations (for example a model-assignment principle
+   such as ``性价比优先``), contaminating obligation compilation and closed-world
+   quantities.
 2. Once several different models failed the same deterministic task-obligation
    reason, standby promotion kept substituting more models even though model
    replacement could not repair the contract/compiler mismatch.
 
 This layer keeps the complete control task in the Artifact, but projects only the
 business question, business-facing delivery clauses and supplied evidence into
-model execution and semantic/evidence validation.  It also suppresses further
+model execution and semantic/evidence validation. It also suppresses further
 standby promotion after the same deterministic task-obligation reason is observed
-across multiple distinct models in the current node/run.  No state survives the
-current task and no cost/token threshold becomes an execution gate.
+across multiple distinct models in the current run. No state survives the current
+task and no cost/token threshold becomes an execution gate.
 """
 from __future__ import annotations
 
@@ -32,18 +32,15 @@ _EXECUTION_REQUIREMENTS_MARKER = "\n\n执行要求："
 _BUSINESS_REQUIREMENTS_MARKER = "\n\n业务交付要求："
 _EVIDENCE_MARKER = "\n\n已提供证据/上下文："
 
-# These tokens describe control-plane/execution mechanics, not subject-matter
-# routing.  They are used only to keep machine/runtime requirements out of the
-# business answer contract.  Domain words such as 法律/商业/数学 are deliberately
-# absent.
+# These tokens are intentionally limited to unambiguous control-plane/execution
+# mechanics. Generic decision principles such as 性价比优先 / 动态适配 are NOT
+# control tokens by themselves because a user may legitimately make them part of
+# the business objective. Domain words such as 法律/商业/数学 are also absent.
 _CONTROL_CLAUSE_TOKENS = (
     "专家不得调用外部工具",
     "外部工具、浏览器",
     "工具、浏览器、搜索",
     "专家数量",
-    "角色/职业",
-    "工作分工",
-    "依赖关系",
     "role dag",
     "reasoning effort",
     "模型组合",
@@ -53,11 +50,6 @@ _CONTROL_CLAUSE_TOKENS = (
     "提示词必须",
     "固定宪法",
     "模型分配必须",
-    "动态求解",
-    "具体问题具体分析",
-    "动态适配",
-    "小付出大回报",
-    "性价比优先",
     "费用/token",
     "token是软优化",
     "最终完整payload",
@@ -104,9 +96,9 @@ def project_business_task(task: str) -> tuple[str, dict[str, Any]]:
     """Project a transport/control task into the business-answer surface.
 
     The historical ticket writer uses ``执行要求：`` as the deterministic boundary
-    between the user question and appended execution requirements.  We retain any
+    between the user question and appended execution requirements. We retain any
     business-facing clauses from that section (for example no-fabrication or final
-    report content requirements) while removing control-plane mechanics.  Evidence
+    report content requirements) while removing control-plane mechanics. Evidence
     remains authoritative and is reattached unchanged.
     """
     full = str(task or "").strip()
@@ -203,8 +195,8 @@ def repeated_deterministic_quality_signal(
     """Return a current-run repeated contract signal, if one is established.
 
     A replacement-worthy model failure should not be inferred from one or two
-    samples.  The evidence threshold scales with the number of distinct models
-    observed so far and is never below three.  The circuit considers only exact
+    samples. The evidence threshold scales with the number of distinct models
+    observed so far and is never below three. The circuit considers only exact
     deterministic task-obligation reasons, not arithmetic/content-quality errors.
     """
     reason_models: dict[str, set[str]] = {}
@@ -254,6 +246,7 @@ class TaskScopedCostEffectiveExecutionEngine(
             self._systemic_quality_circuit_open = False
             self._systemic_quality_signal: dict[str, Any] | None = None
             self._systemic_quality_circuit_events: list[dict[str, Any]] = []
+            self._systemic_quality_attempts: list[Any] = []
             self._task_scope_audit: dict[str, Any] = {}
 
     def _initialize_feedback(self, graph: Any) -> None:
@@ -263,33 +256,35 @@ class TaskScopedCostEffectiveExecutionEngine(
             self._systemic_quality_circuit_open = False
             self._systemic_quality_signal = None
             self._systemic_quality_circuit_events = []
+            self._systemic_quality_attempts = []
+
+    def _open_quality_circuit(self, signal: Mapping[str, Any]) -> None:
+        if self._systemic_quality_circuit_open:
+            return
+        self._systemic_quality_circuit_open = True
+        self._systemic_quality_signal = dict(signal)
+        self._systemic_quality_circuit_events.append(
+            {
+                "event_type": "systemic-quality-contract-circuit-opened",
+                **dict(signal),
+                "standby_promotion_suppressed": True,
+                "initial_recovery_evidence_preserved": True,
+                "cost_or_token_threshold_used": False,
+            }
+        )
 
     def _record_feedback(self, attempt: Any | None) -> None:
         super()._record_feedback(attempt)
         if attempt is None:
             return
         self._ensure_quality_circuit_state()
-        # The node-local attempt history is not available here, so maintain a
-        # compact current-run list solely for deterministic obligation evidence.
         with self._feedback_lock:
-            rows = getattr(self, "_systemic_quality_attempts", None)
-            if rows is None:
-                rows = []
-                self._systemic_quality_attempts = rows
-            rows.append(attempt)
-            signal = repeated_deterministic_quality_signal(rows)
-            if signal is not None and not self._systemic_quality_circuit_open:
-                self._systemic_quality_circuit_open = True
-                self._systemic_quality_signal = dict(signal)
-                self._systemic_quality_circuit_events.append(
-                    {
-                        "event_type": "systemic-quality-contract-circuit-opened",
-                        **dict(signal),
-                        "standby_promotion_suppressed": True,
-                        "initial_recovery_evidence_preserved": True,
-                        "cost_or_token_threshold_used": False,
-                    }
-                )
+            self._systemic_quality_attempts.append(attempt)
+            signal = repeated_deterministic_quality_signal(
+                self._systemic_quality_attempts
+            )
+            if signal is not None:
+                self._open_quality_circuit(signal)
 
     def _claim_next_standby(self) -> dict[str, Any] | None:
         self._ensure_quality_circuit_state()
@@ -303,18 +298,7 @@ class TaskScopedCostEffectiveExecutionEngine(
         signal = repeated_deterministic_quality_signal(node_attempts)
         if signal is not None:
             with self._feedback_lock:
-                if not self._systemic_quality_circuit_open:
-                    self._systemic_quality_circuit_open = True
-                    self._systemic_quality_signal = dict(signal)
-                    self._systemic_quality_circuit_events.append(
-                        {
-                            "event_type": "systemic-quality-contract-circuit-opened",
-                            **dict(signal),
-                            "standby_promotion_suppressed": True,
-                            "initial_recovery_evidence_preserved": True,
-                            "cost_or_token_threshold_used": False,
-                        }
-                    )
+                self._open_quality_circuit(signal)
             return 0
         with self._feedback_lock:
             if self._systemic_quality_circuit_open:
@@ -353,6 +337,7 @@ class TaskScopedCostEffectiveExecutionEngine(
         limits: Any = None,
     ) -> dict[str, Any]:
         business_task, audit = project_business_task(original_task)
+        self._ensure_quality_circuit_state()
         self._task_scope_audit = dict(audit)
         result = super().execute_graph(
             graph,
