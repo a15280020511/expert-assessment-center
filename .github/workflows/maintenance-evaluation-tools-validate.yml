@@ -1,0 +1,54 @@
+name: Validate Maintenance Evaluation Tool Isolation
+
+on:
+  pull_request:
+    paths:
+      - "open-model-market/maintenance-evaluation-tools.json"
+      - "tests/test_maintenance_evaluation_tools.py"
+      - "requirements-runtime.txt"
+      - ".github/workflows/maintenance-evaluation-tools-validate.yml"
+  push:
+    branches: [main]
+    paths:
+      - "open-model-market/maintenance-evaluation-tools.json"
+      - "tests/test_maintenance_evaluation_tools.py"
+      - "requirements-runtime.txt"
+      - ".github/workflows/maintenance-evaluation-tools-validate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: expert-maintenance-eval-tools-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-isolation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+
+      - name: Validate registry JSON
+        run: python -m json.tool open-model-market/maintenance-evaluation-tools.json >/dev/null
+
+      - name: Run maintenance-tool isolation tests
+        run: python -m unittest -v tests.test_maintenance_evaluation_tools
+
+      - name: Confirm zero external evaluation dependencies installed by this gate
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          runtime = Path('requirements-runtime.txt').read_text()
+          for forbidden in ('inspect-ai', 'inspect_ai', 'promptfoo', 'instructor', 'litellm'):
+              assert forbidden not in runtime.casefold(), forbidden
+          print('PASS: maintenance tools remain outside production runtime dependencies')
+          PY
