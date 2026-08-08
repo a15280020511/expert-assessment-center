@@ -8,6 +8,9 @@ on:
       - "open-model-market/v5_task_adaptive_scoring.py"
       - "open-model-market/v5_top50_pool_optimizer.py"
       - "open-model-market/v5_dynamic_role_assignment.py"
+      - "open-model-market/v5_runtime_role_assignment.py"
+      - "open-model-market/v5_runtime_role_scoring.py"
+      - "open-model-market/v5_priority_preserving_heterogeneity.py"
       - "open-model-market/v5_parameter_design_planner.py"
       - "open-model-market/v5_hierarchical_candidate_optimizer.py"
       - "open-model-market/v5_governance_model_plan.py"
@@ -16,6 +19,7 @@ on:
       - "tests/test_v5_task_adaptive_scoring.py"
       - "tests/test_top50_pool_optimizer.py"
       - "tests/test_v5_initial_company_heterogeneity.py"
+      - "tests/test_v5_priority_preserving_standby.py"
       - "tests/test_v5_parameter_design_meta.py"
       - "tests/test_v5_dynamic_recovery_resilience.py"
       - ".github/workflows/v5-price-ranked-full-load.yml"
@@ -62,6 +66,7 @@ jobs:
             tests.test_v5_task_adaptive_scoring \
             tests.test_top50_pool_optimizer \
             tests.test_v5_initial_company_heterogeneity \
+            tests.test_v5_priority_preserving_standby \
             tests.test_v5_parameter_design_meta \
             tests.test_v5_dynamic_recovery_resilience -v \
             2>&1 | tee full-load-evidence/targeted-tests.log
@@ -213,7 +218,7 @@ jobs:
           assert budget_plan['optimizer_audit']['company_diversity_is_execution_gate'] is False
 
           receipt = {
-              'schema_version': 'v5-fully-dynamic-full-load-8-capability-diversity-economy',
+              'schema_version': 'v5-fully-dynamic-full-load-9-production-company-heterogeneity',
               'status': 'PASS',
               'target_sha': os.environ['TARGET_SHA'],
               'parallel_runs': 64,
@@ -228,6 +233,7 @@ jobs:
               'complex_primary_expert_count': complex_primary,
               'complex_recovery_count': complex_recovery,
               'planner': 'v5_hierarchical_candidate_optimizer',
+              'active_assignment_module': 'v5_runtime_role_assignment',
               'candidate_pool_authority': 'decision-system-governance',
               'model_assignment_authority': 'expert-assessment-center-dynamic-ortools',
               'optimizer': 'ortools-cp-sat-with-feasible-or-heuristic-fallback',
