@@ -128,6 +128,16 @@ class ExecutionTransportTests(unittest.TestCase):
             "current-generated-role-structural-signals",
             audit["role_metric_mode"],
         )
+        solver = audit["dynamic_solver_profile"]
+        self.assertEqual(
+            "task-derived-scaled-deterministic-time",
+            solver["search_budget_mode"],
+        )
+        self.assertFalse(solver["wall_clock_stop_condition_used"])
+        self.assertEqual(1, solver["num_search_workers"])
+        self.assertGreaterEqual(solver["max_deterministic_time"], 0.1)
+        self.assertLessEqual(solver["max_deterministic_time"], 2.0)
+        self.assertGreaterEqual(solver["reference_difficulty_budget"], 2.0)
 
 
 if __name__ == "__main__":
