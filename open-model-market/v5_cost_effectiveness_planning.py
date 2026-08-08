@@ -20,7 +20,7 @@ from v5_cost_effectiveness_parameter_closure import (
     build_runtime_planning_context as _resource_planning,
 )
 
-SCHEMA_VERSION = "runtime-planning-4-cost-effectiveness-absolute-reasoning"
+SCHEMA_VERSION = "runtime-planning-5-no-hidden-reasoning-default"
 _EFFORTS = ("low", "medium", "high")
 
 
@@ -37,7 +37,12 @@ def _pressure(profile: Mapping[str, Any]) -> float:
         if value > 1.0:
             value /= 100.0
         values.append(max(0.0, min(1.0, value)))
-    return max(0.0, min(1.0, mean(values) if values else 0.5))
+    if not values:
+        raise RuntimeError(
+            "current-task pressure signals are required to derive reasoning effort; "
+            "a hidden medium fallback is not allowed"
+        )
+    return max(0.0, min(1.0, mean(values)))
 
 
 def _absolute_effort(pressure: float) -> str:
