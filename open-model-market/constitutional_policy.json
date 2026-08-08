@@ -117,7 +117,24 @@
     "reasoning_effort": "task-derived-and-request-bound",
     "output_transport_allowance": "current-request-derived",
     "model_timeout_effective": "current-request-derived-under-finite-safety-cap",
-    "company_mix": "unconstrained",
+    "company_mix": "current-task-soft-heterogeneity-after-capability-risk-before-economy",
+    "company_heterogeneity_soft_objective_required": true,
+    "company_diversity_is_execution_gate": false,
+    "fixed_company_count_allowed": false,
+    "company_heterogeneity_priority": [
+      "current-task-capability-and-capacity-risk",
+      "maximize-distinct-company-coverage",
+      "current-task-cost-and-marginal-return",
+      "stable-deterministic-tie-break"
+    ],
+    "runtime_recovery_priority": [
+      "current-run-quality-or-failure-risk",
+      "company-heterogeneity",
+      "cost",
+      "stable-model-identity"
+    ],
+    "standby_claim_preserves_reranked_priority": true,
+    "company_diversity_overrides_higher_priority_candidate": false,
     "fixed_team_size_allowed": false,
     "fixed_four_plus_four_allowed": false,
     "fixed_role_family_required": false,
@@ -147,7 +164,16 @@
     "capacity_metadata_is_advisory": true,
     "cost_metadata_is_advisory": true,
     "free_route_penalty_required": false,
-    "company_overlap_penalty_required": false
+    "company_overlap_penalty_required": false,
+    "company_heterogeneity_soft_objective": true,
+    "company_heterogeneity_is_hard_constraint": false,
+    "company_heterogeneity_lexicographic_order": [
+      "capability-and-capacity-risk",
+      "distinct-company-coverage",
+      "cost-and-marginal-return",
+      "stable-tie-break"
+    ],
+    "active_assignment_module": "v5_runtime_role_assignment"
   },
   "provider_routing": {
     "mode": "unrestricted-openrouter",
@@ -176,6 +202,7 @@
     "dynamic_transport_allowance_is_task_admission_gate": false,
     "dynamic_transport_allowance_can_invalidate_valid_output": false,
     "truncation_can_recompute_transport_allowance": true,
+    "truncation_same_model_rebind_before_cross_model_substitution": true,
     "fixed_model_timeout_used_as_effective_request_timeout": false,
     "dynamic_model_timeout_required": true,
     "model_timeout_safety_cap_required": true,
@@ -195,6 +222,15 @@
     "truncation_is_observable_failure": true,
     "empty_output_is_observable_failure": true,
     "required_contract_fields_are_observable_gate": true,
+    "task_explicit_semantic_obligations_required": true,
+    "task_explicit_semantic_obligation_scope": "final-delivery-only",
+    "heading_presence_alone_satisfies_semantic_obligation": false,
+    "explicit_arithmetic_consistency_required": true,
+    "explicit_linear_threshold_consistency_required": true,
+    "hidden_chain_of_thought_required_for_math_validation": false,
+    "derived_quantities_from_authoritative_input_are_allowed": true,
+    "derived_quantities_from_authoritative_input_must_be_preserved": true,
+    "unsupported_external_quantities_fail_closed": true,
     "final_evidence_validation_fail_closed": true,
     "internal_fact_label_only_mismatch_can_be_audited_warning": true
   },
@@ -217,7 +253,9 @@
     "failed_or_missing_items_must_be_disclosed": true,
     "request_and_cost_ledgers_required": true,
     "parameter_design_must_be_audited": true,
-    "runtime_knob_coverage_must_be_audited": true
+    "runtime_knob_coverage_must_be_audited": true,
+    "final_task_semantic_completeness_must_be_audited": true,
+    "company_heterogeneity_must_be_audited_when_multiple_models_are_called": true
   },
   "tool_policy": {
     "expert_external_tools_allowed": false,
@@ -260,6 +298,8 @@
     "task_adaptive_value_scoring_required": false,
     "parameter_design_coverage_required": true,
     "runtime_knob_coverage_required": true,
+    "task_semantic_completeness_policy_required": true,
+    "company_heterogeneity_policy_required": true,
     "unrestricted_provider_routing_required": true,
     "no_tools_required": true,
     "automatic_merge_allowed": false,
