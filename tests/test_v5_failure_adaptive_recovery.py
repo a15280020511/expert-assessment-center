@@ -96,8 +96,15 @@ class FailureAdaptiveRecoveryTests(unittest.TestCase):
         )
         self.assertIsNotNone(audit)
         self.assertEqual(
-            "current-run-truncation-derived-output-allowance-v1",
+            "current-run-failure-derived-request-rebinding-v1",
             audit["policy"],
+        )
+        self.assertTrue(
+            any(
+                row.get("policy")
+                == "current-run-truncation-derived-output-allowance-v1"
+                for row in audit["components"]
+            )
         )
         self.assertGreater(
             adapted.parameter_profile["dynamic_output_allowance_multiplier"],
@@ -106,6 +113,58 @@ class FailureAdaptiveRecoveryTests(unittest.TestCase):
         base = dynamic_output_allowance(replacement, "任务" * 100, [])
         increased = dynamic_output_allowance(adapted, "任务" * 100, [])
         self.assertGreater(increased, base)
+
+    def test_timeout_feedback_increases_current_run_timeout_multiplier(self) -> None:
+        engine = object.__new__(EvidenceCompleteExecutionEngine)
+        replacement = node(effort="medium", model="vendor/replacement")
+        source = RuntimeAttempt(
+            attempt_index=1,
+            attempt_kind="initial",
+            candidate_id="n1",
+            model="vendor/original",
+            provider_endpoint="vendor/original@openrouter-auto",
+            request={"model": "vendor/original", "max_tokens": 1200},
+            status="call_failed",
+            answer=None,
+            quality_score=0.0,
+            gate_reasons=[FailureCategory.PROVIDER_TIMEOUT.value],
+            latency_seconds=60.0,
+            usage={},
+            response_id=None,
+            response_model=None,
+            response_provider=None,
+            failure={
+                "category": FailureCategory.PROVIDER_TIMEOUT.value,
+                "retryable": True,
+            },
+            answer_transformations=[
+                {
+                    "type": "dynamic-model-timeout-binding",
+                    "effective_timeout_seconds": 60,
+                    "safety_cap_seconds": 240,
+                }
+            ],
+        )
+        adapted, audit = engine._replacement_adaptation(
+            replacement,
+            source,
+            False,
+        )
+        self.assertIsNotNone(audit)
+        self.assertEqual(
+            "current-run-failure-derived-request-rebinding-v1",
+            audit["policy"],
+        )
+        self.assertTrue(
+            any(
+                row.get("policy") == "current-run-timeout-derived-deadline-v1"
+                for row in audit["components"]
+            )
+        )
+        self.assertGreater(
+            adapted.parameter_profile["dynamic_model_timeout_multiplier"],
+            1.0,
+        )
 
 
 if __name__ == "__main__":
