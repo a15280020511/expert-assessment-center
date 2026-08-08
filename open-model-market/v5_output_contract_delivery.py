@@ -3,7 +3,8 @@
 Contract metadata is converted into executable delivery rules. Both exact JSON
 schemas and explicit user-requested Markdown H2 section lists are validated so
 schema echoes, missing sections and truncated outputs cannot masquerade as
-completed work.
+completed work. A node explicitly marked ``final_delivery_node`` is always told
+to deliver the whole user-facing task, even when its format contract is generic.
 """
 from __future__ import annotations
 
@@ -40,6 +41,10 @@ def _required_fields(node: SelectedNode) -> list[str]:
     ]
 
 
+def _is_final_delivery(node: SelectedNode) -> bool:
+    return node.output_contract.get("final_delivery_node") is True
+
+
 def _compact_mode_enabled() -> bool:
     return os.getenv(COMPACT_MODE_ENV, "").strip().casefold() in {
         "1",
@@ -65,17 +70,22 @@ def _compact_delivery_rule(fields: list[str]) -> str:
 
 
 def _task_format_scope_rule(node: SelectedNode) -> str:
-    kind = task_delivery_contract.explicit_contract_kind(
-        node.output_contract
-    )
+    kind = task_delivery_contract.explicit_contract_kind(node.output_contract)
     if kind != "generic":
         return (
             "本节点承载用户明确指定的最终交付契约；原始任务中的最终格式要求"
             "已经编译为本节点输出契约，必须以本节点契约为唯一格式依据。"
         )
+    if _is_final_delivery(node):
+        return (
+            "本节点是当前执行图的最终交付节点，不是中间分析节点。"
+            "必须直接完成原始任务中全部显式问题、场景、计算、表格和最终格式要求；"
+            "不得把任何必答项委托给下游、后续节点或其他模型，因为本节点之后不存在负责补交的节点。"
+            "通用章节契约只规定外层组织方式，不得缩减原始任务的显式交付范围。"
+        )
     return (
         "原始任务中针对最终报告的标题、章节顺序、JSON键、表格列或其他最终格式要求，"
-        "仅适用于承载显式最终交付契约的综合节点。"
+        "仅适用于承载最终交付契约的节点。"
         "本节点是内部工作节点，不得复制或采用原始任务中的最终报告格式；"
         "本节点输出格式只遵循系统消息中的本节点输出契约。"
     )
@@ -84,20 +94,24 @@ def _task_format_scope_rule(node: SelectedNode) -> str:
 def _delivery_rule(node: SelectedNode) -> str:
     fields = _required_fields(node)
     quoted_fields = json.dumps(fields, ensure_ascii=False)
-    separate = bool(
-        node.output_contract.get("must_separate_fact_assumption_inference")
-    )
+    separate = bool(node.output_contract.get("must_separate_fact_assumption_inference"))
     compact_rule = _compact_delivery_rule(fields) if _compact_mode_enabled() else ""
     explicit_rule = task_delivery_contract.delivery_rule(node.output_contract)
-    contract_kind = task_delivery_contract.explicit_contract_kind(
-        node.output_contract
+    contract_kind = task_delivery_contract.explicit_contract_kind(node.output_contract)
+    response_scope = (
+        "最终响应"
+        if contract_kind != "generic" or _is_final_delivery(node)
+        else "本节点响应"
     )
-    response_scope = "最终响应" if contract_kind != "generic" else "本节点响应"
+    final_completeness = (
+        "除这些外层字段/章节外，还必须逐项回答原始任务全部显式交付要求；"
+        "不得用‘下游补充’、‘另行制作’、‘后续完成’替代实际交付。"
+        if _is_final_delivery(node)
+        else ""
+    )
     if node.output_contract.get("machine_readable_required"):
         separation_rule = (
-            "事实、假设、推断和不确定性必须在相应字段内明确区分。"
-            if separate
-            else ""
+            "事实、假设、推断和不确定性必须在相应字段内明确区分。" if separate else ""
         )
         return (
             f"{response_scope}必须只包含一个合法JSON对象，不要使用Markdown代码块或任何前后缀。"
@@ -106,18 +120,16 @@ def _delivery_rule(node: SelectedNode) -> str:
             "禁止复述输出契约、字段清单或模式定义，禁止输出"
             "machine_readable_required、must_separate_fact_assumption_inference、required_fields"
             "等契约元数据。"
-            f"{explicit_rule}{separation_rule}"
+            f"{explicit_rule}{separation_rule}{final_completeness}"
             "内容必须精炼，避免重复；在篇幅受限时优先保证所有必填键存在且JSON语法完整闭合。"
             f"{compact_rule}"
         )
     if node.output_contract.get("explicit_markdown_contract"):
         separation_rule = (
-            "每个章节内必须明确区分事实、假设、推断和不确定性。"
-            if separate
-            else ""
+            "每个章节内必须明确区分事实、假设、推断和不确定性。" if separate else ""
         )
         return (
-            f"{explicit_rule}{separation_rule}"
+            f"{explicit_rule}{separation_rule}{final_completeness}"
             "禁止复述输出契约、章节清单或模式定义。"
             "内容必须完整、可直接使用；先保证全部二级章节存在并填充，再扩展三级标题和细节。"
             f"{compact_rule}"
@@ -131,15 +143,13 @@ def _delivery_rule(node: SelectedNode) -> str:
         else ""
     )
     separation_rule = (
-        "正文中必须明确区分事实、假设、推断和不确定性。"
-        if separate
-        else ""
+        "正文中必须明确区分事实、假设、推断和不确定性。" if separate else ""
     )
     return (
-        f"本节点响应必须直接交付以下内容：{field_text}。"
+        f"{response_scope}必须直接交付以下内容：{field_text}。"
         f"{heading_rule}"
         "禁止复述输出契约、字段清单或模式定义。"
-        f"{separation_rule}"
+        f"{separation_rule}{final_completeness}"
         "内容应精炼、完整、可直接使用。"
         f"{compact_rule}"
     )
@@ -148,16 +158,21 @@ def _delivery_rule(node: SelectedNode) -> str:
 def contract_aware_system_prompt(node: SelectedNode) -> str:
     modules = list(node.prompt_profile.get("modules", []))
     rules = "".join(
-        primitives.PROMPT_MODULES.get(
-            str(name), f"执行提示模块：{name}。"
-        )
+        primitives.PROMPT_MODULES.get(str(name), f"执行提示模块：{name}。")
         for name in modules
     )
     functions = "、".join(node.functions)
     function_rule = f"本节点功能：{functions}。" if functions else ""
+    final_role_rule = (
+        "虽然当前角色名称可能来自任务分析工作单元，但本节点已被执行图标记为最终交付节点；"
+        "最终交付职责优先于任何‘分析节点’措辞。"
+        if _is_final_delivery(node)
+        else ""
+    )
     return (
         "你是V5动态专家执行图中的一个严格隔离节点。"
         f"{function_rule}负责原子工作：{', '.join(node.assigned_work)}。"
+        f"{final_role_rule}"
         "禁止调用、请求或假装使用网页、搜索、插件、文件、代码执行、数据库、API、浏览器、工具或其他模型。"
         "只能依据原始任务和系统显式传入的上游节点结果。不得读取未声明节点，不得与同独立组节点交换结果。"
         f"{_task_format_scope_rule(node)}{rules}{_delivery_rule(node)}"
