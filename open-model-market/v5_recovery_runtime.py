@@ -19,11 +19,17 @@ from v5_cost_effectiveness_runtime import (
     install_cost_effective_continuous_runtime,
 )
 from v5_credit_aware_recovery import install_credit_aware_recovery
+from v5_fact_or_experience_semantic_policy import (
+    install_fact_or_experience_semantic_policy,
+)
 from v5_final_semantic_gate import install_final_semantic_gate
 from v5_priority_preserving_heterogeneity import (
     install_priority_preserving_heterogeneity,
 )
 from v5_production_expert_policy import install_production_expert_policy
+from v5_provider_account_repair_audit import (
+    install_provider_account_repair_audit,
+)
 from v5_replacement_truncation_rebind import (
     install_replacement_truncation_rebind,
 )
@@ -57,7 +63,9 @@ def build_production_runtime(config: RuntimeConfig) -> ProductionRuntime:
     runtime = install_replacement_truncation_rebind(runtime)
     runtime = install_cost_effective_continuous_runtime(runtime)
     runtime = install_task_scope_quality_circuit(runtime)
+    install_fact_or_experience_semantic_policy()
     runtime = install_credit_aware_recovery(runtime)
+    runtime = install_provider_account_repair_audit(runtime)
     runtime = install_cost_effective_final_payload_policy(runtime)
     install_final_request_audit_hardening()
     return runtime
