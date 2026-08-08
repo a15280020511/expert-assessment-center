@@ -1,4 +1,4 @@
-"""Production-ticket evidence facade for signed task-adaptive Top-50 OR-Tools plans."""
+"""Production-ticket evidence facade for current-ticket dynamic Expert plans."""
 from __future__ import annotations
 
 import json
@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import v5_price_ranked_production_ticket_legacy as _legacy
+from v5_dynamic_assignment_truth import (
+    assignment_fields,
+    expert_dynamic_assignment_active,
+    install_pipeline_assignment_truth,
+)
 from v5_paid_acceptance_free_first_guard import (
     PaidAcceptanceFreeFirstError,
     enforce_free_first,
@@ -20,7 +25,7 @@ for _name in dir(_legacy):
 
 
 def _fields(plan: Mapping[str, Any]) -> dict[str, Any]:
-    top50 = plan.get("selected_from_top50_reasoning_pool_only") is True
+    active = expert_dynamic_assignment_active(plan)
     audit = plan.get("optimizer_audit")
     audit = dict(audit) if isinstance(audit, Mapping) else {}
     constraints = audit.get("constraints")
@@ -29,40 +34,58 @@ def _fields(plan: Mapping[str, Any]) -> dict[str, Any]:
     profile = dict(profile) if isinstance(profile, Mapping) else {}
     principles = plan.get("selection_principles")
     principles = list(principles) if isinstance(principles, list) else []
-    return {
-        "candidate_pool_authority": "decision-system-governance",
-        "selection_authority": "expert-assessment-center-ortools" if top50 else "decision-system-governance",
-        "model_assignment_authority": "expert-assessment-center-ortools" if top50 else "decision-system-governance",
-        "model_selection_performed_locally": top50,
-        "candidate_pool_reranking_performed_locally": False,
-        "model_reranking_performed_locally": False,
-        "model_substitution_allowed": False,
-        "optimizer_used": top50,
-        "optimizer": plan.get("optimizer") if top50 else None,
-        "optimizer_optimality_proven": bool(audit.get("optimality_proven")) if top50 else False,
-        "task_adaptive_scoring_completed": bool(plan.get("task_adaptive_scoring_completed")) if top50 else False,
-        "task_adaptive_scoring_schema_version": plan.get("task_adaptive_scoring_schema_version") if top50 else None,
-        "selection_principles": principles if top50 else [],
-        "task_demand_profile": profile if top50 else {},
-        "dynamic_role_weights_used": constraints.get("dynamic_role_weights_used") is True if top50 else False,
-        "marginal_return_used": constraints.get("marginal_return_used") is True if top50 else False,
-        "task_role_native_capacity_compatibility": constraints.get("task_role_native_capacity_compatibility") is True if top50 else False,
-        "semantic_keyword_routing_used": constraints.get("semantic_keyword_routing_used") is True if top50 else False,
-        "cross_task_history_used": constraints.get("cross_task_history_used") is True if top50 else False,
-        "provider_resolution_authority": "openrouter-unrestricted",
-        "provider_routing_mode": "unrestricted-openrouter",
-        "provider_restrictions_applied": False,
-        "provider_fallback_allowed": True,
-        "unrestricted_provider_fallback_allowed": True,
-        "provider_only_allowed": False,
-        "provider_order_allowed": False,
-        "provider_zdr_filter_allowed": False,
-        "provider_data_collection_filter_allowed": False,
-        "provider_price_filter_allowed": False,
-        "openrouter_selects_provider": True,
-        "orchestration_library": "networkx",
-        "optimizer_library": "ortools-cp-sat" if top50 else None,
-    }
+    fields = assignment_fields(plan)
+    fields.update(
+        {
+            "task_adaptive_scoring_completed": bool(
+                plan.get("task_adaptive_scoring_completed")
+            )
+            if active
+            else False,
+            "task_adaptive_scoring_schema_version": (
+                plan.get("task_adaptive_scoring_schema_version") if active else None
+            ),
+            "selection_principles": principles if active else [],
+            "task_demand_profile": profile if active else {},
+            "dynamic_role_weights_used": (
+                constraints.get("dynamic_role_weights_used") is True
+                if active
+                else False
+            ),
+            "marginal_return_used": (
+                constraints.get("marginal_return_used") is True if active else False
+            ),
+            "task_role_native_capacity_compatibility": (
+                constraints.get("task_role_native_capacity_compatibility") is True
+                if active
+                else False
+            ),
+            "semantic_keyword_routing_used": (
+                constraints.get("semantic_keyword_routing_used") is True
+                if active
+                else False
+            ),
+            "cross_task_history_used": (
+                constraints.get("cross_task_history_used") is True
+                if active
+                else False
+            ),
+            "provider_resolution_authority": "openrouter-unrestricted",
+            "provider_routing_mode": "unrestricted-openrouter",
+            "provider_restrictions_applied": False,
+            "provider_fallback_allowed": True,
+            "unrestricted_provider_fallback_allowed": True,
+            "provider_only_allowed": False,
+            "provider_order_allowed": False,
+            "provider_zdr_filter_allowed": False,
+            "provider_data_collection_filter_allowed": False,
+            "provider_price_filter_allowed": False,
+            "openrouter_selects_provider": True,
+            "orchestration_library": "networkx",
+            "optimizer_library": "ortools-cp-sat" if active else None,
+        }
+    )
+    return fields
 
 
 def _enforce_paid_acceptance_free_first(root: Path) -> None:
@@ -95,7 +118,9 @@ def _enforce_paid_acceptance_free_first(root: Path) -> None:
         )
         raise
     if verdict.get("status") != "PASS" or verdict.get("paid_acceptance_allowed") is not True:
-        raise PaidAcceptanceFreeFirstError("paid acceptance is not authorized by free-first evidence")
+        raise PaidAcceptanceFreeFirstError(
+            "paid acceptance is not authorized by free-first evidence"
+        )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -106,9 +131,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     plan: Mapping[str, Any] = {}
     if ticket_path.is_file():
         raw = json.loads(ticket_path.read_text(encoding="utf-8"))
-        if isinstance(raw, Mapping) and isinstance(raw.get("governance_model_plan"), Mapping):
+        if isinstance(raw, Mapping) and isinstance(
+            raw.get("governance_model_plan"), Mapping
+        ):
             plan = raw["governance_model_plan"]
     fields = _fields(plan)
+    install_pipeline_assignment_truth()
     original_write = _legacy.write_json
 
     def write_json(path: Path, value: Any) -> None:
@@ -121,12 +149,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             document.update(fields)
             if path.name == "production-runtime.json" and fields["optimizer_used"]:
                 document["architecture"] = (
-                    "governance-signed-weekly-top50 -> current-ticket structural demand "
-                    "profile -> task-adaptive cost/intelligence/capacity/marginal-return "
-                    "scoring -> expert-center OR-Tools CP-SAT 4-primary+4-warm-recovery "
-                    "assignment -> unrestricted OpenRouter provider routing for each fixed "
-                    "model -> NetworkX DAG -> parallel analysis -> cross-review -> final "
-                    "synthesis"
+                    "governance-signed-full-current-candidate-pool -> current-ticket "
+                    "structural demand and ParameterDesign -> task-adaptive scoring -> "
+                    "Expert Center OR-Tools CP-SAT dynamic team/recovery assignment -> "
+                    "unrestricted OpenRouter provider routing -> NetworkX finite DAG -> "
+                    "current-run feedback recovery -> final synthesis"
                 )
             original_write(path, document)
             return
