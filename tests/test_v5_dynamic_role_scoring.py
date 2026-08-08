@@ -8,10 +8,10 @@ ROOT = Path(__file__).resolve().parents[1]
 MARKET = ROOT / "open-model-market"
 sys.path.insert(0, str(MARKET))
 
-from v5_dynamic_role_assignment import solve_dynamic_roles  # noqa: E402
-from v5_dynamic_role_scoring import (  # noqa: E402
-    build_dynamic_recovery_metrics,
-    build_dynamic_role_metrics,
+from v5_runtime_role_assignment import solve_runtime_roles  # noqa: E402
+from v5_runtime_role_scoring import (  # noqa: E402
+    build_runtime_recovery_metrics,
+    build_runtime_role_metrics,
     role_structural_profile,
 )
 
@@ -39,6 +39,7 @@ def profile() -> dict[str, object]:
         "expected_completion_tokens": 900,
         "protocol_reserve_tokens": 400,
         "governance_context_floor": 1000,
+        "work_unit_count": 6,
         "requirement_count": 4,
         "acceptance_count": 3,
         "delivery_item_count": 2,
@@ -90,9 +91,11 @@ class DynamicRoleScoringTests(unittest.TestCase):
         current_roles = roles()
         shapes = [role_structural_profile(current_profile, role) for role in current_roles]
         self.assertLess(shapes[0]["required_context_tokens"], shapes[-1]["required_context_tokens"])
-        self.assertNotEqual(shapes[0]["weights"], shapes[-1]["weights"])
+        self.assertNotEqual(shapes[0]["weight_strengths"], shapes[-1]["weight_strengths"])
         self.assertTrue(all(not row["fixed_metric_role_class_used"] for row in shapes))
         self.assertTrue(all(not row["semantic_role_routing_used"] for row in shapes))
+        self.assertTrue(all(not row["fixed_business_weight_coefficients_used"] for row in shapes))
+        self.assertTrue(all(row["weight_derivation"] == "normalize-current-role-and-task-signals" for row in shapes))
 
         renamed = dict(current_roles[1])
         renamed["role_id"] = "completely-different-name"
@@ -104,25 +107,27 @@ class DynamicRoleScoringTests(unittest.TestCase):
             "completion_tokens",
             "required_context_tokens",
             "weights",
+            "weight_strengths",
             "structural_pressure",
         ):
             self.assertEqual(original_shape[key], renamed_shape[key])
 
     def test_metrics_accept_arbitrary_roles_without_fixed_adapter(self) -> None:
         current_roles = roles()
-        metrics = build_dynamic_role_metrics(candidates(), profile(), current_roles[1])
+        metrics = build_runtime_role_metrics(candidates(), profile(), current_roles[1])
         self.assertEqual(8, len(metrics))
         for row in metrics.values():
             self.assertEqual(
-                "current-generated-role-structural-signals",
+                "current-role-current-task-normalized-signals",
                 row["metric_source"],
             )
             self.assertFalse(row["fixed_metric_role_class_used"])
+            self.assertFalse(row["fixed_business_weight_coefficients_used"])
             self.assertEqual("beta-cross-check", row["role_id"])
 
     def test_recovery_uses_heaviest_current_generated_role(self) -> None:
         current_roles = roles()
-        _, recovery_shape = build_dynamic_recovery_metrics(
+        _, recovery_shape = build_runtime_recovery_metrics(
             candidates(), profile(), current_roles
         )
         heaviest = max(
@@ -141,7 +146,7 @@ class DynamicRoleScoringTests(unittest.TestCase):
         self.assertEqual("heaviest-current-generated-role", recovery_shape["source"])
 
     def test_ortools_assignment_preserves_arbitrary_roles(self) -> None:
-        selected, recoveries, audit = solve_dynamic_roles(
+        selected, recoveries, audit = solve_runtime_roles(
             candidates(10), profile(), roles(), 2
         )
         self.assertEqual(3, len(selected))
@@ -154,18 +159,20 @@ class DynamicRoleScoringTests(unittest.TestCase):
         self.assertFalse(audit["metric_role_adapter_used"])
         self.assertFalse(audit["fixed_metric_role_grammar_used"])
         self.assertFalse(audit["semantic_role_routing_used"])
+        self.assertFalse(audit["fixed_business_weight_coefficients_used"])
         self.assertEqual(
-            "current-generated-role-structural-signals",
+            "current-role-current-task-normalized-signals",
             audit["role_metric_mode"],
         )
 
-    def test_active_hierarchical_optimizer_bypasses_legacy_metric_adapter(self) -> None:
+    def test_active_hierarchical_optimizer_uses_runtime_generated_path(self) -> None:
         source = (MARKET / "v5_hierarchical_candidate_optimizer.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn("solve_dynamic_roles", source)
-        self.assertIn('role.pop("metric_role_id", None)', source)
-        self.assertNotIn("selected, recoveries, solver_audit = base._solve", source)
+        self.assertIn("build_runtime_planning_context", source)
+        self.assertIn("solve_runtime_roles", source)
+        self.assertNotIn('role.pop("metric_role_id", None)', source)
+        self.assertNotIn("solve_dynamic_roles", source)
 
 
 if __name__ == "__main__":

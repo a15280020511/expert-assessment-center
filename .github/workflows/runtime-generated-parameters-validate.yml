@@ -1,0 +1,79 @@
+name: Validate Runtime Generated Parameters
+
+on:
+  pull_request:
+    paths:
+      - "open-model-market/v5_task_work_graph.py"
+      - "open-model-market/v5_runtime_parameter_planner.py"
+      - "open-model-market/v5_runtime_role_scoring.py"
+      - "open-model-market/v5_runtime_role_assignment.py"
+      - "open-model-market/v5_hierarchical_candidate_optimizer.py"
+      - "tests/test_v5_runtime_generated_parameters.py"
+      - "tests/test_v5_dynamic_role_scoring.py"
+      - ".github/workflows/runtime-generated-parameters-validate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-generated-parameters:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-runtime.txt
+            requirements-dev.txt
+
+      - name: Install pinned validation dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-input -r requirements-dev.txt
+          python -m pip check
+
+      - name: Compile generated production path
+        run: |
+          set -euo pipefail
+          python -m compileall -q \
+            open-model-market/v5_task_work_graph.py \
+            open-model-market/v5_runtime_parameter_planner.py \
+            open-model-market/v5_runtime_role_scoring.py \
+            open-model-market/v5_runtime_role_assignment.py \
+            open-model-market/v5_hierarchical_candidate_optimizer.py
+
+      - name: Run generated parameter and role scoring regressions
+        run: |
+          set -euo pipefail
+          PYTHONPATH=open-model-market python -m unittest -v \
+            tests.test_v5_runtime_generated_parameters \
+            tests.test_v5_dynamic_role_scoring \
+            tests.test_v5_no_tools_candidate_prefilter \
+            tests.test_v5_hierarchical_production_entry
+
+      - name: Verify active materializer cutover
+        run: |
+          set -euo pipefail
+          PYTHONPATH=open-model-market python - <<'PY'
+          from pathlib import Path
+          source = Path('open-model-market/v5_hierarchical_candidate_optimizer.py').read_text()
+          assert 'build_runtime_planning_context' in source
+          assert 'solve_runtime_roles' in source
+          assert 'from v5_dynamic_parameter_graph import' not in source
+          assert 'from v5_dynamic_role_assignment import' not in source
+          assert 'metric_role_id' not in source
+          planner = Path('open-model-market/v5_runtime_parameter_planner.py').read_text()
+          assert 'current-decisions-first-then-generate-parameter-identities' in planner
+          assert 'parameter_ids_are_generated_after_decision_discovery' in planner
+          assert 'fixed_business_parameter_catalog_used' in planner
+          scoring = Path('open-model-market/v5_runtime_role_scoring.py').read_text()
+          assert 'fixed_business_weight_coefficients_used' in scoring
+          PY
