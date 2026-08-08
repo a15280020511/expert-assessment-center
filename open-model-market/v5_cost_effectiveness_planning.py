@@ -29,8 +29,10 @@ def _pressure(profile: Mapping[str, Any]) -> float:
     raw = raw if isinstance(raw, Mapping) else {}
     values: list[float] = []
     for key in ("input", "constraint", "evidence", "delivery", "overall"):
+        if key not in raw or raw.get(key) in (None, ""):
+            continue
         try:
-            value = float(raw.get(key) or 0.0)
+            value = float(raw.get(key))
         except (TypeError, ValueError):
             continue
         # Support either 0..1 or 0..100 planner representations.
