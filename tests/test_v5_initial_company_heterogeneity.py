@@ -10,7 +10,7 @@ MARKET = ROOT / "open-model-market"
 if str(MARKET) not in sys.path:
     sys.path.insert(0, str(MARKET))
 
-from v5_dynamic_role_assignment import solve_dynamic_roles  # noqa: E402
+from v5_runtime_role_assignment import solve_runtime_roles  # noqa: E402
 
 
 def _metrics(candidates, capability_scores, economy_scores=None):
@@ -24,9 +24,12 @@ def _metrics(candidates, capability_scores, economy_scores=None):
         economy = int(economy_scores[model])
         result[model] = {
             "objective_score": capability + economy,
+            "base_objective_score": capability + economy,
             "estimated_task_cost_usd": float(economy),
             "compatible": True,
+            "capacity_shortfall": 0.0,
             "capacity_shortfall_penalty": 0,
+            "marginal_cost_per_quality": float(economy),
             "weights": {
                 "intelligence": 1,
                 "weekly_popularity": 0,
@@ -34,6 +37,8 @@ def _metrics(candidates, capability_scores, economy_scores=None):
                 "task_cost": 1,
                 "marginal_return": 0,
             },
+            "weight_strengths": {},
+            "role_tokens": {},
             "ranks": {
                 "intelligence": capability,
                 "weekly_popularity": 1,
@@ -66,15 +71,15 @@ class InitialCompanyHeterogeneityTests(unittest.TestCase):
         metrics = _metrics(candidates, capability_scores, economy_scores)
         with (
             patch(
-                "v5_dynamic_role_assignment.build_dynamic_role_metrics",
+                "v5_runtime_role_assignment.build_runtime_role_metrics",
                 return_value=metrics,
             ),
             patch(
-                "v5_dynamic_role_assignment.build_dynamic_recovery_metrics",
+                "v5_runtime_role_assignment.build_runtime_recovery_metrics",
                 return_value=(metrics, {"role_id": "recovery-reference"}),
             ),
         ):
-            return solve_dynamic_roles(candidates, {}, role_plan, recovery)
+            return solve_runtime_roles(candidates, {}, role_plan, recovery)
 
     def test_equal_capability_and_economy_prefer_distinct_companies(self) -> None:
         candidates = [
