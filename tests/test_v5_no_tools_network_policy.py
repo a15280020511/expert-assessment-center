@@ -349,7 +349,7 @@ class NoToolsNetworkPolicyTests(unittest.TestCase):
             )
         )
         self.assertEqual(
-            "v5-constitutional-policy-10-fully-dynamic-no-tools",
+            "v5-constitutional-policy-11-runtime-knob-closure",
             policy["schema_version"],
         )
         self.assertEqual("no-tools", policy["only_hard_model_boundary"])
