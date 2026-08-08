@@ -4,9 +4,15 @@ Unlike the compatibility optimizer, this active solver never maps generated role
 a fixed semantic role family before scoring. Each role is scored from its own current
 structural profile, while recovery is scored against the heaviest role in this run.
 
-Company heterogeneity is a lexicographic soft objective: current-task role quality /
-risk remains primary, then the solver minimizes repeated companies, then applies a
-stable deterministic tie-break. No company count or uniqueness rule is a hard gate.
+Company heterogeneity is a lexicographic soft objective. The active ordering is:
+1. current-task capability and capacity/reliability risk;
+2. maximize distinct-company coverage;
+3. current-task cost and marginal-return efficiency;
+4. stable deterministic tie-break.
+
+No company count or uniqueness rule is a hard gate. A materially stronger/safer model
+therefore beats diversity, while a merely cheaper same-company model does not crowd out
+an equally capable model from a new company.
 """
 from __future__ import annotations
 
@@ -28,6 +34,10 @@ class DynamicRoleAssignmentError(RuntimeError):
     """Raised when a finite current-role assignment cannot be constructed."""
 
 
+_CAPABILITY_KEYS = ("intelligence", "weekly_popularity", "capacity_headroom")
+_ECONOMY_KEYS = ("task_cost", "marginal_return")
+
+
 def _company(row: Mapping[str, Any]) -> str:
     model = str(row.get("model") or "").strip()
     company = canonical_model_company(model)
@@ -35,6 +45,28 @@ def _company(row: Mapping[str, Any]) -> str:
         return company
     raw = str(row.get("company") or "").strip().casefold()
     return raw or "unknown"
+
+
+def _objective_components(metric: Mapping[str, Any]) -> tuple[int, int]:
+    """Split the existing dynamic metric into capability/risk and economy layers."""
+    ranks = metric.get("ranks")
+    weights = metric.get("weights")
+    if not isinstance(ranks, Mapping) or not isinstance(weights, Mapping):
+        # Compatibility for synthetic tests/legacy metrics. Production structural
+        # scoring always supplies ranks+weights; old aggregate score remains primary.
+        return int(metric.get("objective_score") or 0), 0
+
+    def weighted(keys: Sequence[str]) -> int:
+        return sum(
+            int(weights.get(key) or 0) * int(ranks.get(key) or 0)
+            for key in keys
+        )
+
+    capability = weighted(_CAPABILITY_KEYS) + int(
+        metric.get("capacity_shortfall_penalty") or 0
+    )
+    economy = weighted(_ECONOMY_KEYS)
+    return capability, economy
 
 
 def _heterogeneity_audit(
@@ -50,8 +82,9 @@ def _heterogeneity_audit(
         "company_diversity_is_execution_gate": False,
         "hard_company_diversity_constraint": False,
         "objective_priority": [
-            "current-task-role-quality-risk-objective",
+            "current-task-capability-and-capacity-risk",
             "maximize-distinct-company-coverage",
+            "current-task-cost-and-marginal-return",
             "stable-deterministic-tie-break",
         ],
         "primary_company_sequence": primary_companies,
@@ -64,6 +97,21 @@ def _heterogeneity_audit(
         "same_company_position_reuse_count": max(0, len(sequence) - distinct),
         "cross_task_company_history_used": False,
     }
+
+
+def _fallback_rank_key(
+    row: Mapping[str, Any],
+    metric: Mapping[str, Any],
+    used_companies: set[str],
+) -> tuple[Any, ...]:
+    capability, economy = _objective_components(metric)
+    return (
+        capability,
+        int(_company(row) in used_companies),
+        economy,
+        float(metric.get("estimated_task_cost_usd") or 0.0),
+        str(row.get("model") or ""),
+    )
 
 
 def _fallback_recoveries(
@@ -81,19 +129,10 @@ def _fallback_recoveries(
                 for row in candidates
                 if str(row.get("model") or "") not in used_models
             ),
-            key=lambda row: (
-                int(
-                    recovery_metrics[str(row["model"])].get("objective_score")
-                    or 0
-                ),
-                int(_company(row) in used_companies),
-                float(
-                    recovery_metrics[str(row["model"])].get(
-                        "estimated_task_cost_usd"
-                    )
-                    or 0.0
-                ),
-                str(row["model"]),
+            key=lambda row: _fallback_rank_key(
+                row,
+                recovery_metrics[str(row["model"])],
+                used_companies,
             ),
         )
         if not ranked:
@@ -172,42 +211,48 @@ def solve_dynamic_roles(
         for variable in position_vars:
             model.add(company_used[company] >= variable)
 
-    # Lexicographic soft objective encoded by exact integer scales:
-    # 1) any one-point current-task objective improvement dominates all possible
-    #    company-duplication and tie-break gains;
-    # 2) company diversity dominates deterministic candidate-order tie-breaking.
     total_positions = len(roles) + int(recovery_count)
     max_tie_per_position = max(
         1,
         len(candidates) * (len(roles) + 1) + len(roles) + 1,
     )
     max_tie_sum = max(1, total_positions * max_tie_per_position)
-    diversity_scale = max_tie_sum + 1
-    base_scale = diversity_scale * (total_positions + 1)
 
-    base_terms: list[Any] = []
+    capability_terms: list[Any] = []
+    economy_terms: list[Any] = []
     tie_terms: list[Any] = []
+    economy_values: list[int] = []
     for index, row in enumerate(candidates):
         model_id = str(row["model"])
         for role_index in range(len(roles)):
             metric = metrics_by_role[role_index][model_id]
+            capability, economy = _objective_components(metric)
             tie = index * max(1, len(roles)) + role_index
-            base_terms.append(
-                int(metric.get("objective_score") or 0)
-                * active[index, role_index]
-            )
+            capability_terms.append(capability * active[index, role_index])
+            economy_terms.append(economy * active[index, role_index])
+            economy_values.append(economy)
             tie_terms.append(tie * active[index, role_index])
         recovery_metric = recovery_metrics[model_id]
-        base_terms.append(
-            int(recovery_metric.get("objective_score") or 0) * recovery[index]
-        )
+        capability, economy = _objective_components(recovery_metric)
+        capability_terms.append(capability * recovery[index])
+        economy_terms.append(economy * recovery[index])
+        economy_values.append(economy)
         recovery_tie = len(candidates) * max(1, len(roles)) + index
         tie_terms.append(recovery_tie * recovery[index])
 
+    # Exact integer scales encode a true lexicographic soft objective:
+    # capability/risk > company diversity > economy/marginal return > stable tie.
+    max_economy_per_position = max([0, *economy_values])
+    max_economy_sum = max(1, total_positions * max_economy_per_position)
+    economy_scale = max_tie_sum + 1
+    diversity_scale = max_economy_sum * economy_scale + max_tie_sum + 1
+    capability_scale = diversity_scale * (total_positions + 1)
+
     repeated_company_positions = total_positions - sum(company_used.values())
     model.minimize(
-        sum(base_terms) * base_scale
+        sum(capability_terms) * capability_scale
         + repeated_company_positions * diversity_scale
+        + sum(economy_terms) * economy_scale
         + sum(tie_terms)
     )
 
@@ -248,9 +293,19 @@ def solve_dynamic_roles(
             "company_diversity_is_execution_gate": False,
             "hard_company_diversity_constraint": False,
             "candidate_company_count": len(company_indices),
+            "objective_component_policy": {
+                "capability_and_risk": [
+                    *_CAPABILITY_KEYS,
+                    "capacity_shortfall_penalty",
+                ],
+                "company_diversity": "distinct-company-coverage",
+                "economy_and_marginal_return": list(_ECONOMY_KEYS),
+                "cross_task_history_used": False,
+            },
             "objective_lexicographic_scales": {
-                "current_task_base_scale": base_scale,
+                "capability_and_risk_scale": capability_scale,
                 "company_diversity_scale": diversity_scale,
+                "economy_and_marginal_return_scale": economy_scale,
                 "stable_tie_scale": 1,
             },
             "cross_task_company_history_used": False,
@@ -272,21 +327,10 @@ def solve_dynamic_roles(
         for role_index, role in enumerate(roles):
             ranked = sorted(
                 candidates,
-                key=lambda row: (
-                    int(
-                        metrics_by_role[role_index][str(row["model"])].get(
-                            "objective_score"
-                        )
-                        or 0
-                    ),
-                    int(_company(row) in used_companies),
-                    float(
-                        metrics_by_role[role_index][str(row["model"])].get(
-                            "estimated_task_cost_usd"
-                        )
-                        or 0.0
-                    ),
-                    str(row["model"]),
+                key=lambda row: _fallback_rank_key(
+                    row,
+                    metrics_by_role[role_index][str(row["model"])],
+                    used_companies,
                 ),
             )
             source = next(
