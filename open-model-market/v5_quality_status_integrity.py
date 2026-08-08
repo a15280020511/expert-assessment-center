@@ -142,13 +142,26 @@ def _apply_degradation(
     normalized["degradation"] = degradation
 
 
+def _provider_account_failure_reason(result: Mapping[str, Any]) -> str:
+    transport = result.get("provider_account_transport_state")
+    if not isinstance(transport, Mapping) or transport.get("blocked") is not True:
+        return ""
+    reason = str(transport.get("reason") or "").strip()
+    if reason == "openrouter-http-402-insufficient-credits":
+        return "provider-account-credit-insufficient"
+    return "provider-account-unavailable" if reason else ""
+
+
 def _reject_invalid_degraded_delivery(normalized: dict[str, Any]) -> None:
     """Convert an unaudited degraded-success claim into a real failure."""
     previous_answer = str(normalized.get("final_answer") or "").strip()
+    provider_reason = _provider_account_failure_reason(normalized)
     normalized["status"] = "failed"
     normalized["completion_mode"] = "none"
     normalized["quality_status"] = "failed"
-    normalized["stop_reason"] = "degraded-delivery-without-usable-content"
+    normalized["stop_reason"] = (
+        provider_reason or "degraded-delivery-without-usable-content"
+    )
     normalized["final_answer"] = None
 
     delivery = normalized.get("delivery_policy")
@@ -169,6 +182,7 @@ def _reject_invalid_degraded_delivery(normalized: dict[str, Any]) -> None:
             "rejection_reason": marker,
             "status_shell_was_not_delivery": True,
             "previous_final_answer_was_nonempty": bool(previous_answer),
+            "root_cause_preserved": bool(provider_reason),
             "full_success_claimed": False,
         }
     )
