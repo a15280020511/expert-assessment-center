@@ -65,13 +65,15 @@ class OptionalFunctionsSemanticsTests(unittest.TestCase):
         self.assertNotIn("本节点功能：。", text)
         self.assertIn("负责原子工作：work-1", text)
 
-    def test_final_quality_floor_uses_contract_not_function_tag(self) -> None:
+    def test_final_quality_gate_uses_observable_contract_not_fixed_length(self) -> None:
         selected = node(node_id="node-final", work="work-final", final=True)
-        passed, _, reasons = quality_gate(
-            selected, {"choices": [{"finish_reason": "stop"}]}, "结论" * 70
+        passed, score, reasons = quality_gate(
+            selected, {"choices": [{"finish_reason": "stop"}]}, "结论"
         )
-        self.assertFalse(passed)
-        self.assertIn("answer-too-short<320", reasons)
+        self.assertTrue(passed)
+        self.assertEqual([], reasons)
+        self.assertGreater(score, 0.0)
+        self.assertFalse(any(reason.startswith("answer-too-short") for reason in reasons))
 
     def test_content_work_excludes_graph_final_nodes(self) -> None:
         content = node(node_id="node-content", work="work-content", final=False)

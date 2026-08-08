@@ -10,7 +10,7 @@ from typing import Any, Mapping, Sequence
 
 import networkx as nx
 
-SCHEMA_VERSION = "current-ticket-work-graph-1"
+SCHEMA_VERSION = "current-ticket-work-graph-2"
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -102,7 +102,7 @@ def _structural_units(packet: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "source_kind": source_kind,
                     "payload": value,
                     "dependencies": [],
-                    "dependency_source": "current-ticket-similarity",
+                    "dependency_source": "structural-unit-no-inferred-hard-dependency",
                 }
             )
     if not result:
@@ -118,28 +118,40 @@ def _structural_units(packet: Mapping[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
-def _infer_dependencies(units: list[dict[str, Any]]) -> None:
+def _normalize_explicit_dependencies(units: list[dict[str, Any]]) -> None:
+    """Keep only ticket-declared dependencies; never promote similarity to order."""
     ids = {str(row["unit_id"]) for row in units}
+    for row in units:
+        explicit = [
+            value
+            for value in row.get("dependencies", [])
+            if value in ids and value != row["unit_id"]
+        ]
+        row["dependencies"] = list(dict.fromkeys(explicit))
+
+
+def _relatedness_edges(units: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Expose semantic relatedness as soft metadata, never as a DAG edge."""
+    candidates: list[tuple[float, str, str]] = []
     for index, row in enumerate(units):
-        explicit = [value for value in row.get("dependencies", []) if value in ids and value != row["unit_id"]]
-        if explicit:
-            row["dependencies"] = list(dict.fromkeys(explicit))
-            continue
-        if index == 0:
-            row["dependencies"] = []
-            continue
-        scored = [(_jaccard(row.get("payload"), prior.get("payload")), str(prior["unit_id"])) for prior in units[:index]]
-        positives = [score for score, _ in scored if score > 0]
-        if not positives:
-            row["dependencies"] = []
-            continue
-        threshold = median(positives)
-        parent_limit = max(1, math.ceil(math.sqrt(index)))
-        row["dependencies"] = [
-            unit_id
-            for score, unit_id in sorted(scored, key=lambda item: (-item[0], item[1]))
-            if score >= threshold and score > 0
-        ][:parent_limit]
+        for prior in units[:index]:
+            score = _jaccard(row.get("payload"), prior.get("payload"))
+            if score > 0:
+                candidates.append((score, str(prior["unit_id"]), str(row["unit_id"])))
+    if not candidates:
+        return []
+    threshold = median(score for score, _, _ in candidates)
+    return [
+        {
+            "from": source,
+            "to": target,
+            "score": round(score, 8),
+            "relation": "semantic-relatedness-only",
+            "blocks_execution": False,
+        }
+        for score, source, target in sorted(candidates, key=lambda item: (-item[0], item[1], item[2]))
+        if score >= threshold
+    ]
 
 
 def build_current_work_graph(packet: Mapping[str, Any]) -> dict[str, Any]:
@@ -151,7 +163,8 @@ def build_current_work_graph(packet: Mapping[str, Any]) -> dict[str, Any]:
             unit_id = f"{unit_id}-{index}"
         row["unit_id"] = unit_id
         seen.add(unit_id)
-    _infer_dependencies(units)
+    _normalize_explicit_dependencies(units)
+    relatedness = _relatedness_edges(units)
 
     graph = nx.DiGraph()
     graph.add_nodes_from(str(row["unit_id"]) for row in units)
@@ -202,6 +215,10 @@ def build_current_work_graph(packet: Mapping[str, Any]) -> dict[str, Any]:
         "source": "current-ticket-content-derived-work-dag",
         "work_units": units,
         "dependency_edges": edges,
+        "relatedness_edges": relatedness,
+        "relatedness_edge_count": len(relatedness),
+        "relatedness_is_dependency": False,
+        "dependency_policy": "ticket-explicit-or-final-integration-only",
         "work_unit_count": len(units),
         "dependency_edge_count": len(edges),
         "maximum_depth": len(generations),

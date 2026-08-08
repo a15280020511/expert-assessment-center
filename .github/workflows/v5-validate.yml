@@ -49,7 +49,8 @@ jobs:
           import v5_top50_pool_optimizer as optimizer
           from pathlib import Path
           policy = json.loads(Path('open-model-market/constitutional_policy.json').read_text())
-          assert policy['schema_version'] == 'v5-constitutional-policy-10-fully-dynamic-no-tools'
+          assert policy['schema_version'] == 'v5-constitutional-policy-11-runtime-knob-closure'
+          assert policy['authority'] == 'CONSTITUTION.md'
           assert policy['only_hard_model_boundary'] == 'no-tools'
           admission = policy['execution_admission']
           for key in (
@@ -77,6 +78,14 @@ jobs:
           matching = policy['dynamic_task_matching']
           assert matching['required'] is True
           assert matching['all_calculable_planning_parameters_dynamic'] is True
+          assert matching['runtime_parameter_lifecycle_required'] is True
+          assert matching['runtime_knob_coverage_required'] is True
+          assert matching['computed_but_unused_allowed'] is False
+          assert matching['semantic_relatedness_can_create_hard_dependency'] is False
+          assert matching['parameter_lifecycle'] == [
+              'discover', 'resolve', 'bind', 'consume', 'observe',
+              'recompute-from-current-run-feedback',
+          ]
           for key in (
               'task_volume', 'evidence_volume', 'constraint_pressure',
               'delivery_pressure', 'prompt_token_estimate',
@@ -87,6 +96,8 @@ jobs:
           ):
               assert matching[key] == 'task-derived', key
           assert matching['solver_seed'] == 'task-derived-reproducible'
+          assert matching['reasoning_effort'] == 'task-derived-and-request-bound'
+          assert matching['output_transport_allowance'] == 'current-request-derived'
           assert matching['company_mix'] == 'unconstrained'
           assert matching['model_substitution_allowed'] is True
           optimizer_runtime = policy['optimizer_runtime']
@@ -118,8 +129,22 @@ jobs:
           assert resource['fixed_total_call_ceiling'] is False
           assert resource['fixed_initial_call_ceiling'] is False
           assert resource['fixed_recovery_call_ceiling'] is False
+          assert resource['cost_threshold_can_reject_execution'] is False
+          assert resource['estimated_cost_can_reject_execution'] is False
+          assert resource['actual_cost_can_invalidate_valid_output'] is False
+          assert resource['local_token_ceiling_allowed'] is False
+          assert resource['dynamic_transport_allowance_allowed'] is True
+          assert resource['dynamic_transport_allowance_is_task_admission_gate'] is False
+          assert resource['dynamic_transport_allowance_can_invalidate_valid_output'] is False
+          assert resource['truncation_can_recompute_transport_allowance'] is True
           assert resource['finite_execution_graph_required'] is True
           assert resource['unbounded_recursive_retry_allowed'] is False
+          delivery = policy['delivery']
+          assert delivery['runtime_knob_coverage_must_be_audited'] is True
+          security = policy['security_and_integrity_invariants']
+          assert security['semantic_relatedness_is_not_dependency'] is True
+          production = policy['production_promotion']
+          assert production['runtime_knob_coverage_required'] is True
           tools = policy['tool_policy']
           assert tools['request_tool_fields_forbidden'] is True
           assert tools['response_tool_evidence_forbidden'] is True
@@ -151,6 +176,14 @@ jobs:
           orchestrator = Path('open-model-market/v5_governed_plan_orchestrator.py').read_text()
           assert 'depends_on_role_ids' in orchestrator
           assert 'fixed_role_grammar_used' in orchestrator
+          binding = Path('open-model-market/v5_runtime_request_binding.py').read_text()
+          assert 'audit_bound_request' in binding
+          assert 'output_allowance_is_task_admission_gate' in binding
+          knob_audit = Path('open-model-market/v5_runtime_knob_audit.py').read_text()
+          assert 'computed_but_unused' in knob_audit
+          work_graph = Path('open-model-market/v5_task_work_graph.py').read_text()
+          assert 'relatedness_is_dependency' in work_graph
+          assert 'semantic-relatedness-only' in work_graph
           PY
 
       - name: Compile dynamic expert runtime
@@ -169,7 +202,10 @@ jobs:
             tests.test_top50_pool_optimizer \
             tests.test_v5_hierarchical_task_parameter_planner \
             tests.test_v5_task_derived_parameter_graph \
-            tests.test_v5_no_tools_network_policy
+            tests.test_v5_no_tools_network_policy \
+            tests.test_v5_runtime_knob_closure \
+            tests.test_v5_runtime_knob_audit \
+            tests.test_v5_task_work_graph_independence
 
       - name: Verify active execution path has no Provider pinning or model business gates
         run: |

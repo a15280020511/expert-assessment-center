@@ -65,12 +65,15 @@ class SoftResourceGovernanceTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertIn("Token 与费用实行软治理", constitution)
+        self.assertIn("Token、费用、余额与调用数实行软治理", constitution)
         resource = policy["resource_governance"]
         self.assertFalse(resource["local_token_ceiling_allowed"])
         self.assertFalse(resource["estimated_cost_can_reject_execution"])
         self.assertFalse(resource["cost_threshold_can_reject_execution"])
         self.assertFalse(resource["actual_cost_can_invalidate_valid_output"])
+        self.assertTrue(resource["dynamic_transport_allowance_allowed"])
+        self.assertFalse(resource["dynamic_transport_allowance_is_task_admission_gate"])
+        self.assertFalse(resource["dynamic_transport_allowance_can_invalidate_valid_output"])
         self.assertTrue(resource["finite_execution_graph_required"])
         self.assertFalse(resource["unbounded_recursive_retry_allowed"])
 
