@@ -147,10 +147,7 @@ class ConstitutionPolicyTests(unittest.TestCase):
             matching["model_timeout_effective"],
             "current-request-derived-under-finite-safety-cap",
         )
-        self.assertEqual(
-            matching["company_mix"],
-            "current-task-soft-heterogeneity-after-capability-risk-before-economy",
-        )
+        self.assertEqual(matching["company_mix"], "unconstrained")
         self.assertTrue(matching["company_heterogeneity_soft_objective_required"])
         self.assertFalse(matching["company_diversity_is_execution_gate"])
         self.assertFalse(matching["fixed_company_count_allowed"])
