@@ -8,6 +8,7 @@ field, leaving OpenRouter free to choose a Provider for each fixed model.
 """
 from __future__ import annotations
 
+from v5_compound_fact_provenance import install_compound_fact_provenance
 from v5_final_audit_hardening import install_final_request_audit_hardening
 from v5_final_semantic_gate import install_final_semantic_gate
 from v5_priority_preserving_heterogeneity import (
@@ -21,9 +22,6 @@ from v5_runtime import ProductionRuntime, RetryPolicy, RuntimeConfig
 
 def build_production_runtime(config: RuntimeConfig) -> ProductionRuntime:
     """Build the production executor with unrestricted Provider routing."""
-    # Ordinary transport failures still avoid same-endpoint loops. Run-387
-    # hardening performs one explicit same-model retry only for observable output
-    # truncation after rebinding a larger current-run allowance.
     retry_policy = RetryPolicy(
         retry_same_endpoint_categories=(),
         maximum_same_endpoint_retries_per_node=0,
@@ -32,6 +30,7 @@ def build_production_runtime(config: RuntimeConfig) -> ProductionRuntime:
     runtime = install_production_expert_policy(runtime)
     runtime = install_run387_hardening(runtime)
     install_final_semantic_gate()
+    install_compound_fact_provenance()
     runtime = install_priority_preserving_heterogeneity(runtime)
     install_final_request_audit_hardening()
     return runtime
