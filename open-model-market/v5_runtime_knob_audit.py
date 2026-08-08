@@ -3,7 +3,13 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-SCHEMA_VERSION = "runtime-knob-coverage-audit-2"
+SCHEMA_VERSION = "runtime-knob-coverage-audit-3-resource-closure"
+_REQUIRED_RESOURCE_SURFACES = (
+    "prompt-shape-budgeting",
+    "resource-efficiency-balance",
+    "output-transport-allowance",
+    "model-timeout-effective",
+)
 
 
 def _rows(value: Any) -> list[Mapping[str, Any]]:
@@ -38,19 +44,25 @@ def _timeout_binding(attempt: Mapping[str, Any]) -> Mapping[str, Any]:
     return {}
 
 
-def _attempt_rows(node_results: Sequence[Mapping[str, Any]] | None) -> list[dict[str, Any]]:
+def _attempt_rows(
+    node_results: Sequence[Mapping[str, Any]] | None,
+) -> list[dict[str, Any]]:
     flattened: list[dict[str, Any]] = []
     for node in _rows(node_results or []):
         node_id = str(node.get("node_id") or "")
         for attempt in _rows(node.get("attempts")):
             request = attempt.get("request")
-            if not isinstance(request, Mapping) or not str(request.get("model") or "").strip():
+            if not isinstance(request, Mapping) or not str(
+                request.get("model") or ""
+            ).strip():
                 continue
             flattened.append(
                 {
                     "node_id": node_id,
                     "attempt_index": int(attempt.get("attempt_index") or 0),
-                    "model": str(attempt.get("model") or request.get("model") or ""),
+                    "model": str(
+                        attempt.get("model") or request.get("model") or ""
+                    ),
                     "request": dict(request),
                     "timeout_binding": dict(_timeout_binding(attempt)),
                 }
@@ -58,16 +70,38 @@ def _attempt_rows(node_results: Sequence[Mapping[str, Any]] | None) -> list[dict
     return flattened
 
 
+def _resource_parameter_ids(node: Mapping[str, Any]) -> dict[str, str]:
+    profile = node.get("parameter_profile")
+    profile = profile if isinstance(profile, Mapping) else {}
+    ids = profile.get("runtime_resource_parameter_ids")
+    ids = ids if isinstance(ids, Mapping) else {}
+    return {
+        surface: str(ids.get(surface) or "").strip()
+        for surface in _REQUIRED_RESOURCE_SURFACES
+    }
+
+
+def _resource_closure_required(graph: Mapping[str, Any]) -> bool:
+    metadata = graph.get("metadata")
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    # New production materialization always emits this field, including False.
+    # Legacy/unit fixtures that predate the closure omit it and are audited only
+    # for the knobs they actually declare.
+    return "request_resource_parameter_profile_bound" in metadata
+
+
 def audit_runtime_knob_coverage(
     graph: Mapping[str, Any],
     requests: Sequence[Mapping[str, Any]],
     node_results: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Prove planning knobs were bound and effective runtime knobs were observed."""
+    """Prove ParameterDesign values are bound and observed at real attempts."""
     request_rows = _rows(requests)
     nodes = _rows(graph.get("nodes"))
+    closure_required = _resource_closure_required(graph)
     computed_but_unused: list[dict[str, Any]] = []
     reasoning_bindings: list[dict[str, Any]] = []
+    resource_parameter_bindings: list[dict[str, Any]] = []
 
     for node in nodes:
         node_id = str(node.get("node_id") or "")
@@ -78,7 +112,11 @@ def audit_runtime_knob_coverage(
             if isinstance(profile, Mapping)
             else ""
         )
-        matches = [row for row in request_rows if str(row.get("model") or "") == model]
+        matches = [
+            row
+            for row in request_rows
+            if str(row.get("model") or "") == model
+        ]
         effective = next(
             (
                 effort
@@ -106,6 +144,38 @@ def audit_runtime_knob_coverage(
                     "effective": effective or None,
                 }
             )
+
+        ids = _resource_parameter_ids(node)
+        missing_ids = [surface for surface, value in ids.items() if not value]
+        resource_parameter_bindings.append(
+            {
+                "node_id": node_id,
+                "model": model,
+                "parameter_ids": ids,
+                "required_surfaces": list(_REQUIRED_RESOURCE_SURFACES),
+                "required_for_this_graph": closure_required,
+                "status": (
+                    "PASS"
+                    if not missing_ids
+                    else "FAIL"
+                    if closure_required
+                    else "NOT_EVALUATED"
+                ),
+                "missing_parameter_surfaces": missing_ids,
+            }
+        )
+        if closure_required:
+            for surface in missing_ids:
+                computed_but_unused.append(
+                    {
+                        "node_id": node_id,
+                        "model": model,
+                        "parameter": surface,
+                        "reason": (
+                            "first-class-resource-ParameterSpec-id-not-bound-to-node"
+                        ),
+                    }
+                )
 
     request_binding_rows: list[dict[str, Any]] = []
     for index, request in enumerate(request_rows, 1):
@@ -140,25 +210,30 @@ def audit_runtime_knob_coverage(
     for row in attempts:
         binding = row["timeout_binding"]
         try:
-            effective_timeout = int(binding.get("effective_timeout_seconds") or 0)
+            effective_timeout = int(
+                binding.get("effective_timeout_seconds") or 0
+            )
         except (TypeError, ValueError):
             effective_timeout = 0
         try:
             safety_cap = int(binding.get("safety_cap_seconds") or 0)
         except (TypeError, ValueError):
             safety_cap = 0
+        parameter_id = str(binding.get("timeout_parameter_id") or "").strip()
         valid = bool(
             binding
             and binding.get("status") == "PASS"
             and effective_timeout > 0
             and safety_cap > 0
             and effective_timeout <= safety_cap
+            and (parameter_id or not closure_required)
         )
         timeout_bindings.append(
             {
                 "node_id": row["node_id"],
                 "attempt_index": row["attempt_index"],
                 "model": row["model"],
+                "timeout_parameter_id": parameter_id or None,
                 "effective_timeout_seconds": effective_timeout,
                 "safety_cap_seconds": safety_cap,
                 "status": "PASS" if valid else "FAIL",
@@ -174,12 +249,11 @@ def audit_runtime_knob_coverage(
                 }
             )
 
-    # Unit/dry-run callers may omit node_results. Production artifact rewriting
-    # always supplies them; when present, every actual attempt must prove a
-    # dynamic timeout binding under the finite safety cap.
     timeout_status = (
         "PASS"
-        if attempts and all(row["status"] == "PASS" for row in timeout_bindings)
+        if attempts and all(
+            row["status"] == "PASS" for row in timeout_bindings
+        )
         else "FAIL"
         if node_results is not None
         else "NOT_EVALUATED"
@@ -197,8 +271,16 @@ def audit_runtime_knob_coverage(
         "reasoning_binding_count": sum(
             1 for row in reasoning_bindings if row["status"] == "PASS"
         ),
+        "request_resource_parameter_closure_required": closure_required,
+        "request_resource_parameter_node_count": sum(
+            1
+            for row in resource_parameter_bindings
+            if row["status"] == "PASS"
+        ),
         "requests_with_dynamic_output_allowance": sum(
-            1 for row in request_binding_rows if row["dynamic_output_allowance_tokens"] > 0
+            1
+            for row in request_binding_rows
+            if row["dynamic_output_allowance_tokens"] > 0
         ),
         "requests_with_reasoning_binding": sum(
             1 for row in request_binding_rows if row["reasoning_effort"]
@@ -208,12 +290,17 @@ def audit_runtime_knob_coverage(
         ),
         "dynamic_timeout_binding_status": timeout_status,
         "reasoning_bindings": reasoning_bindings,
+        "resource_parameter_bindings": resource_parameter_bindings,
         "request_bindings": request_binding_rows,
         "timeout_bindings": timeout_bindings,
         "computed_but_unused": computed_but_unused,
+        "all_request_resource_controls_first_class_parameters": closure_required,
+        "parameter_design_to_runtime_binding_required": closure_required,
         "output_allowance_is_task_admission_gate": False,
         "output_allowance_is_result_validity_gate": False,
         "timeout_safety_cap_is_business_gate": False,
+        "token_and_cost_soft_control": True,
+        "cost_effectiveness_priority": True,
         "cross_task_history_used": False,
     }
 

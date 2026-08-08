@@ -12,13 +12,18 @@ if str(MARKET) not in sys.path:
 
 
 class HierarchicalProductionEntryTests(unittest.TestCase):
-    def test_ticket_entry_uses_hierarchical_materializer_explicitly(self) -> None:
+    def test_ticket_entry_uses_cost_effective_hierarchical_materializer_explicitly(
+        self,
+    ) -> None:
         entry = importlib.import_module("v5_price_ranked_issue_ticket")
-        hierarchical = importlib.import_module("v5_hierarchical_candidate_optimizer")
+        cost_effective = importlib.import_module(
+            "v5_cost_effectiveness_candidate_optimizer"
+        )
         self.assertTrue(entry.HIERARCHICAL_PRODUCTION_ENTRY_ACTIVE)
+        self.assertTrue(entry.COST_EFFECTIVENESS_RESOURCE_CLOSURE_ACTIVE)
         self.assertIs(
             entry._core.materialize_candidate_pool_selection,
-            hierarchical.materialize_candidate_pool_selection,
+            cost_effective.materialize_candidate_pool_selection,
         )
 
     def test_batch_is_not_a_business_gate_but_online_and_auto_remain_forbidden(self) -> None:

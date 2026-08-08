@@ -18,7 +18,12 @@ from v5_runtime_timeout import (  # noqa: E402
 def node(multiplier: float = 1.0) -> SimpleNamespace:
     return SimpleNamespace(
         node_id="n1",
-        parameter_profile={"dynamic_model_timeout_multiplier": multiplier},
+        parameter_profile={
+            "dynamic_model_timeout_multiplier": multiplier,
+            "runtime_resource_parameter_ids": {
+                "model-timeout-effective": "p-timeout",
+            },
+        },
     )
 
 
@@ -46,8 +51,24 @@ class RuntimeTimeoutTests(unittest.TestCase):
         self.assertGreaterEqual(small, 30)
         self.assertGreaterEqual(large, small)
         self.assertLessEqual(large, 240)
-        self.assertEqual("current-request-shape", large_audit["effective_timeout_source"])
+        self.assertEqual(
+            "final-current-request-shape-plus-current-run-feedback",
+            large_audit["effective_timeout_source"],
+        )
+        self.assertEqual(
+            "final-current-payload-before-send",
+            large_audit["prompt_source"],
+        )
+        self.assertEqual("p-timeout", large_audit["timeout_parameter_id"])
         self.assertFalse(large_audit["safety_cap_is_business_gate"])
+        self.assertEqual(
+            "infrastructure_invariant",
+            large_audit["safety_cap_classification"],
+        )
+        self.assertEqual(
+            "infrastructure_invariant",
+            small_audit["minimum_timeout_classification"],
+        )
 
     def test_current_run_multiplier_can_expand_without_relaxing_cap(self) -> None:
         request = payload(chars=2000, max_tokens=1500, effort="medium")

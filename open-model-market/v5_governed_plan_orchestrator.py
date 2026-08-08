@@ -44,7 +44,11 @@ def _work_id(row: Mapping[str, Any], index: int) -> str:
 
 
 def _functions(row: Mapping[str, Any]) -> list[str]:
-    explicit = [str(value).strip() for value in _rows(row.get("functions")) if str(value).strip()]
+    explicit = [
+        str(value).strip()
+        for value in _rows(row.get("functions"))
+        if str(value).strip()
+    ]
     if explicit:
         return list(dict.fromkeys(explicit))
     kind = str(row.get("role_kind") or "task-role").strip()
@@ -87,8 +91,16 @@ def build_governed_proposal(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     del catalog, task_envelope
     plan = validate_governance_model_plan(ticket)
-    selected = [dict(row) for row in plan.get("selected_models") or [] if isinstance(row, Mapping)]
-    recoveries = [dict(row) for row in plan.get("recovery_models") or [] if isinstance(row, Mapping)]
+    selected = [
+        dict(row)
+        for row in plan.get("selected_models") or []
+        if isinstance(row, Mapping)
+    ]
+    recoveries = [
+        dict(row)
+        for row in plan.get("recovery_models") or []
+        if isinstance(row, Mapping)
+    ]
     standbys = [
         dict(row)
         for row in plan.get("expert_center_ordered_standby") or []
@@ -114,15 +126,35 @@ def build_governed_proposal(
     edges: list[dict[str, str]] = []
     for index, row in enumerate(selected):
         parent_indices = dependencies[index]
-        assigned_units = [str(value) for value in _rows(row.get("assigned_work_units")) if str(value).strip()]
-        role_kind = str(row.get("role_kind") or "dynamic:task-role").strip() or "dynamic:task-role"
+        assigned_units = [
+            str(value)
+            for value in _rows(row.get("assigned_work_units"))
+            if str(value).strip()
+        ]
+        role_kind = (
+            str(row.get("role_kind") or "dynamic:task-role").strip()
+            or "dynamic:task-role"
+        )
+        parameter_profile = row.get("parameter_profile")
+        parameter_profile = (
+            dict(parameter_profile)
+            if isinstance(parameter_profile, Mapping)
+            else {}
+        )
         work_items.append(
             {
                 "work_id": work_ids[index],
-                "objective": str(row.get("role") or f"动态任务角色 {role_ids[index]}").strip(),
+                "objective": str(
+                    row.get("role") or f"动态任务角色 {role_ids[index]}"
+                ).strip(),
                 "dependencies": [work_ids[parent] for parent in parent_indices],
                 "source_work_unit_ids": assigned_units,
-                "required_outputs": ["核心判断", "关键依据", "不确定性与反例", "可执行结论"],
+                "required_outputs": [
+                    "核心判断",
+                    "关键依据",
+                    "不确定性与反例",
+                    "可执行结论",
+                ],
             }
         )
         nodes.append(
@@ -130,21 +162,25 @@ def build_governed_proposal(
                 "node_id": node_ids[index],
                 "work_ids": [work_ids[index]],
                 "role_id": role_ids[index],
-                "role": str(row.get("role") or f"动态任务角色 {role_ids[index]}").strip(),
+                "role": str(
+                    row.get("role") or f"动态任务角色 {role_ids[index]}"
+                ).strip(),
                 "role_kind": role_kind,
                 "functions": _functions(row),
                 "model": str(row.get("model") or ""),
-                "reasoning_effort": str(row.get("reasoning_effort") or "medium"),
-                "estimated_task_cost_usd": float(row.get("estimated_task_cost_usd") or 0.0),
+                "reasoning_effort": str(
+                    row.get("reasoning_effort") or "medium"
+                ),
+                "estimated_task_cost_usd": float(
+                    row.get("estimated_task_cost_usd") or 0.0
+                ),
                 "assigned_work_units": assigned_units,
-                "depends_on_role_ids": [role_ids[parent] for parent in parent_indices],
+                "depends_on_role_ids": [
+                    role_ids[parent] for parent in parent_indices
+                ],
+                "parameter_profile": parameter_profile,
             }
         )
-        # The arbitrary topology lives in source/target edges. ``relation_type`` is
-        # a protocol enum owned by execution_graph_validator and must remain one of
-        # its structural values. Using the canonical ``dependency`` relation keeps
-        # the dynamic DAG fully expressive without creating a second relation
-        # vocabulary that the runtime rejects before any model call.
         edges.extend(
             {
                 "source": node_ids[parent],
@@ -180,7 +216,7 @@ def build_governed_proposal(
         },
     }
     audit = {
-        "schema_version": "v5-exact-dynamic-role-dag-materialization-2",
+        "schema_version": "v5-exact-dynamic-role-dag-materialization-3-resource-closure",
         "status": "PASS",
         "candidate_pool_authority": "decision-system-governance",
         "model_assignment_authority": "expert-assessment-center-dynamic-ortools",
@@ -194,6 +230,16 @@ def build_governed_proposal(
         "terminal_node_count": len(final_nodes),
         "runtime_feedback_replanning_enabled": bool(standbys),
         "runtime_standby_promotion_depth_fixed": False,
+        "request_resource_parameter_profile_propagated": all(
+            bool(
+                (row.get("parameter_profile") or {}).get(
+                    "runtime_resource_parameter_ids"
+                )
+            )
+            for row in selected
+        ),
+        "cost_effectiveness_priority": True,
+        "soft_token_and_cost_efficiency": True,
         "fixed_team_size_used": False,
         "fixed_four_plus_four_used": False,
         "fixed_role_topology_used": False,

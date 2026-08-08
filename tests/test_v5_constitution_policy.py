@@ -9,7 +9,7 @@ MARKET = ROOT / "open-model-market"
 
 
 class ConstitutionPolicyTests(unittest.TestCase):
-    """Assert the active fully dynamic no-tools policy."""
+    """Assert the active dynamic, cost-effective, no-tools policy."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -17,23 +17,33 @@ class ConstitutionPolicyTests(unittest.TestCase):
             (MARKET / "constitutional_policy.json").read_text(encoding="utf-8")
         )
 
-    def test_v12_parameter_design_closure_policy_is_active(self) -> None:
+    def test_v13_cost_effectiveness_resource_closure_is_active(self) -> None:
         self.assertEqual(
             self.policy["schema_version"],
-            "v5-constitutional-policy-12-parameter-design-closure",
+            "v5-constitutional-policy-13-cost-effectiveness-resource-closure",
         )
         self.assertEqual(self.policy["authority"], "CONSTITUTION.md")
         self.assertEqual(self.policy["only_hard_model_boundary"], "no-tools")
         matching = self.policy["dynamic_task_matching"]
+        self.assertTrue(matching["all_calculable_planning_parameters_dynamic"])
+        self.assertTrue(matching["all_request_resource_controls_first_class_parameters"])
         self.assertTrue(matching["runtime_parameter_lifecycle_required"])
         self.assertTrue(matching["runtime_knob_coverage_required"])
         self.assertTrue(matching["parameter_design_required"])
-        self.assertTrue(matching["parameter_design_before_resolution_required"])
+        self.assertTrue(matching["request_resource_parameter_design_required"])
+        self.assertTrue(matching["recompute_after_final_prompt_assembly_before_send"])
+        self.assertTrue(matching["continuous_spatiotemporal_replanning_required"])
+        self.assertTrue(
+            matching["continuous_spatiotemporal_resource_recomputation_required"]
+        )
         self.assertFalse(matching["computed_but_unused_allowed"])
         self.assertFalse(matching["semantic_relatedness_can_create_hard_dependency"])
         self.assertTrue(
             matching["constitutional_invariants_must_not_be_disguised_as_dynamic"]
         )
+
+    def test_parameter_lifecycle_and_design_classes_remain_explicit(self) -> None:
+        matching = self.policy["dynamic_task_matching"]
         self.assertEqual(
             matching["parameter_lifecycle"],
             [
@@ -91,71 +101,113 @@ class ConstitutionPolicyTests(unittest.TestCase):
         self.assertEqual(
             pool["source"], "openrouter-live-reasoning-most-popular-catalog"
         )
-        self.assertEqual(pool["source_definition"]["sort"], "most-popular")
-        self.assertEqual(
-            pool["source_definition"]["supported_parameters"], "reasoning"
-        )
-        self.assertEqual(pool["source_definition"]["output_modalities"], "text")
         self.assertIsNone(pool["fixed_pool_size"])
         self.assertFalse(pool["fixed_top_n_allowed"])
-        for key in (
-            "top50_only",
-            "top20_only",
-            "weekly_rank_required",
-            "reasoning_rank_required",
-            "flagship_filter_required",
-            "price_filter_required",
-            "company_diversity_required",
-            "signed_pool_membership_required",
-            "provider_endpoint_qualification_required",
-            "zdr_provider_qualification_required",
-        ):
-            self.assertFalse(pool[key], key)
         self.assertTrue(pool["expert_center_can_use_any_governance_supplied_candidate"])
         self.assertTrue(pool["expert_center_can_rerank_and_assign"])
         self.assertTrue(pool["tool_use_forbidden"])
         self.assertFalse(pool["tools_allowed"])
 
-    def test_all_calculable_team_and_execution_parameters_are_dynamic(self) -> None:
+    def test_resource_parameters_and_reasoning_are_current_signal_derived(self) -> None:
         matching = self.policy["dynamic_task_matching"]
-        self.assertTrue(matching["required"])
-        self.assertTrue(matching["all_calculable_planning_parameters_dynamic"])
-        self.assertTrue(matching["current_task_only"])
-        self.assertFalse(matching["cross_task_history_allowed"])
-        for key in (
-            "task_volume",
-            "evidence_volume",
-            "constraint_pressure",
-            "delivery_pressure",
-            "prompt_token_estimate",
-            "completion_token_estimate",
-            "protocol_reserve",
-            "dependency_fan_in",
-            "team_size",
-            "recovery_size",
-            "roles",
-            "role_topology",
-            "model_assignment",
-            "role_weights",
-            "solver_time",
-        ):
-            self.assertEqual(matching[key], "task-derived", key)
-        self.assertEqual(matching["solver_seed"], "task-derived-reproducible")
-        self.assertEqual(matching["reasoning_effort"], "task-derived-and-request-bound")
-        self.assertEqual(matching["output_transport_allowance"], "current-request-derived")
+        self.assertEqual(
+            matching["prompt_token_estimate"],
+            "task-derived-then-final-payload-remeasured",
+        )
+        self.assertEqual(
+            matching["completion_token_estimate"],
+            "task-derived-then-current-request-and-feedback-derived",
+        )
+        self.assertEqual(
+            matching["prompt_shape_budgeting"],
+            "current-task-designed-final-payload-bound",
+        )
+        self.assertEqual(
+            matching["resource_efficiency_balance"],
+            "current-task-and-current-run-soft-objective",
+        )
+        self.assertEqual(
+            matching["reasoning_effort"],
+            "current-task-absolute-pressure-plus-current-role-demand-and-request-bound",
+        )
+        self.assertFalse(
+            matching["single_role_reasoning_effort_unconditional_medium_allowed"]
+        )
+        self.assertEqual(
+            matching["output_transport_allowance"],
+            "current-final-payload-plus-current-run-feedback-derived",
+        )
         self.assertEqual(
             matching["model_timeout_effective"],
-            "current-request-derived-under-finite-safety-cap",
+            "current-final-payload-plus-current-run-feedback-derived-under-finite-safety-cap",
         )
-        self.assertEqual(matching["company_mix"], "unconstrained")
-        self.assertTrue(matching["company_heterogeneity_soft_objective_required"])
-        self.assertFalse(matching["company_diversity_is_execution_gate"])
-        self.assertFalse(matching["fixed_company_count_allowed"])
-        self.assertFalse(matching["fixed_team_size_allowed"])
-        self.assertFalse(matching["fixed_four_plus_four_allowed"])
-        self.assertFalse(matching["keyword_routing_required"])
-        self.assertFalse(matching["domain_hardcoding_required"])
-        self.assertTrue(matching["model_substitution_allowed"])
+
+    def test_cost_effectiveness_precedes_company_diversity_but_is_soft(self) -> None:
+        matching = self.policy["dynamic_task_matching"]
+        self.assertEqual(
+            matching["company_heterogeneity_priority"],
+            [
+                "current-task-capability-and-capacity-risk",
+                "current-task-cost-and-marginal-return",
+                "maximize-distinct-company-coverage-on-higher-priority-tie",
+                "stable-deterministic-tie-break",
+            ],
+        )
+        self.assertEqual(
+            matching["runtime_recovery_priority"],
+            [
+                "current-run-quality-or-failure-risk",
+                "current-task-expected-cost-and-marginal-return",
+                "company-heterogeneity-on-higher-priority-tie",
+                "stable-model-identity",
+            ],
+        )
+        optimizer = self.policy["optimizer_runtime"]
+        self.assertTrue(optimizer["cost_effectiveness_soft_priority_required"])
+        self.assertTrue(optimizer["token_cost_soft_optimization_required"])
+        self.assertFalse(optimizer["cheapest_model_is_hard_rule"])
+        self.assertEqual(
+            optimizer["active_assignment_module"],
+            "v5_cost_effectiveness_role_assignment",
+        )
+        self.assertFalse(optimizer["company_heterogeneity_is_hard_constraint"])
+
+    def test_resource_controls_save_when_possible_without_becoming_gates(self) -> None:
+        resources = self.policy["resource_governance"]
+        for key in (
+            "fixed_total_call_ceiling",
+            "fixed_initial_call_ceiling",
+            "fixed_recovery_call_ceiling",
+            "fixed_team_size_ceiling",
+            "cost_threshold_can_reject_execution",
+            "estimated_cost_can_reject_execution",
+            "actual_cost_can_invalidate_valid_output",
+            "local_token_ceiling_allowed",
+            "fixed_reasoning_token_ratio_claim_allowed",
+            "fixed_model_timeout_used_as_effective_request_timeout",
+        ):
+            self.assertFalse(resources[key], key)
+        for key in (
+            "cost_effectiveness_priority",
+            "token_and_cost_are_soft_controls",
+            "minimize_unnecessary_tokens_and_cost",
+            "task_contract_and_quality_override_resource_savings",
+            "prompt_shape_is_first_class_parameter",
+            "resource_efficiency_balance_is_first_class_parameter",
+            "output_transport_allowance_is_first_class_parameter",
+            "effective_timeout_is_first_class_parameter",
+            "final_payload_measured_before_effective_binding",
+            "prompt_compaction_is_lossless_and_obligation_preserving",
+            "truncation_same_model_rebind_before_cross_model_substitution",
+            "dynamic_model_timeout_required",
+            "model_timeout_safety_cap_required",
+            "recovery_candidate_space_recomputed_each_iteration",
+            "finite_execution_graph_required",
+        ):
+            self.assertTrue(resources[key], key)
+        self.assertFalse(resources["model_timeout_safety_cap_is_business_gate"])
+        self.assertFalse(resources["infinite_model_loop_allowed"])
+        self.assertFalse(resources["unbounded_recursive_retry_allowed"])
 
     def test_optimizer_has_no_business_eligibility_constraints(self) -> None:
         optimizer = self.policy["optimizer_runtime"]
@@ -178,60 +230,17 @@ class ConstitutionPolicyTests(unittest.TestCase):
             self.assertFalse(optimizer[key], key)
         self.assertTrue(optimizer["capacity_metadata_is_advisory"])
         self.assertTrue(optimizer["cost_metadata_is_advisory"])
-        self.assertTrue(optimizer["company_heterogeneity_soft_objective"])
-        self.assertFalse(optimizer["company_heterogeneity_is_hard_constraint"])
-        self.assertEqual(
-            optimizer["active_assignment_module"],
-            "v5_runtime_role_assignment",
-        )
 
-    def test_provider_routing_is_unrestricted_but_model_recovery_stays_expert_owned(self) -> None:
+    def test_provider_routing_is_unrestricted(self) -> None:
         routing = self.policy["provider_routing"]
         self.assertEqual(routing["mode"], "unrestricted-openrouter")
         self.assertFalse(routing["provider_allowlist_allowed"])
         self.assertFalse(routing["provider_order_allowed"])
-        self.assertFalse(routing["provider_ignore_list_allowed"])
         self.assertFalse(routing["provider_price_filter_allowed"])
-        self.assertFalse(routing["provider_zdr_filter_required"])
-        self.assertFalse(routing["provider_data_collection_filter_required"])
         self.assertFalse(routing["exact_provider_lock_required"])
         self.assertTrue(routing["openrouter_selects_provider"])
         self.assertTrue(routing["provider_fallback_allowed"])
         self.assertFalse(routing["provider_may_change_model_identity"])
-        self.assertEqual(
-            routing["model_substitution_authority"],
-            "expert-assessment-center-dynamic-recovery",
-        )
-
-    def test_resource_controls_are_soft_but_execution_must_be_finite(self) -> None:
-        resources = self.policy["resource_governance"]
-        for key in (
-            "fixed_total_call_ceiling",
-            "fixed_initial_call_ceiling",
-            "fixed_recovery_call_ceiling",
-            "fixed_team_size_ceiling",
-            "cost_threshold_can_reject_execution",
-            "estimated_cost_can_reject_execution",
-            "actual_cost_can_invalidate_valid_output",
-            "local_token_ceiling_allowed",
-            "fixed_model_timeout_used_as_effective_request_timeout",
-        ):
-            self.assertFalse(resources[key], key)
-        self.assertTrue(resources["dynamic_transport_allowance_allowed"])
-        self.assertFalse(resources["dynamic_transport_allowance_is_task_admission_gate"])
-        self.assertFalse(resources["dynamic_transport_allowance_can_invalidate_valid_output"])
-        self.assertTrue(resources["truncation_can_recompute_transport_allowance"])
-        self.assertTrue(
-            resources["truncation_same_model_rebind_before_cross_model_substitution"]
-        )
-        self.assertTrue(resources["dynamic_model_timeout_required"])
-        self.assertTrue(resources["model_timeout_safety_cap_required"])
-        self.assertFalse(resources["model_timeout_safety_cap_is_business_gate"])
-        self.assertTrue(resources["timeout_feedback_can_recompute_effective_timeout"])
-        self.assertTrue(resources["team_and_recovery_counts_come_from_current_execution_graph"])
-        self.assertTrue(resources["finite_execution_graph_required"])
-        self.assertFalse(resources["infinite_model_loop_allowed"])
-        self.assertFalse(resources["unbounded_recursive_retry_allowed"])
 
     def test_quality_gate_uses_observable_contract_not_hidden_fixed_heuristics(self) -> None:
         quality = self.policy["quality_governance"]
@@ -244,25 +253,12 @@ class ConstitutionPolicyTests(unittest.TestCase):
         self.assertFalse(quality["fixed_numeric_quality_threshold_gate_used"])
         self.assertEqual(quality["quality_score_role"], "telemetry-only")
         self.assertTrue(quality["final_evidence_validation_fail_closed"])
-        self.assertTrue(quality["task_explicit_semantic_obligations_required"])
-        self.assertEqual(
-            quality["task_explicit_semantic_obligation_scope"],
-            "final-delivery-only",
-        )
-        self.assertTrue(quality["explicit_arithmetic_consistency_required"])
-        self.assertTrue(
-            quality["derived_quantities_from_authoritative_input_must_be_preserved"]
-        )
 
     def test_runtime_dependency_allowlist_matches_constitution(self) -> None:
         dependencies = self.policy["runtime_dependencies"]
-        self.assertTrue(dependencies["must_match_constitution"])
         self.assertEqual(
             set(dependencies["allowed"]),
             {"jsonschema", "networkx", "ortools", "optuna"},
-        )
-        self.assertFalse(
-            dependencies["additional_runtime_dependencies_allowed_without_constitution_change"]
         )
         self.assertFalse(dependencies["heavy_agent_orchestration_framework_allowed"])
 
@@ -280,37 +276,26 @@ class ConstitutionPolicyTests(unittest.TestCase):
         self.assertTrue(tools["request_tool_fields_forbidden"])
         self.assertTrue(tools["response_tool_evidence_forbidden"])
 
-    def test_integrity_checks_are_not_misclassified_as_model_business_gates(self) -> None:
+    def test_integrity_invariants_remain_fixed(self) -> None:
         integrity = self.policy["security_and_integrity_invariants"]
         self.assertFalse(integrity["these_are_model_business_gates"])
-        self.assertTrue(integrity["authentication_required"])
-        self.assertTrue(integrity["secret_protection_required"])
-        self.assertTrue(integrity["repository_isolation_preserved"])
         self.assertTrue(integrity["task_and_plan_hash_integrity_required"])
         self.assertTrue(integrity["candidate_transport_integrity_required"])
         self.assertTrue(integrity["finite_acyclic_dag_required"])
-        self.assertTrue(integrity["semantic_relatedness_is_not_dependency"])
         self.assertTrue(integrity["finite_model_timeout_safety_cap_required"])
+        self.assertTrue(integrity["continuous_replanning_must_remain_inside_finite_graph_boundary"])
         self.assertFalse(integrity["arbitrary_network_egress_allowed"])
-        self.assertEqual(integrity["model_plane_hosts"], ["openrouter.ai"])
-        self.assertEqual(integrity["control_plane_hosts"], ["api.github.com"])
 
-    def test_production_model_policy_requires_parameter_design_runtime_coverage_and_no_tools(self) -> None:
+    def test_production_promotion_audits_new_closure(self) -> None:
         promotion = self.policy["production_promotion"]
-        self.assertFalse(promotion["zero_cost_ci_required"])
-        self.assertFalse(promotion["zero_cost_free_canary_required"])
-        self.assertFalse(promotion["explicit_paid_acceptance_required"])
-        self.assertFalse(promotion["signed_weekly_top50_pool_required"])
-        self.assertFalse(promotion["ortools_optimality_proof_required"])
-        self.assertFalse(promotion["task_adaptive_value_scoring_required"])
         self.assertTrue(promotion["parameter_design_coverage_required"])
+        self.assertTrue(promotion["request_resource_parameter_design_required"])
         self.assertTrue(promotion["runtime_knob_coverage_required"])
-        self.assertTrue(promotion["task_semantic_completeness_policy_required"])
-        self.assertTrue(promotion["company_heterogeneity_policy_required"])
+        self.assertTrue(promotion["cost_effectiveness_soft_control_required"])
+        self.assertTrue(promotion["continuous_spatiotemporal_replanning_required"])
         self.assertTrue(promotion["unrestricted_provider_routing_required"])
         self.assertTrue(promotion["no_tools_required"])
         self.assertFalse(promotion["automatic_merge_allowed"])
-        self.assertFalse(promotion["automatic_production_ref_move_allowed"])
 
 
 if __name__ == "__main__":

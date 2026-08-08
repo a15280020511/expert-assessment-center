@@ -24,10 +24,7 @@ from v5_no_tools_policy import (  # noqa: E402
     assert_response_has_no_tools,
     forbidden_request_fields,
 )
-from v5_runtime import (  # noqa: E402
-    ExecutionEngine,
-    FailureCategory,
-)
+from v5_runtime import ExecutionEngine, FailureCategory  # noqa: E402
 
 
 class NoToolsNetworkPolicyTests(unittest.TestCase):
@@ -349,18 +346,27 @@ class NoToolsNetworkPolicyTests(unittest.TestCase):
             )
         )
         self.assertEqual(
-            "v5-constitutional-policy-12-parameter-design-closure",
+            "v5-constitutional-policy-13-cost-effectiveness-resource-closure",
             policy["schema_version"],
         )
         self.assertEqual("CONSTITUTION.md", policy["authority"])
         self.assertEqual("no-tools", policy["only_hard_model_boundary"])
-        self.assertTrue(policy["dynamic_task_matching"]["parameter_design_required"])
+        matching = policy["dynamic_task_matching"]
+        self.assertTrue(matching["parameter_design_required"])
+        self.assertTrue(
+            matching["all_request_resource_controls_first_class_parameters"]
+        )
+        self.assertTrue(
+            matching["continuous_spatiotemporal_resource_recomputation_required"]
+        )
         tools = policy["tool_policy"]
         self.assertTrue(tools["request_tool_fields_forbidden"])
         self.assertTrue(tools["response_tool_evidence_forbidden"])
         self.assertFalse(tools["expert_external_tools_allowed"])
         integrity = policy["security_and_integrity_invariants"]
         self.assertFalse(integrity["arbitrary_network_egress_allowed"])
+        self.assertTrue(integrity["finite_acyclic_dag_required"])
+        self.assertTrue(integrity["finite_model_timeout_safety_cap_required"])
         self.assertEqual(
             ["openrouter.ai"],
             integrity["model_plane_hosts"],
