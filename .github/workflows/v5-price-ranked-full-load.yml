@@ -115,8 +115,9 @@ jobs:
                   audit['assigned_position_count'] - audit['assigned_distinct_company_count']
               )
               assert audit['objective_priority'] == [
-                  'current-task-role-quality-risk-objective',
+                  'current-task-capability-and-capacity-risk',
                   'maximize-distinct-company-coverage',
+                  'current-task-cost-and-marginal-return',
                   'stable-deterministic-tie-break',
               ]
               assert audit['top50_membership_constraint_used'] is False
@@ -212,7 +213,7 @@ jobs:
           assert budget_plan['optimizer_audit']['company_diversity_is_execution_gate'] is False
 
           receipt = {
-              'schema_version': 'v5-fully-dynamic-full-load-7-company-heterogeneity',
+              'schema_version': 'v5-fully-dynamic-full-load-8-capability-diversity-economy',
               'status': 'PASS',
               'target_sha': os.environ['TARGET_SHA'],
               'parallel_runs': 64,
@@ -239,7 +240,9 @@ jobs:
               'company_uniqueness_required': False,
               'company_heterogeneity_soft_objective': True,
               'company_diversity_is_execution_gate': False,
-              'company_heterogeneity_priority': 'after-current-task-quality-risk-before-stable-tie-break',
+              'company_heterogeneity_priority': (
+                  'after-capability-and-capacity-risk-before-cost-and-marginal-return'
+              ),
               'optimizer_optimality_required': False,
               'budget_admission_gate_enabled': False,
               'selection_principles': [
