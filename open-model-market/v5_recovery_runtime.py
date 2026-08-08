@@ -9,6 +9,9 @@ field, leaving OpenRouter free to choose a Provider for each fixed model.
 from __future__ import annotations
 
 from v5_compound_fact_provenance import install_compound_fact_provenance
+from v5_continuous_spatiotemporal_replanning import (
+    install_continuous_spatiotemporal_replanning,
+)
 from v5_final_audit_hardening import install_final_request_audit_hardening
 from v5_final_semantic_gate import install_final_semantic_gate
 from v5_priority_preserving_heterogeneity import (
@@ -32,6 +35,7 @@ def build_production_runtime(config: RuntimeConfig) -> ProductionRuntime:
     install_final_semantic_gate()
     install_compound_fact_provenance()
     runtime = install_priority_preserving_heterogeneity(runtime)
+    runtime = install_continuous_spatiotemporal_replanning(runtime)
     install_final_request_audit_hardening()
     return runtime
 
