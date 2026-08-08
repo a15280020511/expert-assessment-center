@@ -191,6 +191,40 @@ class CostEffectivenessResourceClosureTests(unittest.TestCase):
         )
         self.assertTrue(low["single_role_reasoning_effort_task_derived"])
 
+    def test_missing_task_pressure_cannot_fall_back_to_medium(self) -> None:
+        import v5_cost_effectiveness_planning as planning_module
+
+        invalid = {
+            "role_plan": [
+                {
+                    "role_id": "r1",
+                    "role_structural_demand": 1.0,
+                    "reasoning_effort": "medium",
+                }
+            ],
+            "resolved_profile": {"pressure": {}},
+            "resolved_parameters": {
+                "control_surface_values": {"role-reasoning-effort": {}},
+                "parameter_values": {},
+            },
+            "parameter_requirements": {"control_surface_to_parameter_id": {}},
+        }
+        with self.assertRaisesRegex(RuntimeError, "hidden medium fallback"):
+            planning_module._adjust_roles(invalid)  # noqa: SLF001
+
+    def test_governed_proposal_cannot_invent_medium_reasoning_effort(self) -> None:
+        import v5_governed_plan_orchestrator as orchestrator
+
+        with self.assertRaisesRegex(
+            orchestrator.GovernedPlanOrchestrationError,
+            "task-derived reasoning_effort",
+        ):
+            orchestrator._reasoning_effort({}, "r1")  # noqa: SLF001
+
+    def test_request_binding_cannot_invent_medium_reasoning_effort(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "medium fallback is forbidden"):
+            bind_request_knobs(node(effort=""), "完成当前任务", [])
+
     def test_cjk_estimator_does_not_divide_chinese_prompt_by_four(self) -> None:
         text = "网络保障方案需要完整比较并给出结论" * 20
         estimate = estimate_text_tokens(text)
