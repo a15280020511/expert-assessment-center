@@ -42,11 +42,27 @@ def _number(row: Mapping[str, Any], key: str, fallback: float) -> float:
 
 
 def _quality_risk_key(row: Mapping[str, Any]) -> tuple[float, float]:
-    """Return only the two higher-priority observable dimensions."""
     return (
         -_number(row, "estimated_quality", 0.0),
         _number(row, "failure_probability", 1.0),
     )
+
+
+def dynamic_company_entropy_batch(
+    *,
+    parent_depth: int,
+    eligible_count: int,
+    distinct_company_count: int,
+    feedback_pressure: float,
+) -> int:
+    """Compute a current-run exploration batch; no fixed call ceiling is encoded."""
+    if parent_depth <= 0 or eligible_count <= 0:
+        return 0
+    companies = max(1, int(distinct_company_count))
+    pressure = max(0.0, min(1.0, float(feedback_pressure)))
+    company_entropy_breadth = max(1, math.ceil(math.log2(companies + 1)))
+    batch = max(1, math.ceil(company_entropy_breadth * pressure))
+    return min(int(parent_depth), int(eligible_count), int(batch))
 
 
 def first_equivalent_quality_heterogeneous_standby(
@@ -94,7 +110,6 @@ class PriorityPreservingHeterogeneousExecutionEngine(HeterogeneousEvidenceExecut
             return chosen
 
     def _dynamic_promotion_depth(self, node_attempts: Sequence[Any]) -> int:
-        """Derive one finite exploration batch from company breadth and live pressure."""
         parent_depth = int(super()._dynamic_promotion_depth(node_attempts))
         if parent_depth <= 0:
             return 0
@@ -126,24 +141,26 @@ class PriorityPreservingHeterogeneousExecutionEngine(HeterogeneousEvidenceExecut
                 if str(getattr(row, "status", "")) != "passed"
             )
             node_pressure = min(1.0, node_failures / max(1, self._feedback_primary_count))
-            feedback_pressure = min(
-                1.0,
-                max(failure_rate, quality_rate, node_pressure),
-            )
+            feedback_pressure = min(1.0, max(failure_rate, quality_rate, node_pressure))
             company_entropy_breadth = max(1, math.ceil(math.log2(distinct_companies + 1)))
-            batch = max(1, math.ceil(company_entropy_breadth * feedback_pressure))
+            effective = dynamic_company_entropy_batch(
+                parent_depth=parent_depth,
+                eligible_count=len(eligible),
+                distinct_company_count=distinct_companies,
+                feedback_pressure=feedback_pressure,
+            )
             self._last_dynamic_promotion_batch = {
                 "eligible_standby_count": len(eligible),
                 "eligible_distinct_company_count": distinct_companies,
                 "company_entropy_breadth": company_entropy_breadth,
                 "feedback_pressure": round(feedback_pressure, 6),
                 "parent_structural_depth": parent_depth,
-                "effective_batch_depth": min(parent_depth, len(eligible), batch),
+                "effective_batch_depth": effective,
                 "fixed_call_ceiling_used": False,
                 "fixed_company_count_used": False,
                 "source": "current-eligible-company-entropy-and-current-run-feedback",
             }
-            return min(parent_depth, len(eligible), batch)
+            return effective
 
     def _feedback_snapshot(self) -> dict[str, Any]:
         value = dict(super()._feedback_snapshot())
@@ -176,6 +193,7 @@ def install_priority_preserving_heterogeneity(runtime: ProductionRuntime) -> Pro
 
 __all__ = [
     "PriorityPreservingHeterogeneousExecutionEngine",
+    "dynamic_company_entropy_batch",
     "first_equivalent_quality_heterogeneous_standby",
     "first_ranked_eligible_standby",
     "install_priority_preserving_heterogeneity",
