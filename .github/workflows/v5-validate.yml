@@ -58,7 +58,7 @@ jobs:
           from pathlib import Path
 
           policy = json.loads(Path('open-model-market/constitutional_policy.json').read_text())
-          assert policy['schema_version'] == 'v5-constitutional-policy-12-parameter-design-closure'
+          assert policy['schema_version'] == 'v5-constitutional-policy-13-cost-effectiveness-resource-closure'
           assert policy['authority'] == 'CONSTITUTION.md'
           assert policy['only_hard_model_boundary'] == 'no-tools'
 
@@ -90,17 +90,21 @@ jobs:
           matching = policy['dynamic_task_matching']
           assert matching['required'] is True
           assert matching['all_calculable_planning_parameters_dynamic'] is True
+          assert matching['all_request_resource_controls_first_class_parameters'] is True
           assert matching['runtime_parameter_lifecycle_required'] is True
           assert matching['runtime_knob_coverage_required'] is True
           assert matching['parameter_design_required'] is True
           assert matching['parameter_design_before_resolution_required'] is True
+          assert matching['request_resource_parameter_design_required'] is True
           assert matching['computed_but_unused_allowed'] is False
           assert matching['semantic_relatedness_can_create_hard_dependency'] is False
           assert matching['constitutional_invariants_must_not_be_disguised_as_dynamic'] is True
           assert matching['continuous_spatiotemporal_replanning_required'] is True
+          assert matching['continuous_spatiotemporal_resource_recomputation_required'] is True
           assert matching['recompute_after_each_model_attempt'] is True
           assert matching['recompute_after_each_quality_gate'] is True
           assert matching['recompute_before_each_retry_or_replacement'] is True
+          assert matching['recompute_after_final_prompt_assembly_before_send'] is True
           assert matching['current_run_feedback_persists_across_replacement_models'] is True
           assert matching['parameter_lifecycle'] == [
               'task-model', 'discover-decisions', 'design-parameters',
@@ -117,24 +121,34 @@ jobs:
           }
           for key in (
               'task_volume', 'evidence_volume', 'constraint_pressure',
-              'delivery_pressure', 'prompt_token_estimate',
-              'completion_token_estimate', 'protocol_reserve',
-              'dependency_fan_in', 'team_size', 'recovery_size',
-              'roles', 'role_topology', 'model_assignment', 'role_weights',
-              'solver_time',
+              'delivery_pressure', 'protocol_reserve', 'dependency_fan_in',
+              'team_size', 'recovery_size', 'roles', 'role_topology',
+              'model_assignment', 'role_weights', 'solver_time',
           ):
               assert matching[key] == 'task-derived', key
+          assert matching['prompt_token_estimate'] == 'task-derived-then-final-payload-remeasured'
+          assert matching['completion_token_estimate'] == 'task-derived-then-current-request-and-feedback-derived'
           assert matching['solver_seed'] == 'task-derived-reproducible'
-          assert matching['reasoning_effort'] == 'task-derived-and-request-bound'
-          assert matching['output_transport_allowance'] == 'current-request-derived'
+          assert matching['reasoning_effort'] == 'current-task-absolute-pressure-plus-current-role-demand-and-request-bound'
+          assert matching['single_role_reasoning_effort_unconditional_medium_allowed'] is False
+          assert matching['prompt_shape_budgeting'] == 'current-task-designed-final-payload-bound'
+          assert matching['resource_efficiency_balance'] == 'current-task-and-current-run-soft-objective'
+          assert matching['output_transport_allowance'] == 'current-final-payload-plus-current-run-feedback-derived'
+          assert matching['model_timeout_effective'] == 'current-final-payload-plus-current-run-feedback-derived-under-finite-safety-cap'
           assert matching['company_mix'] == 'unconstrained'
           assert matching['model_substitution_allowed'] is True
+          assert matching['company_heterogeneity_priority'][1] == 'current-task-cost-and-marginal-return'
+          assert matching['runtime_recovery_priority'][1] == 'current-task-expected-cost-and-marginal-return'
 
           optimizer_runtime = policy['optimizer_runtime']
           assert optimizer_runtime['engine'] == 'ortools-cp-sat'
           assert optimizer_runtime['optimality_required'] is False
           assert optimizer_runtime['feasible_solution_allowed'] is True
           assert optimizer_runtime['heuristic_fallback_allowed'] is True
+          assert optimizer_runtime['cost_effectiveness_soft_priority_required'] is True
+          assert optimizer_runtime['token_cost_soft_optimization_required'] is True
+          assert optimizer_runtime['cheapest_model_is_hard_rule'] is False
+          assert optimizer_runtime['active_assignment_module'] == 'v5_cost_effectiveness_role_assignment'
           for key in (
               'company_uniqueness_constraint', 'top50_membership_constraint',
               'fixed_role_slot_constraint', 'fixed_recovery_slot_constraint',
@@ -165,10 +179,21 @@ jobs:
           assert resource['estimated_cost_can_reject_execution'] is False
           assert resource['actual_cost_can_invalidate_valid_output'] is False
           assert resource['local_token_ceiling_allowed'] is False
+          assert resource['cost_effectiveness_priority'] is True
+          assert resource['token_and_cost_are_soft_controls'] is True
+          assert resource['minimize_unnecessary_tokens_and_cost'] is True
+          assert resource['task_contract_and_quality_override_resource_savings'] is True
+          assert resource['prompt_shape_is_first_class_parameter'] is True
+          assert resource['resource_efficiency_balance_is_first_class_parameter'] is True
+          assert resource['output_transport_allowance_is_first_class_parameter'] is True
+          assert resource['effective_timeout_is_first_class_parameter'] is True
+          assert resource['final_payload_measured_before_effective_binding'] is True
+          assert resource['fixed_reasoning_token_ratio_claim_allowed'] is False
           assert resource['dynamic_transport_allowance_allowed'] is True
           assert resource['dynamic_transport_allowance_is_task_admission_gate'] is False
           assert resource['dynamic_transport_allowance_can_invalidate_valid_output'] is False
           assert resource['truncation_can_recompute_transport_allowance'] is True
+          assert resource['dynamic_model_timeout_required'] is True
           assert resource['finite_execution_graph_required'] is True
           assert resource['unbounded_recursive_retry_allowed'] is False
 
@@ -185,12 +210,17 @@ jobs:
 
           delivery = policy['delivery']
           assert delivery['parameter_design_must_be_audited'] is True
+          assert delivery['request_resource_parameter_design_must_be_audited'] is True
           assert delivery['runtime_knob_coverage_must_be_audited'] is True
+          assert delivery['final_payload_measurement_must_be_audited'] is True
+          assert delivery['cost_effectiveness_soft_control_must_be_audited'] is True
           security = policy['security_and_integrity_invariants']
           assert security['semantic_relatedness_is_not_dependency'] is True
           production = policy['production_promotion']
           assert production['parameter_design_coverage_required'] is True
+          assert production['request_resource_parameter_design_required'] is True
           assert production['runtime_knob_coverage_required'] is True
+          assert production['cost_effectiveness_soft_control_required'] is True
           tools = policy['tool_policy']
           assert tools['request_tool_fields_forbidden'] is True
           assert tools['response_tool_evidence_forbidden'] is True
@@ -203,29 +233,38 @@ jobs:
           assert 'continuous_spatiotemporal_replanning": True' in dynamic
           assert getattr(optimizer, 'HIERARCHICAL_TASK_PARAMETER_PLANNER_ACTIVE', False) is True
 
-          active = Path('open-model-market/v5_hierarchical_candidate_optimizer.py').read_text()
-          assert 'from v5_parameter_design_planner import' in active
-          assert 'parameter_design_completed_before_parameter_resolution' in active
-          design = Path('open-model-market/v5_parameter_design_planner.py').read_text()
+          legacy_active = Path('open-model-market/v5_hierarchical_candidate_optimizer.py').read_text()
+          assert 'parameter_design_completed_before_parameter_resolution' in legacy_active
+          cost_active = Path('open-model-market/v5_cost_effectiveness_candidate_optimizer.py').read_text()
+          assert 'v5_cost_effectiveness_planning' in cost_active
+          assert 'v5_cost_effectiveness_role_assignment' in cost_active
+          entry = Path('open-model-market/v5_price_ranked_issue_ticket.py').read_text()
+          assert 'v5_cost_effectiveness_candidate_optimizer' in entry
+          assert 'COST_EFFECTIVENESS_RESOURCE_CLOSURE_ACTIVE = True' in entry
+          resource_design = Path('open-model-market/v5_cost_effectiveness_parameter_closure.py').read_text()
           for token in (
-              'decision-first-then-design-then-parameter-instance',
-              'parameter_design_completed_before_value_resolution',
-              'constitutional_invariant', 'infrastructure_invariant',
-              'current_task_derived', 'current_run_feedback_derived',
+              'prompt-shape-budgeting', 'resource-efficiency-balance',
+              'output-transport-allowance', 'model-timeout-effective',
+              'runtime_effective_values_may_require_future_current_run_signals',
           ):
-              assert token in design, token
-          planner = Path('open-model-market/v5_runtime_parameter_planner.py').read_text()
-          assert 'current-decisions-first-then-generate-parameter-identities' in planner
-          assert 'parameter_ids_are_generated_after_decision_discovery' in planner
-          assert 'fixed_business_parameter_catalog_used' in planner
-          orchestrator = Path('open-model-market/v5_governed_plan_orchestrator.py').read_text()
-          assert 'depends_on_role_ids' in orchestrator
-          assert 'fixed_role_grammar_used' in orchestrator
+              assert token in resource_design, token
+          planning = Path('open-model-market/v5_cost_effectiveness_planning.py').read_text()
+          assert 'single_role_reasoning_effort_task_derived' in planning
+          assert 'current-task-absolute-pressure' in planning
           binding = Path('open-model-market/v5_runtime_request_binding.py').read_text()
-          assert 'audit_bound_request' in binding
-          assert 'output_allowance_is_task_admission_gate' in binding
+          assert 'estimate_payload_tokens' in binding
+          assert 'final_payload_measured' in binding
+          assert 'parameter_runtime_binding' in binding
+          prompt_policy = Path('open-model-market/v5_cost_effectiveness_request_policy.py').read_text()
+          assert 'final_payload_measured_before_effective_binding' in prompt_policy
+          runtime = Path('open-model-market/v5_cost_effectiveness_runtime.py').read_text()
+          assert 'current-task-expected-cost-and-marginal-return' in runtime
+          timeout = Path('open-model-market/v5_runtime_timeout.py').read_text()
+          assert 'timeout_parameter_id' in timeout
+          assert 'infrastructure_invariant' in timeout
           knob_audit = Path('open-model-market/v5_runtime_knob_audit.py').read_text()
           assert 'computed_but_unused' in knob_audit
+          assert 'resource_parameter_bindings' in knob_audit
           work_graph = Path('open-model-market/v5_task_work_graph.py').read_text()
           assert 'relatedness_is_dependency' in work_graph
           assert 'semantic-relatedness-only' in work_graph
@@ -255,7 +294,10 @@ jobs:
             tests.test_v5_runtime_generated_parameters \
             tests.test_v5_dynamic_role_scoring \
             tests.test_v5_hierarchical_production_entry \
-            tests.test_v5_continuous_spatiotemporal_replanning
+            tests.test_v5_continuous_spatiotemporal_replanning \
+            tests.test_v5_cost_effectiveness_resource_closure \
+            tests.test_v5_initial_company_heterogeneity \
+            tests.test_v5_runtime_timeout
 
       - name: Verify active execution path has no Provider pinning or model business gates
         run: |
@@ -281,7 +323,11 @@ jobs:
           no_tools = (Path('open-model-market') / 'v5_no_tools_policy.py').read_text().casefold()
           for token in ('tools', 'tool_choice', 'function_call', 'web_search', 'mcp'):
               assert token in no_tools, token
-          active = (Path('open-model-market') / 'v5_hierarchical_candidate_optimizer.py').read_text()
-          assert 'from v5_parameter_design_planner import' in active
+          issue_entry = (Path('open-model-market') / 'v5_price_ranked_issue_ticket.py').read_text()
+          assert 'v5_cost_effectiveness_candidate_optimizer' in issue_entry
+          assert 'COST_EFFECTIVENESS_RESOURCE_CLOSURE_ACTIVE = True' in issue_entry
+          runtime_entry = (Path('open-model-market') / 'v5_recovery_runtime.py').read_text()
+          assert 'install_cost_effective_continuous_runtime' in runtime_entry
+          assert 'install_cost_effective_final_payload_policy' in runtime_entry
           assert getattr(optimizer, 'HIERARCHICAL_TASK_PARAMETER_PLANNER_ACTIVE', False) is True
           PY
