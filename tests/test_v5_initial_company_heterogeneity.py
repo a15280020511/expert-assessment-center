@@ -10,7 +10,7 @@ MARKET = ROOT / "open-model-market"
 if str(MARKET) not in sys.path:
     sys.path.insert(0, str(MARKET))
 
-from v5_runtime_role_assignment import solve_runtime_roles  # noqa: E402
+from v5_cost_effectiveness_role_assignment import solve_runtime_roles  # noqa: E402
 
 
 def _metrics(candidates, capability_scores, economy_scores=None):
@@ -71,11 +71,11 @@ class InitialCompanyHeterogeneityTests(unittest.TestCase):
         metrics = _metrics(candidates, capability_scores, economy_scores)
         with (
             patch(
-                "v5_runtime_role_assignment.build_runtime_role_metrics",
+                "v5_cost_effectiveness_role_assignment.build_runtime_role_metrics",
                 return_value=metrics,
             ),
             patch(
-                "v5_runtime_role_assignment.build_runtime_recovery_metrics",
+                "v5_cost_effectiveness_role_assignment.build_runtime_recovery_metrics",
                 return_value=(metrics, {"role_id": "recovery-reference"}),
             ),
         ):
@@ -96,7 +96,7 @@ class InitialCompanyHeterogeneityTests(unittest.TestCase):
         self.assertEqual(1.0, audit["company_heterogeneity_ratio"])
         self.assertFalse(audit["company_diversity_is_execution_gate"])
 
-    def test_better_capability_and_reliability_beats_diversity(self) -> None:
+    def test_better_capability_and_reliability_beats_everything_else(self) -> None:
         candidates = [
             {"model": "aion-labs/model-a"},
             {"model": "aion-labs/model-b"},
@@ -110,13 +110,12 @@ class InitialCompanyHeterogeneityTests(unittest.TestCase):
         selected, _, audit = self._solve(candidates, capability)
         companies = sorted(row["model"].split("/", 1)[0] for row in selected)
         self.assertEqual(["aion-labs", "aion-labs"], companies)
-        self.assertEqual(1, audit["primary_distinct_company_count"])
         self.assertEqual(
             "current-task-capability-and-capacity-risk",
             audit["objective_priority"][0],
         )
 
-    def test_diversity_beats_cheaper_same_company_when_capability_ties(self) -> None:
+    def test_cheaper_same_company_beats_expensive_diversity_when_capability_ties(self) -> None:
         candidates = [
             {"model": "aion-labs/model-a"},
             {"model": "aion-labs/model-b"},
@@ -134,18 +133,20 @@ class InitialCompanyHeterogeneityTests(unittest.TestCase):
             economy_scores=economy,
         )
         companies = {row["model"].split("/", 1)[0] for row in selected}
-        self.assertEqual({"aion-labs", "anthropic"}, companies)
+        self.assertEqual({"aion-labs"}, companies)
         self.assertEqual(
             [
                 "current-task-capability-and-capacity-risk",
-                "maximize-distinct-company-coverage",
                 "current-task-cost-and-marginal-return",
+                "maximize-distinct-company-coverage-on-higher-priority-tie",
                 "stable-deterministic-tie-break",
             ],
             audit["objective_priority"],
         )
+        self.assertTrue(audit["cost_effectiveness_priority"])
+        self.assertFalse(audit["cost_is_business_gate"])
 
-    def test_recovery_slot_also_prefers_new_company_on_capability_tie(self) -> None:
+    def test_recovery_slot_uses_diversity_only_on_cost_tie(self) -> None:
         candidates = [
             {"model": "openai/model-a"},
             {"model": "openai/model-b"},
