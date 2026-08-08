@@ -1,17 +1,18 @@
 """Production candidate optimizer with cost-effectiveness and resource closure.
 
-This is a thin assembly layer over the existing hierarchical planner.  It swaps in
+This is a thin assembly layer over the existing hierarchical planner. It swaps in
 only the current production planning extensions for the duration of one ticket:
-first-class request/resource ParameterDesign and the cost-effectiveness-first
-OR-Tools objective.  The resulting generated parameter identities are attached to
-selected nodes so request-time audits can prove ParameterSpec -> RuntimeBinding.
+first-class request/resource ParameterDesign, absolute current-task reasoning effort,
+and the cost-effectiveness-first OR-Tools objective. Generated parameter identities
+are attached to selected nodes so request-time audits can prove ParameterSpec ->
+RuntimeBinding.
 """
 from __future__ import annotations
 
 from typing import Any, Mapping
 
 import v5_hierarchical_candidate_optimizer as base
-from v5_cost_effectiveness_parameter_closure import (
+from v5_cost_effectiveness_planning import (
     PRINCIPLES,
     SCHEMA_VERSION as PARAMETER_SCHEMA_VERSION,
     build_runtime_planning_context,
@@ -28,8 +29,12 @@ def _resource_profile(receipt: Mapping[str, Any]) -> dict[str, Any]:
     ids = resolved.get("request_resource_parameter_ids")
     values = resolved.get("request_resource_parameter_values")
     return {
-        "runtime_resource_parameter_ids": dict(ids) if isinstance(ids, Mapping) else {},
-        "runtime_resource_parameter_values": dict(values) if isinstance(values, Mapping) else {},
+        "runtime_resource_parameter_ids": (
+            dict(ids) if isinstance(ids, Mapping) else {}
+        ),
+        "runtime_resource_parameter_values": (
+            dict(values) if isinstance(values, Mapping) else {}
+        ),
         "cost_effectiveness_priority": True,
         "soft_token_and_cost_efficiency": True,
         "continuous_spatiotemporal_resource_recomputation": True,
@@ -65,10 +70,17 @@ def _attach_runtime_resource_profile(
 
     receipt.update(
         {
-            "schema_version": "expert-center-generated-parameter-selection-receipt-3-cost-effectiveness-resource-closure",
+            "schema_version": (
+                "expert-center-generated-parameter-selection-receipt-3-"
+                "cost-effectiveness-resource-closure"
+            ),
             "selection_principles": list(PRINCIPLES),
-            "request_resource_parameter_ids": profile["runtime_resource_parameter_ids"],
-            "request_resource_parameter_values": profile["runtime_resource_parameter_values"],
+            "request_resource_parameter_ids": profile[
+                "runtime_resource_parameter_ids"
+            ],
+            "request_resource_parameter_values": profile[
+                "runtime_resource_parameter_values"
+            ],
             "all_request_resource_controls_first_class_parameters": True,
             "cost_effectiveness_priority": True,
             "soft_token_and_cost_efficiency": True,
@@ -95,7 +107,9 @@ def _attach_runtime_resource_profile(
     return result, receipt
 
 
-def _materialize(packet: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def _materialize(
+    packet: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
     original_planner = base.build_runtime_planning_context
     original_solver = base.solve_runtime_roles
     original_principles = base.PRINCIPLES
@@ -114,7 +128,10 @@ def _materialize(packet: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, A
         base.PRINCIPLES = original_principles
         base.DYNAMIC_PARAMETER_GRAPH_SCHEMA_VERSION = original_parameter_schema
         base.RUNTIME_ROLE_ASSIGNMENT_SCHEMA_VERSION = original_role_schema
-    return _attach_runtime_resource_profile(dict(materialized), dict(receipt))
+    return _attach_runtime_resource_profile(
+        dict(materialized),
+        dict(receipt),
+    )
 
 
 def materialize_candidate_pool_selection(
@@ -129,4 +146,7 @@ def materialize_top50_selection(
     return _materialize(packet)
 
 
-__all__ = ["materialize_candidate_pool_selection", "materialize_top50_selection"]
+__all__ = [
+    "materialize_candidate_pool_selection",
+    "materialize_top50_selection",
+]
