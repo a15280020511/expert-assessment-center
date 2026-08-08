@@ -31,12 +31,8 @@ class CostEffectiveContinuousExecutionEngine(
         category_value = str(getattr(category, "value", category))
         quality = cls._number(row, "estimated_quality", 0.0)
         failure = cls._number(row, "failure_probability", 1.0)
-        task_cost = cls._number(row, "estimated_task_cost_usd", -1.0)
-        if task_cost >= 0.0 and (
-            "estimated_task_cost_usd" in row
-            and row.get("estimated_task_cost_usd") not in {None, ""}
-        ):
-            cost = task_cost
+        if bool(row.get("estimated_task_cost_available")):
+            cost = cls._number(row, "estimated_task_cost_usd", 0.0)
             cost_source = "estimated-task-cost-usd"
         elif row.get("cost_rank_signal") not in {None, ""}:
             cost = cls._number(row, "cost_rank_signal", 0.0)
