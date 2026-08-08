@@ -117,7 +117,7 @@
     "reasoning_effort": "task-derived-and-request-bound",
     "output_transport_allowance": "current-request-derived",
     "model_timeout_effective": "current-request-derived-under-finite-safety-cap",
-    "company_mix": "current-task-soft-heterogeneity-after-capability-risk-before-economy",
+    "company_mix": "unconstrained",
     "company_heterogeneity_soft_objective_required": true,
     "company_diversity_is_execution_gate": false,
     "fixed_company_count_allowed": false,
