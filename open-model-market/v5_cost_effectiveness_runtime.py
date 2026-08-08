@@ -31,17 +31,28 @@ class CostEffectiveContinuousExecutionEngine(
         category_value = str(getattr(category, "value", category))
         quality = cls._number(row, "estimated_quality", 0.0)
         failure = cls._number(row, "failure_probability", 1.0)
-        cost = cls._number(
-            row,
-            "estimated_task_cost_usd",
-            cls._number(row, "estimated_cost", 0.0),
-        )
+        task_cost = cls._number(row, "estimated_task_cost_usd", -1.0)
+        if task_cost >= 0.0 and (
+            "estimated_task_cost_usd" in row
+            and row.get("estimated_task_cost_usd") not in {None, ""}
+        ):
+            cost = task_cost
+            cost_source = "estimated-task-cost-usd"
+        elif row.get("cost_rank_signal") not in {None, ""}:
+            cost = cls._number(row, "cost_rank_signal", 0.0)
+            cost_source = "catalog-price-rank-signal"
+        else:
+            cost = cls._number(row, "estimated_cost", 0.0)
+            cost_source = "compatibility-estimated-cost"
         model = str(row.get("model") or "")
         company = canonical_model_company(model)
         repeated = int(company in tried_companies and company != "unknown")
+        # Keep source only as a deterministic final discriminator so rows with an
+        # equal numeric signal retain a stable ordering without changing the
+        # quality/risk/cost/company priority hierarchy.
         if category_value == FailureCategory.QUALITY_GATE_FAILED.value:
-            return (-quality, failure, cost, repeated, model)
-        return (failure, -quality, cost, repeated, model)
+            return (-quality, failure, cost, repeated, cost_source, model)
+        return (failure, -quality, cost, repeated, cost_source, model)
 
     def _rerank_standby_for_failure(self, category: Any) -> None:
         self._ensure_production_failure_state()
@@ -72,9 +83,10 @@ class CostEffectiveContinuousExecutionEngine(
                     "top_before": before[:8],
                     "top_after": after[:8],
                     "policy": (
-                        "current-quality-risk-then-cost-marginal-return-then-"
+                        "current-quality-risk-then-preserved-cost-signal-then-"
                         "company-heterogeneity"
                     ),
+                    "standby_catalog_price_signal_supported": True,
                     "cost_effectiveness_priority": True,
                     "cost_is_execution_gate": False,
                     "company_diversity_is_execution_gate": False,
@@ -89,10 +101,11 @@ class CostEffectiveContinuousExecutionEngine(
                 "cost_effectiveness_priority": True,
                 "runtime_candidate_priority": [
                     "current-task-quality-and-current-failure-risk",
-                    "current-task-expected-cost-and-marginal-return",
+                    "current-task-expected-cost-or-preserved-catalog-price-signal",
                     "company-heterogeneity-on-higher-priority-tie",
                     "stable-model-identity",
                 ],
+                "standby_catalog_price_signal_supported": True,
                 "token_and_cost_soft_control": True,
                 "cost_is_execution_gate": False,
                 "company_diversity_is_execution_gate": False,
