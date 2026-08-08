@@ -12,6 +12,9 @@ the end of the recovery process. If current-run failures or quality-gate failure
 exhaust the initially activated recovery rows, the runtime recomputes a finite
 promotion depth from live feedback and may promote additional candidates from
 the current task's ordered standby inventory. No cross-task history is used.
+Account-level OpenRouter credit failures are transport-wide conditions rather
+than model failures, so the current run stops issuing further model requests
+instead of wasting standby promotions that cannot repair the account state.
 """
 from __future__ import annotations
 
@@ -239,6 +242,8 @@ class ExecutionEngine(_LegacyExecutionEngine):
             self._feedback_promotions = 0
             self._feedback_primary_count = 1
             self._feedback_events: list[dict[str, Any]] = []
+            self._provider_account_blocked = False
+            self._provider_account_block_reason = ""
 
     def _initialize_feedback(self, graph: ExecutionGraph) -> None:
         self._ensure_feedback_state()
@@ -254,6 +259,8 @@ class ExecutionEngine(_LegacyExecutionEngine):
             self._feedback_promotions = 0
             self._feedback_primary_count = max(1, len(graph.nodes))
             self._feedback_events = []
+            self._provider_account_blocked = False
+            self._provider_account_block_reason = ""
 
     def _feedback_snapshot(self) -> dict[str, Any]:
         self._ensure_feedback_state()
@@ -264,7 +271,7 @@ class ExecutionEngine(_LegacyExecutionEngine):
             standby_total = len(self._standby_inventory)
             claimed = len(self._standby_claimed)
             return {
-                "schema_version": "v5-current-run-feedback-replanning-1",
+                "schema_version": "v5-current-run-feedback-replanning-2",
                 "enabled": bool(standby_total),
                 "promotion_trigger": (
                     "initial-recovery-exhausted-plus-current-run-failure-feedback"
@@ -282,6 +289,9 @@ class ExecutionEngine(_LegacyExecutionEngine):
                 "standby_promoted_or_claimed": claimed,
                 "standby_remaining": max(0, standby_total - claimed),
                 "promotion_attempts": int(self._feedback_promotions),
+                "provider_account_blocked": bool(self._provider_account_blocked),
+                "provider_account_block_reason": self._provider_account_block_reason,
+                "account_level_failure_stops_model_recovery": True,
                 "events": [dict(row) for row in self._feedback_events],
                 "cross_task_history_used": False,
             }
@@ -302,6 +312,8 @@ class ExecutionEngine(_LegacyExecutionEngine):
         """Recompute finite standby depth from current-run observations."""
         self._ensure_feedback_state()
         with self._feedback_lock:
+            if self._provider_account_blocked:
+                return 0
             remaining = max(
                 0,
                 len(self._standby_inventory) - len(self._standby_claimed),
@@ -329,6 +341,8 @@ class ExecutionEngine(_LegacyExecutionEngine):
     def _claim_next_standby(self) -> dict[str, Any] | None:
         self._ensure_feedback_state()
         with self._feedback_lock:
+            if self._provider_account_blocked:
+                return None
             for row in self._standby_inventory:
                 model = str(row.get("model") or "").strip()
                 if not model or model in self._standby_claimed:
@@ -349,6 +363,7 @@ class ExecutionEngine(_LegacyExecutionEngine):
     ) -> None:
         self._ensure_feedback_state()
         event = {
+            "event_type": "standby-promotion",
             "node_id": selected.node_id,
             "selected_model": selected.model,
             "promoted_model": candidate.model,
@@ -361,6 +376,84 @@ class ExecutionEngine(_LegacyExecutionEngine):
         with self._feedback_lock:
             self._feedback_promotions += 1
             self._feedback_events.append(event)
+
+    @staticmethod
+    def _failure_from_exception(
+        exc: BaseException,
+        node: SelectedNode,
+    ) -> Any:
+        """Classify account-level 402 responses separately from model failures."""
+        status = getattr(exc, "http_status", None)
+        message = str(exc)
+        account_credit_failure = (
+            status == 402
+            or "insufficient credits" in message.casefold()
+        )
+        if account_credit_failure:
+            diagnostics = dict(
+                getattr(exc, "response_diagnostics", {}) or {}
+            )
+            diagnostics.update(
+                {
+                    "provider_account_credit_insufficient": True,
+                    "failure_scope": "current-openrouter-account",
+                    "model_replacement_can_repair": False,
+                }
+            )
+            retry_after = getattr(exc, "retry_after_seconds", None)
+            return _legacy.ExecutionFailure(
+                category=_legacy.FailureCategory.BUDGET_INSUFFICIENT,
+                retryable=False,
+                http_status=int(status) if status is not None else 402,
+                retry_after_seconds=(
+                    float(retry_after) if retry_after is not None else None
+                ),
+                model=node.model,
+                provider_endpoint=node.provider_endpoint,
+                request_sent=bool(getattr(exc, "request_sent", True)),
+                response_received=bool(
+                    getattr(exc, "response_received", True)
+                ),
+                usage_received=False,
+                actual_cost_usd=0.0,
+                message=message,
+                response_diagnostics=diagnostics,
+            )
+        return _LegacyExecutionEngine._failure_from_exception(exc, node)
+
+    def _mark_provider_account_blocked(self, attempt: Any | None) -> None:
+        if attempt is None:
+            return
+        failure = getattr(attempt, "failure", None)
+        if not isinstance(failure, Mapping):
+            return
+        try:
+            status = int(failure.get("http_status") or 0)
+        except (TypeError, ValueError):
+            status = 0
+        diagnostics = failure.get("response_diagnostics", {})
+        diagnostics = diagnostics if isinstance(diagnostics, Mapping) else {}
+        if status != 402 and not diagnostics.get(
+            "provider_account_credit_insufficient"
+        ):
+            return
+        self._ensure_feedback_state()
+        with self._feedback_lock:
+            if self._provider_account_blocked:
+                return
+            self._provider_account_blocked = True
+            self._provider_account_block_reason = (
+                "openrouter-http-402-insufficient-credits"
+            )
+            self._feedback_events.append(
+                {
+                    "event_type": "provider-account-circuit-opened",
+                    "http_status": status or 402,
+                    "reason": self._provider_account_block_reason,
+                    "further_model_requests_suppressed": True,
+                    "standby_promotion_suppressed": True,
+                }
+            )
 
     def _validated_graph(
         self,
@@ -399,6 +492,11 @@ class ExecutionEngine(_LegacyExecutionEngine):
         node: SelectedNode,
         kind: str,
     ) -> Any:
+        self._ensure_feedback_state()
+        with self._feedback_lock:
+            if self._provider_account_blocked:
+                return None
+
         # Explicit top-level no-tools enforcement wraps the actual model request
         # and raw response. openrouter_api enforces the same boundary again at
         # transport level, giving production a two-layer fail-closed guarantee.
@@ -423,6 +521,7 @@ class ExecutionEngine(_LegacyExecutionEngine):
             kind,
         )
         self._record_feedback(attempt)
+        self._mark_provider_account_blocked(attempt)
         invalid = _legacy.FailureCategory.PROVIDER_INVALID_RESPONSE
         if attempt is not None and self._category(attempt) == invalid:
             budget.fail_endpoint(node.provider_endpoint, invalid)
@@ -550,7 +649,17 @@ class ExecutionEngine(_LegacyExecutionEngine):
             blockers,
             missing_non_degradable,
         )
-        result["runtime_feedback_replanning"] = self._feedback_snapshot()
+        feedback = self._feedback_snapshot()
+        result["runtime_feedback_replanning"] = feedback
+        result["provider_account_transport_state"] = {
+            "blocked": bool(feedback.get("provider_account_blocked")),
+            "reason": str(feedback.get("provider_account_block_reason") or ""),
+            "model_replacement_can_repair": False
+            if feedback.get("provider_account_blocked")
+            else None,
+        }
+        if feedback.get("provider_account_blocked") and result.get("status") == "failed":
+            result["stop_reason"] = "provider-account-credit-insufficient"
         return result
 
     def execute_graph(

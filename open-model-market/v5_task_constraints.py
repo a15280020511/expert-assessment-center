@@ -4,6 +4,9 @@ The implementation module contains the general validators. This facade adds
 quantity-local, spatial-local, sensory-local and task-anchored canonicalization,
 and applies the production constitutional default that audited degraded success
 is allowed unless the user explicitly denies partial or degraded delivery.
+Closed-world tasks keep external facts closed while allowing exact quantities
+that are transparently derived from authoritative task inputs when the task
+itself requires calculation, thresholds or sensitivity analysis.
 """
 from __future__ import annotations
 
@@ -67,6 +70,25 @@ _GENERIC_ONSITE_RE = re.compile(
     rf"(?P<subject>{_QUANTITY_LITERAL_PATTERN}"
     r"[^，。！？!?；;\n]{0,24}?)(?:在|位于)现场"
 )
+_DERIVED_QUANTITY_TASK_RE = re.compile(
+    r"(?:计算|测算|算出|求解|公式|算式|总成本|期望成本|预期成本|"
+    r"临界值|阈值|切换条件|敏感性|敏感度|误差|情景|"
+    r"calculate|calculation|compute|formula|threshold|break[- ]?even|"
+    r"sensitivity|scenario)",
+    re.IGNORECASE,
+)
+_DERIVED_QUANTITY_CONTEXT_RE = re.compile(
+    r"(?:计算|测算|推导|派生|公式|算式|总成本|期望|预期|"
+    r"临界|阈值|切换|敏感|情景|结果|"
+    r"calculate|computed|derived|formula|threshold|break[- ]?even|"
+    r"sensitivity|scenario|=|＝|\+|×|\*|÷|/)",
+    re.IGNORECASE,
+)
+_FACT_LABEL_PREFIX_RE = re.compile(
+    r"^\s*(?:[-*+]\s*)?(?:\*\*)?(?:事实|已知事实|fact)"
+    r"(?:\s*[（(][^）)]*[）)])?(?:\*\*)?\s*[:：-]",
+    re.IGNORECASE,
+)
 
 
 def _decimal_text(value: Decimal) -> str:
@@ -110,6 +132,11 @@ def original_quantity_tokens(text: str) -> list[str]:
     return values
 
 
+def _derived_quantities_requested(task: str) -> bool:
+    """Return true only when this task explicitly needs numerical derivation."""
+    return bool(_DERIVED_QUANTITY_TASK_RE.search(str(task or "")))
+
+
 def closed_world_numeric_prompt(
     task: str,
     constraints: _impl.TaskConstraints | Mapping[str, Any] | None = None,
@@ -123,6 +150,16 @@ def closed_world_numeric_prompt(
     if precise_allowed:
         return ""
     rendered = "[" + "，".join(original_quantity_tokens(task)) + "]"
+    if _derived_quantities_requested(task):
+        return (
+            "封闭世界精确数量规则（不可覆盖）：题面原样数量是唯一允许的外部"
+            f"数值来源：{rendered}。不得引入任何题外参数、统计值、年份、价格、"
+            "概率或经验数字。因为本任务明确要求计算/临界值/敏感性，可以输出由"
+            "题面数量通过显式算式直接得到的派生精确数量；每个题面外数值必须在"
+            "同一句、同一条或同一表格字段中标明计算/推导/结果/临界值/敏感性等"
+            "派生语义，或展示等号/运算关系，使其 provenance 可复核。派生数量不得"
+            "标为题面事实。所有确定数据仍必须保持题面原意和原始单位。"
+        )
     return (
         "封闭世界精确数量规则（不可覆盖）：允许出现的‘数值+单位’仅限"
         f"题面原样集合：{rendered}。回答必须保留题面原始单位。除题面直接等式"
@@ -219,6 +256,54 @@ def fact_claim_supported(task: str, claim: str) -> bool:
     return _impl.fact_claim_supported(canonical_task, canonical_claim)
 
 
+def _answer_segments(answer: str) -> list[str]:
+    """Split answer into local provenance units without losing table rows."""
+    rendered = str(answer or "")
+    values: list[str] = []
+    for line in rendered.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if "|" in line:
+            values.append(line)
+            continue
+        values.extend(
+            part.strip()
+            for part in re.split(r"(?<=[。！？!?；;])", line)
+            if part.strip()
+        )
+    return values
+
+
+def _unproven_derived_quantities(
+    task: str,
+    answer: str,
+) -> set[tuple[str, str, str]]:
+    """Find task-external quantities lacking local derivation provenance."""
+    task_quantities = normalized_quantities(task)
+    unproven: set[tuple[str, str, str]] = set()
+    for segment in _answer_segments(answer):
+        introduced = normalized_quantities(segment) - task_quantities
+        if not introduced:
+            continue
+        derived_context = bool(_DERIVED_QUANTITY_CONTEXT_RE.search(segment))
+        fact_labeled = bool(_FACT_LABEL_PREFIX_RE.search(segment))
+        if not derived_context or fact_labeled:
+            unproven.update(introduced)
+    return unproven
+
+
+def _render_quantity_violation(
+    prefix: str,
+    quantities: set[tuple[str, str, str]],
+) -> str:
+    rendered_values: list[str] = []
+    for lo, hi, unit in sorted(quantities)[:16]:
+        suffix = f"-{hi}" if hi else ""
+        rendered_values.append(f"{lo}{suffix}:{unit}")
+    return prefix + ",".join(rendered_values)
+
+
 def validate_answer_evidence(
     task: str,
     answer: str,
@@ -238,18 +323,24 @@ def validate_answer_evidence(
 
     violations: list[str] = []
     if not precise_allowed:
-        introduced = sorted(
-            normalized_quantities(answer) - normalized_quantities(task)
-        )
-        if introduced:
-            rendered_values: list[str] = []
-            for lo, hi, unit in introduced[:16]:
-                suffix = f"-{hi}" if hi else ""
-                rendered_values.append(f"{lo}{suffix}:{unit}")
-            violations.append(
-                "closed-world-unsupported-quantity:"
-                + ",".join(rendered_values)
-            )
+        if _derived_quantities_requested(task):
+            unproven = _unproven_derived_quantities(task, answer)
+            if unproven:
+                violations.append(
+                    _render_quantity_violation(
+                        "closed-world-unproven-derived-quantity:",
+                        unproven,
+                    )
+                )
+        else:
+            introduced = normalized_quantities(answer) - normalized_quantities(task)
+            if introduced:
+                violations.append(
+                    _render_quantity_violation(
+                        "closed-world-unsupported-quantity:",
+                        introduced,
+                    )
+                )
 
     if provenance_required or not external_facts_allowed:
         unsupported = [
