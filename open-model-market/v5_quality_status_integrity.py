@@ -4,6 +4,9 @@ Audited degraded output may be delivered, but it must never be represented as
 ``full_success``. A failed non-critical node may coexist with degraded success
 only when the runtime delivery gate has already proved sufficient coverage,
 strict successful content, no missing non-degradable work and a usable report.
+A status-only shell such as "nothing was covered" is never usable delivery: an
+audited degraded success requires positive work coverage and at least one strict
+successful content node.
 """
 from __future__ import annotations
 
@@ -78,12 +81,16 @@ def _classify_node_rows(
     return degraded_nodes, strict_nodes, failed_nodes
 
 
+def _declares_degraded_status(result: Mapping[str, Any]) -> bool:
+    return (
+        result.get("status") == "success"
+        and result.get("completion_mode") == "degraded"
+        and result.get("quality_status") == "degraded_success"
+    )
+
+
 def _run_declares_audited_degradation(result: Mapping[str, Any]) -> bool:
-    if result.get("status") != "success":
-        return False
-    if result.get("completion_mode") != "degraded":
-        return False
-    if result.get("quality_status") != "degraded_success":
+    if not _declares_degraded_status(result):
         return False
     if not str(result.get("final_answer") or "").strip():
         return False
@@ -105,7 +112,11 @@ def _run_declares_audited_degradation(result: Mapping[str, Any]) -> bool:
         strict_nodes = int(coverage.get("successful_content_nodes") or 0)
     except (TypeError, ValueError):
         return False
-    return observed + 1e-12 >= minimum and strict_nodes >= 1
+    return (
+        observed > 0.0
+        and observed + 1e-12 >= minimum
+        and strict_nodes >= 1
+    )
 
 
 def _apply_degradation(
@@ -131,12 +142,48 @@ def _apply_degradation(
     normalized["degradation"] = degradation
 
 
+def _reject_invalid_degraded_delivery(normalized: dict[str, Any]) -> None:
+    """Convert an unaudited degraded-success claim into a real failure."""
+    previous_answer = str(normalized.get("final_answer") or "").strip()
+    normalized["status"] = "failed"
+    normalized["completion_mode"] = "none"
+    normalized["quality_status"] = "failed"
+    normalized["stop_reason"] = "degraded-delivery-without-usable-content"
+    normalized["final_answer"] = None
+
+    delivery = normalized.get("delivery_policy")
+    delivery = dict(delivery) if isinstance(delivery, Mapping) else {}
+    blockers = [str(value) for value in delivery.get("blockers", [])]
+    marker = "degraded-delivery-requires-positive-covered-work-and-strict-content"
+    if marker not in blockers:
+        blockers.append(marker)
+    delivery["blockers"] = blockers
+    normalized["delivery_policy"] = delivery
+
+    degradation = normalized.get("degradation")
+    degradation = dict(degradation) if isinstance(degradation, Mapping) else {}
+    degradation.update(
+        {
+            "used": False,
+            "rejected": True,
+            "rejection_reason": marker,
+            "status_shell_was_not_delivery": True,
+            "previous_final_answer_was_nonempty": bool(previous_answer),
+            "full_success_claimed": False,
+        }
+    )
+    normalized["degradation"] = degradation
+
+
 def _integrity_status(
     degraded_nodes: list[dict[str, Any]],
     failed_nodes: list[str],
     all_nodes_strict: bool,
     run_degraded: bool,
+    invalid_degraded: bool,
 ) -> str:
+    if invalid_degraded:
+        return "FAIL"
     if run_degraded or degraded_nodes:
         return "DEGRADED"
     if failed_nodes:
@@ -150,9 +197,13 @@ def enforce_result_integrity(result: Mapping[str, Any]) -> dict[str, Any]:
     rows = raw_rows if isinstance(raw_rows, list) else []
     degraded_nodes, strict_nodes, failed_nodes = _classify_node_rows(rows)
     all_nodes_strict = bool(rows) and len(strict_nodes) == len(rows)
+    declared_degraded = _declares_degraded_status(normalized)
     run_degraded = _run_declares_audited_degradation(normalized)
+    invalid_degraded = bool(declared_degraded and not run_degraded)
 
-    if run_degraded or degraded_nodes:
+    if invalid_degraded:
+        _reject_invalid_degraded_delivery(normalized)
+    elif run_degraded or degraded_nodes:
         _apply_degradation(normalized, degraded_nodes, failed_nodes)
     elif all_nodes_strict and normalized.get("status") == "success":
         normalized["completion_mode"] = "full"
@@ -164,12 +215,16 @@ def enforce_result_integrity(result: Mapping[str, Any]) -> dict[str, Any]:
             failed_nodes,
             all_nodes_strict,
             run_degraded,
+            invalid_degraded,
         ),
         "strict_success_statuses": sorted(STRICT_SUCCESS_STATUSES),
         "strict_node_ids": strict_nodes,
         "degraded_nodes": degraded_nodes,
         "failed_node_ids": failed_nodes,
         "audited_degraded_delivery": run_degraded,
+        "invalid_degraded_success_rejected": invalid_degraded,
+        "positive_work_coverage_required_for_degraded_success": True,
+        "minimum_strict_content_nodes_for_degraded_success": 1,
         "failed_nodes_may_coexist_only_with_delivery_gate_pass": True,
         "full_success_allowed": all_nodes_strict and not degraded_nodes and not failed_nodes,
     }
@@ -251,6 +306,7 @@ def _rewrite_failure_artifacts(root: Path) -> None:
                 and str(row.get("status") or "") not in STRICT_SUCCESS_STATUSES
             ],
             "audited_degraded_delivery": False,
+            "invalid_degraded_success_rejected": False,
             "full_success_allowed": False,
         }
         write_json(root / "v5-execution-summary.json", summary)
