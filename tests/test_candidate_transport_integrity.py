@@ -70,9 +70,10 @@ def _fixture() -> tuple[dict, list[dict]]:
     }
     plan = {
         "schema_version": "governance-expert-dynamic-candidate-plan-v1",
-        "selection_authority": "decision-system-governance",
+        "selection_authority": "expert-assessment-center-dynamic-ortools",
         "candidate_pool_authority": "decision-system-governance",
         "model_assignment_authority": "expert-assessment-center-dynamic-ortools",
+        "selection_performed_by_governance": False,
         "task_sha256": hashlib.sha256(_canonical(task)).hexdigest(),
         "selected_models": [],
         "recovery_models": [],
@@ -159,6 +160,12 @@ class CandidateTransportIntegrityTests(unittest.TestCase):
         )
         self.assertTrue(transport_receipt["transport_verified"])
         self.assertGreaterEqual(selection_receipt["primary_expert_count"], 1)
+        self.assertEqual(validated["candidate_pool_authority"], "decision-system-governance")
+        self.assertTrue(validated["selection_authority"].startswith("expert-assessment-center"))
+        self.assertTrue(
+            validated["model_assignment_authority"].startswith("expert-assessment-center")
+        )
+        self.assertFalse(validated["selection_performed_by_governance"])
         self.assertFalse(validated["company_uniqueness_required"])
         self.assertFalse(validated["optimizer_optimality_required"])
         self.assertFalse(validated["budget_admission_gate_enabled"])
