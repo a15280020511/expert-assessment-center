@@ -2,8 +2,9 @@
 
 Business qualification gates are intentionally absent. The validator preserves
 only protocol/integrity invariants: an accepted governance schema, governance
-selection authority, task binding, canonical plan integrity, executable unique
-model identities and the absence of explicit Provider pinning.
+candidate-pool authority, current-task Expert assignment authority for dynamic
+plans, task binding, canonical plan integrity, executable unique model identities
+and the absence of explicit Provider pinning.
 
 It deliberately does not rewrite policy/business fields. Dynamic team size,
 company mix, role topology, pool membership, price/flagship metadata, budget,
@@ -24,6 +25,8 @@ SCHEMA_VERSION = _legacy.SCHEMA_VERSION
 DYNAMIC_SCHEMA_VERSION = "governance-expert-dynamic-candidate-plan-v1"
 ALLOWED_SCHEMA_VERSIONS = frozenset({SCHEMA_VERSION, DYNAMIC_SCHEMA_VERSION})
 SELECTION_AUTHORITY = _legacy.SELECTION_AUTHORITY
+CANDIDATE_POOL_AUTHORITY = "decision-system-governance"
+EXPERT_SELECTION_AUTHORITY_PREFIX = "expert-assessment-center"
 
 
 def _canonical(value: Any, field: str) -> bytes:
@@ -81,6 +84,42 @@ def _rows(value: Any, field: str, *, required: bool) -> list[dict[str, Any]]:
     return rows
 
 
+def _validate_authority(plan: Mapping[str, Any], schema: str) -> None:
+    selection_authority = str(plan.get("selection_authority") or "").strip()
+    if schema == DYNAMIC_SCHEMA_VERSION:
+        candidate_pool_authority = str(
+            plan.get("candidate_pool_authority") or ""
+        ).strip()
+        model_assignment_authority = str(
+            plan.get("model_assignment_authority") or selection_authority
+        ).strip()
+        if candidate_pool_authority != CANDIDATE_POOL_AUTHORITY:
+            raise GovernanceModelPlanError(
+                "dynamic governance model plan candidate_pool_authority must be "
+                "decision-system-governance"
+            )
+        if not selection_authority.startswith(EXPERT_SELECTION_AUTHORITY_PREFIX):
+            raise GovernanceModelPlanError(
+                "dynamic governance model plan selection_authority must be "
+                "expert-assessment-center current-task assignment"
+            )
+        if not model_assignment_authority.startswith(EXPERT_SELECTION_AUTHORITY_PREFIX):
+            raise GovernanceModelPlanError(
+                "dynamic governance model plan model_assignment_authority must be "
+                "expert-assessment-center current-task assignment"
+            )
+        if plan.get("selection_performed_by_governance") is True:
+            raise GovernanceModelPlanError(
+                "dynamic governance model plan cannot claim Governance performed model selection"
+            )
+        return
+
+    if selection_authority != SELECTION_AUTHORITY:
+        raise GovernanceModelPlanError(
+            "governance model plan selection_authority must be decision-system-governance"
+        )
+
+
 def _validate_protocol_envelope(
     ticket: Mapping[str, Any],
     plan: Mapping[str, Any],
@@ -91,10 +130,7 @@ def _validate_protocol_envelope(
         raise GovernanceModelPlanError(
             f"governance model plan schema_version is unsupported; allowed: {allowed}"
         )
-    if str(plan.get("selection_authority") or "").strip() != SELECTION_AUTHORITY:
-        raise GovernanceModelPlanError(
-            "governance model plan selection_authority must be decision-system-governance"
-        )
+    _validate_authority(plan, schema)
     expected_task_sha = str(plan.get("task_sha256") or "").strip()
     observed_task_sha = task_sha256(ticket)
     if expected_task_sha != observed_task_sha:
@@ -177,7 +213,9 @@ def validate_governance_model_plan(
 
 __all__ = [
     "ALLOWED_SCHEMA_VERSIONS",
+    "CANDIDATE_POOL_AUTHORITY",
     "DYNAMIC_SCHEMA_VERSION",
+    "EXPERT_SELECTION_AUTHORITY_PREFIX",
     "GovernanceModelPlanError",
     "SCHEMA_VERSION",
     "SELECTION_AUTHORITY",
