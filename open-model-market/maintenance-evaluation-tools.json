@@ -1,0 +1,54 @@
+{
+  "schema_version": "expert-maintenance-evaluation-tools-v1",
+  "audited_at": "2026-08-08",
+  "production_runtime_integration": false,
+  "production_model_calls_enabled_by_this_registry": false,
+  "principles": [
+    "maintenance evaluation tools must not become expert runtime dependencies",
+    "no maintenance tool may add expert tool-use or network capabilities to production expert calls",
+    "free or mock evaluation is preferred and paid model calls are never automatically enabled",
+    "runtime dependency set remains constitutionally closed"
+  ],
+  "tools": [
+    {
+      "id": "inspect-ai",
+      "repository": "UKGovernmentBEIS/inspect_ai",
+      "license": "MIT",
+      "status": "APPROVED_MAINTENANCE_EVALUATION_CANDIDATE",
+      "role": "repeatable LLM evaluation and regression harness",
+      "production_runtime": false,
+      "production_tool_use": false,
+      "observed_commit": "f4a0e65abb61a05d7002a683140029aa905ddd71",
+      "activation": "explicit maintenance-only validation task after dependency and cost gate"
+    },
+    {
+      "id": "promptfoo",
+      "repository": "promptfoo/promptfoo",
+      "license": "MIT",
+      "status": "APPROVED_MAINTENANCE_REDTEAM_CANDIDATE",
+      "role": "prompt regression, model comparison and bounded red-team test harness",
+      "production_runtime": false,
+      "production_tool_use": false,
+      "observed_release": "0.122.0",
+      "minimum_node_note": "upstream 0.122.0 dropped Node.js 20 support",
+      "activation": "explicit maintenance-only validation task; free/mock providers by default"
+    },
+    {
+      "id": "instructor",
+      "repository": "567-labs/instructor",
+      "license": "MIT",
+      "status": "RADAR_ONLY_RUNTIME_DUPLICATE",
+      "role": "structured LLM output helper",
+      "production_runtime": false,
+      "reason": "current production runtime already uses jsonschema and the constitution forbids adding runtime dependencies without an explicit constitution change"
+    },
+    {
+      "id": "litellm",
+      "repository": "BerriAI/litellm",
+      "status": "RADAR_ONLY_ROUTING_DUPLICATE",
+      "role": "multi-provider LLM gateway",
+      "production_runtime": false,
+      "reason": "would duplicate existing Governance/OpenRouter/provider-routing, cost and recovery responsibilities"
+    }
+  ]
+}
