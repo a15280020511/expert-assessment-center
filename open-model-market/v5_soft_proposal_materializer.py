@@ -3,9 +3,9 @@
 Only intrinsic graph validity is enforced. Historical company uniqueness,
 approved-call capacity, exact Provider endpoint, price/context qualification and
 fixed recovery reserve gates are removed. OpenRouter receives the selected model
-identity and chooses the Provider freely. The current-task standby inventory is
-preserved separately from the initially activated recovery pool so the runtime
-can promote additional candidates only after observing current-run failures.
+identity and chooses the Provider freely. Current-task generated request/resource
+ParameterSpecs are carried into every node so request-time binding can prove the
+full ParameterDesign -> RuntimeBinding path.
 """
 from __future__ import annotations
 
@@ -49,7 +49,8 @@ def _functions(raw: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 def _required_outputs(
-    work_map: Mapping[str, Mapping[str, Any]], work_ids: Sequence[str]
+    work_map: Mapping[str, Mapping[str, Any]],
+    work_ids: Sequence[str],
 ) -> list[str]:
     result: list[str] = []
     for work_id in work_ids:
@@ -76,13 +77,28 @@ def _selected_node(
         raise ProposalValidationError("every node needs node_id, model and work_ids")
     unknown = [work_id for work_id in work_ids if work_id not in work_map]
     if unknown:
-        raise ProposalValidationError(f"node {node_id} references unknown work: {unknown}")
+        raise ProposalValidationError(
+            f"node {node_id} references unknown work: {unknown}"
+        )
     functions = _functions(raw)
     effort = str(raw.get("reasoning_effort") or "medium")
     contract = work_output_contract(
         task,
         _required_outputs(work_map, work_ids),
         final_node=node_id in final_nodes,
+    )
+    inherited_profile = raw.get("parameter_profile")
+    inherited_profile = (
+        dict(inherited_profile)
+        if isinstance(inherited_profile, Mapping)
+        else {}
+    )
+    inherited_profile.update(
+        {
+            "selection_source": "task-dynamic-ortools",
+            "local_token_ceiling_enforced": False,
+            "provider_routing_mode": "unrestricted-openrouter",
+        }
     )
     return SelectedNode(
         node_id=node_id,
@@ -95,11 +111,7 @@ def _selected_node(
             "source": "task-dynamic-expert-plan",
         },
         reasoning_profile={"reasoning_enabled": True, "effort": effort},
-        parameter_profile={
-            "selection_source": "task-dynamic-ortools",
-            "local_token_ceiling_enforced": False,
-            "provider_routing_mode": "unrestricted-openrouter",
-        },
+        parameter_profile=inherited_profile,
         model=model,
         provider_endpoint=f"{model}@openrouter-auto",
         output_contract=contract,
@@ -126,7 +138,8 @@ def _selected_edges(proposal: Mapping[str, Any]) -> tuple[SelectedEdge, ...]:
 
 
 def _stages(
-    node_ids: Sequence[str], edges: Sequence[SelectedEdge]
+    node_ids: Sequence[str],
+    edges: Sequence[SelectedEdge],
 ) -> tuple[tuple[str, ...], ...]:
     graph = nx.DiGraph()
     graph.add_nodes_from(node_ids)
@@ -154,6 +167,10 @@ def _stages(
 
 def _recovery_row(raw: Mapping[str, Any], node: SelectedNode) -> dict[str, Any]:
     model = str(raw.get("model") or "").strip()
+    raw_profile = raw.get("parameter_profile")
+    raw_profile = dict(raw_profile) if isinstance(raw_profile, Mapping) else {}
+    parameter_profile = {**dict(node.parameter_profile), **raw_profile}
+    parameter_profile["shared_recovery_pool"] = True
     return {
         "candidate_id": f"recovery:{node.node_id}:{model}",
         "assigned_work": list(node.assigned_work),
@@ -161,10 +178,7 @@ def _recovery_row(raw: Mapping[str, Any], node: SelectedNode) -> dict[str, Any]:
         "functions": list(node.functions),
         "prompt_profile": dict(node.prompt_profile),
         "reasoning_profile": dict(node.reasoning_profile),
-        "parameter_profile": {
-            **dict(node.parameter_profile),
-            "shared_recovery_pool": True,
-        },
+        "parameter_profile": parameter_profile,
         "model": model,
         "provider_endpoint": f"{model}@openrouter-auto",
         "provider_slug": "openrouter-auto",
@@ -224,10 +238,15 @@ def materialize_proposal(
     raw_nodes = _rows(proposal.get("nodes"))
     if not raw_nodes:
         raise ProposalValidationError("proposal has no expert nodes")
-    final_nodes = {str(value) for value in proposal.get("final_nodes", []) if str(value)}
+    final_nodes = {
+        str(value) for value in proposal.get("final_nodes", []) if str(value)
+    }
     if not final_nodes:
         final_nodes = {str(raw_nodes[-1].get("node_id") or "")}
-    nodes = tuple(_selected_node(row, work_map, task, final_nodes) for row in raw_nodes)
+    nodes = tuple(
+        _selected_node(row, work_map, task, final_nodes)
+        for row in raw_nodes
+    )
     node_ids = [node.node_id for node in nodes]
     if len(node_ids) != len(set(node_ids)):
         raise ProposalValidationError("duplicate expert node id")
@@ -235,7 +254,10 @@ def materialize_proposal(
         raise ProposalValidationError("final_nodes reference unknown experts")
 
     edges = _selected_edges(proposal)
-    if any(edge.source not in node_ids or edge.target not in node_ids for edge in edges):
+    if any(
+        edge.source not in node_ids or edge.target not in node_ids
+        for edge in edges
+    ):
         raise ProposalValidationError("edge references unknown expert")
     stages = _stages(node_ids, edges)
     incoming = {edge.target for edge in edges}
@@ -264,7 +286,9 @@ def materialize_proposal(
             "enabled": bool(standby_inventory),
             "standby_inventory_count": len(standby_inventory),
             "promotion_depth_fixed": False,
-            "promotion_trigger": "current-run-failure-or-quality-gate-feedback",
+            "promotion_trigger": (
+                "current-run-failure-or-quality-gate-feedback"
+            ),
             "cross_task_history_used": False,
         }
     )
@@ -273,12 +297,19 @@ def materialize_proposal(
         nodes=nodes,
         edges=edges,
         execution_stages=stages,
-        entry_nodes=tuple(node_id for node_id in node_ids if node_id not in incoming),
-        final_nodes=tuple(node_id for node_id in node_ids if node_id in final_nodes),
+        entry_nodes=tuple(
+            node_id for node_id in node_ids if node_id not in incoming
+        ),
+        final_nodes=tuple(
+            node_id for node_id in node_ids if node_id in final_nodes
+        ),
         required_work=tuple(work_map),
         estimated_quality=0.0,
         quality_floor=0.0,
-        estimated_total_cost=round(sum(node.estimated_cost for node in nodes), 8),
+        estimated_total_cost=round(
+            sum(node.estimated_cost for node in nodes),
+            8,
+        ),
         metadata={
             "work_items": [dict(row) for row in work_map.values()],
             "recovery_pool": recovery_pool,
@@ -291,9 +322,22 @@ def materialize_proposal(
             "approved_call_budget_used_as_gate": False,
             "exact_provider_endpoint_used_as_gate": False,
             "fixed_topology_used": False,
+            "request_resource_parameter_profile_bound": all(
+                bool(
+                    node.parameter_profile.get(
+                        "runtime_resource_parameter_ids"
+                    )
+                )
+                for node in nodes
+            ),
+            "cost_effectiveness_priority": True,
+            "soft_token_and_cost_efficiency": True,
         },
     )
-    recovery_count = max((len(rows) for rows in recovery_pool.values()), default=0)
+    recovery_count = max(
+        (len(rows) for rows in recovery_pool.values()),
+        default=0,
+    )
     finite_runtime_candidates = recovery_count + len(standby_inventory)
     limits = GraphLimits(
         max_nodes=max(1, len(nodes)),
@@ -307,17 +351,30 @@ def materialize_proposal(
         min_successful_content_nodes=0,
         allow_degraded_success=True,
         max_provider_share=1.0,
-        max_provider_failures=max(1, len(nodes) + finite_runtime_candidates),
+        max_provider_failures=max(
+            1,
+            len(nodes) + finite_runtime_candidates,
+        ),
         max_output_allowance_tokens=None,
     )
     audit = {
-        "schema_version": "v5-task-dynamic-materialization-2",
+        "schema_version": "v5-task-dynamic-materialization-3-resource-closure",
         "status": "PASS",
         "selected_node_count": len(nodes),
         "recovery_candidate_count": recovery_count,
         "standby_candidate_count": len(standby_inventory),
         "runtime_feedback_replanning_enabled": bool(standby_inventory),
         "runtime_standby_promotion_depth_fixed": False,
+        "request_resource_parameter_profile_bound": all(
+            bool(
+                node.parameter_profile.get(
+                    "runtime_resource_parameter_ids"
+                )
+            )
+            for node in nodes
+        ),
+        "cost_effectiveness_priority": True,
+        "soft_token_and_cost_efficiency": True,
         "company_uniqueness_gate": False,
         "call_budget_gate": False,
         "provider_endpoint_gate": False,
@@ -342,9 +399,15 @@ def deterministic_violations(
             task,
             task_envelope,
             catalog,
-            approved_total_calls=int(limits.get("approved_total_calls") or 1),
-            governance_calls_reserved=int(limits.get("governance_calls_reserved") or 0),
-            approved_recovery_calls=int(limits.get("approved_recovery_calls") or 0),
+            approved_total_calls=int(
+                limits.get("approved_total_calls") or 1
+            ),
+            governance_calls_reserved=int(
+                limits.get("governance_calls_reserved") or 0
+            ),
+            approved_recovery_calls=int(
+                limits.get("approved_recovery_calls") or 0
+            ),
             cost_anomaly_usd=limits.get("cost_anomaly_usd"),
         )
     except Exception as exc:  # noqa: BLE001
@@ -352,4 +415,8 @@ def deterministic_violations(
     return []
 
 
-__all__ = ["ProposalValidationError", "deterministic_violations", "materialize_proposal"]
+__all__ = [
+    "ProposalValidationError",
+    "deterministic_violations",
+    "materialize_proposal",
+]
