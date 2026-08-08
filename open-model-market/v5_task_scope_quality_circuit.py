@@ -25,6 +25,7 @@ import math
 import re
 from typing import Any, Mapping, Sequence
 
+import v5_run387_hardening as run387_hardening
 from v5_cost_effectiveness_runtime import CostEffectiveContinuousExecutionEngine
 from v5_runtime import ProductionRuntime
 
@@ -74,6 +75,11 @@ _DETERMINISTIC_OBLIGATION_PREFIXES = (
     "missing-task-obligation:",
     "empty-task-obligation:",
 )
+_BUSINESS_CALC_CLASSIFICATION_RE = re.compile(
+    r"(?:计算结果|派生计算|计算|测算|算出|算式|公式|总成本|期望成本|预期成本|成本计算)",
+    re.I,
+)
+_BASE_TASK_OBLIGATION_VIOLATIONS = run387_hardening.task_obligation_violations
 
 
 def _sha(text: str) -> str:
@@ -175,6 +181,38 @@ def project_business_task(task: str) -> tuple[str, dict[str, Any]]:
         "cross_task_history_used": False,
     }
     return projected, audit
+
+
+def business_task_obligation_violations(task: str, answer: str) -> list[str]:
+    """Apply legacy obligations only to classifications explicitly requested.
+
+    Run #407 exposed an older compiler shortcut: once a task asked to distinguish
+    facts from judgments/recommendations, the validator unconditionally required a
+    third ``calculated`` class even when the business task never requested a
+    calculation.  This wrapper preserves the fact/judgment distinction while
+    requiring calculated classification only when the already-scoped business task
+    itself contains an explicit calculation request.
+    """
+    values = list(_BASE_TASK_OBLIGATION_VIOLATIONS(task, answer))
+    if not _BUSINESS_CALC_CLASSIFICATION_RE.search(str(task or "")):
+        values = [
+            value
+            for value in values
+            if value != "missing-task-obligation:classification:calculated"
+        ]
+    return list(dict.fromkeys(values))
+
+
+def _install_business_obligation_compiler() -> None:
+    """Bind the scoped compiler into both production validation call sites."""
+    # hardened_validate_answer_evidence resolves this module global at call time.
+    run387_hardening.task_obligation_violations = business_task_obligation_violations
+
+    # v5_final_semantic_gate imported the function by name, so patch that local
+    # binding as well.  Import lazily to avoid a cold-start import cycle.
+    import v5_final_semantic_gate as final_semantic_gate
+
+    final_semantic_gate.task_obligation_violations = business_task_obligation_violations
 
 
 def _deterministic_gate_reasons(attempt: Any) -> list[str]:
@@ -356,6 +394,7 @@ def install_task_scope_quality_circuit(
     runtime: ProductionRuntime,
 ) -> ProductionRuntime:
     """Install the final execution layer before any model call occurs."""
+    _install_business_obligation_compiler()
     runtime.execution_engine = TaskScopedCostEffectiveExecutionEngine(
         runtime.config,
         prompt_policy=runtime.prompt_policy,
@@ -369,6 +408,7 @@ def install_task_scope_quality_circuit(
 
 __all__ = [
     "TaskScopedCostEffectiveExecutionEngine",
+    "business_task_obligation_violations",
     "install_task_scope_quality_circuit",
     "project_business_task",
     "repeated_deterministic_quality_signal",
