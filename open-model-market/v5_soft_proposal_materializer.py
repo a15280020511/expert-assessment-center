@@ -21,6 +21,9 @@ class ProposalValidationError(RuntimeError):
     """Raised only for malformed or non-executable graph structure."""
 
 
+_REASONING_EFFORTS = {"low", "medium", "high"}
+
+
 def _rows(value: Any) -> list[Mapping[str, Any]]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return []
@@ -81,7 +84,11 @@ def _selected_node(
             f"node {node_id} references unknown work: {unknown}"
         )
     functions = _functions(raw)
-    effort = str(raw.get("reasoning_effort") or "medium")
+    effort = str(raw.get("reasoning_effort") or "").strip().casefold()
+    if effort not in _REASONING_EFFORTS:
+        raise ProposalValidationError(
+            f"node {node_id} needs a valid current-task-derived reasoning_effort"
+        )
     contract = work_output_contract(
         task,
         _required_outputs(work_map, work_ids),
@@ -330,6 +337,7 @@ def materialize_proposal(
                 )
                 for node in nodes
             ),
+            "hidden_reasoning_effort_default_used": False,
             "cost_effectiveness_priority": True,
             "soft_token_and_cost_efficiency": True,
         },
@@ -358,7 +366,7 @@ def materialize_proposal(
         max_output_allowance_tokens=None,
     )
     audit = {
-        "schema_version": "v5-task-dynamic-materialization-3-resource-closure",
+        "schema_version": "v5-task-dynamic-materialization-4-no-hidden-effort-default",
         "status": "PASS",
         "selected_node_count": len(nodes),
         "recovery_candidate_count": recovery_count,
@@ -373,6 +381,7 @@ def materialize_proposal(
             )
             for node in nodes
         ),
+        "hidden_reasoning_effort_default_used": False,
         "cost_effectiveness_priority": True,
         "soft_token_and_cost_efficiency": True,
         "company_uniqueness_gate": False,

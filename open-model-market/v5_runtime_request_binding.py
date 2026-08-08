@@ -17,7 +17,7 @@ from typing import Any, Mapping, Sequence
 
 from execution_graph import SelectedNode
 
-SCHEMA_VERSION = "current-request-runtime-knob-binding-4-final-payload-resource-closure"
+SCHEMA_VERSION = "current-request-runtime-knob-binding-5-no-hidden-reasoning-default"
 _EFFORT_ORDER = {
     "none": 0,
     "minimal": 1,
@@ -91,17 +91,22 @@ def estimate_payload_tokens(payload: Mapping[str, Any] | None) -> int:
 
 def _effort(node: SelectedNode) -> str:
     profile = _mapping_attr(node, "reasoning_profile")
-    raw = str(profile.get("effort") or "medium").casefold()
-    if raw in _EFFORT_ORDER:
-        return raw
     if profile.get("reasoning_enabled") is False:
         return "minimal"
-    return "medium"
+    raw = str(profile.get("effort") or "").strip().casefold()
+    if raw in _EFFORT_ORDER:
+        return raw
+    raise RuntimeError(
+        f"node {getattr(node, 'node_id', '')} has no valid task-derived reasoning effort; "
+        "request-time medium fallback is forbidden"
+    )
 
 
 def _reasoning_reserve_multiplier(effort: str) -> float:
     """Use effort as an ordinal pressure prior, not a claimed reasoning-token ratio."""
-    rank = _EFFORT_ORDER.get(effort, _EFFORT_ORDER["medium"])
+    if effort not in _EFFORT_ORDER:
+        raise ValueError(f"unsupported reasoning effort: {effort}")
+    rank = _EFFORT_ORDER[effort]
     maximum = max(_EFFORT_ORDER.values()) + 1
     return 1.0 + rank / maximum
 
@@ -295,6 +300,7 @@ def bind_request_knobs(
         "node_id": str(getattr(node, "node_id", "")),
         "reasoning_effort_planned": effort,
         "reasoning_effort_bound": effort,
+        "hidden_reasoning_effort_default_used": False,
         "reasoning_reserve_multiplier": round(
             _reasoning_reserve_multiplier(effort),
             8,
@@ -354,6 +360,7 @@ def audit_bound_request(
         "computed_but_unused": unused,
         "reasoning_effort_planned": planned_effort,
         "reasoning_effort_effective": bound_effort or None,
+        "hidden_reasoning_effort_default_used": False,
         "dynamic_output_allowance_tokens": allowance_value,
         "final_payload_token_estimate": estimate_payload_tokens(payload),
         "parameter_runtime_binding": {
