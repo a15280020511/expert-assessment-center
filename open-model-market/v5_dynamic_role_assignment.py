@@ -99,22 +99,31 @@ def solve_dynamic_roles(
         )
     model.minimize(sum(terms))
 
-    # Reuse the existing task-derived budget calculation, but interpret the numeric
-    # search allowance as deterministic CP-SAT time rather than wall-clock seconds.
-    # This keeps the budget task-adaptive and finite while making equal inputs
-    # reproducible under different CPU contention levels.
+    # Reuse the existing task-derived difficulty budget as an input signal, then map
+    # it to a bounded deterministic CP-SAT work allowance. The old value represented
+    # wall seconds (2..60); using it 1:1 as deterministic time made high-concurrency
+    # validation needlessly expensive. The scaled value remains task-derived and
+    # monotone with difficulty, while FEASIBLE/UNKNOWN outcomes still have the
+    # deterministic heuristic fallback required by the architecture.
     base_solver_profile = base._dynamic_solver_profile(  # noqa: SLF001
         profile,
         len(candidates),
         len(roles),
         recovery_count,
     )
-    deterministic_limit = float(base_solver_profile["max_time_in_seconds"])
+    reference_budget = float(base_solver_profile["max_time_in_seconds"])
+    deterministic_limit = round(
+        min(2.0, max(0.1, reference_budget / 20.0)),
+        6,
+    )
     solver_profile = {
         **base_solver_profile,
+        "reference_difficulty_budget": reference_budget,
         "max_deterministic_time": deterministic_limit,
         "wall_clock_stop_condition_used": False,
-        "search_budget_mode": "task-derived-deterministic-time",
+        "search_budget_mode": "task-derived-scaled-deterministic-time",
+        "deterministic_budget_floor": 0.1,
+        "deterministic_budget_ceiling": 2.0,
     }
     solver_profile.pop("max_time_in_seconds", None)
 
