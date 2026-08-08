@@ -1,26 +1,30 @@
-"""Task-derived dynamic candidate optimizer.
+"""Current-ticket generated-parameter candidate optimizer.
 
-Pre-execution planning order:
-current ticket -> constitutional no-tools route boundary -> task-derived work DAG ->
-parameter-instance discovery -> parameter dependency graph -> conditional Optuna
-resolution -> role DAG -> structural role demand -> OR-Tools model-role assignment.
+Pre-execution order:
+current ticket -> constitutional no-tools route boundary -> current work DAG ->
+required decision discovery -> generated ParameterSpec identities -> parameter DAG ->
+current-signal/Optuna resolution -> role DAG -> current-signal model scoring ->
+OR-Tools model-role assignment.
 
-Current-run standby promotion is a separate execution/replanning phase, not a
-pre-execution planning step. No fixed role grammar, metric-role grammar or
-pre-activated business parameter template participates. No model-business
-eligibility gates are introduced; no-tools remains the sole hard model boundary.
+Runtime standby promotion is a separate current-run replanning phase. Stable control
+surface names describe infrastructure capabilities only; business parameter identities
+and values are generated after the current decisions are known.
 """
 from __future__ import annotations
 
 from typing import Any, Mapping
 
 import v5_top50_pool_optimizer as base
-from v5_dynamic_parameter_graph import (
-    SCHEMA_VERSION as DYNAMIC_PARAMETER_GRAPH_SCHEMA_VERSION,
-    build_dynamic_planning_context,
-)
-from v5_dynamic_role_assignment import solve_dynamic_roles
 from v5_no_tools_policy import forbidden_model_route
+from v5_runtime_parameter_planner import (
+    PRINCIPLES,
+    SCHEMA_VERSION as DYNAMIC_PARAMETER_GRAPH_SCHEMA_VERSION,
+    build_runtime_planning_context,
+)
+from v5_runtime_role_assignment import (
+    SCHEMA_VERSION as RUNTIME_ROLE_ASSIGNMENT_SCHEMA_VERSION,
+    solve_runtime_roles,
+)
 
 
 class HierarchicalOptimizationError(RuntimeError):
@@ -30,12 +34,7 @@ class HierarchicalOptimizationError(RuntimeError):
 def _partition_no_tools_routes(
     rows: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    """Apply the existing constitutional route boundary before optimization.
-
-    This is deliberately not a model-quality, price, company, provider or popularity
-    gate.  It only prevents the optimizer from assigning a route that the request
-    boundary would deterministically reject later under the same no-tools policy.
-    """
+    """Apply the existing constitutional route boundary before optimization."""
     executable: list[dict[str, Any]] = []
     rejected: list[dict[str, str]] = []
     for row in rows:
@@ -69,16 +68,11 @@ def _materialize(
             raise HierarchicalOptimizationError(
                 "no candidate survives the constitutional no-tools route boundary"
             )
-        planning = build_dynamic_planning_context(packet, candidates)
+        planning = build_runtime_planning_context(packet, candidates)
         profile = dict(planning["resolved_profile"])
         roles = [dict(row) for row in planning["role_plan"]]
-        # ``metric_role_id`` is a historical scoring adapter.  It is deliberately
-        # removed before the active assignment stage: model-role scoring now reads
-        # the actual current role structure directly.
-        for role in roles:
-            role.pop("metric_role_id", None)
         recovery_count = int(planning["recovery_count"])
-        selected, recoveries, solver_audit = solve_dynamic_roles(
+        selected, recoveries, solver_audit = solve_runtime_roles(
             candidates,
             profile,
             roles,
@@ -118,7 +112,7 @@ def _materialize(
     )
     if parameter_coverage.get("status") != "PASS":
         raise HierarchicalOptimizationError(
-            "dynamic parameter coverage audit did not pass"
+            "generated parameter coverage audit did not pass"
         )
 
     planning_sequence = [
@@ -140,9 +134,12 @@ def _materialize(
 
     audit = {
         **solver_audit,
-        "schema_version": "v5-task-derived-dynamic-expert-composition-3",
+        "schema_version": "current-ticket-generated-expert-composition-1",
         "dynamic_parameter_graph_schema_version": (
             DYNAMIC_PARAMETER_GRAPH_SCHEMA_VERSION
+        ),
+        "runtime_role_assignment_schema_version": (
+            RUNTIME_ROLE_ASSIGNMENT_SCHEMA_VERSION
         ),
         "planning_sequence": planning_sequence,
         "runtime_replanning": runtime_replanning,
@@ -155,14 +152,18 @@ def _materialize(
         "primary_expert_count": len(selected),
         "recovery_count": len(recoveries),
         "role_plan": roles,
-        "selection_principles": list(base.PRINCIPLES),
-        "task_adaptive_scoring_schema_version": base.TASK_SCORING_SCHEMA_VERSION,
-        "role_metric_mode": "current-generated-role-structural-signals",
+        "selection_principles": list(PRINCIPLES),
+        "task_adaptive_scoring_schema_version": (
+            RUNTIME_ROLE_ASSIGNMENT_SCHEMA_VERSION
+        ),
+        "role_metric_mode": "current-role-current-task-normalized-signals",
         "metric_role_adapter_used": False,
         "fixed_metric_role_grammar_used": False,
+        "fixed_business_weight_coefficients_used": False,
+        "fixed_business_solver_time_used": False,
         "recovery_resilience": {
             "recovery_count": len(recoveries),
-            "selection_source": "heaviest-current-generated-role",
+            "selection_source": "heaviest-current-role-normalized-objective",
             "free_route_soft_penalty": 0,
             "primary_company_overlap_soft_penalty": 0,
             "recovery_company_concentration_soft_penalty": 0,
@@ -174,6 +175,8 @@ def _materialize(
         },
         "task_decomposition_completed": True,
         "parameter_requirement_discovery_completed": True,
+        "required_decision_discovery_completed": True,
+        "parameter_ids_generated_after_decision_discovery": True,
         "parameter_dependency_graph_completed": True,
         "parameter_values_resolved_before_team_composition": True,
         "team_and_roles_derived_after_parameter_resolution": True,
@@ -183,6 +186,8 @@ def _materialize(
         "all_calculable_planning_parameters_dynamic": True,
         "all_parameter_instances_current_task_derived": True,
         "fixed_parameter_template_used": False,
+        "fixed_business_parameter_catalog_used": False,
+        "legacy_business_parameter_names_used_as_parameter_ids": False,
         "fixed_parameter_values_used": False,
         "fixed_role_grammar_used": False,
         "hard_model_eligibility_gates": [],
@@ -223,6 +228,8 @@ def _materialize(
             "expert_center_hierarchical_planning_completed": True,
             "task_decomposition_completed": True,
             "parameter_requirement_discovery_completed": True,
+            "required_decision_discovery_completed": True,
+            "parameter_ids_generated_after_decision_discovery": True,
             "parameter_dependency_graph_completed": True,
             "parameter_values_resolved_before_model_assignment": True,
             "role_scoring_derived_from_current_role_structure": True,
@@ -238,14 +245,16 @@ def _materialize(
             "selected_from_governance_candidate_pool": True,
             "candidate_pool_authority": "decision-system-governance",
             "model_assignment_authority": (
-                "expert-assessment-center-task-derived-dynamic-ortools"
+                "expert-assessment-center-current-ticket-generated-parameter-ortools"
             ),
             "optimizer": str(audit["optimizer"]),
             "optimizer_audit": audit,
             "task_adaptive_scoring_completed": True,
-            "task_adaptive_scoring_schema_version": base.TASK_SCORING_SCHEMA_VERSION,
+            "task_adaptive_scoring_schema_version": (
+                RUNTIME_ROLE_ASSIGNMENT_SCHEMA_VERSION
+            ),
             "task_demand_profile": profile,
-            "selection_principles": list(base.PRINCIPLES),
+            "selection_principles": list(PRINCIPLES),
             "provider_routing_mode": "unrestricted-openrouter",
             "provider_restrictions_applied": False,
             "model_substitution_allowed": True,
@@ -254,6 +263,8 @@ def _materialize(
             "fixed_role_grammar_required": False,
             "fixed_metric_role_grammar_required": False,
             "metric_role_adapter_used": False,
+            "fixed_business_weight_coefficients_used": False,
+            "fixed_business_parameter_catalog_used": False,
             "company_deduplication_required": False,
             "free_first_required": False,
             "canary_required_before_execution": False,
@@ -269,16 +280,13 @@ def _materialize(
             "all_calculable_planning_parameters_dynamic": True,
             "all_parameter_instances_current_task_derived": True,
             "selection_policy": (
-                "governance reasoning-popularity candidates -> apply the same "
-                "constitutional no-tools model-route boundary used at request time -> "
-                "derive current-ticket finite work DAG -> discover effective parameter "
-                "instances -> build parameter DAG -> resolve current values with "
-                "NetworkX/Optuna -> derive role DAG from work DAG -> derive each role's "
-                "token/weight/capacity demand directly from its current structural "
-                "signals -> OR-Tools model-role assignment -> execution performs "
-                "current-run feedback standby promotion; unrestricted OpenRouter "
-                "Provider routing; no business eligibility gates; hard model "
-                "boundary=no-tools"
+                "governance candidates -> constitutional no-tools route boundary -> "
+                "current-ticket work DAG -> discover required decisions -> generate "
+                "opaque current ParameterSpec identities -> generated parameter DAG -> "
+                "resolve current values with graph signals and conditional Optuna -> "
+                "derive arbitrary current role DAG and empirical reasoning effort -> "
+                "normalize current role/task scoring strengths without fixed business "
+                "coefficients -> OR-Tools assignment -> current-run standby replanning"
             ),
         }
     )
@@ -286,7 +294,7 @@ def _materialize(
     selection_basis_sha256 = base._sha(plan)  # noqa: SLF001
 
     receipt = {
-        "schema_version": "expert-center-task-derived-dynamic-selection-receipt-current-role",
+        "schema_version": "expert-center-generated-parameter-selection-receipt-1",
         "selection_basis_sha256": selection_basis_sha256,
         "planning_sequence": planning_sequence,
         "runtime_replanning": runtime_replanning,
@@ -301,9 +309,11 @@ def _materialize(
         "recovery_count": len(recoveries),
         "standby_count": len(standby),
         "optimizer_audit": audit,
-        "role_metric_mode": "current-generated-role-structural-signals",
+        "role_metric_mode": "current-role-current-task-normalized-signals",
         "metric_role_adapter_used": False,
         "fixed_metric_role_grammar_used": False,
+        "fixed_business_weight_coefficients_used": False,
+        "parameter_ids_generated_after_decision_discovery": True,
         "constitutional_no_tools_route_prefilter_applied": True,
         "constitutional_no_tools_route_rejected_count": len(no_tools_rejected),
         "provider_routing_mode": "unrestricted-openrouter",
