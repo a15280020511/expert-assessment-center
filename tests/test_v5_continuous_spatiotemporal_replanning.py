@@ -19,6 +19,9 @@ from v5_continuous_spatiotemporal_replanning import (  # noqa: E402
     continuous_dynamic_model_timeout_seconds,
 )
 from v5_recovery_runtime import build_production_runtime  # noqa: E402
+from v5_replacement_truncation_rebind import (  # noqa: E402
+    ReplacementTruncationRebindExecutionEngine,
+)
 from v5_runtime import FailureCategory, RuntimeAttempt, RuntimeConfig  # noqa: E402
 
 
@@ -55,10 +58,12 @@ def truncation_attempt(
     model: str = "vendor/original",
     allowance: int = 1536,
     completion: int = 1536,
+    attempt_index: int = 1,
+    attempt_kind: str = "initial",
 ) -> RuntimeAttempt:
     return RuntimeAttempt(
-        attempt_index=1,
-        attempt_kind="initial",
+        attempt_index=attempt_index,
+        attempt_kind=attempt_kind,
         candidate_id="n1",
         model=model,
         provider_endpoint=f"{model}@openrouter-auto",
@@ -69,7 +74,7 @@ def truncation_attempt(
         gate_reasons=["truncated-output"],
         latency_seconds=10.0,
         usage={"completion_tokens": completion},
-        response_id="r1",
+        response_id=f"r{attempt_index}",
         response_model=model,
         response_provider="provider-a",
         failure={
@@ -112,6 +117,62 @@ def timeout_attempt(
                 "safety_cap_seconds": 240,
             }
         ],
+    )
+
+
+def empty_attempt(
+    *,
+    model: str,
+    attempt_index: int = 1,
+    attempt_kind: str = "initial",
+) -> RuntimeAttempt:
+    return RuntimeAttempt(
+        attempt_index=attempt_index,
+        attempt_kind=attempt_kind,
+        candidate_id="n1",
+        model=model,
+        provider_endpoint=f"{model}@openrouter-auto",
+        request={"model": model, "max_tokens": 512},
+        status="call_failed",
+        answer=None,
+        quality_score=0.0,
+        gate_reasons=["empty-output"],
+        latency_seconds=1.0,
+        usage={},
+        response_id=None,
+        response_model=None,
+        response_provider=None,
+        failure={
+            "category": FailureCategory.PROVIDER_EMPTY_RESPONSE.value,
+            "retryable": False,
+        },
+    )
+
+
+def passed_attempt(
+    *,
+    model: str,
+    attempt_index: int,
+    attempt_kind: str,
+    allowance: int,
+) -> RuntimeAttempt:
+    return RuntimeAttempt(
+        attempt_index=attempt_index,
+        attempt_kind=attempt_kind,
+        candidate_id="n1",
+        model=model,
+        provider_endpoint=f"{model}@openrouter-auto",
+        request={"model": model, "max_tokens": allowance},
+        status="passed",
+        answer="## 核心判断\n通过\n## 关键依据\n充分\n## 结论\n完成",
+        quality_score=1.0,
+        gate_reasons=[],
+        latency_seconds=1.0,
+        usage={"completion_tokens": 400},
+        response_id=f"r{attempt_index}",
+        response_model=model,
+        response_provider="provider-a",
+        failure=None,
     )
 
 
@@ -272,6 +333,110 @@ class ContinuousSpatiotemporalReplanningTests(unittest.TestCase):
             snapshot["recovery_candidate_space_recomputed_each_iteration"]
         )
 
+    def test_replacement_truncation_rebinds_same_model_before_substitution(self) -> None:
+        runtime = build_production_runtime(
+            RuntimeConfig(
+                total_call_limit=8,
+                recovery_call_limit=4,
+                cost_anomaly_usd=None,
+                tools_allowed=False,
+                live_catalog_required=False,
+                provider_lock_required=False,
+            )
+        )
+        engine = runtime.execution_engine
+        self.assertIsInstance(
+            engine,
+            ReplacementTruncationRebindExecutionEngine,
+        )
+
+        selected = node(model="vendor/original", final=True)
+        graph = ExecutionGraph(
+            nodes=(selected,),
+            edges=(),
+            execution_stages=(("n1",),),
+            entry_nodes=("n1",),
+            final_nodes=("n1",),
+            required_work=("w1",),
+            estimated_quality=0.8,
+            quality_floor=0.0,
+            estimated_total_cost=0.01,
+            metadata={"standby_inventory": []},
+        )
+        engine._initialize_feedback(graph)
+        attempts: list[RuntimeAttempt] = []
+        first = empty_attempt(model=selected.model)
+        attempts.append(first)
+        engine._record_feedback(first)
+
+        recovery_rows = [
+            {
+                "model": "vendor/replacement",
+                "provider_endpoint": "vendor/replacement@openrouter-auto",
+                "estimated_quality": 0.8,
+                "quality_uncertainty": 0.1,
+                "estimated_cost": 0.01,
+                "failure_probability": 0.1,
+            }
+        ]
+        call_kinds: list[tuple[str, str, int]] = []
+
+        def fake_call(candidate: SelectedNode, attempt_kind: str) -> RuntimeAttempt:
+            attempt_index = len(attempts) + 1
+            learned_floor = int(
+                candidate.parameter_profile.get(
+                    "dynamic_output_allowance_floor_tokens",
+                    0,
+                )
+            )
+            call_kinds.append((candidate.model, attempt_kind, learned_floor))
+            if attempt_kind == "replacement":
+                attempted = truncation_attempt(
+                    model=candidate.model,
+                    allowance=1000,
+                    completion=1000,
+                    attempt_index=attempt_index,
+                    attempt_kind=attempt_kind,
+                )
+            else:
+                self.assertEqual(candidate.model, "vendor/replacement")
+                self.assertGreater(learned_floor, 1000)
+                attempted = passed_attempt(
+                    model=candidate.model,
+                    attempt_index=attempt_index,
+                    attempt_kind=attempt_kind,
+                    allowance=learned_floor,
+                )
+            attempts.append(attempted)
+            engine._record_feedback(attempted)
+            return attempted
+
+        result, _best, final_node = engine._recover_node(
+            selected,
+            attempts,
+            recovery_rows,
+            FailureCategory.PROVIDER_EMPTY_RESPONSE,
+            None,
+            fake_call,
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(final_node.model, "vendor/replacement")
+        self.assertEqual(
+            [kind for _model, kind, _floor in call_kinds],
+            ["replacement", "retry"],
+        )
+        self.assertEqual(call_kinds[0][0], call_kinds[1][0])
+        self.assertGreater(call_kinds[1][2], call_kinds[0][2])
+        snapshot = engine._feedback_snapshot()
+        self.assertTrue(
+            snapshot["replacement_truncation_same_model_rebind_enabled"]
+        )
+        self.assertEqual(
+            snapshot["replacement_truncation_same_model_rebind_limit"],
+            1,
+        )
+        self.assertTrue(engine._same_model_truncation_retries)
+
     def test_production_runtime_installs_continuous_engine(self) -> None:
         runtime = build_production_runtime(
             RuntimeConfig(
@@ -286,6 +451,10 @@ class ContinuousSpatiotemporalReplanningTests(unittest.TestCase):
         self.assertIsInstance(
             runtime.execution_engine,
             ContinuousSpatiotemporalExecutionEngine,
+        )
+        self.assertIsInstance(
+            runtime.execution_engine,
+            ReplacementTruncationRebindExecutionEngine,
         )
 
 
