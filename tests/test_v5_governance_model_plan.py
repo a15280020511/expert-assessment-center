@@ -52,6 +52,27 @@ def add_recoveries(ticket: dict) -> None:
     resign(ticket)
 
 
+def make_dynamic(ticket: dict) -> None:
+    plan = ticket["governance_model_plan"]
+    plan["schema_version"] = DYNAMIC_SCHEMA_VERSION
+    plan["candidate_pool_authority"] = "decision-system-governance"
+    plan["selection_authority"] = "expert-assessment-center-dynamic-ortools"
+    plan["model_assignment_authority"] = (
+        "expert-assessment-center-current-ticket-generated-parameter-ortools"
+    )
+    plan["selection_performed_by_governance"] = False
+    plan["model_substitution_allowed"] = True
+    plan["expert_center_reranking_allowed"] = True
+    plan["fixed_team_size_required"] = False
+    plan["fixed_role_topology_required"] = False
+    plan["company_uniqueness_required"] = False
+    plan["optimizer_optimality_required"] = False
+    plan["budget_admission_gate_enabled"] = False
+    plan["provider_routing_mode"] = "unrestricted-openrouter"
+    plan["provider_restrictions_applied"] = False
+    resign(ticket)
+
+
 class GovernanceModelPlanTests(unittest.TestCase):
     def test_valid_fixture_passes_without_policy_rewrite(self) -> None:
         ticket = load_ticket()
@@ -71,23 +92,56 @@ class GovernanceModelPlanTests(unittest.TestCase):
 
     def test_current_dynamic_schema_and_unrestricted_provider_are_accepted(self) -> None:
         ticket = load_ticket()
+        make_dynamic(ticket)
         plan = ticket["governance_model_plan"]
-        plan["schema_version"] = DYNAMIC_SCHEMA_VERSION
-        plan["model_substitution_allowed"] = True
-        plan["expert_center_reranking_allowed"] = True
-        plan["fixed_team_size_required"] = False
-        plan["fixed_role_topology_required"] = False
-        plan["company_uniqueness_required"] = False
-        plan["optimizer_optimality_required"] = False
-        plan["budget_admission_gate_enabled"] = False
-        plan["provider_routing_mode"] = "unrestricted-openrouter"
-        plan["provider_restrictions_applied"] = False
-        resign(ticket)
         validated = validate_governance_model_plan(ticket)
         self.assertEqual(validated["schema_version"], DYNAMIC_SCHEMA_VERSION)
+        self.assertEqual(validated["candidate_pool_authority"], "decision-system-governance")
+        self.assertTrue(validated["selection_authority"].startswith("expert-assessment-center"))
+        self.assertTrue(
+            validated["model_assignment_authority"].startswith("expert-assessment-center")
+        )
+        self.assertFalse(validated["selection_performed_by_governance"])
         self.assertEqual(validated["provider_routing_mode"], "unrestricted-openrouter")
         self.assertFalse(validated["provider_restrictions_applied"])
         self.assertEqual(validated["plan_sha256"], plan["plan_sha256"])
+
+    def test_dynamic_schema_rejects_governance_as_model_selection_authority(self) -> None:
+        ticket = load_ticket()
+        make_dynamic(ticket)
+        ticket["governance_model_plan"]["selection_authority"] = (
+            "decision-system-governance"
+        )
+        resign(ticket)
+        with self.assertRaisesRegex(
+            GovernanceModelPlanError,
+            "selection_authority must be expert-assessment-center",
+        ):
+            validate_governance_model_plan(ticket)
+
+    def test_dynamic_schema_requires_governance_candidate_pool_authority(self) -> None:
+        ticket = load_ticket()
+        make_dynamic(ticket)
+        ticket["governance_model_plan"]["candidate_pool_authority"] = (
+            "expert-assessment-center"
+        )
+        resign(ticket)
+        with self.assertRaisesRegex(
+            GovernanceModelPlanError,
+            "candidate_pool_authority must be decision-system-governance",
+        ):
+            validate_governance_model_plan(ticket)
+
+    def test_dynamic_schema_rejects_governance_selection_claim(self) -> None:
+        ticket = load_ticket()
+        make_dynamic(ticket)
+        ticket["governance_model_plan"]["selection_performed_by_governance"] = True
+        resign(ticket)
+        with self.assertRaisesRegex(
+            GovernanceModelPlanError,
+            "cannot claim Governance performed model selection",
+        ):
+            validate_governance_model_plan(ticket)
 
     def test_missing_plan_fails_closed(self) -> None:
         ticket = load_ticket()
