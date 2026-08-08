@@ -8,7 +8,7 @@ coverage after the last ordinary request-audit writer.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Mapping
 
 import v5_price_ranked_pipeline_legacy as pipeline_legacy
 import v5_quality_status_integrity as quality_integrity
