@@ -17,6 +17,9 @@ from v5_priority_preserving_heterogeneity import (
     install_priority_preserving_heterogeneity,
 )
 from v5_production_expert_policy import install_production_expert_policy
+from v5_replacement_truncation_rebind import (
+    install_replacement_truncation_rebind,
+)
 from v5_run387_hardening import install_run387_hardening
 from v5_soft_resource_governance import build_runtime
 from v5_runtime import ProductionRuntime, RetryPolicy, RuntimeConfig
@@ -44,6 +47,7 @@ def build_production_runtime(config: RuntimeConfig) -> ProductionRuntime:
     install_compound_fact_provenance()
     runtime = install_priority_preserving_heterogeneity(runtime)
     runtime = install_continuous_spatiotemporal_replanning(runtime)
+    runtime = install_replacement_truncation_rebind(runtime)
     install_final_request_audit_hardening()
     return runtime
 
