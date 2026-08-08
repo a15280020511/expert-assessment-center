@@ -92,6 +92,7 @@
     "solver_seed": "task-derived-reproducible",
     "reasoning_effort": "task-derived-and-request-bound",
     "output_transport_allowance": "current-request-derived",
+    "model_timeout_effective": "current-request-derived-under-finite-safety-cap",
     "company_mix": "unconstrained",
     "fixed_team_size_allowed": false,
     "fixed_four_plus_four_allowed": false,
@@ -151,10 +152,27 @@
     "dynamic_transport_allowance_is_task_admission_gate": false,
     "dynamic_transport_allowance_can_invalidate_valid_output": false,
     "truncation_can_recompute_transport_allowance": true,
+    "fixed_model_timeout_used_as_effective_request_timeout": false,
+    "dynamic_model_timeout_required": true,
+    "model_timeout_safety_cap_required": true,
+    "model_timeout_safety_cap_is_business_gate": false,
+    "timeout_feedback_can_recompute_effective_timeout": true,
     "team_and_recovery_counts_come_from_current_execution_graph": true,
     "finite_execution_graph_required": true,
     "infinite_model_loop_allowed": false,
     "unbounded_recursive_retry_allowed": false
+  },
+  "quality_governance": {
+    "gate_source": "observable-current-contract-and-evidence-signals",
+    "fixed_answer_length_gate_used": false,
+    "fixed_business_quality_weight_coefficients_used": false,
+    "fixed_numeric_quality_threshold_gate_used": false,
+    "quality_score_role": "telemetry-only",
+    "truncation_is_observable_failure": true,
+    "empty_output_is_observable_failure": true,
+    "required_contract_fields_are_observable_gate": true,
+    "final_evidence_validation_fail_closed": true,
+    "internal_fact_label_only_mismatch_can_be_audited_warning": true
   },
   "delivery": {
     "full_success_required_to_return_useful_output": false,
@@ -185,6 +203,7 @@
     "candidate_transport_integrity_required": true,
     "finite_acyclic_dag_required": true,
     "semantic_relatedness_is_not_dependency": true,
+    "finite_model_timeout_safety_cap_required": true,
     "arbitrary_network_egress_allowed": false,
     "model_plane_hosts": [
       "openrouter.ai"
