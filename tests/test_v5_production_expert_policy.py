@@ -47,8 +47,9 @@ class ProductionExpertPolicyTests(unittest.TestCase):
         return SimpleNamespace(
             node_id="N1",
             model="vendor/model",
+            assigned_work=("work-1",),
             output_contract={},
-            reasoning_profile={},
+            reasoning_profile={"effort": "medium"},
             parameter_profile={},
         )
 
@@ -66,12 +67,14 @@ class ProductionExpertPolicyTests(unittest.TestCase):
             },
         }
         policy = ProductionExpertPromptPolicy()
-        node = SimpleNamespace(node_id="N1")
+        node = self._prompt_node()
         with patch.object(SoftResourcePromptPolicy, "build_payload", return_value=base):
             payload = policy.build_payload(node, "task", [])
         self.assertIsNone(EXPERT_DATA_COLLECTION_POLICY)
         self.assertFalse(EXPERT_ZDR_REQUIRED)
         self.assertNotIn("provider", payload)
+        self.assertGreater(payload["max_tokens"], 0)
+        self.assertEqual("medium", payload["reasoning"]["effort"])
 
     def test_real_inheritance_chain_skips_exact_provider_assertion_only_in_production(self) -> None:
         base = {
@@ -140,7 +143,8 @@ class ProductionExpertPolicyTests(unittest.TestCase):
         with common[0], common[1], common[2], common[3], common[4]:
             payload = ProductionExpertPromptPolicy().build_payload(node, "task", [])
         self.assertNotIn("provider", payload)
-        self.assertNotIn("max_tokens", payload)
+        self.assertGreater(payload["max_tokens"], 0)
+        self.assertEqual("medium", payload["reasoning"]["effort"])
         self.assertFalse(ProductionExpertPromptPolicy.provider_lock_required)
         self.assertTrue(ConstitutionalPromptPolicy.provider_lock_required)
 
@@ -154,7 +158,7 @@ class ProductionExpertPolicyTests(unittest.TestCase):
         policy = ProductionExpertPromptPolicy()
         with patch.object(SoftResourcePromptPolicy, "build_payload", return_value=base):
             with self.assertRaisesRegex(RuntimeError, "forbidden tool"):
-                policy.build_payload(SimpleNamespace(node_id="N1"), "task", [])
+                policy.build_payload(self._prompt_node(), "task", [])
 
     def test_constitutional_quality_failure_preserves_actual_cost(self) -> None:
         engine = self._installed_runtime().execution_engine
