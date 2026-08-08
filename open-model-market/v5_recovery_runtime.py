@@ -10,6 +10,9 @@ from __future__ import annotations
 
 from v5_final_audit_hardening import install_final_request_audit_hardening
 from v5_final_semantic_gate import install_final_semantic_gate
+from v5_priority_preserving_heterogeneity import (
+    install_priority_preserving_heterogeneity,
+)
 from v5_production_expert_policy import install_production_expert_policy
 from v5_run387_hardening import install_run387_hardening
 from v5_soft_resource_governance import build_runtime
@@ -29,6 +32,7 @@ def build_production_runtime(config: RuntimeConfig) -> ProductionRuntime:
     runtime = install_production_expert_policy(runtime)
     runtime = install_run387_hardening(runtime)
     install_final_semantic_gate()
+    runtime = install_priority_preserving_heterogeneity(runtime)
     install_final_request_audit_hardening()
     return runtime
 
