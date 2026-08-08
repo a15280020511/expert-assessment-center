@@ -1,7 +1,7 @@
 """Final current-task planner assembly including absolute reasoning-effort demand.
 
-The older role planner used relative role-demand extrema.  For a one-role task (or
-roles with equal demand), that collapses to an unconditional ``medium``.  This
+The older role planner used relative role-demand extrema. For a one-role task (or
+roles with equal demand), that collapses to an unconditional ``medium``. This
 layer keeps relative adaptation when it is informative, but also uses the current
 task's absolute pressure so a simple one-role task can be low and a difficult
 one-role task can be high.
@@ -20,7 +20,7 @@ from v5_cost_effectiveness_parameter_closure import (
     build_runtime_planning_context as _resource_planning,
 )
 
-SCHEMA_VERSION = "runtime-planning-5-no-hidden-reasoning-default"
+SCHEMA_VERSION = "runtime-planning-6-unified-current-task-pressure"
 _EFFORTS = ("low", "medium", "high")
 
 
@@ -28,11 +28,29 @@ def _pressure(profile: Mapping[str, Any]) -> float:
     raw = profile.get("pressure")
     raw = raw if isinstance(raw, Mapping) else {}
     values: list[float] = []
-    for key in ("input", "constraint", "evidence", "delivery", "overall"):
-        if key not in raw or raw.get(key) in (None, ""):
+    # The base planner historically emitted ``constraints`` while an older adapter
+    # read ``constraint``. Treat those as one semantic signal and include structural
+    # pressure when present so no current-task dimension silently disappears.
+    dimensions = (
+        ("input",),
+        ("constraints", "constraint"),
+        ("evidence",),
+        ("delivery",),
+        ("structure",),
+        ("overall",),
+    )
+    for aliases in dimensions:
+        raw_value: Any = None
+        found = False
+        for key in aliases:
+            if key in raw and raw.get(key) not in (None, ""):
+                raw_value = raw.get(key)
+                found = True
+                break
+        if not found:
             continue
         try:
-            value = float(raw.get(key))
+            value = float(raw_value)
         except (TypeError, ValueError):
             continue
         # Support either 0..1 or 0..100 planner representations.
@@ -54,6 +72,41 @@ def _absolute_effort(pressure: float) -> str:
     return _EFFORTS[index]
 
 
+def derive_reasoning_efforts(
+    profile: Mapping[str, Any],
+    role_demands: Sequence[float],
+) -> tuple[list[str], float, list[str]]:
+    """Derive role efforts from current-task pressure and current role structure.
+
+    This helper is shared by the full planner and by the executable compatibility
+    bridge. It never invents an unconditional middle value.
+    """
+    demands = [float(value) for value in role_demands]
+    if not demands:
+        return [], _pressure(profile), []
+    task_pressure = _pressure(profile)
+    global_effort = _absolute_effort(task_pressure)
+    global_index = _EFFORTS.index(global_effort)
+    minimum = min(demands)
+    maximum = max(demands)
+    efforts: list[str] = []
+    sources: list[str] = []
+    for demand in demands:
+        if len(demands) == 1 or minimum == maximum:
+            effort_index = global_index
+            source = "current-task-absolute-pressure"
+        else:
+            relative = 1 if demand == maximum else (-1 if demand == minimum else 0)
+            effort_index = max(
+                0,
+                min(len(_EFFORTS) - 1, global_index + relative),
+            )
+            source = "current-task-absolute-pressure-plus-current-role-relative-demand"
+        efforts.append(_EFFORTS[effort_index])
+        sources.append(source)
+    return efforts, task_pressure, sources
+
+
 def _adjust_roles(planning: dict[str, Any]) -> dict[str, Any]:
     roles = [
         dict(row)
@@ -63,30 +116,12 @@ def _adjust_roles(planning: dict[str, Any]) -> dict[str, Any]:
     if not roles:
         return planning
     profile = dict(planning.get("resolved_profile") or {})
-    task_pressure = _pressure(profile)
-    global_effort = _absolute_effort(task_pressure)
     demands = [float(row.get("role_structural_demand") or 0.0) for row in roles]
-    minimum = min(demands)
-    maximum = max(demands)
-    global_index = _EFFORTS.index(global_effort)
+    efforts, task_pressure, sources = derive_reasoning_efforts(profile, demands)
 
     for index, row in enumerate(roles):
-        if len(roles) == 1 or minimum == maximum:
-            effort_index = global_index
-            source = "current-task-absolute-pressure"
-        else:
-            relative = (
-                1
-                if demands[index] == maximum
-                else (-1 if demands[index] == minimum else 0)
-            )
-            effort_index = max(
-                0,
-                min(len(_EFFORTS) - 1, global_index + relative),
-            )
-            source = "current-task-absolute-pressure-plus-current-role-relative-demand"
-        row["reasoning_effort"] = _EFFORTS[effort_index]
-        row["reasoning_effort_source"] = source
+        row["reasoning_effort"] = efforts[index]
+        row["reasoning_effort_source"] = sources[index]
         row["reasoning_effort_task_pressure"] = round(task_pressure, 8)
         row["reasoning_effort_quantizer"] = (
             "three-equal-regions-over-current-task-pressure"
@@ -148,4 +183,5 @@ __all__ = [
     "RESOURCE_SCHEMA_VERSION",
     "SCHEMA_VERSION",
     "build_runtime_planning_context",
+    "derive_reasoning_efforts",
 ]
