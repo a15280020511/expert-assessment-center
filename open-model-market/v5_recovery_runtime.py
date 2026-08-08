@@ -23,6 +23,9 @@ from v5_fact_or_experience_semantic_policy import (
     install_fact_or_experience_semantic_policy,
 )
 from v5_final_semantic_gate import install_final_semantic_gate
+from v5_generic_heading_typo_normalization import (
+    install_generic_heading_typo_normalization,
+)
 from v5_priority_preserving_heterogeneity import (
     install_priority_preserving_heterogeneity,
 )
@@ -56,6 +59,7 @@ def build_production_runtime(config: RuntimeConfig) -> ProductionRuntime:
     runtime = build_runtime(config, retry_policy=retry_policy)
     runtime = install_production_expert_policy(runtime)
     runtime = install_run387_hardening(runtime)
+    install_generic_heading_typo_normalization()
     install_final_semantic_gate()
     install_compound_fact_provenance()
     runtime = install_priority_preserving_heterogeneity(runtime)
