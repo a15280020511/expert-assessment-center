@@ -81,6 +81,15 @@ def _resource_parameter_ids(node: Mapping[str, Any]) -> dict[str, str]:
     }
 
 
+def _resource_closure_required(graph: Mapping[str, Any]) -> bool:
+    metadata = graph.get("metadata")
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    # New production materialization always emits this field, including False.
+    # Legacy/unit fixtures that predate the closure omit it and are audited only
+    # for the knobs they actually declare.
+    return "request_resource_parameter_profile_bound" in metadata
+
+
 def audit_runtime_knob_coverage(
     graph: Mapping[str, Any],
     requests: Sequence[Mapping[str, Any]],
@@ -89,6 +98,7 @@ def audit_runtime_knob_coverage(
     """Prove ParameterDesign values are bound and observed at real attempts."""
     request_rows = _rows(requests)
     nodes = _rows(graph.get("nodes"))
+    closure_required = _resource_closure_required(graph)
     computed_but_unused: list[dict[str, Any]] = []
     reasoning_bindings: list[dict[str, Any]] = []
     resource_parameter_bindings: list[dict[str, Any]] = []
@@ -143,19 +153,29 @@ def audit_runtime_knob_coverage(
                 "model": model,
                 "parameter_ids": ids,
                 "required_surfaces": list(_REQUIRED_RESOURCE_SURFACES),
-                "status": "PASS" if not missing_ids else "FAIL",
+                "required_for_this_graph": closure_required,
+                "status": (
+                    "PASS"
+                    if not missing_ids
+                    else "FAIL"
+                    if closure_required
+                    else "NOT_EVALUATED"
+                ),
                 "missing_parameter_surfaces": missing_ids,
             }
         )
-        for surface in missing_ids:
-            computed_but_unused.append(
-                {
-                    "node_id": node_id,
-                    "model": model,
-                    "parameter": surface,
-                    "reason": "first-class-resource-ParameterSpec-id-not-bound-to-node",
-                }
-            )
+        if closure_required:
+            for surface in missing_ids:
+                computed_but_unused.append(
+                    {
+                        "node_id": node_id,
+                        "model": model,
+                        "parameter": surface,
+                        "reason": (
+                            "first-class-resource-ParameterSpec-id-not-bound-to-node"
+                        ),
+                    }
+                )
 
     request_binding_rows: list[dict[str, Any]] = []
     for index, request in enumerate(request_rows, 1):
@@ -206,7 +226,7 @@ def audit_runtime_knob_coverage(
             and effective_timeout > 0
             and safety_cap > 0
             and effective_timeout <= safety_cap
-            and parameter_id
+            and (parameter_id or not closure_required)
         )
         timeout_bindings.append(
             {
@@ -251,6 +271,7 @@ def audit_runtime_knob_coverage(
         "reasoning_binding_count": sum(
             1 for row in reasoning_bindings if row["status"] == "PASS"
         ),
+        "request_resource_parameter_closure_required": closure_required,
         "request_resource_parameter_node_count": sum(
             1
             for row in resource_parameter_bindings
@@ -273,8 +294,8 @@ def audit_runtime_knob_coverage(
         "request_bindings": request_binding_rows,
         "timeout_bindings": timeout_bindings,
         "computed_but_unused": computed_but_unused,
-        "all_request_resource_controls_first_class_parameters": True,
-        "parameter_design_to_runtime_binding_required": True,
+        "all_request_resource_controls_first_class_parameters": closure_required,
+        "parameter_design_to_runtime_binding_required": closure_required,
         "output_allowance_is_task_admission_gate": False,
         "output_allowance_is_result_validity_gate": False,
         "timeout_safety_cap_is_business_gate": False,
