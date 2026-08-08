@@ -9,6 +9,7 @@ full ParameterDesign -> RuntimeBinding path.
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Mapping, Sequence
 
 import networkx as nx
@@ -28,6 +29,14 @@ def _rows(value: Any) -> list[Mapping[str, Any]]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return []
     return [row for row in value if isinstance(row, Mapping)]
+
+
+def _number(value: Any, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if math.isfinite(number) else default
 
 
 def _work_map(proposal: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
@@ -172,12 +181,52 @@ def _stages(
     return tuple(stages)
 
 
+def _price_telemetry(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve current catalog price signals without turning them into gates."""
+    model = str(raw.get("model") or "").strip()
+    prompt = max(0.0, _number(raw.get("prompt_usd_per_million"), 0.0))
+    completion = max(0.0, _number(raw.get("completion_usd_per_million"), 0.0))
+    rank = max(0.0, _number(raw.get("price_rank_usd_per_million"), 0.0))
+    explicit_task = raw.get("estimated_task_cost_usd")
+    explicit_cost = raw.get("estimated_cost")
+    task_cost = max(0.0, _number(explicit_task, -1.0))
+    if task_cost < 0:
+        task_cost = max(0.0, _number(explicit_cost, 0.0))
+    zero_cost = bool(
+        raw.get("zero_cost_candidate") is True
+        or model.casefold().endswith(":free")
+        or (
+            (prompt > 0.0 or completion > 0.0 or rank > 0.0)
+            and prompt == 0.0
+            and completion == 0.0
+            and rank == 0.0
+        )
+    )
+    # Runtime recovery ordering needs a monotonic soft cost signal even when a
+    # task-specific dollar estimate was not emitted for standby rows.  The
+    # per-million price rank is not represented as actual task spend; it is kept
+    # separately and used only as a tie-break signal.
+    cost_rank_signal = task_cost if task_cost > 0.0 else rank
+    if cost_rank_signal <= 0.0 and not zero_cost:
+        cost_rank_signal = prompt + completion
+    return {
+        "estimated_task_cost_usd": task_cost,
+        "prompt_usd_per_million": prompt,
+        "completion_usd_per_million": completion,
+        "price_rank_usd_per_million": rank,
+        "cost_rank_signal": max(0.0, cost_rank_signal),
+        "zero_cost_candidate": zero_cost,
+        "cost_rank_signal_is_execution_gate": False,
+    }
+
+
 def _recovery_row(raw: Mapping[str, Any], node: SelectedNode) -> dict[str, Any]:
     model = str(raw.get("model") or "").strip()
     raw_profile = raw.get("parameter_profile")
     raw_profile = dict(raw_profile) if isinstance(raw_profile, Mapping) else {}
     parameter_profile = {**dict(node.parameter_profile), **raw_profile}
     parameter_profile["shared_recovery_pool"] = True
+    pricing = _price_telemetry(raw)
     return {
         "candidate_id": f"recovery:{node.node_id}:{model}",
         "assigned_work": list(node.assigned_work),
@@ -192,11 +241,8 @@ def _recovery_row(raw: Mapping[str, Any], node: SelectedNode) -> dict[str, Any]:
         "output_contract": dict(node.output_contract),
         "estimated_quality": float(raw.get("estimated_quality") or 0.0),
         "quality_uncertainty": float(raw.get("quality_uncertainty") or 0.0),
-        "estimated_cost": float(
-            raw.get("estimated_task_cost_usd")
-            or raw.get("estimated_cost")
-            or 0.0
-        ),
+        "estimated_cost": float(pricing["estimated_task_cost_usd"]),
+        **pricing,
         "failure_probability": float(raw.get("failure_probability") or 0.0),
         "request_config": {},
     }
@@ -204,6 +250,7 @@ def _recovery_row(raw: Mapping[str, Any], node: SelectedNode) -> dict[str, Any]:
 
 def _standby_row(raw: Mapping[str, Any]) -> dict[str, Any]:
     model = str(raw.get("model") or "").strip()
+    pricing = _price_telemetry(raw)
     return {
         "candidate_id": f"standby:{model}",
         "model": model,
@@ -211,11 +258,8 @@ def _standby_row(raw: Mapping[str, Any]) -> dict[str, Any]:
         "provider_slug": "openrouter-auto",
         "estimated_quality": float(raw.get("estimated_quality") or 0.0),
         "quality_uncertainty": float(raw.get("quality_uncertainty") or 0.0),
-        "estimated_cost": float(
-            raw.get("estimated_task_cost_usd")
-            or raw.get("estimated_cost")
-            or 0.0
-        ),
+        "estimated_cost": float(pricing["estimated_task_cost_usd"]),
+        **pricing,
         "failure_probability": float(raw.get("failure_probability") or 0.0),
         "request_config": {},
         "runtime_promotable": True,
@@ -340,6 +384,10 @@ def materialize_proposal(
             "hidden_reasoning_effort_default_used": False,
             "cost_effectiveness_priority": True,
             "soft_token_and_cost_efficiency": True,
+            "standby_price_telemetry_preserved": True,
+            "standby_zero_cost_candidate_count": sum(
+                1 for row in standby_inventory if row.get("zero_cost_candidate") is True
+            ),
         },
     )
     recovery_count = max(
@@ -366,7 +414,7 @@ def materialize_proposal(
         max_output_allowance_tokens=None,
     )
     audit = {
-        "schema_version": "v5-task-dynamic-materialization-4-no-hidden-effort-default",
+        "schema_version": "v5-task-dynamic-materialization-5-preserve-standby-price-telemetry",
         "status": "PASS",
         "selected_node_count": len(nodes),
         "recovery_candidate_count": recovery_count,
@@ -391,6 +439,10 @@ def materialize_proposal(
         "token_gate": False,
         "provider_routing_mode": "unrestricted-openrouter",
         "cost_advisory_usd": cost_anomaly_usd,
+        "standby_price_telemetry_preserved": True,
+        "standby_zero_cost_candidate_count": sum(
+            1 for row in standby_inventory if row.get("zero_cost_candidate") is True
+        ),
     }
     return graph, limits, audit
 
