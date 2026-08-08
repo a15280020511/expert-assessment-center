@@ -147,7 +147,13 @@ class ConstitutionPolicyTests(unittest.TestCase):
             matching["model_timeout_effective"],
             "current-request-derived-under-finite-safety-cap",
         )
-        self.assertEqual(matching["company_mix"], "unconstrained")
+        self.assertEqual(
+            matching["company_mix"],
+            "current-task-soft-heterogeneity-after-capability-risk-before-economy",
+        )
+        self.assertTrue(matching["company_heterogeneity_soft_objective_required"])
+        self.assertFalse(matching["company_diversity_is_execution_gate"])
+        self.assertFalse(matching["fixed_company_count_allowed"])
         self.assertFalse(matching["fixed_team_size_allowed"])
         self.assertFalse(matching["fixed_four_plus_four_allowed"])
         self.assertFalse(matching["keyword_routing_required"])
@@ -175,6 +181,12 @@ class ConstitutionPolicyTests(unittest.TestCase):
             self.assertFalse(optimizer[key], key)
         self.assertTrue(optimizer["capacity_metadata_is_advisory"])
         self.assertTrue(optimizer["cost_metadata_is_advisory"])
+        self.assertTrue(optimizer["company_heterogeneity_soft_objective"])
+        self.assertFalse(optimizer["company_heterogeneity_is_hard_constraint"])
+        self.assertEqual(
+            optimizer["active_assignment_module"],
+            "v5_runtime_role_assignment",
+        )
 
     def test_provider_routing_is_unrestricted_but_model_recovery_stays_expert_owned(self) -> None:
         routing = self.policy["provider_routing"]
@@ -212,6 +224,9 @@ class ConstitutionPolicyTests(unittest.TestCase):
         self.assertFalse(resources["dynamic_transport_allowance_is_task_admission_gate"])
         self.assertFalse(resources["dynamic_transport_allowance_can_invalidate_valid_output"])
         self.assertTrue(resources["truncation_can_recompute_transport_allowance"])
+        self.assertTrue(
+            resources["truncation_same_model_rebind_before_cross_model_substitution"]
+        )
         self.assertTrue(resources["dynamic_model_timeout_required"])
         self.assertTrue(resources["model_timeout_safety_cap_required"])
         self.assertFalse(resources["model_timeout_safety_cap_is_business_gate"])
@@ -232,6 +247,15 @@ class ConstitutionPolicyTests(unittest.TestCase):
         self.assertFalse(quality["fixed_numeric_quality_threshold_gate_used"])
         self.assertEqual(quality["quality_score_role"], "telemetry-only")
         self.assertTrue(quality["final_evidence_validation_fail_closed"])
+        self.assertTrue(quality["task_explicit_semantic_obligations_required"])
+        self.assertEqual(
+            quality["task_explicit_semantic_obligation_scope"],
+            "final-delivery-only",
+        )
+        self.assertTrue(quality["explicit_arithmetic_consistency_required"])
+        self.assertTrue(
+            quality["derived_quantities_from_authoritative_input_must_be_preserved"]
+        )
 
     def test_runtime_dependency_allowlist_matches_constitution(self) -> None:
         dependencies = self.policy["runtime_dependencies"]
@@ -284,6 +308,8 @@ class ConstitutionPolicyTests(unittest.TestCase):
         self.assertFalse(promotion["task_adaptive_value_scoring_required"])
         self.assertTrue(promotion["parameter_design_coverage_required"])
         self.assertTrue(promotion["runtime_knob_coverage_required"])
+        self.assertTrue(promotion["task_semantic_completeness_policy_required"])
+        self.assertTrue(promotion["company_heterogeneity_policy_required"])
         self.assertTrue(promotion["unrestricted_provider_routing_required"])
         self.assertTrue(promotion["no_tools_required"])
         self.assertFalse(promotion["automatic_merge_allowed"])
