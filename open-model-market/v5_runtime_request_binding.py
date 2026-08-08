@@ -1,7 +1,7 @@
 """Bind current-task planning signals to concrete OpenRouter request knobs.
 
-This module is intentionally small and dependency-free.  It does not introduce
-business admission gates: token/cost/call budgets remain advisory.  The output
+This module is intentionally small and dependency-free. It does not introduce
+business admission gates: token/cost/call budgets remain advisory. The output
 allowance below is a per-request transport reservation derived from the current
 request shape; it may be increased on truncation and never invalidates an
 otherwise valid task result.
@@ -17,6 +17,18 @@ SCHEMA_VERSION = "current-request-runtime-knob-binding-1"
 _EFFORT_ORDER = {"low": 1, "medium": 2, "high": 3}
 
 
+def _mapping_attr(value: Any, name: str) -> Mapping[str, Any]:
+    raw = getattr(value, name, {})
+    return raw if isinstance(raw, Mapping) else {}
+
+
+def _sequence_attr(value: Any, name: str) -> list[Any]:
+    raw = getattr(value, name, ())
+    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
+        return list(raw)
+    return []
+
+
 def _text_length(value: Any) -> int:
     if value in (None, ""):
         return 0
@@ -24,7 +36,7 @@ def _text_length(value: Any) -> int:
 
 
 def _effort(node: SelectedNode) -> str:
-    raw = str(node.reasoning_profile.get("effort") or "medium").casefold()
+    raw = str(_mapping_attr(node, "reasoning_profile").get("effort") or "medium").casefold()
     return raw if raw in _EFFORT_ORDER else "medium"
 
 
@@ -35,20 +47,20 @@ def dynamic_output_allowance(
 ) -> int:
     """Derive a finite request reservation from only current-run structure.
 
-    This is not a task budget and is not an eligibility gate.  Its purpose is to
+    This is not a task budget and is not an eligibility gate. Its purpose is to
     avoid provider-side worst-case reservation (for example a native 65k output
-    default) while leaving enough room for the current contract.  A truncation
+    default) while leaving enough room for the current contract. A truncation
     remains recoverable and may receive a larger allowance from recovery logic.
     """
     task_chars = max(1, _text_length(original_task))
     upstream_chars = sum(_text_length(row.get("answer")) for row in upstream)
     estimated_prompt_tokens = max(1, math.ceil((task_chars + upstream_chars) / 4))
-    required_fields = len(node.output_contract.get("required_fields", []))
-    work_units = max(1, len(node.assigned_work))
+    required_fields = len(_mapping_attr(node, "output_contract").get("required_fields", []))
+    work_units = max(1, len(_sequence_attr(node, "assigned_work")))
     fan_in = len(upstream)
     effort_rank = _EFFORT_ORDER[_effort(node)]
 
-    # Contract floor is protocol-shaped, not business-shaped.  The variable
+    # Contract floor is protocol-shaped, not business-shaped. The variable
     # terms are entirely current-request derived.
     structural_units = max(1, required_fields + work_units + fan_in + effort_rank)
     contract_floor = max(256, 192 * max(1, required_fields))
@@ -73,7 +85,7 @@ def bind_request_knobs(
     audit = {
         "schema_version": SCHEMA_VERSION,
         "status": "PASS",
-        "node_id": node.node_id,
+        "node_id": str(getattr(node, "node_id", "")),
         "reasoning_effort_planned": effort,
         "reasoning_effort_bound": effort,
         "dynamic_output_allowance_tokens": allowance,
@@ -108,7 +120,7 @@ def audit_bound_request(node: SelectedNode, payload: Mapping[str, Any]) -> dict[
     return {
         "schema_version": SCHEMA_VERSION,
         "status": "PASS" if not unused else "FAIL",
-        "node_id": node.node_id,
+        "node_id": str(getattr(node, "node_id", "")),
         "computed_but_unused": unused,
         "reasoning_effort_planned": planned_effort,
         "reasoning_effort_effective": bound_effort or None,
