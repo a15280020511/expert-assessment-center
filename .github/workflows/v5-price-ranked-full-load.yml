@@ -65,7 +65,7 @@ jobs:
           coverage report --show-missing --fail-under=85 \
             2>&1 | tee full-load-evidence/coverage.log
 
-      - name: Produce deterministic dynamic full-load receipt
+      - name: Produce deterministic production-planner full-load receipt
         env:
           TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
@@ -79,11 +79,11 @@ jobs:
 
           from tests.test_top50_pool_optimizer import _packet
           from v5_governance_model_plan import validate_governance_model_plan
-          from v5_top50_pool_optimizer import materialize_top50_selection
+          from v5_hierarchical_candidate_optimizer import materialize_candidate_pool_selection
 
           def run_one(index: int) -> tuple[str, int, int, int, int]:
               packet = _packet(complex_task=bool(index % 2))
-              materialized, receipt = materialize_top50_selection(packet)
+              materialized, receipt = materialize_candidate_pool_selection(packet)
               plan = validate_governance_model_plan(materialized)
               selected = list(plan['selected_models'])
               recoveries = list(plan['recovery_models'])
@@ -114,6 +114,7 @@ jobs:
               assert audit['all_calculable_planning_parameters_dynamic'] is True
               assert audit['parameter_design_completed_before_parameter_resolution'] is True
               assert audit['parameter_design_status'] == 'PASS'
+              assert audit['all_parameter_design_dimensions_classified'] is True
               assert audit['hard_model_eligibility_gates'] == []
               assert audit['only_hard_model_boundary'] == 'no-tools'
               assert audit['tool_use_forbidden'] is True
@@ -138,6 +139,7 @@ jobs:
                   'expert_count': len(selected),
                   'recovery_count': len(recoveries),
                   'role_plan': audit['role_plan'],
+                  'parameter_design_status': audit['parameter_design_status'],
                   'optimizer': audit['optimizer'],
                   'solver_status': audit['solver_status'],
                   'fallback_used': audit['fallback_used'],
@@ -179,17 +181,15 @@ jobs:
           assert simple_candidates == complex_candidates
           assert simple_candidates > 0
 
-          # Budget metadata is advisory. Deliberately tiny values must not
-          # reject or force the dynamic execution graph into an artificial shape.
           budget_probe = _packet()
           budget_probe['approved_budget'] = {'calls': 1, 'maximum_recovery_calls': 0}
-          budget_materialized, _ = materialize_top50_selection(budget_probe)
+          budget_materialized, _ = materialize_candidate_pool_selection(budget_probe)
           budget_plan = validate_governance_model_plan(budget_materialized)
           assert budget_plan['expert_count'] >= 1
           assert budget_plan['optimizer_audit']['budget_constraint_used'] is False
 
           receipt = {
-              'schema_version': 'v5-fully-dynamic-full-load-5-parameter-design',
+              'schema_version': 'v5-fully-dynamic-full-load-6-production-design',
               'status': 'PASS',
               'target_sha': os.environ['TARGET_SHA'],
               'parallel_runs': 64,
@@ -203,6 +203,7 @@ jobs:
               'simple_recovery_count': simple_recovery,
               'complex_primary_expert_count': complex_primary,
               'complex_recovery_count': complex_recovery,
+              'planner': 'v5_hierarchical_candidate_optimizer',
               'candidate_pool_authority': 'decision-system-governance',
               'model_assignment_authority': 'expert-assessment-center-dynamic-ortools',
               'optimizer': 'ortools-cp-sat-with-feasible-or-heuristic-fallback',
