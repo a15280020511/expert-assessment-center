@@ -134,65 +134,78 @@ def quality_gate(
     response: Mapping[str, Any],
     answer: str,
 ) -> tuple[bool, float, list[str]]:
+    """Gate observable delivery failures without fixed business heuristics.
+
+    Length is not treated as a proxy for quality and model-estimated quality does
+    not become a hidden recovery threshold. Hard failures are directly
+    auditable: empty delivery, truncation, tool-dependent non-delivery, missing
+    contract field markers, or malformed required JSON. The numeric score is an
+    equal-weight telemetry summary of the active observable signals only.
+    """
     reasons: list[str] = []
+    rendered = str(answer or "").strip()
+    folded = rendered.casefold()
     finish = finish_reason(response).casefold()
-    if finish in {"length", "max_tokens"}:
+
+    nonempty_score = 1.0 if rendered else 0.0
+    if not rendered:
+        reasons.append("empty-output")
+
+    finish_score = 0.0 if finish in {"length", "max_tokens"} else 1.0
+    if finish_score == 0.0:
         reasons.append("truncated-output")
-    minimum_chars = (
-        320
-        if node.output_contract.get("final_delivery_node") is True
-        else 120
+
+    refusal_terms = (
+        "i cannot access",
+        "无法访问互联网",
+        "作为ai无法",
+        "没有提供任何答案",
     )
-    if len(answer) < minimum_chars:
-        reasons.append(f"answer-too-short<{minimum_chars}")
-    folded = answer.casefold()
-    if any(
-        term in folded
-        for term in (
-            "i cannot access",
-            "无法访问互联网",
-            "作为ai无法",
-            "没有提供任何答案",
-        )
-    ):
+    delivery_score = 0.0 if any(term in folded for term in refusal_terms) else 1.0
+    if delivery_score == 0.0:
         reasons.append("non-delivery-or-tool-dependency")
+
     required_fields = [
-        str(value)
+        str(value).strip()
         for value in node.output_contract.get("required_fields", [])
+        if str(value).strip()
     ]
     field_hits = sum(
         field.replace("_", " ").casefold() in folded
         or field.casefold() in folded
         for field in required_fields
     )
+    contract_score = (
+        field_hits / len(required_fields)
+        if required_fields
+        else 1.0
+    )
+    if required_fields and field_hits < len(required_fields):
+        missing = [
+            field
+            for field in required_fields
+            if field.replace("_", " ").casefold() not in folded
+            and field.casefold() not in folded
+        ]
+        reasons.append("missing-required-field-markers:" + ",".join(missing))
+
+    signal_scores = [
+        nonempty_score,
+        finish_score,
+        delivery_score,
+        contract_score,
+    ]
     if node.output_contract.get("machine_readable_required"):
+        json_score = 0.0
         try:
-            parsed = json.loads(answer)
-            if not isinstance(parsed, Mapping):
+            parsed = json.loads(rendered)
+            if isinstance(parsed, Mapping):
+                json_score = 1.0
+            else:
                 reasons.append("machine-readable-output-not-object")
         except json.JSONDecodeError:
             reasons.append("invalid-required-json")
-    completeness = min(1.0, len(answer) / max(minimum_chars * 3, 1))
-    contract_score = field_hits / max(1, len(required_fields))
-    finish_score = 0.0 if finish in {"length", "max_tokens"} else 1.0
-    score = max(
-        0.0,
-        min(
-            1.0,
-            0.48 * completeness
-            + 0.27 * contract_score
-            + 0.25 * finish_score,
-        ),
-    )
-    threshold = max(
-        0.48,
-        min(
-            0.82,
-            0.50
-            + 0.22 * node.estimated_quality
-            - 0.10 * node.quality_uncertainty,
-        ),
-    )
-    if score + 1e-12 < threshold:
-        reasons.append(f"quality-score<{threshold:.3f}")
-    return not reasons, round(score, 6), reasons
+        signal_scores.append(json_score)
+
+    score = sum(signal_scores) / max(1, len(signal_scores))
+    return not reasons, round(max(0.0, min(1.0, score)), 6), reasons
