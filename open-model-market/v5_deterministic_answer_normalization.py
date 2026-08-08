@@ -336,3 +336,15 @@ def normalize_answer(
     audit["applied"] = working != original
     audit["normalized_answer_sha256"] = sha256(working.encode("utf-8")).hexdigest()
     return working, audit
+
+
+# Compatibility surface for the run-387 hardening layer. These names existed
+# when that layer was authored and are intentionally kept as aliases so a
+# normalization-internal rename cannot crash a live model run. They do not
+# change normalization semantics or weaken any quality gate.
+def _sha(value: str) -> str:
+    return sha256(str(value or "").encode("utf-8")).hexdigest()
+
+
+_relabel_inferential_facts = _relabel_inferential_fact_labels
+_normalized_quantities = normalized_quantities
